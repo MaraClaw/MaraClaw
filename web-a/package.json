@@ -4,6 +4,8 @@
   "version": "1.0.3",
   "type": "module",
   "scripts": {
+    "contracts:generate": "node ../engine/scripts/contract_codegen/generate.mjs --input ../engine/contracts/api-contract.json --output src/lib/engine-contracts.generated.ts",
+    "contracts:check": "node ../engine/scripts/contract_codegen/generate.mjs --input ../engine/contracts/api-contract.json --output src/lib/engine-contracts.generated.ts --check",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject
 from app.records.channel_config import ChannelConfigRecord
 from app.services import wechat_channel, wechat_message_processor
@@ -15,7 +16,7 @@ def _channel_config(extra_config: JsonObject) -> ChannelConfigRecord:
     return ChannelConfigRecord(
         id=uuid.uuid4(),
         agent_id=uuid.uuid4(),
-        channel_type="wechat",
+        channel_type=ChannelType.WECHAT,
         app_id="wechat-bot",
         extra_config=extra_config,
     )

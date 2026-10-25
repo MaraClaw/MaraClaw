@@ -7,7 +7,9 @@ import pytest
 from app.core.redis_cache import cache_key
 from app.runtime import incident_alerts
 from app.services.incident_report import IncidentReport, build_report
-from incident_alert_fakes import AlertHarness, harness as harness
+from incident_alert_fakes import AlertHarness, harness
+
+__all__ = ["harness"]
 
 
 async def test_shared_dedup_across_workers(harness: AlertHarness) -> None:

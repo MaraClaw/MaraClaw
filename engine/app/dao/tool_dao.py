@@ -85,7 +85,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools "
-                + "WHERE category = %(category)s AND enabled IS TRUE ORDER BY name",
+                "WHERE category = %(category)s AND enabled IS TRUE ORDER BY name",
                 {"category": category},
             )
             return [ToolRecord.from_row(row) for row in rows]
@@ -102,7 +102,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tools "
-                + "WHERE type = 'mcp' AND mcp_tool_name = %(mcp_tool_name)s LIMIT 1",
+                "WHERE type = 'mcp' AND mcp_tool_name = %(mcp_tool_name)s LIMIT 1",
                 {"mcp_tool_name": mcp_tool_name},
             )
             return ToolRecord.from_row(row) if row is not None else None
@@ -134,8 +134,8 @@ class ToolDAO(BaseDAO[ToolRecord]):
         clauses = [
             "enabled IS TRUE",
             "("
-            + " source = 'builtin'"
-            + " OR (source = 'admin' AND (tenant_id IS NULL"
+            " source = 'builtin'"
+            " OR (source = 'admin' AND (tenant_id IS NULL"
             + (" OR tenant_id = %(tenant_id)s" if agent_tenant_id is not None else "")
             + "))"
             + (" OR id = ANY(%(assigned_ids)s)" if assigned_tool_ids else "")
@@ -158,17 +158,17 @@ class ToolDAO(BaseDAO[ToolRecord]):
             if assigned_ids:
                 result = await db.fetchone(
                     "WITH deleted AS ("
-                    + "  DELETE FROM tools "
-                    + "  WHERE type = 'mcp' AND tenant_id IS NULL AND NOT (id = ANY(%(assigned_ids)s)) "
-                    + "  RETURNING 1"
-                    + ") SELECT COUNT(*) AS cnt FROM deleted",
+                    "  DELETE FROM tools "
+                    "  WHERE type = 'mcp' AND tenant_id IS NULL AND NOT (id = ANY(%(assigned_ids)s)) "
+                    "  RETURNING 1"
+                    ") SELECT COUNT(*) AS cnt FROM deleted",
                     {"assigned_ids": list(assigned_ids)},
                 )
             else:
                 result = await db.fetchone(
                     "WITH deleted AS ("
-                    + "  DELETE FROM tools WHERE type = 'mcp' AND tenant_id IS NULL RETURNING 1"
-                    + ") SELECT COUNT(*) AS cnt FROM deleted"
+                    "  DELETE FROM tools WHERE type = 'mcp' AND tenant_id IS NULL RETURNING 1"
+                    ") SELECT COUNT(*) AS cnt FROM deleted"
                 )
             return int_from_row(result["cnt"] if result is not None else 0)
 
@@ -181,8 +181,8 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools "
-                + f"WHERE source = ANY(%(sources)s){tenant_sql} "
-                + "ORDER BY category, name",
+                f"WHERE source = ANY(%(sources)s){tenant_sql} "
+                "ORDER BY category, name",
                 {**params, "sources": ["builtin", "admin"]},
             )
             return [ToolRecord.from_row(row) for row in rows]
@@ -191,7 +191,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tools "
-                + "WHERE name = %(name)s AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 1",
+                "WHERE name = %(name)s AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 1",
                 {"name": name, "tenant_id": tenant_id},
             )
             return ToolRecord.from_row(row) if row is not None else None
@@ -216,8 +216,8 @@ class ToolDAO(BaseDAO[ToolRecord]):
         clauses = [
             "enabled IS TRUE",
             "("
-            + " source = 'builtin'"
-            + " OR (source = 'admin' AND (tenant_id IS NULL"
+            " source = 'builtin'"
+            " OR (source = 'admin' AND (tenant_id IS NULL"
             + (" OR tenant_id = %(tenant_id)s" if agent_tenant_id is not None else "")
             + "))"
             + (" OR id = ANY(%(assigned_ids)s)" if assigned_tool_ids else "")
@@ -239,7 +239,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tools "
-                + "WHERE mcp_server_name = %(server_name)s AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s",
+                "WHERE mcp_server_name = %(server_name)s AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s",
                 {"server_name": server_name, "tenant_id": tenant_id},
             )
             return [ToolRecord.from_row(row) for row in rows]
@@ -267,9 +267,9 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT t.category, COUNT(*) AS count "
-                + "FROM tools t JOIN agent_tools at ON at.tool_id = t.id "
-                + "WHERE at.enabled IS TRUE "
-                + "GROUP BY t.category ORDER BY COUNT(*) DESC LIMIT %(limit)s",
+                "FROM tools t JOIN agent_tools at ON at.tool_id = t.id "
+                "WHERE at.enabled IS TRUE "
+                "GROUP BY t.category ORDER BY COUNT(*) DESC LIMIT %(limit)s",
                 {"limit": limit},
             )
             return [
@@ -312,7 +312,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE tools SET config = %(config)s, updated_at = NOW() "
-                + "WHERE mcp_server_name = %(server_name)s AND type = 'mcp' RETURNING id",
+                "WHERE mcp_server_name = %(server_name)s AND type = 'mcp' RETURNING id",
                 {"server_name": server_name, "config": as_jsonb(config)},
             )
             return len(rows)
@@ -330,7 +330,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_tools "
-                + "WHERE agent_id = %(agent_id)s AND tool_id = %(tool_id)s",
+                "WHERE agent_id = %(agent_id)s AND tool_id = %(tool_id)s",
                 {"agent_id": agent_id, "tool_id": tool_id},
             )
             return AgentToolRecord.from_row(row) if row is not None else None
@@ -342,12 +342,12 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('at')}, "
-                + "t.config AS tool_config, t.config_schema AS tool_config_schema, "
-                + "t.source AS tool_source, t.name AS tool_name "
-                + "FROM agent_tools at "
-                + "JOIN tools t ON t.id = at.tool_id "
-                + "WHERE at.agent_id = %(agent_id)s AND t.name = %(tool_name)s "
-                + "LIMIT 1",
+                "t.config AS tool_config, t.config_schema AS tool_config_schema, "
+                "t.source AS tool_source, t.name AS tool_name "
+                "FROM agent_tools at "
+                "JOIN tools t ON t.id = at.tool_id "
+                "WHERE at.agent_id = %(agent_id)s AND t.name = %(tool_name)s "
+                "LIMIT 1",
                 {"agent_id": agent_id, "tool_name": tool_name},
             )
             if row is None:
@@ -461,17 +461,17 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT at.id AS agent_tool_id, at.agent_id, at.tool_id, at.enabled, at.config, "
-                + "at.installed_by_agent_id, at.created_at AS installed_at, "
-                + "t.name AS tool_name, t.display_name AS tool_display_name, t.description, "
-                + "t.type, t.category, t.source, t.mcp_server_name, t.mcp_server_url, t.mcp_tool_name, "
-                + "installer.name AS installed_by_agent_name "
-                + "FROM agent_tools at "
-                + "JOIN tools t ON t.id = at.tool_id "
-                + "JOIN agents owner ON owner.id = at.agent_id "
-                + "LEFT JOIN agents installer ON installer.id = at.installed_by_agent_id "
-                + "WHERE (at.source = 'user_installed' OR t.source = 'agent')"
-                + f"{tenant_sql} "
-                + "ORDER BY at.created_at DESC NULLS LAST",
+                "at.installed_by_agent_id, at.created_at AS installed_at, "
+                "t.name AS tool_name, t.display_name AS tool_display_name, t.description, "
+                "t.type, t.category, t.source, t.mcp_server_name, t.mcp_server_url, t.mcp_tool_name, "
+                "installer.name AS installed_by_agent_name "
+                "FROM agent_tools at "
+                "JOIN tools t ON t.id = at.tool_id "
+                "JOIN agents owner ON owner.id = at.agent_id "
+                "LEFT JOIN agents installer ON installer.id = at.installed_by_agent_id "
+                "WHERE (at.source = 'user_installed' OR t.source = 'agent')"
+                f"{tenant_sql} "
+                "ORDER BY at.created_at DESC NULLS LAST",
                 params or None,
             )
             return list(rows)

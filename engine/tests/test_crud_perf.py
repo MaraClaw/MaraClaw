@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
@@ -18,7 +18,7 @@ class _FakeCursor:
     def __init__(self, parent: _FakeRawConnection) -> None:
         self._parent = parent
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:

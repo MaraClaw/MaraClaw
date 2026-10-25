@@ -1,22 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
 
 import { useAuth } from '@/hooks/use-auth'
-import { lookupOrgByEmail, transferOrg } from '@/lib/auth-api'
+import { transferOrg } from '@/lib/auth-api'
+import { useJoinedWorkspace } from '@/hooks/use-joined-workspace'
 import { getTransferQuote } from '@/lib/company-transfers-api'
 import { userFacingRequestError } from '@/lib/http'
-import type { SuggestedOrg } from '@/lib/types/auth'
 import type { AdmissionSummary } from '@/lib/types/company-admissions'
 import type { TransferInput, TransferQuote, TransferSelection, TransferSummary } from '@/lib/types/company-transfers'
 
 export function useTransferFunnel() {
-  const { owner, user, isCurrent, refreshReplacement } = useAuth()
-  const navigate = useNavigate()
+  const { owner, isCurrent } = useAuth()
+  const enter = useJoinedWorkspace()
   const [quote, setQuote] = useState<TransferQuote | null>(null)
   const [quoteError, setQuoteError] = useState<string | null>(null)
   const request = useRef<AbortController | null>(null)
-  const [match, setMatch] = useState<SuggestedOrg | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selection, setSelection] = useState<TransferInput | null>(null)
   const [busy, setBusy] = useState(false)
@@ -33,12 +30,7 @@ export function useTransferFunnel() {
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted && isCurrent(owner)) setQuoteError(userFacingRequestError(cause, 'Unable to load transfer options. Try again.'))
     })
-    if (user?.email) void lookupOrgByEmail(user.email, owner).then((value) => {
-      if (!controller.signal.aborted && isCurrent(owner)) setMatch(value.match?.id === user.tenant_id ? null : value.match)
-    }).catch(() => {
-      if (!controller.signal.aborted && isCurrent(owner)) setMatch(null)
-    })
-  }, [owner, user, isCurrent])
+  }, [owner, isCurrent])
   useEffect(() => {
     load()
     return () => request.current?.abort()
@@ -58,11 +50,9 @@ export function useTransferFunnel() {
       } else if ('request' in result) {
         setAdmission(result.request)
         setSelection(null)
+        await enter(result)
       } else {
-        const installedOwner = await refreshReplacement(owner, result.access_token)
-        if (!installedOwner || !isCurrent(installedOwner)) return
-        toast.success('Organization updated')
-        navigate('/app', { replace: true })
+        await enter(result)
       }
     } catch (cause) {
       if (isCurrent(owner)) setError(userFacingRequestError(cause, 'Transfer failed. Refresh transfer options or check your saved requests before trying again.'))
@@ -79,8 +69,16 @@ export function useTransferFunnel() {
   function confirm(choice: TransferSelection) {
     if (selection && isCurrent(owner)) void execute({ ...selection, ...choice })
   }
+  async function open() {
+    if (!admission || admission.status !== 'approved' || busy || !isCurrent(owner)) return
+    setBusy(true)
+    setError(null)
+    try { await enter({ status: 'approved', request: { ...admission, status: 'approved' } }) }
+    catch (cause) { if (isCurrent(owner)) setError(userFacingRequestError(cause, 'Unable to open the joined workspace. Try again.')) }
+    finally { if (isCurrent(owner)) setBusy(false) }
+  }
   return {
-    quote, quoteError, match, error, selection, busy, admission, payment, submit, confirm,
+    quote, quoteError, error, selection, busy, admission, payment, submit, confirm, open,
     setError: (value: string) => { if (isCurrent(owner)) setError(value) },
     cancel: () => { if (isCurrent(owner) && !busy) { setSelection(null); setError(null) } },
     reload: () => {

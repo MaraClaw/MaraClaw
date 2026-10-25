@@ -27,7 +27,7 @@ def _cdp_payload(raw: object) -> JsonObject:
 
 
 def _json_float(value: object, default: float) -> float:
-    raw: object = value if value else default
+    raw: object = value or default
     if isinstance(raw, bool):
         return float(raw)
     if isinstance(raw, int | float):

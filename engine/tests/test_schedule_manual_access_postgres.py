@@ -14,10 +14,12 @@ from app.records.schedule import AgentScheduleRecord
 from app.records.user import UserRecord
 from test_schedule_occurrence_postgres import (
     accept_claim,
-    live_schedule as live_schedule,
-    manual_schedule as manual_schedule,
+    live_schedule,
+    manual_schedule,
     schedule_app,
 )
+
+__all__ = ["live_schedule", "manual_schedule"]
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
@@ -136,7 +138,7 @@ async def test_live_manual_control_scopes_all_path_bindings(
                     {"id": agent_id, "creator": run.requester_id},
                 )
             case "deleted":
-                await agent_schedule_dao.delete(id=schedule_id)
+                await agent_schedule_dao.delete(record_id=schedule_id)
             case _:
                 raise AssertionError(binding)
     async with httpx.AsyncClient(

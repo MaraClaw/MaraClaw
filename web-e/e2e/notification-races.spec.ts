@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
 
+import { NotificationKind } from '../src/lib/notifications-api'
 import { inboxPath, notice, prepareNotifications, replacementNotice } from './notifications-fixture'
 import { replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 
 test('bulk mutation retains its submitted category while the selected category changes', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, [notice('Tool', 'autonomy_l2'), notice('Approval', 'approval_pending')])
+  const fixture = await prepareNotifications(page, [notice('Tool', NotificationKind.AutonomyL2), notice('Approval', NotificationKind.ApprovalPending)])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   await page.route('**/api/notifications/read-all?category=tool', async (route) => {
@@ -30,7 +31,7 @@ test('bulk mutation retains its submitted category while the selected category c
 
 test('a failed next page retains loaded rows and retries the same offset', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, Array.from({ length: 51 }, (_, index) => notice(`Tool ${index}`, 'autonomy_l2')))
+  const fixture = await prepareNotifications(page, Array.from({ length: 51 }, (_, index) => notice(`Tool ${index}`, NotificationKind.AutonomyL2)))
   await page.goto(inboxPath)
   const list = page.getByRole('list', { name: 'Notifications' })
   await expect(list.getByRole('listitem')).toHaveCount(50)
@@ -48,7 +49,7 @@ test('a failed next page retains loaded rows and retries the same offset', async
 
 test('failed category counts expose a retry without enabling an unknown bulk scope', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, [notice('Approval', 'approval_pending')])
+  const fixture = await prepareNotifications(page, [notice('Approval', NotificationKind.ApprovalPending)])
   fixture.failCounts(true)
   await page.goto(inboxPath)
   await page.getByLabel('Category', { exact: true }).selectOption('approval')
@@ -65,7 +66,7 @@ test('failed category counts expose a retry without enabling an unknown bulk sco
 for (const status of [204, 503]) {
   test(`retired bulk response ${status} cannot change replacement inbox state`, async ({ page }) => {
     // Given
-    await prepareNotifications(page, [notice('Original tool', 'autonomy_l2')])
+    await prepareNotifications(page, [notice('Original tool', NotificationKind.AutonomyL2)])
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     await page.route('**/api/notifications/read-all?category=all', async (route) => {
@@ -91,13 +92,13 @@ for (const status of [204, 503]) {
 
 test('a late Active next page cannot appear after switching to Archived', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [...Array.from({ length: 50 }, (_, index) => notice(`Active ${index}`, 'autonomy_l2')), { ...notice('Archived tool', 'autonomy_l2'), archived_at: '2030-01-02T00:00:00Z' }])
+  await prepareNotifications(page, [...Array.from({ length: 50 }, (_, index) => notice(`Active ${index}`, NotificationKind.AutonomyL2)), { ...notice('Archived tool', NotificationKind.AutonomyL2), archived_at: '2030-01-02T00:00:00Z' }])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   await page.route('**/api/notifications?category=tool&limit=50&offset=50&view=active', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Obsolete Active page', 'autonomy_l2')] })
+    await route.fulfill({ json: [notice('Obsolete Active page', NotificationKind.AutonomyL2)] })
   })
   try {
     await page.goto(inboxPath)
@@ -121,7 +122,7 @@ for (const action of ['archive', 'restore'] as const) {
   const label = action === 'archive' ? 'Archive' : 'Restore'
   test(`failed ${action} retains the row and count until a successful retry`, async ({ page }) => {
     // Given
-    const fixture = await prepareNotifications(page, [{ ...notice('Move me', 'broadcast'), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
+    const fixture = await prepareNotifications(page, [{ ...notice('Move me', NotificationKind.Broadcast), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
     await page.goto(inboxPath)
     if (action === 'restore') await page.getByRole('button', { name: 'Archived', exact: true }).click()
     fixture.failWrites(true)
@@ -141,7 +142,7 @@ for (const action of ['archive', 'restore'] as const) {
   for (const status of [200, 503]) {
     test(`retired ${action} response ${status} cannot affect a replacement workspace`, async ({ page }) => {
       // Given
-      const fixture = await prepareNotifications(page, [{ ...notice('Original move', 'broadcast'), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
+      const fixture = await prepareNotifications(page, [{ ...notice('Original move', NotificationKind.Broadcast), archived_at: action === 'restore' ? '2030-01-02T00:00:00Z' : null }])
       const requested = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()
       await page.route(`**/api/notifications/Original%20move/${action}`, async (route) => {
@@ -175,7 +176,7 @@ for (const action of ['archive', 'restore'] as const) {
 
 test('archive completion refreshes all overlapping categories after the selected view changes', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [notice('Announcement', 'broadcast'), notice('Tool', 'autonomy_l2')])
+  await prepareNotifications(page, [notice('Announcement', NotificationKind.Broadcast), notice('Tool', NotificationKind.AutonomyL2)])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   await page.route('**/api/notifications/Announcement/archive', async (route) => {

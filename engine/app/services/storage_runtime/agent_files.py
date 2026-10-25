@@ -7,7 +7,6 @@ channel handlers and background services do not manually assemble
 
 from __future__ import annotations
 
-import os
 import uuid
 from pathlib import Path
 
@@ -73,7 +72,7 @@ async def store_agent_upload(
 ) -> tuple[str, str, Path]:
     key = agent_upload_key(agent_id, filename)
     storage = get_storage_backend()
-    safe_name = os.path.basename(key)
+    safe_name = Path(key).name
     await storage.write_bytes(
         key,
         data,

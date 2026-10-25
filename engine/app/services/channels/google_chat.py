@@ -76,7 +76,7 @@ async def _fetch_chat_certs() -> dict[str, str]:
         _ = resp.raise_for_status()
         certs_raw = json_value_from_response(resp)
     if not isinstance(certs_raw, dict):
-        raise ValueError("Unexpected Chat certs payload")
+        raise TypeError("Unexpected Chat certs payload")
     certs_map = {key: value for key, value in json_object_from(certs_raw).items() if isinstance(value, str)}
     _certs = certs_map
     _certs_expires_at = now + 3600
@@ -112,7 +112,10 @@ async def verify_google_chat_bearer(authorization: str | None, audience: str) ->
     if not audience.strip():
         raise ValueError("Missing Google Chat audience (project number)")
 
-    certs = await _fetch_chat_certs()
+    try:
+        certs = await _fetch_chat_certs()
+    except TypeError as exc:
+        raise ValueError(str(exc)) from exc
     try:
         headers_raw: object = jwt.get_unverified_header(token)
     except JWTError as exc:
@@ -375,8 +378,7 @@ async def send_google_chat_message(
     sa_info = _service_account_info(config)
     if sa_info is None or not sa_info:
         raise ValueError(
-            "Google Chat proactive send requires extra_config.service_account_json "
-            + "with client_email and private_key"
+            "Google Chat proactive send requires extra_config.service_account_json with client_email and private_key"
         )
     if not space_name.startswith("spaces/"):
         raise ValueError(f"Invalid space name: {space_name}")

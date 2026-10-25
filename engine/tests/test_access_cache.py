@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, override
+from typing import Any, Self, override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +13,8 @@ from fastapi import HTTPException
 
 from app.core import access_cache, permissions
 from app.core.access_cache import bump_agent_acl_version
+from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.users import UserRole
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.user import UserRecord
 
@@ -118,7 +120,11 @@ def test_decide_creator_and_admin_and_custom() -> None:
     other = _user(tenant_id=tenant)
     perms = [
         AgentPermissionRecord(
-            id=uuid.uuid4(), agent_id=agent.id, scope_type="user", scope_id=other.id, access_level="manage"
+            id=uuid.uuid4(),
+            agent_id=agent.id,
+            scope_type=PermissionGrantScope.USER,
+            scope_id=other.id,
+            access_level=PermissionAccessLevel.MANAGE,
         )
     ]
     custom = _agent(tenant_id=tenant, access_mode="custom", company_access_level=None)
@@ -198,8 +204,8 @@ async def test_role_change_misses_cache(monkeypatch: pytest.MonkeyPatch) -> None
 
     await permissions.check_agent_access(user, agent.id)
     access_cache.clear_request_memo()
-    user.role = "org_admin"
-    agent.access_mode = "company"
+    user.role = UserRole.ORG_ADMIN
+    agent.access_mode = AgentSharingMode.COMPANY
     level = await access_cache.get_cached_level(user, agent.id)
     assert level is None
 
@@ -259,7 +265,7 @@ async def test_ttl_zero_skips_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 0)
     user = _user()
     assert await access_cache.get_cached_level(user, uuid.uuid4()) is None
-    await access_cache.set_cached_level(user, uuid.uuid4(), "manage")
+    await access_cache.set_cached_level(user, uuid.uuid4(), PermissionAccessLevel.MANAGE)
     await bump_agent_acl_version(uuid.uuid4())
 
 
@@ -305,10 +311,10 @@ async def test_set_cached_level_skips_when_version_changes(monkeypatch: pytest.M
         return fake
 
     monkeypatch.setattr(access_cache, "get_redis", get_redis)
-    await access_cache.set_cached_level(user, agent_id, "use", observed_ver="0")
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert any(key.startswith("acl:v1:") for key in fake.store)
     fake.store.clear()
-    await access_cache.set_cached_level(user, agent_id, "use", observed_ver="9")
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="9")
     assert fake.store == {}
 
 
@@ -342,7 +348,7 @@ class _SessionCursor:
     def __init__(self, parent: _SessionRaw) -> None:
         self._parent = parent
 
-    async def __aenter__(self) -> _SessionCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -414,13 +420,13 @@ async def test_dirty_acl_inputs_are_never_cached(monkeypatch):
         return fake
 
     monkeypatch.setattr(access_cache, "get_redis", redis)
-    await access_cache.set_cached_level(user, agent_id, "use", observed_ver="0")
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert await access_cache.get_cached_level(user, agent_id) == "use"
     token = access_cache.begin_deferred_acl()
     try:
         await access_cache.bump_agent_acl_version(agent_id)
         assert await access_cache.get_cached_level(user, agent_id) is None
-        await access_cache.set_cached_level(user, agent_id, "manage", observed_ver="0")
+        await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.MANAGE, observed_ver="0")
     finally:
         access_cache.end_deferred_acl(token)
     assert await access_cache.get_cached_level(user, agent_id) == "use"
@@ -442,7 +448,7 @@ async def test_version_change_between_validation_and_write_rejects_stale_fill(mo
         return fake
 
     monkeypatch.setattr(access_cache, "get_redis", redis)
-    await access_cache.set_cached_level(_user(), agent_id, "use", observed_ver="0")
+    await access_cache.set_cached_level(_user(), agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert not any(key.startswith("acl:v1:") for key in fake.store)
 
 
@@ -485,7 +491,7 @@ async def test_inactive_user_id_helper_rejects_even_a_request_memo(monkeypatch):
         return user
 
     monkeypatch.setattr(permissions.user_dao, "get", user_input)
-    access_cache.memo_set(user.id, agent.id, agent, "manage")
+    access_cache.memo_set(user.id, agent.id, agent, PermissionAccessLevel.MANAGE)
     assert await permissions.get_agent_access_level_for_user_id(user.id, agent) is None
 
 

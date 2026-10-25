@@ -6,7 +6,9 @@ import pytest
 
 from app.dao.schedule_dao import agent_schedule_dao
 from schedule_occurrence_persistence_fakes import SLOT_COLUMNS
-from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _schedule, pool as pool
+from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _schedule, pool
+
+__all__ = ["pool"]
 
 
 async def test_edit_uses_current_pending_snapshot_even_with_stale_record(pool: _Pool) -> None:

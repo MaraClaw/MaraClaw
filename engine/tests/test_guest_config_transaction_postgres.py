@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from tests.channel_submission_fixtures import ChannelDatabase, channel_db as channel_db
+from tests.channel_submission_fixtures import ChannelDatabase, channel_db
 from tests.test_channel_event_receipts_postgres import counts
 from tests.test_chat_submission_postgres import (
     ReceiptDatabase,
-    receipt_db as receipt_db,
-    writable_receipt_db as writable_receipt_db,
+    receipt_db,
+    writable_receipt_db,
 )
 
 from app.db.session import transaction
@@ -22,6 +22,8 @@ from app.services.channels import submissions
 from app.services.chat_submissions import ChatSubmission
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
+
+__all__ = ["channel_db", "receipt_db", "writable_receipt_db"]
 
 
 @pytest.fixture

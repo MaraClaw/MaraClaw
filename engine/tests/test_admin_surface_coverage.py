@@ -21,6 +21,7 @@ from app.api import (
     tenants as tenants_api,
     users as users_api,
 )
+from app.core.domain.users import UserRole
 from app.records.audit import AdminAuditLogRecord
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.tenant import TenantRecord
@@ -93,23 +94,26 @@ def _tenant(**kwargs):
 @pytest.fixture
 def pending_admission(monkeypatch):
     def configure(member, tenant, method):
+        invited = method == AdmissionMethod.INVITATION
         summary = RequestSummary(
             id=uuid.uuid4(),
-            status=AdmissionStatus.PENDING,
+            status=AdmissionStatus.APPROVED if invited else AdmissionStatus.PENDING,
             source_tenant_id=member.tenant_id,
             target_tenant=AdmissionTenant(id=tenant.id, name=tenant.name),
             method=method,
             created_at=_NOW,
-            decided_at=None,
+            decided_at=_NOW if invited else None,
             decision_reason=None,
         )
-        submit = AsyncMock(return_value=object())
+        submit = AsyncMock(return_value=SimpleNamespace(status=AdmissionStatus.PENDING))
+        admit = AsyncMock(return_value=SimpleNamespace(status=AdmissionStatus.APPROVED))
         summarize = AsyncMock(return_value=summary)
         monkeypatch.setattr("app.services.company_admissions.submit_request", submit)
         monkeypatch.setattr("app.services.company_admissions.summarize", summarize)
-        monkeypatch.setattr("app.services.company_transfer_entrypoint.submit_request", submit)
+        monkeypatch.setattr("app.services.company_admission_auto.submit_request", submit)
+        monkeypatch.setattr("app.services.company_admission_auto.admit_with_invitation", admit)
         monkeypatch.setattr("app.services.company_transfer_entrypoint.summarize", summarize)
-        return SimpleNamespace(submit=submit, summarize=summarize, summary=summary)
+        return SimpleNamespace(submit=submit, admit=admit, summarize=summarize, summary=summary)
 
     return configure
 
@@ -122,6 +126,16 @@ def _assert_pending_response(response, admission):
         "request": admission.summary.model_dump(mode="json"),
     }
     admission.summarize.assert_awaited_with(admission.submit.return_value)
+
+
+def _assert_approved_response(response, admission):
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    assert json.loads(bytes(response.body)) == {
+        "status": "approved",
+        "request": admission.summary.model_dump(mode="json"),
+    }
+    admission.summarize.assert_awaited_with(admission.admit.return_value)
 
 
 @pytest.mark.asyncio
@@ -366,6 +380,7 @@ async def test_get_user_detail_includes_agents(monkeypatch):
         id=uuid.uuid4(),
         name="Daisy",
         status="running",
+        is_system=True,
         is_expired=False,
         role_description="Researcher",
         last_active_at=_NOW,
@@ -378,6 +393,7 @@ async def test_get_user_detail_includes_agents(monkeypatch):
     assert detail.agents_count == 1
     assert detail.agents[0].name == "Daisy"
     assert detail.agents[0].status == "running"
+    assert detail.agents[0].model_dump(mode="json")["is_system"] is True
     list_agents.assert_awaited_once_with(member.id, tenant_id=tenant_id)
 
 
@@ -518,8 +534,9 @@ async def test_tenants_pending_join_registration_and_me(monkeypatch, pending_adm
     monkeypatch.setattr("app.services.org_membership.attach_user_to_org", attach)
     admission = pending_admission(user, tenant, AdmissionMethod.INVITATION)
     result = await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="ABCD"), user)
-    _assert_pending_response(result, admission)
-    admission.submit.assert_awaited_once_with(user, tenant.id, AdmissionMethod.INVITATION, invitation_code="ABCD")
+    _assert_approved_response(result, admission)
+    admission.admit.assert_awaited_once_with(user, tenant.id, "ABCD", transfer_id=None, fenced_ids=None)
+    admission.submit.assert_not_awaited()
     attach.assert_not_awaited()
     consume.assert_not_awaited()
     assert user.tenant_id is None
@@ -596,9 +613,10 @@ async def test_transfer_requires_correct_password_then_requests_admission(monkey
         tenants_api.TransferRequest(password="secret1", invitation_code="X"),
         member,
     )
-    _assert_pending_response(out, admission)
+    _assert_approved_response(out, admission)
     verify_password.assert_awaited_with("secret1", "hashed")
-    admission.submit.assert_awaited_once_with(member, dest.id, AdmissionMethod.INVITATION, invitation_code="X")
+    admission.admit.assert_awaited_once_with(member, dest.id, "X", transfer_id=None, fenced_ids=None)
+    admission.submit.assert_not_awaited()
     transfer.assert_not_awaited()
     consume.assert_not_awaited()
     token.assert_not_called()
@@ -690,7 +708,7 @@ async def test_update_me_clears_email_verified_and_checks_global_email(monkeypat
     monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_api.user_dao, "get_by_email_and_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_api.identity_dao, "update", _update_identity)
-    monkeypatch.setattr(auth_api.UserOut, "model_validate", staticmethod(lambda value: value))
+    monkeypatch.setattr(auth_api.AuthUser, "model_validate", staticmethod(lambda value: value))
     monkeypatch.setattr(
         "app.services.registration_service.registration_service.sync_org_member_contact_from_user",
         AsyncMock(),
@@ -1109,13 +1127,13 @@ async def test_user_role_remaining_branches(monkeypatch):
     org = _user(role="org_admin", tenant_id=tenant_id)
     target = _user(role="member", tenant_id=tenant_id)
     with pytest.raises(HTTPException):
-        await users_api.update_user_role(target.id, users_api.RoleUpdate(role="nope"), org)
+        await users_api.update_user_role(target.id, users_api.RoleUpdate.model_validate({"role": "nope"}), org)
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=None))
     with pytest.raises(HTTPException):
-        await users_api.update_user_role(target.id, users_api.RoleUpdate(role="member"), org)
+        await users_api.update_user_role(target.id, users_api.RoleUpdate(role=UserRole.MEMBER), org)
     same = _user(role="member", tenant_id=tenant_id)
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=same))
-    out = await users_api.update_user_role(same.id, users_api.RoleUpdate(role="member"), org)
+    out = await users_api.update_user_role(same.id, users_api.RoleUpdate(role=UserRole.MEMBER), org)
     assert out["status"] == "ok"
 
     last = _user(role="org_admin", tenant_id=tenant_id)
@@ -1126,7 +1144,7 @@ async def test_user_role_remaining_branches(monkeypatch):
         AsyncMock(side_effect=provisioning.AdminGuardError(400, "last admin")),
     )
     with pytest.raises(HTTPException) as exc:
-        await users_api.update_user_role(last.id, users_api.RoleUpdate(role="member"), org)
+        await users_api.update_user_role(last.id, users_api.RoleUpdate(role=UserRole.MEMBER), org)
     assert exc.value.status_code == 400
 
     pa = _user(role="platform_admin")
@@ -1138,7 +1156,7 @@ async def test_user_role_remaining_branches(monkeypatch):
         AsyncMock(side_effect=provisioning.AdminGuardError(400, "last pa")),
     )
     with pytest.raises(HTTPException) as exc:
-        await users_api.update_user_role(last_pa.id, users_api.RoleUpdate(role="member"), pa)
+        await users_api.update_user_role(last_pa.id, users_api.RoleUpdate(role=UserRole.MEMBER), pa)
     assert exc.value.status_code == 400
 
 
@@ -1578,7 +1596,7 @@ async def test_join_default_immediate_and_suggested_pending_branches(monkeypatch
     admission = pending_admission(in_org, suggested, AdmissionMethod.VERIFIED_DOMAIN)
     with pytest.raises(HTTPException) as transfer_required:
         await tenants_api.join_suggested_org(tenants_api.SuggestedJoinRequest(), in_org)
-    assert transfer_required.value.status_code == 409
+    assert transfer_required.value.status_code == 403
     admission.submit.assert_not_awaited()
     attach.assert_not_awaited()
     token.assert_not_called()
@@ -1644,8 +1662,9 @@ async def test_join_company_invitation_validation_and_deferred_attach_conflict(m
     )
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     result = await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), member)
-    _assert_pending_response(result, admission)
-    admission.submit.assert_awaited_once_with(member, tenant.id, AdmissionMethod.INVITATION, invitation_code="X")
+    _assert_approved_response(result, admission)
+    admission.admit.assert_awaited_once_with(member, tenant.id, "X", transfer_id=None, fenced_ids=None)
+    admission.submit.assert_not_awaited()
     attach.assert_not_awaited()
     consume.assert_not_awaited()
     assert member.tenant_id is None
@@ -1660,12 +1679,13 @@ async def test_join_company_invitation_validation_and_deferred_attach_conflict(m
         await tenants_api.join_company(tenants_api.JoinRequest(invitation_code="X"), member)
     assert conflict.value.status_code == 409
     consume.assert_not_awaited()
-    admission.submit.assert_awaited_once()
+    admission.admit.assert_awaited_once()
+    admission.submit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_transfer_validation_pending_company_and_same_default_paths(monkeypatch, pending_admission):
-    from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError, InvitationError
+    from app.services.org_membership import DefaultOrgUnavailableError, InvitationError
 
     dest = _tenant()
     source = _tenant(is_default_end_user_org=True)
@@ -1765,12 +1785,14 @@ async def test_transfer_validation_pending_company_and_same_default_paths(monkey
         AsyncMock(return_value=dest),
     )
     monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=None))
-    pending = await tenants_api.transfer_organization(
-        tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
-        member,
-    )
-    _assert_pending_response(pending, admission)
-    admission.submit.assert_awaited_once_with(member, dest.id, AdmissionMethod.VERIFIED_DOMAIN, invitation_code=None)
+    with pytest.raises(HTTPException) as company_without_invitation:
+        await tenants_api.transfer_organization(
+            tenants_api.TransferRequest(password="secret1", tenant_id=dest.id),
+            member,
+        )
+    assert company_without_invitation.value.status_code == 403
+    admission.submit.assert_not_awaited()
+    admission.admit.assert_not_awaited()
     transfer.assert_not_awaited()
     consume.assert_not_awaited()
     token.assert_not_called()
@@ -1790,31 +1812,7 @@ async def test_transfer_validation_pending_company_and_same_default_paths(monkey
             member,
         )
     assert not_allowed.value.status_code == 403
-    admission.submit.assert_awaited_once()
-
-    monkeypatch.setattr(
-        "app.services.org_membership.lookup_tenant_for_verified_email",
-        AsyncMock(return_value=dest),
-    )
-    monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=dest))
-    transfer.side_effect = AlreadyInOrgError("already")
-    pending = await tenants_api.transfer_organization(
-        tenants_api.TransferRequest(password="secret1", tenant_id=dest.id), member
-    )
-    _assert_pending_response(pending, admission)
-    transfer.assert_not_awaited()
-
-    transfer.side_effect = DefaultOrgUnavailableError("gone")
-    pending = await tenants_api.transfer_organization(
-        tenants_api.TransferRequest(password="secret1", tenant_id=dest.id), member
-    )
-    _assert_pending_response(pending, admission)
-    admission.submit.assert_awaited_with(member, dest.id, AdmissionMethod.VERIFIED_DOMAIN, invitation_code=None)
-    assert admission.submit.await_count == 3
-    transfer.assert_not_awaited()
-    consume.assert_not_awaited()
-    token.assert_not_called()
-    assert member.tenant_id == source.id
+    admission.submit.assert_not_awaited()
 
     fallback = source
     monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
@@ -1828,7 +1826,7 @@ async def test_transfer_validation_pending_company_and_same_default_paths(monkey
     assert same_default.value.status_code == 400
     transfer.assert_not_awaited()
     token.assert_not_called()
-    assert admission.submit.await_count == 3
+    admission.submit.assert_not_awaited()
 
     with pytest.raises(HTTPException) as no_target:
         await tenants_api.transfer_organization(tenants_api.TransferRequest(password="secret1"), member)
@@ -1941,43 +1939,47 @@ async def test_admin_provisioning_taken_and_assignment_guards(monkeypatch):
     actor = _user(role="member")
     target = _user(role="member")
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_role_change(actor=actor, target=target, new_role="member")
+        await provisioning.apply_user_role_change(actor=actor, target=target, new_role=UserRole.MEMBER)
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_role_change(actor=_user(role="org_admin"), target=target, new_role="nope")
-    with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_assignment(
-            actor=_user(), target=_user(is_genesis=True), tenant_id=uuid.uuid4(), role="member"
+        await provisioning.apply_user_role_change(
+            actor=_user(role="org_admin"), target=target, new_role=UserRole.AGENT_ADMIN
         )
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_assignment(actor=_user(), target=target, tenant_id=uuid.uuid4(), role="org_admin")
+        await provisioning.apply_user_assignment(
+            actor=_user(), target=_user(is_genesis=True), tenant_id=uuid.uuid4(), role=UserRole.MEMBER
+        )
+    with pytest.raises(provisioning.AdminGuardError):
+        await provisioning.apply_user_assignment(
+            actor=_user(), target=target, tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN
+        )
 
     pa = _user(role="platform_admin")
     same = _user(role="member", tenant_id=uuid.uuid4())
-    unchanged = await provisioning.apply_user_role_change(actor=pa, target=same, new_role="member")
+    unchanged = await provisioning.apply_user_role_change(actor=pa, target=same, new_role=UserRole.MEMBER)
     assert unchanged.id == same.id
 
     genesis_target = _user(role="member", is_genesis=True)
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_role_change(actor=pa, target=genesis_target, new_role="org_admin")
+        await provisioning.apply_user_role_change(actor=pa, target=genesis_target, new_role=UserRole.ORG_ADMIN)
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", AsyncMock(return_value=False))
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_role_change(actor=pa, target=target, new_role="platform_admin")
+        await provisioning.apply_user_role_change(actor=pa, target=target, new_role=UserRole.PLATFORM_ADMIN)
 
     org = _user(role="org_admin", tenant_id=uuid.uuid4())
     monkeypatch.setattr(provisioning, "is_genesis_org_admin", AsyncMock(return_value=False))
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning.apply_user_role_change(actor=org, target=target, new_role="org_admin")
+        await provisioning.apply_user_role_change(actor=org, target=target, new_role=UserRole.ORG_ADMIN)
 
     last_pa = _user(role="platform_admin", is_active=True)
     monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=1))
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning._assert_not_last_active_admin(last_pa, leaving_role="platform_admin")
+        await provisioning._assert_not_last_active_admin(last_pa, leaving_role=UserRole.PLATFORM_ADMIN)
     last_oa = _user(role="org_admin", tenant_id=uuid.uuid4(), is_active=True)
     with pytest.raises(provisioning.AdminGuardError):
-        await provisioning._assert_not_last_active_admin(last_oa, leaving_role="org_admin")
+        await provisioning._assert_not_last_active_admin(last_oa, leaving_role=UserRole.ORG_ADMIN)
     inactive = _user(role="platform_admin", is_active=False)
-    await provisioning._assert_not_last_active_admin(inactive, leaving_role="platform_admin")
+    await provisioning._assert_not_last_active_admin(inactive, leaving_role=UserRole.PLATFORM_ADMIN)
 
 
 @pytest.mark.asyncio

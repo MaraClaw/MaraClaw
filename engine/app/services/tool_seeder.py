@@ -10,7 +10,19 @@ from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.services import tool_definitions
-from app.services.tool_definition_types import BuiltinToolDefinition as BuiltinToolDefinition
+from app.services.tool_definition_types import BuiltinToolDefinition
+
+__all__ = [
+    "AGENTBAY_TOOLS",
+    "BUILTIN_TOOLS",
+    "DEPLOY_BUILTIN_TOOLS",
+    "OKR_BUILTIN_TOOLS",
+    "BuiltinToolDefinition",
+    "clean_orphaned_mcp_tools",
+    "get_atlassian_api_key",
+    "seed_atlassian_rovo_config",
+    "seed_builtin_tools",
+]
 
 AGENTBAY_TOOLS = tool_definitions.AGENTBAY_TOOLS
 BUILTIN_TOOLS: Sequence[BuiltinToolDefinition] = tool_definitions.BUILTIN_TOOLS
@@ -275,7 +287,7 @@ async def _auto_assign_helpers(*, anchor_names: list[str], helper_names: list[st
     if assigned_count:
         logger.info(
             f"[ToolSeeder] Auto-assigned {assigned_count} AgentBay {label} helper tool(s) "
-            + f"to {len(enabled_agent_ids)} agent(s)"
+            f"to {len(enabled_agent_ids)} agent(s)"
         )
 
 
@@ -302,8 +314,8 @@ ATLASSIAN_ROVO_CONFIG_TOOL: AtlassianRovoConfigTool = {
     "display_name": "Atlassian Rovo (Jira / Confluence / Compass)",
     "description": (
         "Connect to Atlassian Rovo MCP Server to access Jira, Confluence, and Compass. "
-        + "Configure your API key to enable Jira issue management, Confluence page creation, "
-        + "and Compass component queries."
+        "Configure your API key to enable Jira issue management, Confluence page creation, "
+        "and Compass component queries."
     ),
     "category": "atlassian",
     "icon": "🔷",
@@ -320,7 +332,7 @@ ATLASSIAN_ROVO_CONFIG_TOOL: AtlassianRovoConfigTool = {
                 "placeholder": "ATSTT3x... (service account key) or Basic base64(email:token)",
                 "description": (
                     "Service account API key (Bearer) or base64-encoded email:api_token (Basic). "
-                    + "Get your API key from id.atlassian.com/manage-profile/security/api-tokens"
+                    "Get your API key from id.atlassian.com/manage-profile/security/api-tokens"
                 ),
             },
         ]

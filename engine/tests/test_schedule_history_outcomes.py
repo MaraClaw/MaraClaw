@@ -6,9 +6,11 @@ from uuid import UUID
 import pytest
 
 from app.schemas.schedule_history import ScheduleHistoryPage
-from test_schedule_dao import NOW, pool as pool
-from test_schedule_history import _History, history as history
-from test_scheduler_api import _HTTP, api as api
+from test_schedule_dao import NOW, pool
+from test_schedule_history import _History, history
+from test_scheduler_api import _HTTP, api
+
+__all__ = ["api", "history", "pool"]
 
 
 @pytest.mark.parametrize("outcome", ["all", "success", "failure", "cancelled", "unknown"])
@@ -19,12 +21,12 @@ async def test_outcome_filters_before_limit_with_nulls_and_ties(api: _HTTP, hist
     for index, value in enumerate(statuses):
         log_id = UUID(int=100 - index)
         history.add(
-            api.row.agent_id, api.row.id, id=log_id, created_at=NOW if index < 5 else None, detail={"status": value}
+            api.row.agent_id, api.row.id, log_id=log_id, created_at=NOW if index < 5 else None, detail={"status": value}
         )
         normalized = (
             "failure" if value in ("failed", "failure") else value if value in ("success", "cancelled") else "unknown"
         )
-        if outcome == "all" or normalized == outcome:
+        if outcome in ("all", normalized):
             expected.append(str(log_id))
     # When traversing the SQL-filtered result a row at a time.
     observed: list[str] = []

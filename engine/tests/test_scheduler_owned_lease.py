@@ -13,9 +13,11 @@ from app.db import session
 from app.services import schedule_lease
 from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.schedule_lease import ScheduleLeaseHold
-from test_schedule_dao import NOW, _next_run, _schedule, pool as pool
+from test_schedule_dao import NOW, _next_run, _schedule, pool
 from test_scheduler import _Clock
-from test_scheduler_tasks import owner as owner
+from test_scheduler_tasks import owner
+
+__all__ = ["owner", "pool"]
 
 
 @pytest.fixture(autouse=True)

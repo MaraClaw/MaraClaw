@@ -32,7 +32,7 @@ def _response_mapping(response: Response) -> JsonObject:
 
 
 def _nested_mapping(value: object) -> Mapping[object, object]:
-    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
+    return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -173,19 +173,19 @@ async def _vercel_deploy(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments
             if status == "READY":
                 return (
                     "✅ **Deployment triggered successfully!**\n\n"
-                    + f"- **URL**: https://{dep_url}\n"
-                    + "- **Status**: READY (Active)\n"
-                    + f"- **Project Name**: {project_name}\n"
-                    + f"- **Deployment ID**: {dep_id}\n"
-                    + "- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
-                    + f"{quota_summary}"
+                    f"- **URL**: https://{dep_url}\n"
+                    "- **Status**: READY (Active)\n"
+                    f"- **Project Name**: {project_name}\n"
+                    f"- **Deployment ID**: {dep_id}\n"
+                    "- **Protection Bypass**: Disabled (Automatically turned off for automated debugging)\n\n"
+                    f"{quota_summary}"
                 )
             return (
                 f"⚠️ **Deployment state**: {status}\n"
-                + f"- **URL**: https://{dep_url}\n"
-                + f"- **Deployment ID**: {dep_id}\n"
-                + "- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
-                + f"{quota_summary}"
+                f"- **URL**: https://{dep_url}\n"
+                f"- **Deployment ID**: {dep_id}\n"
+                "- **Note**: Check build logs using `vercel_get_deploy_logs` to diagnose errors.\n\n"
+                f"{quota_summary}"
             )
         except Exception as e:
             logger.exception("Vercel deployment failed")
@@ -218,9 +218,9 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
                         created_str = str(created_at)
                     lines.append(
                         f"- URL: https://{dep.get('url')} | "
-                        + f"Status: {dep.get('state')} | "
-                        + f"Created: {created_str} | "
-                        + f"ID: `{dep.get('uid')}`"
+                        f"Status: {dep.get('state')} | "
+                        f"Created: {created_str} | "
+                        f"ID: `{dep.get('uid')}`"
                     )
                 return "\n".join(lines)
             return f"❌ Failed to retrieve deployments: {res.text}"

@@ -9,6 +9,7 @@ import pytest
 from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache, session_cache
+from app.core.domain.users import UserRole
 from app.core.json_types import is_json_object
 from app.core.row_memo import clear_row_memo
 from app.core.security import load_identity_for_password
@@ -47,7 +48,7 @@ def _user(**overrides) -> UserRecord:
         identity_id=ident.id,
         tenant_id=uuid4(),
         display_name="Alice",
-        role="member",
+        role=UserRole.MEMBER,
         is_active=True,
         quota_messages_used=9,
         identity=ident,

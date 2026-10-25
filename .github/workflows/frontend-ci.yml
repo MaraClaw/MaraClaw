@@ -35,6 +35,8 @@ jobs:
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
       - name: Install locked dependencies
         run: npm ci
+      - name: Check API contract freshness
+        run: npm run contracts:check
       - name: Lint
         run: npm run lint
       - name: Typecheck

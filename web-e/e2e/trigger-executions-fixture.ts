@@ -22,7 +22,7 @@ export function historyExecution(id = latestId, status = 'pending'): TriggerExec
 
 export async function prepareTriggerHistory(page: Page, access: AgentOut['access_level'] = 'manage', role = 'member') {
   await prepareWorkspace(page)
-  await page.route('**/api/auth/me', (route) => route.fulfill({ json: { ...originalUser, role } }))
+  await page.route('**/api/member/auth/me', (route) => route.fulfill({ json: { ...originalUser, role } }))
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: { ...originalAgent, access_level: access } }))
   await page.route(`**/api/agents/${originalAgent.id}/openclaw-update`, (route) => route.fulfill({
     json: { notice: null, run: null, required: false, can_upgrade: false },

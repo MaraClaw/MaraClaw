@@ -149,7 +149,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
             return date_from_row_opt(
                 await db.fetchval(
                     "SELECT period_start FROM okr_objectives "
-                    + "WHERE tenant_id = %(tenant_id)s ORDER BY period_start ASC LIMIT 1",
+                    "WHERE tenant_id = %(tenant_id)s ORDER BY period_start ASC LIMIT 1",
                     {"tenant_id": tenant_id},
                 )
             )
@@ -158,9 +158,9 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM okr_objectives "
-                + "WHERE tenant_id = %(tenant_id)s AND owner_type = 'company' "
-                + "AND period_start >= %(period_start)s AND period_end <= %(period_end)s "
-                + "AND status <> 'archived' LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND owner_type = 'company' "
+                "AND period_start >= %(period_start)s AND period_end <= %(period_end)s "
+                "AND status <> 'archived' LIMIT 1",
                 {"tenant_id": tenant_id, "period_start": period_start, "period_end": period_end},
             )
             return value is not None
@@ -176,10 +176,10 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT owner_id FROM okr_objectives "
-                + "WHERE tenant_id = %(tenant_id)s "
-                + "AND owner_type = ANY(%(owner_types)s) "
-                + "AND period_start >= %(period_start)s AND period_end <= %(period_end)s "
-                + "AND status <> 'archived' AND owner_id IS NOT NULL",
+                "WHERE tenant_id = %(tenant_id)s "
+                "AND owner_type = ANY(%(owner_types)s) "
+                "AND period_start >= %(period_start)s AND period_end <= %(period_end)s "
+                "AND status <> 'archived' AND owner_id IS NOT NULL",
                 {
                     "tenant_id": tenant_id,
                     "owner_types": list(owner_types),
@@ -202,7 +202,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM okr_key_results "
-                + "WHERE objective_id = %(objective_id)s ORDER BY created_at",
+                "WHERE objective_id = %(objective_id)s ORDER BY created_at",
                 {"objective_id": objective_id},
             )
             return [OKRKeyResultRecord.from_row(row) for row in rows]
@@ -213,7 +213,7 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM okr_key_results "
-                + "WHERE objective_id = ANY(%(ids)s) ORDER BY created_at",
+                "WHERE objective_id = ANY(%(ids)s) ORDER BY created_at",
                 {"ids": list(objective_ids)},
             )
             return [OKRKeyResultRecord.from_row(row) for row in rows]
@@ -225,9 +225,9 @@ class OKRKeyResultDAO(BaseDAO[OKRKeyResultRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('k')}, {obj_cols} "
-                + "FROM okr_key_results k "
-                + "JOIN okr_objectives o ON o.id = k.objective_id "
-                + "WHERE k.id = %(kr_id)s AND o.tenant_id = %(tenant_id)s",
+                "FROM okr_key_results k "
+                "JOIN okr_objectives o ON o.id = k.objective_id "
+                "WHERE k.id = %(kr_id)s AND o.tenant_id = %(tenant_id)s",
                 {"kr_id": kr_id, "tenant_id": tenant_id},
             )
             if row is None:
@@ -277,8 +277,8 @@ class WorkReportDAO(BaseDAO[WorkReportRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM work_reports "
-                + f"WHERE tenant_id = %(tenant_id)s{type_sql} "
-                + "ORDER BY period_date DESC, created_at DESC LIMIT %(limit)s",
+                f"WHERE tenant_id = %(tenant_id)s{type_sql} "
+                "ORDER BY period_date DESC, created_at DESC LIMIT %(limit)s",
                 params,
             )
             return [WorkReportRecord.from_row(row) for row in rows]
@@ -303,8 +303,8 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM member_daily_reports "
-                + "WHERE tenant_id = %(tenant_id)s AND member_type = %(member_type)s "
-                + "AND member_id = %(member_id)s AND report_date = %(report_date)s",
+                "WHERE tenant_id = %(tenant_id)s AND member_type = %(member_type)s "
+                "AND member_id = %(member_id)s AND report_date = %(report_date)s",
                 {
                     "tenant_id": tenant_id,
                     "member_type": member_type,
@@ -318,7 +318,7 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM member_daily_reports "
-                + "WHERE tenant_id = %(tenant_id)s AND report_date = %(report_date)s",
+                "WHERE tenant_id = %(tenant_id)s AND report_date = %(report_date)s",
                 {"tenant_id": tenant_id, "report_date": report_date},
             )
             return [MemberDailyReportRecord.from_row(row) for row in rows]
@@ -343,8 +343,8 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM company_reports "
-                + "WHERE tenant_id = %(tenant_id)s AND report_type = %(report_type)s "
-                + "AND period_start = %(period_start)s AND period_end = %(period_end)s",
+                "WHERE tenant_id = %(tenant_id)s AND report_type = %(report_type)s "
+                "AND period_start = %(period_start)s AND period_end = %(period_end)s",
                 {
                     "tenant_id": tenant_id,
                     "report_type": report_type,
@@ -369,8 +369,8 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM company_reports "
-                + f"WHERE tenant_id = %(tenant_id)s{type_sql} "
-                + "ORDER BY period_start DESC, updated_at DESC LIMIT %(limit)s",
+                f"WHERE tenant_id = %(tenant_id)s{type_sql} "
+                "ORDER BY period_start DESC, updated_at DESC LIMIT %(limit)s",
                 params,
             )
             return [CompanyReportRecord.from_row(row) for row in rows]
@@ -381,9 +381,9 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM company_reports "
-                + "WHERE tenant_id = %(tenant_id)s AND report_type = 'daily' "
-                + "AND period_start >= %(period_start)s AND period_start <= %(period_end)s "
-                + "ORDER BY period_start ASC",
+                "WHERE tenant_id = %(tenant_id)s AND report_type = 'daily' "
+                "AND period_start >= %(period_start)s AND period_start <= %(period_end)s "
+                "ORDER BY period_start ASC",
                 {"tenant_id": tenant_id, "period_start": period_start, "period_end": period_end},
             )
             return [CompanyReportRecord.from_row(row) for row in rows]
@@ -394,9 +394,9 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM company_reports "
-                + "WHERE tenant_id = %(tenant_id)s AND report_type = 'weekly' "
-                + "AND period_start >= %(period_start)s AND period_start <= %(period_end)s "
-                + "ORDER BY period_start ASC",
+                "WHERE tenant_id = %(tenant_id)s AND report_type = 'weekly' "
+                "AND period_start >= %(period_start)s AND period_start <= %(period_end)s "
+                "ORDER BY period_start ASC",
                 {"tenant_id": tenant_id, "period_start": period_start, "period_end": period_end},
             )
             return [CompanyReportRecord.from_row(row) for row in rows]
@@ -416,11 +416,11 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE company_reports SET needs_refresh = TRUE, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND ("
-                + "  (report_type = 'daily' AND period_start = %(day)s)"
-                + "  OR (report_type = 'weekly' AND period_start = %(week_start)s AND period_end = %(week_end)s)"
-                + "  OR (report_type = 'monthly' AND period_start = %(month_start)s AND period_end = %(month_end)s)"
-                + ")",
+                "WHERE tenant_id = %(tenant_id)s AND ("
+                "  (report_type = 'daily' AND period_start = %(day)s)"
+                "  OR (report_type = 'weekly' AND period_start = %(week_start)s AND period_end = %(week_end)s)"
+                "  OR (report_type = 'monthly' AND period_start = %(month_start)s AND period_end = %(month_end)s)"
+                ")",
                 {
                     "tenant_id": tenant_id,
                     "day": report_day,

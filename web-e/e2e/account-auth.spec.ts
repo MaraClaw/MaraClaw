@@ -4,8 +4,8 @@ import type { UserOut } from '../src/lib/types/auth'
 
 const member: UserOut = {
   id: 'f936188e-a374-4edf-9b05-ac6c9cb236a6', email: 'member@example.test',
-  display_name: 'Member', role: 'member', tenant_id: 'company', email_verified: true,
-  must_change_password: true,
+  display_name: 'Member', role: 'member', tenant_id: 'f0c4b91d-7d55-4d66-845c-320f76e938de', email_verified: true,
+  must_change_password: true, is_active: true, created_at: '2026-10-25T08:00:00Z',
 }
 
 async function prepareAuth(page: Page) {
@@ -29,27 +29,29 @@ async function prepareAuth(page: Page) {
         availability.push([...url.searchParams])
         await route.fulfill({ json: { email_exists: false, has_conflict: false } })
         break
-      case '/api/auth/register/init':
+      case '/api/member/auth/register/init':
         registrations.push(request.postDataJSON())
         await route.fulfill({ json: {
-          access_token: 'registered-account', user: member,
-          identity: { id: 'identity', email: member.email },
+          access_token: 'registered-account', user: member, email: member.email, user_id: member.id, message: 'Registration complete',
         } })
         break
-      case '/api/auth/login':
+      case '/api/member/auth/login':
         logins.push(request.postDataJSON())
         await route.fulfill({ json: {
-          access_token: 'email-account', user: member, identity: { id: 'identity', email: member.email },
+          access_token: 'email-account', user: member,
         } })
         break
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         await route.fulfill({ json: member })
         break
       case '/api/notifications/unread-count':
         await route.fulfill({ json: { unread_count: 0 } })
         break
+      case '/api/company-admissions/mine/page':
+        await route.fulfill({ json: { items: [], next_cursor: null } })
+        break
       case '/api/tenants/me':
-        await route.fulfill({ json: { id: 'company', name: 'Company', slug: 'company' } })
+        await route.fulfill({ json: { id: member.tenant_id, name: 'Company', slug: 'company' } })
         break
       default:
         throw new Error(`Unexpected auth request: ${request.method()} ${url.pathname}`)
@@ -101,6 +103,7 @@ for (const email of ['shared@one.example', 'shared@two.example']) {
     await expect(page.getByLabel('Username', { exact: true })).toHaveCount(0)
     await page.getByLabel('Email', { exact: true }).fill(email)
     await page.getByLabel('Password', { exact: true }).fill('a-secure-password')
+    await page.getByLabel('Confirm password', { exact: true }).fill('a-secure-password')
     await page.getByLabel('Invitation code', { exact: false }).fill('  company-invite  ')
     // When
     await page.getByRole('button', { name: 'Create account', exact: true }).click()
@@ -118,9 +121,37 @@ test('registration omits optional display name and invitation code', async ({ pa
   await page.goto('/register')
   await page.getByLabel('Email', { exact: true }).fill('member@example.test')
   await page.getByLabel('Password', { exact: true }).fill('a-secure-password')
+  const confirmPassword = page.getByLabel('Confirm password', { exact: true })
+  await expect(confirmPassword).toHaveAttribute('type', 'password')
+  await expect(confirmPassword).toHaveAttribute('autocomplete', 'new-password')
+  await confirmPassword.fill('a-secure-password')
   // When
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
   // Then
   await expect(page).toHaveURL('/app/settings')
   expect(registrations).toEqual([{ email: 'member@example.test', password: 'a-secure-password' }])
 })
+
+for (const { confirmation, message } of [
+  { confirmation: '', message: 'Confirm your password' },
+  { confirmation: 'different-password', message: 'Passwords do not match' },
+]) {
+  test(`registration rejects ${confirmation ? 'mismatched' : 'missing'} password confirmation without posting`, async ({ page }) => {
+    // Given
+    const { registrations, errors } = await prepareAuth(page)
+    await page.goto('/register')
+    await page.getByLabel('Email', { exact: true }).fill('member@example.test')
+    await page.getByLabel('Password', { exact: true }).fill('a-secure-password')
+    const confirmPassword = page.getByLabel('Confirm password', { exact: true })
+    if (confirmation) await confirmPassword.fill(confirmation)
+    // When
+    await page.getByRole('button', { name: 'Create account', exact: true }).click()
+    // Then
+    await expect(page.getByRole('alert')).toHaveText(message)
+    await expect(confirmPassword).toHaveAttribute('aria-invalid', 'true')
+    await expect(confirmPassword).toHaveAccessibleDescription(message)
+    await expect(page).toHaveURL('/register')
+    expect(registrations).toEqual([])
+    expect(errors).toEqual([])
+  })
+}

@@ -7,14 +7,15 @@ from contextlib import contextmanager
 from typing import Literal
 from unittest.mock import patch
 
+from app.core.smtp_policy import PublicSMTP, PublicSMTPSSL
+
 
 def _ipv4_getaddrinfo(
     host: str | bytes | None,
     port: str | bytes | int | None,
     family: int = 0,
-    type: int = 0,
-    proto: int = 0,
-    flags: int = 0,
+    *socket_args: int,
+    **socket_options: int,
 ) -> list[
     tuple[Literal[socket.AddressFamily.AF_INET], socket.SocketKind, int, str, tuple[str, int]]
     | tuple[
@@ -26,6 +27,7 @@ def _ipv4_getaddrinfo(
     ]
 ]:
     """Wrapper that forces AF_INET (IPv4) to avoid IPv6 failures in Docker."""
+    _ = family
     ipv4_addresses: list[
         tuple[Literal[socket.AddressFamily.AF_INET], socket.SocketKind, int, str, tuple[str, int]]
         | tuple[
@@ -37,7 +39,7 @@ def _ipv4_getaddrinfo(
         ]
     ] = []
     for _, socket_type, protocol, canonical_name, socket_address in _original_getaddrinfo(
-        host, port, socket.AF_INET, type, proto, flags
+        host, port, socket.AF_INET, *socket_args, **socket_options
     ):
         address = socket_address[0]
         resolved_port = socket_address[1]
@@ -72,6 +74,7 @@ def send_smtp_email(
     msg_string: str,
     use_ssl: bool = True,
     timeout: int = 15,
+    public_only: bool = False,
 ) -> None:
     """Synchronously send an email via SMTP with IPv4 enforcement.
 
@@ -99,14 +102,20 @@ def send_smtp_email(
         use_ssl: True for direct TLS (port 465), False for plain/STARTTLS
         timeout: Socket timeout in seconds
     """
-    with force_ipv4():
+    # Public dials own their DNS lookup and pin the socket. Do not patch process DNS.
+    from contextlib import nullcontext
+
+    smtp_class = PublicSMTP if public_only else smtplib.SMTP
+    ssl_class = PublicSMTPSSL if public_only else smtplib.SMTP_SSL
+    with nullcontext() if public_only else force_ipv4():
         if use_ssl:
             context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(host, port, context=context, timeout=timeout) as server:
-                _ = server.login(user, password)
+            with ssl_class(host, port, context=context, timeout=timeout) as server:
+                if user or password:
+                    _ = server.login(user, password)
                 _ = server.sendmail(from_addr, to_addrs, msg_string)
         else:
-            with smtplib.SMTP(host, port, timeout=timeout) as server:
+            with smtp_class(host, port, timeout=timeout) as server:
                 _ = server.ehlo()
 
                 # Upgrade to STARTTLS only if the server explicitly advertises

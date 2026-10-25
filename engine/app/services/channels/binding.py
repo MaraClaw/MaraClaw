@@ -14,6 +14,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
+from app.schemas.chat_wire import ChatEventType
 from app.services.channel_user_service import ChannelUserResolutionError, channel_user_service
 from app.services.shared_chat import ensure_shared_session, is_shared_session
 
@@ -95,7 +96,7 @@ async def persist_channel_user_message(
                         agent_id,
                         conversation_id,
                         {
-                            "type": "done",
+                            "type": ChatEventType.DONE,
                             "role": "user",
                             "content": content,
                             "message_id": str(message.id),

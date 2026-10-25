@@ -8,6 +8,7 @@ import pytest
 
 import app.services.sso_scan_sessions as service
 from app.core import security
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
 from app.records.sso_scan_session import SSOScanSessionRecord
 from app.records.user import UserRecord
@@ -50,7 +51,12 @@ class AtomicSessionDAO:
 def make_user(*, active: bool = True, identity_active: bool = True) -> UserRecord:
     identity = IdentityRecord(id=uuid4(), is_active=identity_active, must_change_password=True)
     return UserRecord(
-        id=uuid4(), identity_id=identity.id, identity=identity, tenant_id=uuid4(), is_active=active, role="org_admin"
+        id=uuid4(),
+        identity_id=identity.id,
+        identity=identity,
+        tenant_id=uuid4(),
+        is_active=active,
+        role=UserRole.ORG_ADMIN,
     )
 
 

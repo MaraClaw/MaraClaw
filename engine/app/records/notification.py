@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.notification_kinds import NotificationKind
 
 
 @dataclass(slots=True)
@@ -15,7 +16,7 @@ class NotificationRecord:
     """In-app notification for a user or agent."""
 
     id: UUID
-    type: str
+    type: NotificationKind
     title: str
     user_id: UUID | None = None
     agent_id: UUID | None = None
@@ -31,7 +32,7 @@ class NotificationRecord:
     def from_row(cls, row: Mapping[str, object]) -> NotificationRecord:
         return cls(
             id=uuid_from_row(row["id"]),
-            type=str_from_row(row["type"]),
+            type=NotificationKind(str_from_row(row["type"])),
             title=str_from_row(row["title"]),
             user_id=uuid_from_row_opt(row.get("user_id")),
             agent_id=uuid_from_row_opt(row.get("agent_id")),

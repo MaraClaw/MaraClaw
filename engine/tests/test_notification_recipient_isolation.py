@@ -12,12 +12,15 @@ from fastapi import FastAPI, Request
 from pydantic import TypeAdapter
 
 from app.api import notification as notification_api
+from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.db.connection import Params
 from app.records.notification import NotificationRecord
 from app.records.user import UserRecord
 from app.schemas.notification_responses import NotificationResponse
-from notification_db_fakes import NotificationConnection, _Cursor, notification_db as notification_db
+from notification_db_fakes import NotificationConnection, _Cursor, notification_db
+
+__all__ = ["notification_db"]
 
 OWNER = UserRecord(id=UUID(int=100), identity_id=UUID(int=1000), tenant_id=UUID(int=10))
 SAME_TENANT = UserRecord(id=UUID(int=200), identity_id=UUID(int=2000), tenant_id=OWNER.tenant_id)
@@ -64,7 +67,11 @@ def populated_db(notification_db: NotificationConnection, monkeypatch: pytest.Mo
     monkeypatch.setattr(notification_db, "cursor", lambda: _RecipientCursor(notification_db))
     notification_db.notifications = [
         NotificationRecord(
-            id=note_id, user_id=user.id, type="organization_welcome", title="Private welcome", is_read=read
+            id=note_id,
+            user_id=user.id,
+            type=NotificationKind.ORGANIZATION_WELCOME,
+            title="Private welcome",
+            is_read=read,
         )
         for note_id, user, read in [
             (PRIVATE_ID, OWNER, False),

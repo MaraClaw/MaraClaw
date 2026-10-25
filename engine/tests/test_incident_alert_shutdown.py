@@ -7,7 +7,9 @@ from app.core.logging import get_trace_id, set_trace_id
 from app.db import session
 from app.runtime import incident_alerts
 from app.services.incident_report import IncidentReport
-from incident_alert_fakes import AlertHarness, harness as harness
+from incident_alert_fakes import AlertHarness, harness
+
+__all__ = ["harness"]
 from test_db_session import _FakePool, _FakeRawConnection
 
 

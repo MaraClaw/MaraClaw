@@ -16,10 +16,12 @@ from app.services.schedule_lease import in_fresh_schedule_context
 from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
-    live_schedule as live_schedule,
-    manual_schedule as manual_schedule,
+    live_schedule,
+    manual_schedule,
     schedule_app,
 )
+
+__all__ = ["live_schedule", "manual_schedule"]
 
 
 @final
@@ -180,7 +182,7 @@ async def test_live_cancel_conflicts_except_already_cancelled(manual_schedule: A
 async def test_live_cancel_after_scoped_read_and_delete_is_not_found(manual_schedule: AgentScheduleRecord) -> None:
     # Given a trusted scoped row whose schedule is subsequently deleted.
     claim = await accept_claim(manual_schedule)
-    await agent_schedule_dao.delete(id=manual_schedule.id)
+    await agent_schedule_dao.delete(record_id=manual_schedule.id)
     # When cancellation tries to update the formerly authorized identity.
     with pytest.raises(HTTPException) as caught:
         await cancel_manual_run(claim)

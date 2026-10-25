@@ -1,17 +1,18 @@
 import { expect, test } from '@playwright/test'
 
+import { NotificationKind } from '../src/lib/notifications-api'
 import { inboxPath, notice, prepareNotifications, replacementNotice } from './notifications-fixture'
 import { replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 
 test('category switching during a request never displays another category’s late rows', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [notice('Tool event', 'autonomy_l2'), notice('Approval event', 'approval_pending')])
+  await prepareNotifications(page, [notice('Tool event', NotificationKind.AutonomyL2), notice('Approval event', NotificationKind.ApprovalPending)])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   await page.route('**/api/notifications?category=tool&**', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Late tool event', 'autonomy_l2')] })
+    await route.fulfill({ json: [notice('Late tool event', NotificationKind.AutonomyL2)] })
   })
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
@@ -32,7 +33,7 @@ test('category switching during a request never displays another category’s la
 
 test('load more uses real offsets beyond 200 and retains earlier notifications', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, Array.from({ length: 251 }, (_, index) => notice(`Tool ${index}`, 'autonomy_l2', index < 250)))
+  const fixture = await prepareNotifications(page, Array.from({ length: 251 }, (_, index) => notice(`Tool ${index}`, NotificationKind.AutonomyL2, index < 250)))
   await page.goto(inboxPath)
   await page.getByLabel('Category', { exact: true }).selectOption('tool')
   const list = page.getByRole('list', { name: 'Notifications' })
@@ -52,8 +53,8 @@ test('load more uses real offsets beyond 200 and retains earlier notifications',
 test('bulk read includes unread rows beyond the page and preserves unrelated badge counts', async ({ page }) => {
   // Given
   await prepareNotifications(page, [
-    ...Array.from({ length: 51 }, (_, index) => notice(`Tool ${index}`, 'autonomy_l2', index < 50)),
-    notice('Pending approval', 'approval_pending'), notice('Company broadcast', 'broadcast'),
+    ...Array.from({ length: 51 }, (_, index) => notice(`Tool ${index}`, NotificationKind.AutonomyL2, index < 50)),
+    notice('Pending approval', NotificationKind.ApprovalPending), notice('Company broadcast', NotificationKind.Broadcast),
   ])
   await page.goto(inboxPath)
   await page.getByLabel('Category', { exact: true }).selectOption('tool')
@@ -71,7 +72,7 @@ test('bulk read includes unread rows beyond the page and preserves unrelated bad
 
 test('broadcast bulk read refreshes both social and broadcast views', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [notice('Announcement', 'broadcast'), notice('Comment', 'plaza_comment'), notice('Approval', 'approval_resolved')])
+  await prepareNotifications(page, [notice('Announcement', NotificationKind.Broadcast), notice('Comment', NotificationKind.PlazaComment), notice('Approval', NotificationKind.ApprovalResolved)])
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
   await category.selectOption('social')
@@ -104,7 +105,7 @@ test('failed list requests can retry to an empty category', async ({ page }) => 
 
 test('failed bulk requests preserve unread rows and badge until a successful retry', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, [notice('Unread tool', 'autonomy_l2'), notice('Unread approval', 'approval_pending')])
+  const fixture = await prepareNotifications(page, [notice('Unread tool', NotificationKind.AutonomyL2), notice('Unread approval', NotificationKind.ApprovalPending)])
   fixture.failWrites(true)
   await page.goto(inboxPath)
   await page.getByLabel('Category', { exact: true }).selectOption('tool')
@@ -123,10 +124,10 @@ test('failed bulk requests preserve unread rows and badge until a successful ret
 test('notification links keep Plaza remapping and existing member destinations', async ({ page }) => {
   // Given
   await prepareNotifications(page, [
-    { ...notice('Plaza', 'mention'), link: '/plaza?post=one#reply' },
-    { ...notice('Admission', 'company_admission_resolved'), link: '/app/admissions/request-a' },
-    { ...notice('Agent', 'autonomy_l2'), link: '/app/agents/agent-a/chat' },
-    { ...notice('Update', 'openclaw_update'), link: '/app/updates/update-a' },
+    { ...notice('Plaza', NotificationKind.Mention), link: '/plaza?post=one#reply' },
+    { ...notice('Admission', NotificationKind.CompanyAdmissionResolved), link: '/app/admissions/request-a' },
+    { ...notice('Agent', NotificationKind.AutonomyL2), link: '/app/agents/agent-a/chat' },
+    { ...notice('Update', NotificationKind.OpenClawUpdate), link: '/app/updates/update-a' },
   ])
   // When
   await page.goto(inboxPath)
@@ -138,13 +139,13 @@ test('notification links keep Plaza remapping and existing member destinations',
 
 test('late paginated rows cannot cross a retired session boundary', async ({ page }) => {
   // Given
-  await prepareNotifications(page, Array.from({ length: 50 }, (_, index) => notice(`Original ${index}`, 'autonomy_l2')))
+  await prepareNotifications(page, Array.from({ length: 50 }, (_, index) => notice(`Original ${index}`, NotificationKind.AutonomyL2)))
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   await page.route('**/api/notifications?category=all&limit=50&offset=50&view=active', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Obsolete next page', 'autonomy_l2')] })
+    await route.fulfill({ json: [notice('Obsolete next page', NotificationKind.AutonomyL2)] })
   })
   await page.goto(inboxPath)
   await page.getByRole('button', { name: 'Load more', exact: true }).click()
@@ -161,7 +162,7 @@ test('late paginated rows cannot cross a retired session boundary', async ({ pag
 
 test('archive preserves unread state and links while Active bulk read excludes Archived', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [{ ...notice('Announcement', 'broadcast'), link: '/plaza?post=one' }, notice('Tool', 'autonomy_l2')])
+  await prepareNotifications(page, [{ ...notice('Announcement', NotificationKind.Broadcast), link: '/plaza?post=one' }, notice('Tool', NotificationKind.AutonomyL2)])
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
   await category.selectOption('broadcast')
@@ -191,7 +192,7 @@ test('archive preserves unread state and links while Active bulk read excludes A
 
 test('view switches retain category and restart both previously loaded page sequences', async ({ page }) => {
   // Given
-  const fixture = await prepareNotifications(page, ['active', 'archived'].flatMap((view) => Array.from({ length: 51 }, (_, index) => ({ ...notice(`${view} ${index}`, 'autonomy_l2'), archived_at: view === 'archived' ? '2030-01-02T00:00:00Z' : null }))))
+  const fixture = await prepareNotifications(page, ['active', 'archived'].flatMap((view) => Array.from({ length: 51 }, (_, index) => ({ ...notice(`${view} ${index}`, NotificationKind.AutonomyL2), archived_at: view === 'archived' ? '2030-01-02T00:00:00Z' : null }))))
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
   await category.selectOption('tool')
@@ -223,9 +224,9 @@ for (const width of [390, 1440, 1920]) {
         test(`backgrounds converge when marking ${readMode} read`, async ({ page }, testInfo) => {
           // Given mixed read states with the existing labels and destinations.
           await prepareNotifications(page, [
-            { ...notice('company-announcement', 'broadcast'), title: 'Company announcement', body: 'Review the latest company news and upcoming team plans.', link: '/plaza?post=announcement' },
-            { ...notice('tool-request', 'autonomy_l2'), title: 'Tool request ready', body: 'Your requested tool is available for the next task.' },
-            { ...notice('membership-approved', 'company_admission_resolved', true), title: 'Membership approved', body: 'Your membership request has been approved.', link: '/app/admissions/request-a' },
+            { ...notice('company-announcement', NotificationKind.Broadcast), title: 'Company announcement', body: 'Review the latest company news and upcoming team plans.', link: '/plaza?post=announcement' },
+            { ...notice('tool-request', NotificationKind.AutonomyL2), title: 'Tool request ready', body: 'Your requested tool is available for the next task.' },
+            { ...notice('membership-approved', NotificationKind.CompanyAdmissionResolved, true), title: 'Membership approved', body: 'Your membership request has been approved.', link: '/app/admissions/request-a' },
           ])
           await page.clock.install({ time: new Date('2030-01-02T12:00:00Z') })
           await page.goto(inboxPath)

@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.core.domain.tasks import TaskStatus, TaskType
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.task_dao import task_dao, task_log_dao
@@ -29,13 +30,13 @@ async def _enrich_task_out(task: TaskRecord) -> TaskOut:
 @router.get("/", response_model=list[TaskOut])
 async def list_tasks(
     agent_id: uuid.UUID,
-    status_filter: str | None = None,
-    type_filter: str | None = None,
+    status_filter: TaskStatus | None = None,
+    type_filter: TaskType | None = None,
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[TaskOut]:
     """List tasks for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    tasks_list = await task_dao.list_for_agent(agent_id, status=status_filter, type=type_filter)
+    tasks_list = await task_dao.list_for_agent(agent_id, status=status_filter, task_type=type_filter)
     creator_ids = {t.created_by for t in tasks_list if t.created_by}
     creator_map = await user_dao.labels_for_ids(list(creator_ids)) if creator_ids else {}
     out_list: list[TaskOut] = []

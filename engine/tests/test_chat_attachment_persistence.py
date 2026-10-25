@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
+from typing import Self
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -31,7 +32,7 @@ class ReceiptCursor:
         self.connection = parent
         self.row: dict[str, object] | None = None
 
-    async def __aenter__(self) -> ReceiptCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:

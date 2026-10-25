@@ -7,6 +7,7 @@ export type UserAgent = {
   name: string
   status: string
   is_expired: boolean
+  is_system: boolean
   role_description: string | null
   last_active_at: string | null
 }
@@ -103,7 +104,7 @@ export type UsersPageRequest = {
 export async function listUsersPage(input: UsersPageRequest, signal?: AbortSignal): Promise<UsersPage> {
   const params = new URLSearchParams({ tenant_id: input.tenantId, search: input.search, limit: '50' })
   if (input.cursor !== null) params.set('cursor', input.cursor)
-  return usersPageSchema.parse(await apiRequest<unknown>(`/api/users/page?${params}`, { signal }))
+  return apiRequest(`/api/users/page?${params}`, { schema: usersPageSchema, signal })
 }
 
 export async function getUserDetail(userId: string, signal?: AbortSignal): Promise<UserDetail> {

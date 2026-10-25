@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from anyio import CancelScope, fail_after
@@ -114,8 +114,11 @@ async def test_delivery_settles_explicit_outcomes_with_bounded_retries(
     # Given
     row = replace(claim(), attempts=attempts)
 
-    async def attempt(_to: str, _subject: str, _body: str, *, message_id: str) -> email.EmailAttemptOutcome:
+    async def attempt(
+        _to: str, _subject: str, _body: str, *, message_id: str, tenant_id: UUID
+    ) -> email.EmailAttemptOutcome:
         assert message_id == row.message_id
+        assert tenant_id == row.tenant_id
         return email.EmailAttemptOutcome(kind, "safe_code")
 
     monkeypatch.setattr(worker, "attempt_email", attempt)
@@ -227,7 +230,7 @@ async def test_owned_batch_leaves_continuing_threads_without_starting_more_batch
             deadlines.append(scope)
             yield
 
-    async def resolve() -> email.SystemEmailConfig:
+    async def resolve(_tenant_id: UUID) -> email.SystemEmailConfig:
         return email.SystemEmailConfig("from@example.com", "MaraClaw", "smtp.example.com", 465, "u", "s", True, 15)
 
     def smtp(**_kwargs: object) -> None:
@@ -244,11 +247,13 @@ async def test_owned_batch_leaves_continuing_threads_without_starting_more_batch
                 if completed == native_count:
                     loop.call_soon_threadsafe(finished.set)
 
-    async def attempt(to: str, subject: str, body: str, *, message_id: str) -> email.EmailAttemptOutcome:
+    async def attempt(
+        to: str, subject: str, body: str, *, message_id: str, tenant_id: UUID
+    ) -> email.EmailAttemptOutcome:
         if interruption == "sibling_error" and message_id == "<broken@example.com>":
             await entered.wait()
             raise RuntimeError("unexpected adapter error")
-        return await email.attempt_email(to, subject, body, message_id=message_id)
+        return await email.attempt_email(to, subject, body, message_id=message_id, tenant_id=tenant_id)
 
     if interruption == "sibling_error":
         dao.rows[0] = replace(dao.rows[0], message_id="<broken@example.com>")

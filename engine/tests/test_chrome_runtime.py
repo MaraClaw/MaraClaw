@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Self
 
 from app.services.document_conversion.chrome_runtime import (
     cleanup_temporary_paths,
@@ -66,7 +67,7 @@ async def test_create_cdp_target_passes_file_url_as_the_devtools_query(monkeypat
             return {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/id"}
 
     class FakeClient:
-        async def __aenter__(self) -> FakeClient:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *_: object) -> None:

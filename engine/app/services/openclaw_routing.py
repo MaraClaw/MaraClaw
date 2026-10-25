@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from uuid import UUID
 
 from app.core.logging import logger
@@ -19,6 +20,7 @@ from app.db.session import connection_ctx, get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
+from app.runtime.tasks import AdmissionClosedError, TaskAdmission
 from app.services.agent_manager import agent_manager, guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.enterprise_llm import ensure_agent_company_models
@@ -121,7 +123,7 @@ async def prepare_openclaw_message(
     if not _bundle_usable(bundle):
         raise NoCompanyModelError(
             "This company has no model assigned. Connect a Grok or ChatGPT subscription or add a model in Admin → Models, "
-            + "then set it as primary."
+            "then set it as primary."
         )
     mark_ensured(agent)
     set_cached_bundle(agent, bundle)
@@ -202,7 +204,11 @@ async def enqueue_openclaw_message(
             reply_session_id=reply_session_id,
         )
     if await_wake and get_connection() is None:
-        await _run_inbox_wake(prepared.agent, content, created.id)
+        # Awaited by the caller but run as an owned child, so a drain can cancel it (releasing its claim) and join it.
+        try:
+            await _wake_admission.run(partial(_run_inbox_wake, prepared.agent, content, created.id))
+        except AdmissionClosedError:
+            logger.info("[OpenClaw] inbox wake left pending for {}: shutdown drain in progress", prepared.agent.id)
     else:
         _schedule_inbox_wake(prepared.agent, content, created.id)
     return created
@@ -239,12 +245,15 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
             woke = await dispatch_shared_turn(agent, claimed)
         else:
             woke = await wake_openclaw_inbox(agent, content=content, message_id=message_id)
+    except asyncio.CancelledError:
+        await _release_wake_claim_shielded(agent, claimed)
+        raise
     except Exception as exc:
         logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
-        await _release_wake_claim(agent, claimed)
+        await _release_wake_claim_shielded(agent, claimed)
         return
     if not woke:
-        await _release_wake_claim(agent, claimed)
+        await _release_wake_claim_shielded(agent, claimed)
         logger.info("[OpenClaw] inbox left pending for {}; guest gateway will pick it up", agent.id)
 
 
@@ -257,13 +266,45 @@ async def _release_wake_claim(agent: AgentRecord, claimed: GatewayMessageRecord 
         logger.warning("[OpenClaw] inbox claim release error for {}: {}", agent.id, exc)
 
 
+async def _release_wake_claim_shielded(agent: AgentRecord, claimed: GatewayMessageRecord | None) -> None:
+    """Finish the release even when the wake is cancelled again; the cancellation then propagates."""
+    release = asyncio.ensure_future(_release_wake_claim(agent, claimed))
+    cancelled = False
+    while not release.done():
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 _wake_tasks: set[asyncio.Task[None]] = set()
+_wake_admission = TaskAdmission("Inbox wake", _wake_tasks)
 _wake_running: set[UUID] = set()
 _wake_again: dict[UUID, tuple[str, UUID | None]] = {}
 
 
+def open_wake_admission() -> None:
+    """Reopen inbox wake admission for a new lifespan."""
+    _wake_admission.open()
+
+
+def close_wake_admission() -> None:
+    """Stop admitting inbox wakes; refused wakes leave their message pending for the guest gateway."""
+    _wake_admission.close()
+
+
+async def drain_wake_tasks(grace_seconds: float = 20.0) -> None:
+    """Wait for direct and scheduled wakes, then cancel and await the rest; cancelled claims are released."""
+    await _wake_admission.drain(grace_seconds)
+
+
 def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
     """Start inbox wake without blocking the chat socket."""
+    if not _wake_admission.accepting:
+        logger.info("[OpenClaw] inbox wake left pending for {}: shutdown drain in progress", agent.id)
+        return
     if get_connection() is not None:
         from app.api.background_tasks import schedule_background_task
 
@@ -284,10 +325,12 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
         _wake_running.add(agent.id)
         try:
             await _run_inbox_wake(agent, content, message_id)
-            while (follow := _wake_again.pop(agent.id, None)) is not None:
+            while _wake_admission.accepting and (follow := _wake_again.pop(agent.id, None)) is not None:
                 await _run_inbox_wake(agent, follow[0], follow[1])
         finally:
             _wake_running.discard(agent.id)
+            if not _wake_admission.accepting:
+                _ = _wake_again.pop(agent.id, None)
 
     task = loop.create_task(_run())
     _wake_tasks.add(task)

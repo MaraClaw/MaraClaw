@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from tests.analytics_response_fixtures import summary_projection, trending_query_projection
 
 from app.api.admin_search_analytics import (
     get_search_analytics_export_status,
@@ -16,11 +17,12 @@ from app.api.admin_search_analytics import (
     get_search_analytics_trending,
     router,
 )
+from app.core.domain.users import UserRole
 from app.records.user import UserRecord
 
 
 def _pa() -> Any:
-    return SimpleNamespace(id=uuid4(), role="platform_admin", email="pa@example.test")
+    return SimpleNamespace(id=uuid4(), role=UserRole.PLATFORM_ADMIN, email="pa@example.test")
 
 
 @pytest.mark.asyncio
@@ -32,11 +34,11 @@ async def test_summary_and_trending_scope(monkeypatch: pytest.MonkeyPatch) -> No
     class FakeDao:
         async def summary(self, **kwargs):
             calls["summary"] = kwargs
-            return {"event_count": 2, "by_kind": []}
+            return summary_projection()
 
         async def trending(self, **kwargs):
             calls["trending"] = kwargs
-            return [{"query_normalized": "stripe ceo", "hits": 2}]
+            return [trending_query_projection()]
 
         async def export_status(self):
             return {"pending": 1, "exporting": 0, "exported": 0, "skipped": 3, "last_exported_at": None}
@@ -198,8 +200,8 @@ async def test_export_disabled_reclaims_exporting(monkeypatch: pytest.MonkeyPatc
 async def test_search_analytics_forbid_org_admin() -> None:
     from app.core.security import require_role
 
-    checker = require_role("platform_admin")
-    org_admin = UserRecord(id=uuid4(), role="org_admin", identity=None)
+    checker = require_role(UserRole.PLATFORM_ADMIN)
+    org_admin = UserRecord(id=uuid4(), role=UserRole.ORG_ADMIN, identity=None)
     with pytest.raises(HTTPException) as exc:
         await checker(current_user=org_admin)
     assert exc.value.status_code == 403

@@ -11,7 +11,6 @@ from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
-from app.api import agents
 from app.core.security import encrypt_data
 from app.dao import agent_dao, agent_setup_dao, user_dao
 from app.db.connection import DbConnection
@@ -187,6 +186,8 @@ async def test_postgres_agent_and_setup_rollback_together(setup_db):
 
 
 async def test_postgres_http_create_survives_api_exit_and_worker_recovery(setup_db, tmp_path):
+    from app.api import agents
+
     _db, actor_id = setup_db
     actor = await user_dao.get(actor_id)
     assert actor is not None

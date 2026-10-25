@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.api.background_tasks import schedule_background_task
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     json_as_int,
@@ -170,10 +171,7 @@ def _parse_wecom_xml(xml: bytes | str) -> WeComXmlFields:
 # Instead, tenants paste their verification token into the enterprise settings,
 # and this endpoint serves the correct file content for any known token.
 #
-# Nginx config required to route requests at the root path:
-#   location ~ ^/(WW_verify_[A-Za-z0-9_.-]{1,64}\.txt)$ {
-#       proxy_pass http://backend:8000/api/wecom-verify/$1;
-#   }
+# Nginx must proxy root WW_verify_<token>.txt requests to /api/wecom-verify/<filename>.
 
 _VERIFY_FILENAME_RE = re.compile(r"^WW_verify_[A-Za-z0-9_]{1,64}\.txt$")
 
@@ -250,7 +248,7 @@ async def configure_wecom_channel(
         "connection_mode": "websocket" if has_ws_mode else "webhook",
     }
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -301,7 +299,7 @@ async def get_wecom_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
 
@@ -325,11 +323,11 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
     await wecom_stream_manager.stop_client(agent_id)
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 # ─── Event Webhook ──────────────────────────────────────
@@ -340,7 +338,7 @@ async def wecom_verify_webhook(
     agent_id: uuid.UUID, msg_signature: str = "", timestamp: str = "", nonce: str = "", echostr: str = ""
 ) -> Response:
     """Handle WeCom callback URL verification (GET request)."""
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if not config:
         return Response(status_code=404)
 
@@ -371,7 +369,7 @@ async def wecom_event_webhook(
     if body_bytes is None:
         return Response(status_code=413)
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if not config:
         return Response(status_code=404)
 
@@ -454,7 +452,7 @@ async def _process_wecom_kf_event(
 ):
     _ = config_obj
     try:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
         if not config:
             return
 

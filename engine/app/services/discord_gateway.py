@@ -17,6 +17,7 @@ from contextlib import AbstractAsyncContextManager
 from types import ModuleType
 from typing import Protocol, TypeIs
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
@@ -92,8 +93,8 @@ except ImportError:
 if not _HAS_DISCORD:
     logger.warning(
         "[Discord GW] discord.py package not installed. "
-        + "Discord Gateway features will be disabled. "
-        + "Install with: pip install discord.py"
+        "Discord Gateway features will be disabled. "
+        "Install with: pip install discord.py"
     )
 
 DISCORD_MSG_LIMIT = 2000  # Discord message character limit
@@ -237,7 +238,7 @@ class DiscordGatewayManager:
             channel_id = str(message.channel.id)
             conv_id = f"discord_dm_{sender_id}" if message.guild is None else f"discord_{channel_id}_{sender_id}"
 
-            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
             if config is None:
                 return None
             await accept_channel_event(
@@ -289,7 +290,7 @@ class DiscordGatewayManager:
             logger.info("[Discord GW] discord.py not installed, skipping Discord Gateway init")
             return
         logger.info("[Discord GW] Initializing all active Discord Gateway channels...")
-        configs = await channel_config_dao.list_configured("discord")
+        configs = await channel_config_dao.list_configured(ChannelType.DISCORD)
 
         for config in configs:
             extra = json_object_from(config.extra_config)

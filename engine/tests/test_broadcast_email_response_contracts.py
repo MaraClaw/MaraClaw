@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter
 
 from app.api import notification as api
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
@@ -37,7 +38,7 @@ async def test_broadcast_enforces_role_and_tenant(
     client: httpx.AsyncClient, member: UserRecord, role: str, has_tenant: bool, status: int
 ) -> None:
     # Given: an unauthorized membership or an administrator without a current tenant.
-    member.role = role
+    member.role = UserRole(role)
     if not has_tenant:
         member.tenant_id = None
     # When: broadcast acceptance is requested.
@@ -50,7 +51,7 @@ async def test_broadcast_response_keeps_counts_and_tenant_scope(
     client: httpx.AsyncClient, member: UserRecord, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: one member and one agent receive an in-app-only broadcast.
-    member.role = "org_admin"
+    member.role = UserRole.ORG_ADMIN
     monkeypatch.setattr(api, "connection_ctx", nullcontext)
     users = AsyncMock(return_value=[member])
     agents = AsyncMock(return_value=[AgentRecord(id=uuid4(), name="Agent", creator_id=member.id)])

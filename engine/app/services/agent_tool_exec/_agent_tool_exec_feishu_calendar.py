@@ -138,13 +138,13 @@ async def _get_agent_calendar_id(token: str) -> tuple[str | None, str | None]:
     if code == 99991672:
         return None, (
             "❌ 飞书日历权限未开通（错误码 99991672）\n\n"
-            + "请在飞书开放平台为应用 cli_a9257c5136781ceb 开通以下权限并发布新版本：\n"
-            + "• calendar:calendar:readonly（应用身份权限）\n"
-            + "• calendar:calendar.event:create（应用身份权限）\n"
-            + "• calendar:calendar.event:read（用户身份权限）\n"
-            + "• calendar:calendar.event:update（用户身份权限）\n"
-            + "• calendar:calendar.event:delete（用户身份权限）\n\n"
-            + "开通步骤：飞书开放平台 → 权限管理 → 批量导入权限 → 添加以上权限 → 创建版本 → 确认发布"
+            "请在飞书开放平台为应用 cli_a9257c5136781ceb 开通以下权限并发布新版本：\n"
+            "• calendar:calendar:readonly（应用身份权限）\n"
+            "• calendar:calendar.event:create（应用身份权限）\n"
+            "• calendar:calendar.event:read（用户身份权限）\n"
+            "• calendar:calendar.event:update（用户身份权限）\n"
+            "• calendar:calendar.event:delete（用户身份权限）\n\n"
+            "开通步骤：飞书开放平台 → 权限管理 → 批量导入权限 → 添加以上权限 → 创建版本 → 确认发布"
         )
     return None, f"获取日历 ID 失败：{data.get('msg')} (code {code})"
 
@@ -171,7 +171,7 @@ def _iso_to_ts(iso_str: str) -> float:
     from datetime import datetime as datetime_type
 
     try:
-        return datetime_type.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+        return datetime_type.fromisoformat(iso_str).timestamp()
     except ValueError as error:
         raise ValueError(f"Cannot parse datetime: {iso_str!r}") from error
 

@@ -9,6 +9,10 @@ from fastapi import HTTPException, WebSocket
 from starlette.types import Message
 
 from app.api.websocket import ConnectionManager, WebSocketConnection
+from app.core.domain.users import UserRole
+from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
+from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.realtime_runtime.router import RealtimeRouter
 from app.services.shared_chat import shared_session_id
@@ -91,7 +95,9 @@ async def test_shared_delivery_requires_current_matching_binding(monkeypatch, re
         del socket.state.chat_binding
     elif binding_state == "wrong_session":
         socket.state.chat_binding.session_id = uuid4()
-    authorize = AsyncMock()
+    user = UserRecord(id=user_id)
+    agent = AgentRecord(id=agent_id, name="Agent", creator_id=uuid4())
+    authorize = AsyncMock(return_value=(user, agent, "use"))
     session = AsyncMock()
     monkeypatch.setattr(chat_tickets, "authorize", authorize)
     monkeypatch.setattr(chat_tickets, "authorized_session", session)
@@ -116,9 +122,50 @@ async def test_shared_delivery_requires_current_matching_binding(monkeypatch, re
     assert len(frames) == (1 if binding_state == "current" else 0)
     if binding_state == "current":
         authorize.assert_awaited_once_with(socket.state.chat_binding)
-        session.assert_awaited_once_with(socket.state.chat_binding)
+        session.assert_awaited_once_with(socket.state.chat_binding, user, agent)
     else:
         authorize.assert_not_awaited()
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize(
+    ("privilege", "source", "allowed"),
+    [
+        ("member", "shared", True),
+        ("org_admin", "web", True),
+        ("creator", "web", True),
+        ("revoked_admin", "web", False),
+        ("revoked_creator", "agent", False),
+    ],
+)
+async def test_shared_delivery_uses_fresh_principal_and_agent(monkeypatch, remote, privilege, source, allowed):
+    agent_id, user_id = uuid4(), uuid4()
+    frames: list[Message] = []
+    socket = socket_with_binding(agent_id, user_id, frames)
+    await socket.accept()
+    frames.clear()
+    user = UserRecord(id=user_id, role=UserRole.ORG_ADMIN if privilege == "org_admin" else UserRole.MEMBER)
+    agent = AgentRecord(id=agent_id, name="Agent", creator_id=user_id if privilege == "creator" else uuid4())
+    session = ChatSessionRecord(
+        id=shared_session_id(agent_id), agent_id=agent_id, user_id=uuid4(), source_channel=source
+    )
+    monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
+    monkeypatch.setattr(chat_tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
+    connections: list[WebSocketConnection] = [(socket, str(session.id), str(user_id))]
+    if remote:
+        manager = ConnectionManager()
+        manager.active_connections[str(agent_id)] = connections
+        await manager.deliver_pubsub_message(
+            agent_id=str(agent_id), session_id=str(session.id), payload={"type": "done"}
+        )
+    else:
+        router = RealtimeRouter()
+        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
+        await router.route_message(
+            agent_id=str(agent_id), session_id=str(session.id), message={"type": "done"}, local_connections=connections
+        )
+
+    assert frames == ([{"type": "websocket.send", "text": '{"type":"done"}'}] if allowed else [])
 
 
 async def test_shared_redis_envelope_excludes_archive_presence_and_user_fallback(monkeypatch):

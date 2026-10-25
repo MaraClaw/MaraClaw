@@ -14,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
+from app.services.chat_session_access import can_access_chat_session
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
@@ -88,9 +89,9 @@ async def accept_submission(
         session = await chat_session_dao.lock_for_agent(session_id, agent.id)
         if session is None:
             raise HTTPException(403, "Session unavailable")
-        shared = is_shared_session(session)
-        if not shared and session.source_channel != "agent" and session.user_id != user.id:
+        if not can_access_chat_session(user, agent, session):
             raise HTTPException(403, "Not authorized for this session")
+        shared = is_shared_session(session)
         existing = await chat_message_dao.find_submission(candidate)
         if existing is not None:
             return _replay(existing, candidate)

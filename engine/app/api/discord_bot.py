@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     json_as_int,
@@ -74,7 +75,7 @@ async def configure_discord_channel(
 
     extra_config: JsonObject = {"connection_mode": connection_mode}
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -120,7 +121,7 @@ async def get_discord_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
     return ChannelConfigOut.model_validate(config)
@@ -139,7 +140,7 @@ async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord =
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
     try:
@@ -148,7 +149,7 @@ async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord =
         await discord_gateway_manager.stop_client(agent_id)
     except Exception as error:
         logger.warning(f"[Discord] Failed to stop Gateway client: {error}")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 # ─── Slash Command Registration ─────────────────────────
@@ -235,7 +236,7 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
     if body_bytes is None:
         return Response(status_code=413)
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="discord")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
     if not config or (config.extra_config or {}).get("connection_mode") == "gateway":
         return Response(status_code=404)
 

@@ -78,7 +78,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
                 available = sorted({channel for _, _, channel in rows if channel is not None})
                 return (
                     f"❌ {member_name} not found in {target_channel} channel. "
-                    + f"Available channels: {', '.join(available)}"
+                    f"Available channels: {', '.join(available)}"
                 )
         else:
             if len(rows) > 1:
@@ -107,7 +107,7 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArguments) -> str
             else:
                 return (
                     f"❌ {member_name} has no linked channel. "
-                    + "If they are a platform user, use send_platform_message instead."
+                    "If they are a platform user, use send_platform_message instead."
                 )
 
         logger.info(f"[ChannelMessage] Sending to {member_name} via {provider_type}")

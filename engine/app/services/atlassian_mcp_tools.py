@@ -54,7 +54,7 @@ def _normalize_atlassian_tool(mcp_tool: JsonObject) -> AtlassianToolDefinition |
 
     properties: dict[str, JsonObject] = {}
     for property_name, property_schema in raw_properties.items():
-        if not isinstance(cast(object, property_name), str) or not isinstance(property_schema, dict):
+        if not isinstance(cast("object", property_name), str) or not isinstance(property_schema, dict):
             return {"name": raw_name, "description": description[:500], "parameters_schema": default_schema}
         properties[property_name] = property_schema
 

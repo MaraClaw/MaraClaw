@@ -16,6 +16,7 @@ from tests.test_enterprise_llm import _model
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import enterprise
+from app.core.domain.users import UserRole
 from app.db import session
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
@@ -40,7 +41,7 @@ def owned_pool(monkeypatch):
 
 async def test_model_creation_and_default_assignment_share_owned_transaction(monkeypatch, owned_pool):
     model = _model()
-    user = UserRecord(id=model.id, tenant_id=model.tenant_id, role="org_admin")
+    user = UserRecord(id=model.id, tenant_id=model.tenant_id, role=UserRole.ORG_ADMIN)
     observed = []
 
     async def create(**kwargs):
@@ -132,7 +133,7 @@ async def test_model_mutation_and_audit_share_transaction_and_recover_savepoint(
 async def test_admin_refresh_rechecks_revoked_actor_even_when_credentials_changed(monkeypatch, owned_pool, service):
     kind = "grok_subscription" if service is grok_subscription else "chatgpt_subscription"
     model = _model(auth_kind=kind, refresh_token_encrypted="old-refresh")
-    user = UserRecord(id=model.id, tenant_id=model.tenant_id, role="org_admin")
+    user = UserRecord(id=model.id, tenant_id=model.tenant_id, role=UserRole.ORG_ADMIN)
     revoked = replace(user, is_active=False)
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -166,7 +167,7 @@ async def test_admin_refresh_rechecks_revoked_actor_even_when_credentials_change
 def _actor(model):
     identity = IdentityRecord(id=uuid.uuid4())
     return UserRecord(
-        id=uuid.uuid4(), tenant_id=model.tenant_id, role="org_admin", identity_id=identity.id, identity=identity
+        id=uuid.uuid4(), tenant_id=model.tenant_id, role=UserRole.ORG_ADMIN, identity_id=identity.id, identity=identity
     )
 
 

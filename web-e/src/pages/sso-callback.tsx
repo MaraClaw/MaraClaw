@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { bindProvider, oauthCallback } from '@/lib/auth-api'
-import { SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
+import { consumeSsoTransaction, readSsoContinuation, SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   isMultiTenantResponse,
@@ -24,12 +24,19 @@ export function SsoCallbackPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { owner, capture, isCurrent, applySession } = useAuth()
-  const [transaction] = useState(() => ({
-    owner,
-    state: sessionStorage.getItem(SSO_STATE_KEY),
-    provider: sessionStorage.getItem(SSO_PROVIDER_KEY),
-    intent: sessionStorage.getItem(SSO_INTENT_KEY),
-  }))
+  const [transaction] = useState(() => {
+    const stored = {
+      owner,
+      state: sessionStorage.getItem(SSO_STATE_KEY),
+      provider: sessionStorage.getItem(SSO_PROVIDER_KEY),
+      intent: sessionStorage.getItem(SSO_INTENT_KEY),
+    }
+    return { ...stored, continuation: readSsoContinuation(stored, {
+      state: searchParams.get('state'),
+      provider: searchParams.get('provider') || stored.provider,
+    }) }
+  })
+  const continuation = useRef(transaction.continuation)
   const request = useRef<Promise<TokenResponse | MultiTenantResponse | void> | null>(null)
   const [requestError, setError] = useState<string | null>(null)
   const [tenants, setTenants] = useState<TenantChoice[] | null>(null)
@@ -47,24 +54,28 @@ export function SsoCallbackPage() {
 
   useEffect(() => {
     const expectedOwner = transaction.owner
-    if (!isCurrent(expectedOwner) || validationError || !provider || !code) return
-    const storedState = transaction.state
+    if (!isCurrent(expectedOwner)) return
+    if (validationError) {
+      consumeSsoTransaction(transaction)
+      continuation.current = null
+      return
+    }
+    if (!provider || !code) return
     const intent = transaction.intent
     let cancelled = false
-    const consumeTransaction = (): void => {
-      if (sessionStorage.getItem(SSO_STATE_KEY) !== storedState) return
-      sessionStorage.removeItem(SSO_STATE_KEY)
-      sessionStorage.removeItem(SSO_PROVIDER_KEY)
-      sessionStorage.removeItem(SSO_INTENT_KEY)
-    }
     request.current ??= intent === 'bind'
       ? bindProvider(provider, code, expectedOwner).then(() => undefined)
       : oauthCallback(provider, { code }, expectedOwner)
     void request.current
       .then((result) => {
-        if (cancelled || !isCurrent(expectedOwner)) return
+        if (cancelled) return
+        if (!isCurrent(expectedOwner)) {
+          consumeSsoTransaction(transaction)
+          continuation.current = null
+          return
+        }
         if (intent === 'bind') {
-          consumeTransaction()
+          consumeSsoTransaction(transaction)
           toast.success('Account linked')
           navigate('/app/settings', { replace: true })
           return
@@ -73,20 +84,24 @@ export function SsoCallbackPage() {
           if (!applySession(expectedOwner, result)) return
           const installedOwner = capture()
           if (!isCurrent(installedOwner)) return
-          consumeTransaction()
+          consumeSsoTransaction(transaction)
           toast.success('Signed in')
-          navigate(result.needs_org_confirm ? '/join' : '/app', { replace: true })
+          const destination = continuation.current ?? (result.needs_org_confirm ? '/join' : '/app')
+          continuation.current = null
+          navigate(destination, { replace: true })
           return
         }
         if (isMultiTenantResponse(result)) {
-          consumeTransaction()
+          consumeSsoTransaction(transaction)
           setTenants(result.tenants)
           setPendingToken(result.pending_token ?? null)
         }
       })
       .catch((err: unknown) => {
-        if (cancelled || !isCurrent(expectedOwner)) return
-        consumeTransaction()
+        if (cancelled) return
+        consumeSsoTransaction(transaction)
+        continuation.current = null
+        if (!isCurrent(expectedOwner)) return
         setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'SSO sign-in failed.')
       })
     return () => { cancelled = true }
@@ -108,9 +123,12 @@ export function SsoCallbackPage() {
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
         toast.success(`Signed in to ${tenant.tenant_name}`)
-        navigate(result.needs_org_confirm ? '/join' : '/app', { replace: true })
+        const destination = continuation.current ?? (result.needs_org_confirm ? '/join' : '/app')
+        continuation.current = null
+        navigate(destination, { replace: true })
       }
     } catch (err) {
+      continuation.current = null
       if (!isCurrent(expectedOwner)) return
       setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Unable to finish SSO.')
     } finally {

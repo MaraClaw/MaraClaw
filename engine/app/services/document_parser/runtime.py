@@ -222,7 +222,7 @@ def _spawn_job(
             raise DocumentParseError(f"Document read failed: {exc}") from exc
         ctx = mp.get_context("spawn")
         spawned = cast(
-            ProcessLike,
+            "ProcessLike",
             ctx.Process(
                 target=worker,
                 args=(str(src), filename, str(out), str(err), extra),
@@ -241,7 +241,7 @@ def _spawn_job(
             if remaining <= 0:
                 raise DocumentParseTimeoutError(
                     f"Document parse timed out after {timeout_seconds:.0f}s. "
-                    + "The file may be too large or too complex to extract safely."
+                    "The file may be too large or too complex to extract safely."
                 )
             spawned.join(min(0.02, remaining))
         spawned.join(0)

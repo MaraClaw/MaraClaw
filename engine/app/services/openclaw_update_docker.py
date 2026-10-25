@@ -37,7 +37,7 @@ def _repository(reference: str) -> str:
 def _readiness_script(port: int) -> str:
     return (
         f"fetch('http://127.0.0.1:{port}/readyz',{{signal:AbortSignal.timeout(5000)}})"
-        + ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+        ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
     )
 
 
@@ -46,13 +46,21 @@ class UpgradeDocker:
         self.client: DockerClient = client
 
     def pull(self, reference: str) -> str:
-        """Fresh pull; returns the image id of the exact manifest this pull resolved.
+        """Resolve local images or freshly pull registry images; return an immutable image id.
 
         The SDK's returned ``Image`` is a lazy handle on the tag, so inspecting it (or the tag)
         after the pull can see a concurrently retargeted tag. The ``Digest:`` line the daemon
         prints names the pulled manifest; ``repo@digest`` cannot be retargeted. A digest-pinned
         configuration is pulled too (it may not be cached locally) and then inspected as is.
         """
+        if "@" not in reference and "/" not in _repository(reference):
+            try:
+                return self.client.image.inspect(reference).id
+            except NoSuchImage as exc:
+                raise OSError(
+                    f"Local OpenClaw image {reference} is missing; build it with build-openclaw-local-dockerfile.sh "
+                    "on the worker's Docker daemon before retrying the upgrade"
+                ) from exc
         stream = self.client.image.pull(reference, stream_logs=True)
         if not isinstance(stream, Iterator):
             raise OSError(f"docker pull of {reference} did not stream its log")

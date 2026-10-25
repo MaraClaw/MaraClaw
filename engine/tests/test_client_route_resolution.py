@@ -294,7 +294,7 @@ class Expansion:
 
 
 CHANNEL_EXPANSION: Final = Expansion(
-    "web-e/src/lib/workspace-api.ts",
+    "web-e/src/lib/channels-api.ts",
     frozenset({"getChannel", "saveChannel", "deleteChannel", "getChannelWebhook"}),
     frozenset({"getChannelWebhook"}),
     "path",
@@ -453,7 +453,7 @@ class Extractor:
         return [(path, reason) for path in paths]
 
     def methods(self, helper: str, args: list[list[Token]], token: Token) -> list[str]:
-        from client_route_context import routing_neutral_context
+        from client_route_context import routing_neutral_context, routing_neutral_field_spread
 
         option_index = 2 if helper == "apiFormRequest" else 1
         default = "POST" if helper == "apiFormRequest" else "GET"
@@ -470,7 +470,7 @@ class Extractor:
             if not prop:
                 continue
             if prop[0].text == "...":
-                if routing_neutral_context(self, prop[1:]):
+                if routing_neutral_context(self, prop[1:]) or routing_neutral_field_spread(prop[1:]):
                     continue
                 raise self.error(token, "top-level spread in request options")
             if prop[0].text == "[":
@@ -519,16 +519,19 @@ class Extractor:
         return True
 
     def calls(self) -> list[ClientCall]:
-        from client_route_declarations import helper_declaration
+        from client_route_declarations import factory_return_helper, helper_declaration
+        from client_route_forwarding import forwarding_helpers
 
         tokens = self.tokens
+        forwarders = forwarding_helpers(self)
+        helpers = HELPERS | forwarders.keys()
         for inner in template_tokens(tokens):
-            if inner.text in HELPERS or (inner.kind == "literal" and static_text(inner).startswith(("/api/", "/ws/"))):
+            if inner.text in helpers or (inner.kind == "literal" and static_text(inner).startswith(("/api/", "/ws/"))):
                 raise self.error(inner, "engine call inside a template expression is unsupported")
         consumed = set()
         calls = []
         for index, token in enumerate(tokens):
-            if token.kind != "word" or token.text not in HELPERS:
+            if token.kind != "word" or token.text not in helpers or index in forwarders.values():
                 continue
             if index > 0 and tokens[index - 1].text in {"function", "const", "let", "var"}:
                 continue
@@ -540,6 +543,8 @@ class Extractor:
             if cursor < len(tokens) and tokens[cursor].text == "<":
                 cursor = group_end(tokens, cursor) + 1
             if cursor >= len(tokens) or tokens[cursor].text != "(":
+                if factory_return_helper(tokens, index, self.enclosing(index)):
+                    continue
                 if token.text == "wsUrl":
                     from client_route_alias import websocket_alias
 

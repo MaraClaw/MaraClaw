@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.activity import ActivityAction
 from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
@@ -17,7 +18,7 @@ class AgentActivityLogRecord:
 
     id: UUID
     agent_id: UUID
-    action_type: str
+    action_type: ActivityAction
     summary: str
     detail_json: dict[str, Any] = field(default_factory=dict[str, Any])
     related_id: UUID | None = None
@@ -29,7 +30,7 @@ class AgentActivityLogRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
-            action_type=str_from_row(row["action_type"]),
+            action_type=ActivityAction(str_from_row(row["action_type"])),
             summary=str_from_row(row.get("summary")),
             detail_json=detail,
             related_id=uuid_from_row_opt(row.get("related_id")),

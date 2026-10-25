@@ -6,22 +6,22 @@ import { notificationArchiveOptions, notificationKeys, notificationListOptions, 
 import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { ApiError } from '../src/lib/http.ts'
-import { notificationCategories, notificationViews, unreadNotificationCount, type NotificationCategory, type NotificationRow, type NotificationView } from '../src/lib/notifications-api.ts'
+import { notificationCategories, NotificationKind, notificationViews, unreadNotificationCount, type NotificationCategory, type NotificationRow, type NotificationView } from '../src/lib/notifications-api.ts'
 import type { UserOut } from '../src/lib/types/auth.ts'
 
-const first: NotificationRow = { id: 'first', title: 'First', type: 'autonomy_l2', is_read: false, archived_at: null }
-const second: NotificationRow = { id: 'second', title: 'Second', type: 'approval_pending', is_read: false, archived_at: null }
-const broadcast: NotificationRow = { id: 'broadcast', title: 'Broadcast', type: 'broadcast', is_read: false, archived_at: null }
+const first: NotificationRow = { id: 'first', title: 'First', type: NotificationKind.AutonomyL2, is_read: false, archived_at: null }
+const second: NotificationRow = { id: 'second', title: 'Second', type: NotificationKind.ApprovalPending, is_read: false, archived_at: null }
+const broadcast: NotificationRow = { id: 'broadcast', title: 'Broadcast', type: NotificationKind.Broadcast, is_read: false, archived_at: null }
 const archivedAt = '2030-01-02T00:00:00Z'
 const user: UserOut = { id: 'member', email: 'member@example.com', display_name: 'Member', role: 'member', tenant_id: 'source', email_verified: true }
 
 function matches(row: NotificationRow, category: string) {
   switch (category) {
     case 'all': return true
-    case 'tool': return row.type === 'autonomy_l2'
-    case 'approval': return row.type === 'approval_pending'
-    case 'social': return row.type === 'broadcast'
-    case 'broadcast': return row.type === 'broadcast'
+    case 'tool': return row.type === NotificationKind.AutonomyL2
+    case 'approval': return row.type === NotificationKind.ApprovalPending
+    case 'social': return row.type === NotificationKind.Broadcast
+    case 'broadcast': return row.type === NotificationKind.Broadcast
     default: throw new Error(`Unexpected category ${category}`)
   }
 }

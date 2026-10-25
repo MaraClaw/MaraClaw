@@ -8,24 +8,25 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
-from python_on_whales.exceptions import DockerException
 
 from app.api import agents as agents_api, background_tasks
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.agent_dao import AGENT_DELETE_CLEANUP_SQL
 from app.db import session
 from app.records.agent import AgentRecord
+from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
 from app.records.user import UserRecord
-from app.services import agent_deletion_history, agent_stops
+from app.services import agent_stops
+from app.services.agent_deletion_archive import publish_deletion_archive
 from deletion_content_pg import seed_deletion_content
 
 if TYPE_CHECKING:
@@ -47,7 +48,9 @@ def test_agent_delete_cleanup_uses_real_chat_message_and_gateway_sender_columns(
 
 def make_user(**overrides):
     return replace(
-        UserRecord(id=uuid.uuid4(), display_name="Alice", role="member", tenant_id=uuid.uuid4(), is_active=True),
+        UserRecord(
+            id=uuid.uuid4(), display_name="Alice", role=UserRole.PLATFORM_ADMIN, tenant_id=uuid.uuid4(), is_active=True
+        ),
         **overrides,
     )
 
@@ -59,7 +62,7 @@ def make_agent(creator_id: uuid.UUID, **overrides):
             name="Ops Bot",
             role_description="assistant",
             creator_id=creator_id,
-            status="idle",
+            status=AgentStatus.IDLE,
             agent_type="openclaw",
             is_system=False,
             tenant_id=uuid.uuid4(),
@@ -78,12 +81,40 @@ def delete_runtime(monkeypatch):
 
     monkeypatch.setattr(session, "get_pool", lambda: SimpleNamespace(connection=connection))
     monkeypatch.setattr(agents_api, "assert_agent_deletion_allowed", AsyncMock())
-    monkeypatch.setattr(agent_deletion_history.task_dao, "list_for_agent", AsyncMock(return_value=[]))
+
+    async def snapshot(agents):
+        return tuple(agent_stops.AgentTeardown(replace(agent), None) for agent in agents)
+
+    monkeypatch.setattr(agents_api, "snapshot_agent_teardown", snapshot)
+    monkeypatch.setattr(agent_stops, "complete_deletion_cleanup", AsyncMock())
     return raw
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delete_runtime, tmp_path: Path):
+@pytest.mark.parametrize("role", ["member", "agent_admin", "org_admin"])
+async def test_direct_delete_is_denied_before_any_cleanup_for_non_platform_roles(monkeypatch, delete_runtime, role):
+    creator = make_user(role=role)
+    agent = make_agent(creator.id)
+    delete = AsyncMock()
+    snapshot = AsyncMock()
+    monkeypatch.setattr(agents_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", delete)
+    monkeypatch.setattr(agents_api, "snapshot_agent_teardown", snapshot)
+
+    with pytest.raises(HTTPException) as denied:
+        await agents_api.delete_agent(agent_id=agent.id, current_user=creator)
+
+    assert denied.value.status_code == 403
+    assert denied.value.detail == {
+        "code": "agent_deletion_requires_request",
+        "message": "Agents are deleted through an approval request: POST /agent-deletion-requests",
+    }
+    delete.assert_not_awaited()
+    snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delete_runtime):
     creator = make_user()
     agent = make_agent(creator.id)
     executed: list[str] = []
@@ -96,20 +127,9 @@ async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delet
         executed.extend(AGENT_DELETE_CLEANUP_SQL)
         executed.append("DELETE FROM agents WHERE id = %(aid)s")
 
-    class FakeAgentManager:
-        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
-            return tmp_path / str(agent_id)
-
-        async def remove_container(self, _agent):
-            return None
-
-        async def archive_agent_files(self, _agent_id):
-            return None
-
     monkeypatch.setattr(agents_api, "check_agent_access", fake_check_agent_access)
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda _user, _agent: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", fake_delete_with_related)
-    monkeypatch.setattr(agent_stops, "agent_manager", FakeAgentManager())
 
     await agents_api.delete_agent(agent_id=agent.id, current_user=creator)
     await asyncio.gather(*tuple(background_tasks._tasks))
@@ -123,9 +143,7 @@ async def test_delete_agent_cleans_remaining_foreign_key_rows(monkeypatch, delet
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(
-    monkeypatch, delete_runtime, tmp_path: Path
-):
+async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(monkeypatch, delete_runtime):
     creator = make_user()
     agent = make_agent(creator.id)
     called_with: list[uuid.UUID] = []
@@ -136,20 +154,9 @@ async def test_delete_agent_uses_static_cleanup_statements_with_bound_agent_id(
     async def fake_delete_with_related(agent_id):
         called_with.append(agent_id)
 
-    class FakeAgentManager:
-        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
-            return tmp_path / str(agent_id)
-
-        async def remove_container(self, _agent):
-            return None
-
-        async def archive_agent_files(self, _agent_id):
-            return None
-
     monkeypatch.setattr(agents_api, "check_agent_access", fake_check_agent_access)
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda _user, _agent: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", fake_delete_with_related)
-    monkeypatch.setattr(agent_stops, "agent_manager", FakeAgentManager())
 
     await agents_api.delete_agent(agent_id=agent.id, current_user=creator)
     await asyncio.gather(*tuple(background_tasks._tasks))
@@ -173,20 +180,16 @@ async def test_delete_agent_propagates_required_cleanup_failure_without_committi
     monkeypatch.setattr(agents_api, "check_agent_access", fake_check_agent_access)
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda _user, _agent: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", failing_delete)
-    manager = SimpleNamespace(remove_container=AsyncMock(), archive_agent_files=AsyncMock())
-    monkeypatch.setattr(agent_stops, "agent_manager", manager)
-
+    cleanup = AsyncMock()
+    monkeypatch.setattr(agent_stops, "complete_deletion_cleanup", cleanup)
     with pytest.raises(RuntimeError, match="required cleanup failed"):
         await agents_api.delete_agent(agent_id=agent.id, current_user=creator)
     delete_runtime.commit.assert_not_awaited()
-    manager.remove_container.assert_not_awaited()
-    manager.archive_agent_files.assert_not_awaited()
+    cleanup.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_ignores_expected_container_and_archive_failures(
-    monkeypatch, delete_runtime, tmp_path: Path
-):
+async def test_delete_agent_commit_survives_postcommit_cleanup_dispatch_failure(monkeypatch, delete_runtime):
     creator = make_user()
     agent = make_agent(creator.id)
     deleted: list[uuid.UUID] = []
@@ -197,89 +200,43 @@ async def test_delete_agent_ignores_expected_container_and_archive_failures(
     async def fake_delete_with_related(agent_id):
         deleted.append(agent_id)
 
-    class FailingAgentManager:
-        def _agent_dir(self, agent_id: uuid.UUID) -> Path:
-            return tmp_path / str(agent_id)
+    async def failed_dispatch(agent_id):
+        assert delete_runtime.commit.await_count == 1
+        raise OSError("cleanup dispatch unavailable")
 
-        async def remove_container(self, _agent):
-            raise DockerException(["docker", "rm"], 1, b"not found", b"container unavailable")
-
-        async def archive_agent_files(self, _agent_id):
-            raise OSError("archive unavailable")
+    dispatch = AsyncMock(side_effect=failed_dispatch)
 
     monkeypatch.setattr(agents_api, "check_agent_access", fake_check_agent_access)
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda _user, _agent: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", fake_delete_with_related)
-    monkeypatch.setattr(agent_stops, "agent_manager", FailingAgentManager())
+    monkeypatch.setattr(agent_stops, "complete_deletion_cleanup", dispatch)
 
     await agents_api.delete_agent(agent_id=agent.id, current_user=creator)
-    await asyncio.gather(*tuple(background_tasks._tasks))
+    with pytest.raises(OSError, match="cleanup dispatch unavailable"):
+        await asyncio.gather(*tuple(background_tasks._tasks))
     assert deleted == [agent.id]
+    dispatch.assert_awaited_once_with(agent.id)
+    delete_runtime.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_archive_agent_task_history_writes_json_snapshot(monkeypatch, tmp_path):
+async def test_archive_agent_task_history_writes_json_snapshot(tmp_path):
     agent_id = uuid.uuid4()
     task_id = uuid.uuid4()
-    created_at = datetime.now(UTC)
-
-    task = SimpleNamespace(
-        id=task_id,
-        title="Review PR",
-        description="Check lore trailers",
-        type="todo",
-        status="done",
-        priority="high",
-        assignee="self",
-        created_by=uuid.uuid4(),
-        due_date=None,
-        supervision_target_user_id=None,
-        supervision_target_name=None,
-        supervision_channel=None,
-        remind_schedule=None,
-        created_at=created_at,
-        updated_at=created_at,
-        completed_at=created_at,
+    workspace = tmp_path / str(agent_id)
+    workspace.mkdir()
+    archive_dir = tmp_path / "_archived" / f"{agent_id}_deleted"
+    history = json.dumps(
+        {"agent_id": str(agent_id), "tasks": [{"id": str(task_id), "logs": [{"content": "Completed"}]}]}
     )
-    log = SimpleNamespace(
-        id=uuid.uuid4(),
-        content="Completed review and left comments",
-        created_at=created_at,
-    )
-
-    async def list_for_agent(_agent_id, *, ascending=False):
-        assert ascending is True
-        return [task]
-
-    async def list_for_task(_task_id):
-        return [log]
-
-    monkeypatch.setattr(agent_deletion_history.task_dao, "list_for_agent", list_for_agent)
-    monkeypatch.setattr(agent_deletion_history.task_log_dao, "list_for_task", list_for_task)
-
-    archive_dir = tmp_path / "_archived" / f"{agent_id}_20260325_120000"
-    archive_dir.mkdir(parents=True)
-    monkeypatch.setattr(
-        agent_stops,
-        "agent_manager",
-        SimpleNamespace(
-            remove_container=AsyncMock(),
-            archive_agent_files=AsyncMock(return_value=archive_dir),
-            _agent_dir=lambda agent_id: tmp_path / str(agent_id),
-        ),
-    )
-    snapshots = await agent_stops.snapshot_agent_teardown([make_agent(uuid.uuid4(), id=agent_id)])
-    assert not (archive_dir / "task_history.json").exists()
-    monkeypatch.setattr(agent_deletion_history.task_dao, "list_for_agent", AsyncMock(return_value=[]))
-    await agent_stops.teardown_deleted_agents(snapshots)
+    job = AgentDeletionCleanupRecord(agent_id, "Ops Bot", uuid.uuid4(), None, None, workspace, archive_dir, history)
+    publish_deletion_archive(job)
     archive_path = archive_dir / "task_history.json"
 
-    assert archive_path == archive_dir / "task_history.json"
-    assert archive_path is not None
     payload = json.loads(archive_path.read_text(encoding="utf-8"))
     assert payload["agent_id"] == str(agent_id)
     assert payload["tasks"][0]["id"] == str(task_id)
-    assert payload["tasks"][0]["logs"][0]["content"] == "Completed review and left comments"
+    assert payload["tasks"][0]["logs"][0]["content"] == "Completed"
 
 
 @pytest.mark.parametrize("rollback", [False, True])
@@ -290,26 +247,15 @@ async def test_delete_agent_waits_for_owning_request_commit(monkeypatch, delete_
     workspace.mkdir()
     observed = []
 
-    async def remove(record):
-        observed.append((record.id, delete_runtime.commit.await_count, session.get_connection()))
-
-    async def archive(agent_id):
+    async def complete(agent_id):
+        observed.append((agent_id, delete_runtime.commit.await_count, session.get_connection()))
         destination = tmp_path / "archive"
         workspace.rename(destination)
-        return destination
 
     monkeypatch.setattr(agents_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
     monkeypatch.setattr(agents_api, "is_agent_creator", lambda user, record: True)
     monkeypatch.setattr(agents_api.agent_dao, "delete_with_related", AsyncMock())
-    monkeypatch.setattr(
-        agent_stops,
-        "agent_manager",
-        SimpleNamespace(
-            remove_container=remove,
-            archive_agent_files=archive,
-            _agent_dir=lambda agent_id: tmp_path / str(agent_id),
-        ),
-    )
+    monkeypatch.setattr(agent_stops, "complete_deletion_cleanup", complete)
     owner = session.bind_crud_connection()
     assert isinstance(owner, AsyncGenerator)
     await anext(owner)
@@ -331,7 +277,7 @@ async def test_postgres_delete_agent_clears_plaza_children_and_peer_participant_
     content = await seed_deletion_content(deletion_pg)
     app = FastAPI()
     app.include_router(agents_api.router, prefix="/api", dependencies=[Depends(session.bind_crud_connection)])
-    app.dependency_overrides[get_current_user] = lambda: deletion_pg.actor
+    app.dependency_overrides[get_current_user] = lambda: replace(deletion_pg.actor, role=UserRole.PLATFORM_ADMIN)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.delete(f"/api/agents/{deletion_pg.agent_id}")
     assert response.status_code == 204
@@ -361,7 +307,9 @@ async def test_postgres_agent_delete_rollback_preserves_database_container_and_w
 
     async def fail_request():
         async with session.connection_ctx():
-            await agents_api.delete_agent(deletion_pg.agent_id, deletion_pg.actor)
+            await agents_api.delete_agent(
+                deletion_pg.agent_id, replace(deletion_pg.actor, role=UserRole.PLATFORM_ADMIN)
+            )
             assert deletion_pg.runtime_calls == []
             raise RuntimeError("later request failure")
 

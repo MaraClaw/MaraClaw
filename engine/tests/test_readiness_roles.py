@@ -9,20 +9,26 @@ from app.runtime import lifecycle, readiness
 from app.runtime.connectors import WeChatRuntime
 from app.runtime.tasks import OwnedTasks
 from app.services.wechat_channel import WeChatPollManager
+from producer_admission_fixtures import producer_admission
+
+__all__ = ["producer_admission"]
 
 
 @pytest.mark.parametrize(
     "role", ["api", "worker", "connector", "api,connector", "worker,connector", "all", "bootstrap"]
 )
-@pytest.mark.parametrize("failed_worker", ["trigger_daemon", "agent_setup"])
+@pytest.mark.parametrize("failed_worker", ["trigger_daemon", "agent_setup", "agent_start_reconciler"])
 async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
 ) -> None:
     from app.services import (
         agent_setup,
+        agent_start_reconciler,
         audit_logger,
         broadcast_email_worker,
+        company_transfer_cleanup,
         gateway_report_relay,
+        openclaw_update_worker,
         scheduler,
         trigger_daemon,
     )
@@ -67,11 +73,16 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
     monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
+    monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
+    monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
+    monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
     monkeypatch.setattr(runtime.proxy, "start", noop)
     monkeypatch.setattr(runtime.proxy, "stop", noop)
     monkeypatch.setattr(readiness, "ping_pool", dependency)
@@ -79,10 +90,13 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(readiness, "realtime_router", subscriber)
     roles = parse_process_roles(role)
     try:
-        await runtime.start(roles)
+        await asyncio.wait_for(runtime.start(roles), 5)
         required = runtime.tasks.required
         assert ("trigger_daemon" in required) == role_enabled(roles, "worker")
         assert ("agent_setup" in required) == role_enabled(roles, "worker")
+        assert ("agent_start_reconciler" in required) == role_enabled(roles, "worker")
+        if role_enabled(roles, "worker"):
+            assert required["agent_start_reconciler"][1] is False
         assert ("gateway_report_relay" in required) == role_enabled(roles, "worker")
         assert ("Connector" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])
@@ -91,7 +105,7 @@ async def test_actual_start_registers_required_role_evidence(
         gate.set()
         for task, finite in tuple(required.values()):
             if finite:
-                await task
+                await asyncio.wait_for(task, 5)
         subscriber.ready = True
         assert await runtime.readiness.check() == (role != "bootstrap")
         if role_enabled(roles, "api"):
@@ -100,10 +114,10 @@ async def test_actual_start_registers_required_role_evidence(
             subscriber.ready = True
         if role_enabled(roles, "worker"):
             required[failed_worker][0].cancel()
-            await asyncio.gather(required[failed_worker][0], return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(required[failed_worker][0], return_exceptions=True), 5)
             assert not await runtime.readiness.check()
     finally:
-        await runtime.stop()
+        await asyncio.wait_for(runtime.stop(), 5)
     assert runtime.readiness.draining
 
 
@@ -124,7 +138,7 @@ async def test_wechat_first_reconciliation_is_finite_and_ongoing_loop_is_require
 
     adapter = WeChatRuntime(Manager(), tasks)
     await adapter.start_all()
-    await loop_started.wait()
+    await asyncio.wait_for(loop_started.wait(), 5)
     assert reconciled.is_set()
     assert tasks.ready()
     task, finite = tasks.required["wechat-reconcile"]

@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.api import admin, auth, tenants
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.user import UserRecord
 
@@ -52,7 +53,7 @@ async def test_retired_self_creation_setting_cannot_be_persisted(monkeypatch: py
     app.include_router(admin.router, prefix="/api")
 
     async def current_user() -> UserRecord:
-        return UserRecord(id=uuid4(), role="platform_admin")
+        return UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
 
     app.dependency_overrides[get_current_user] = current_user
     set_flag = AsyncMock()

@@ -9,6 +9,7 @@ from typing import override
 
 import pytest
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.services import agent_tools, workspace_collaboration, workspace_locking
 from app.services.agent_tool_exec import _agent_tool_exec_storage as storage, workspace, workspace_read
 from app.services.agent_tool_exec._agent_tool_exec_storage import list_files as storage_list_files
@@ -514,8 +515,8 @@ async def test_storage_focus_callbacks_use_focus_service_owners(monkeypatch) -> 
         "key": "task",
         "title": None,
         "description": "work",
-        "status": "in_progress",
-        "kind": "normal",
+        "status": FocusStatus.IN_PROGRESS,
+        "kind": FocusKind.NORMAL,
         "source": "user",
         "metadata": {},
         "sort_order": 0,

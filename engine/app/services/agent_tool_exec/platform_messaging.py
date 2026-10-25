@@ -7,6 +7,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.user_dao import user_dao
+from app.schemas.chat_wire import ChatEventType
 from app.services.access_relationships import ensure_access_granted_platform_relationships
 
 from .registry import ToolArgumentMapping
@@ -35,7 +36,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
                 names = await user_dao.list_display_names_for_tenant(agent.tenant_id, limit=20)
             return (
                 f"❌ No unique user matching '{recipient}' found in your organization. "
-                + f"Available users: {', '.join(names) if names else 'none'}"
+                f"Available users: {', '.join(names) if names else 'none'}"
             )
 
         rel = await agent_relationship_dao.get_for_agent_and_user(agent_id, target_user.id)
@@ -45,7 +46,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_user.display_name or target_user.email or 'User'} "
-                + f"is not active ({status_info['access_status_reason'] or 'restricted'})"
+                f"is not active ({status_info['access_status_reason'] or 'restricted'})"
             )
 
         # Agent-initiated platform messages should always go to the long-lived primary session
@@ -81,7 +82,7 @@ async def _send_platform_message(agent_id: uuid.UUID, args: ToolArgumentMapping)
                 str(agent_id),
                 str(target_user.id),
                 {
-                    "type": "trigger_notification",
+                    "type": ChatEventType.TRIGGER_NOTIFICATION,
                     "content": message_text,
                     "triggers": ["web_message"],
                     "session_id": str(session.id),

@@ -1,6 +1,7 @@
 import socket
 import uuid
 from datetime import UTC, datetime
+from typing import Unpack
 from unittest.mock import AsyncMock
 
 import httpx
@@ -10,6 +11,7 @@ from app.core.json_types import JsonObject
 from app.core.outbound_policy import OutboundPolicyError
 from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime import evaluator
+from builtin_keyword_fakes import SocketTypeKeyword
 
 
 def _trigger(config: JsonObject) -> AgentTriggerRecord:
@@ -48,8 +50,8 @@ def _trigger(config: JsonObject) -> AgentTriggerRecord:
     ],
 )
 async def test_poll_blocks_forbidden_destinations_before_client_creation(monkeypatch, url) -> None:
-    def resolve(host: str, port: int, *, type: socket.SocketKind):
-        assert type == socket.SOCK_STREAM
+    def resolve(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]):
+        assert kwargs["type"] == socket.SOCK_STREAM
         if host == "missing.example":
             raise socket.gaierror(socket.EAI_NONAME, "not found")
         addresses = ["93.184.216.34", "10.0.0.1"] if host == "mixed.example" else ["198.18.0.1"]
@@ -80,9 +82,9 @@ async def test_poll_blocks_forbidden_destinations_before_client_creation(monkeyp
     ],
 )
 async def test_public_poll_preserves_fire_and_persistence(monkeypatch, state, expected) -> None:
-    def resolve(host: str, port: int, *, type: socket.SocketKind):
+    def resolve(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]):
         assert host == "public.example"
-        return [(socket.AF_INET, type, 6, "", ("93.184.216.34", port))]
+        return [(socket.AF_INET, kwargs["type"], 6, "", ("93.184.216.34", port))]
 
     requests: list[httpx.Request] = []
 

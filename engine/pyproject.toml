@@ -45,7 +45,7 @@ dependencies = [
     "aioboto3>=15.5.0",
     "uvloop>=0.23.0",
     "httptools>=0.9.0",
-    "starlette>=1.9.0",
+    "starlette>=1.10.0",
     "jinja2>=3.1.6",
     "h2>=4.4.1",
     "hpack>=4.2.0",
@@ -58,6 +58,7 @@ dependencies = [
     "celery-fastapi[all]>=0.1.6",
     "amqp>=5.4.1",
     "gunicorn>=26.2.0",
+    "typing-extensions>=4.16.0",
 ]
 
 [project.optional-dependencies]
@@ -79,6 +80,7 @@ target-version = "py314"
 line-length = 120
 src = ["app", "tests"]
 force-exclude = true
+unsafe-fixes = false
 extend-exclude = [
     ".venv",
     "venv",
@@ -96,6 +98,8 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
+# Explicit correctness rules; basedpyright handles annotation coverage.
+# The formatter owns layout; vendor exclusions above remain unchanged.
 select = [
     "E",
     "F",
@@ -117,6 +121,12 @@ select = [
     "S",
     "SIM",
     "T20",
+    "A", "ARG", "ERA", "FURB", "PTH", "PYI",
+    "RSE", "G", "INP", "FLY", "EXE", "TID",
+    "PGH", "SLOT", "ICN", "INT", "FA", "YTT", "T10", "PLE",
+    "PLC0414", "PLR0402", "PLR1711", "PLR1714", "PLR1716", "PLR5501",
+    "TRY002", "TRY004", "TRY201", "TRY203", "TRY401",
+    "TC004", "TC005", "TC006", "ISC003", "ISC004",
 ]
 ignore = [
     "E501",   # line length handled by the formatter
@@ -130,7 +140,8 @@ known-first-party = ["app"]
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S311", "PT011"]
+# Fixtures and protocol-compatible fakes intentionally leave arguments unused.
+"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S311", "PT011", "ARG"]
 "app/scripts/**/*.py" = ["T201", "S608"]
 "scripts/**/*.py" = ["T201"]
 # DAO SQL builders use class-constant fragments and named parameters.
@@ -188,10 +199,10 @@ reportAny = "error"
 root = ["."]
 
 [tool.ty.rules]
-all = "warn"
+all = "error"
 
 [tool.ty.terminal]
-error-on-warning = false
+error-on-warning = true
 
 [tool.ty.src]
 include = [

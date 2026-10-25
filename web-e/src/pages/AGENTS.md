@@ -32,7 +32,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 - Named exports (`LoginPage`, `JoinOrgPage`, …). Routes live in `src/routes/index.tsx`.
 - Join/transfer are **not** under `ProtectedRoute`; they self-gate on `useAuth` status.
 - Role copy on landing must match `engine/agent_templates/` when it claims product facts (landing shows **12 of 22** roles). Edit `components/sections/agents.tsx`, not this folder.
-- `useAuth` rejects `platform_admin` — member funnel only.
+- Auth responses use member-specific contracts; the server enforces member-audience eligibility.
 
 ## ANTI-PATTERNS
 

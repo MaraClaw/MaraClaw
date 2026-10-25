@@ -58,6 +58,9 @@ jobs:
       - name: Sync dependencies
         id: sync
         run: uv sync --locked --extra dev
+      - name: Check API contract freshness
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run --extra dev python -m scripts.export_api_contracts --check
       - name: basedpyright
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run --extra dev basedpyright --project pyrightconfig.json
@@ -96,3 +99,51 @@ jobs:
             engine/htmlcov/
           retention-days: 14
           if-no-files-found: error
+
+  lifecycle-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: lifecycle_qa
+          POSTGRES_PASSWORD: lifecycle_qa
+          POSTGRES_DB: lifecycle_qa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lifecycle_qa -d lifecycle_qa"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGENT_SETUP_TEST_DATABASE_URL: postgresql://lifecycle_qa:lifecycle_qa@localhost:5432/lifecycle_qa
+      AGENT_SETUP_TEST_DATABASE_DISPOSABLE: "1"
+      MARACLAW_TEST_POSTGRES_DSN: postgresql://lifecycle_qa:lifecycle_qa@localhost:5432/lifecycle_qa
+      CHAT_SUBMISSION_TEST_DATABASE_URL: postgresql://lifecycle_qa:lifecycle_qa@localhost:5432/lifecycle_qa
+      BOOTSTRAP_TEST_DATABASE_URL: postgresql://lifecycle_qa:lifecycle_qa@localhost:5432/lifecycle_qa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          working-directory: engine
+          version: "0.13.5"
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --locked --extra dev
+      - name: Test agent lifecycle with PostgreSQL
+        run: >-
+          uv run --no-sync python -m pytest
+          tests/test_agent_setup_postgres.py
+          tests/test_agent_setup_retry_postgres.py
+          tests/test_agent_setup_authorization_postgres.py
+          tests/test_agent_deletion_requests_postgres.py
+          tests/test_agent_deletion_cleanup_postgres.py
+          tests/test_agent_deletion_cleanup_approval_postgres.py
+          tests/test_agent_ownership_transfers_postgres.py
+          tests/test_guest_config_transaction_postgres.py
+          tests/test_agent_start_postgres.py
+          -q

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, ClassVar, final
 from uuid import UUID
 
+from app.core.domain.tasks import TaskStatus, TaskType
 from app.core.json_types import int_from_row, str_from_row
 from app.dao.base import BaseDAO
 from app.records.task import TaskLogRecord, TaskRecord
@@ -43,18 +44,18 @@ class TaskDAO(BaseDAO[TaskRecord]):
         self,
         agent_id: UUID,
         *,
-        status: str | None = None,
-        type: str | None = None,
+        status: TaskStatus | None = None,
+        task_type: TaskType | None = None,
         ascending: bool = False,
     ) -> Sequence[TaskRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
         clauses = ["agent_id = %(agent_id)s"]
-        if status not in (None, ""):
+        if status is not None:
             clauses.append("status = %(status)s")
-            params["status"] = status
-        if type not in (None, ""):
+            params["status"] = status.value
+        if task_type is not None:
             clauses.append("type = %(type)s")
-            params["type"] = type
+            params["type"] = task_type.value
         where = " AND ".join(clauses)
         order = "ASC" if ascending else "DESC"
         async with self.session() as db:
@@ -72,12 +73,12 @@ class TaskDAO(BaseDAO[TaskRecord]):
             )
             return TaskRecord.from_row(row) if row is not None else None
 
-    async def count_for_agent(self, agent_id: UUID, *, status: str | None = None) -> int:
+    async def count_for_agent(self, agent_id: UUID, *, status: TaskStatus | None = None) -> int:
         params: dict[str, Any] = {"agent_id": agent_id}
         status_sql = ""
-        if status not in (None, ""):
+        if status is not None:
             status_sql = " AND status = %(status)s"
-            params["status"] = status
+            params["status"] = status.value
         async with self.session() as db:
             value = await db.fetchval(
                 f"SELECT COUNT(*) FROM tasks WHERE agent_id = %(agent_id)s{status_sql}",
@@ -90,9 +91,9 @@ class TaskDAO(BaseDAO[TaskRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('t')}, a.name AS agent_name "
-                + "FROM tasks t JOIN agents a ON a.id = t.agent_id "
-                + "WHERE t.type = 'supervision' AND t.status = ANY(%(statuses)s) "
-                + "AND t.remind_schedule IS NOT NULL",
+                "FROM tasks t JOIN agents a ON a.id = t.agent_id "
+                "WHERE t.type = 'supervision' AND t.status = ANY(%(statuses)s) "
+                "AND t.remind_schedule IS NOT NULL",
                 {"statuses": ["pending", "doing"]},
             )
             return [
@@ -108,8 +109,8 @@ class TaskDAO(BaseDAO[TaskRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tasks "
-                + "WHERE agent_id = %(agent_id)s AND title ILIKE %(pattern)s "
-                + "ORDER BY created_at DESC LIMIT 1",
+                "WHERE agent_id = %(agent_id)s AND title ILIKE %(pattern)s "
+                "ORDER BY created_at DESC LIMIT 1",
                 {"agent_id": agent_id, "pattern": f"%{title}%"},
             )
             return TaskRecord.from_row(row) if row is not None else None
@@ -146,7 +147,7 @@ class TaskLogDAO(BaseDAO[TaskLogRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM task_logs "
-                + "WHERE task_id = %(task_id)s ORDER BY created_at DESC LIMIT 1",
+                "WHERE task_id = %(task_id)s ORDER BY created_at DESC LIMIT 1",
                 {"task_id": task_id},
             )
             return TaskLogRecord.from_row(row) if row is not None else None

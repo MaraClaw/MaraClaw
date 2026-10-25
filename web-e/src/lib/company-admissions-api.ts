@@ -21,16 +21,16 @@ export async function listMyAdmissions(
 ): Promise<readonly AdmissionSummary[]> {
   const { owner, signal } = context
   const query = new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) })
-  return z.array(admissionSummarySchema).readonly().parse(
-    await apiRequest<unknown>(`/api/company-admissions/mine?${query}`, requestContext(owner, signal)),
-  )
+  return apiRequest(`/api/company-admissions/mine?${query}`, {
+    schema: z.array(admissionSummarySchema).readonly(), ...requestContext(owner, signal),
+  })
 }
 
 export async function getMyAdmission(id: string, context: RequestContext): Promise<AdmissionDetail> {
   const { owner, signal } = context
-  return admissionDetailSchema.parse(
-    await apiRequest<unknown>(`/api/company-admissions/${encodeURIComponent(id)}`, requestContext(owner, signal)),
-  )
+  return apiRequest(`/api/company-admissions/${encodeURIComponent(id)}`, {
+    schema: admissionDetailSchema, ...requestContext(owner, signal),
+  })
 }
 
 export async function listMyAdmissionsPage(page: AdmissionPageRequest, context: RequestContext): Promise<AdmissionSummaryPage> {
@@ -40,16 +40,14 @@ export async function listMyAdmissionsPage(page: AdmissionPageRequest, context: 
   if (status !== undefined) query.set('status', status)
   if (limit !== undefined) query.set('limit', String(limit))
   if (cursor !== undefined) query.set('cursor', cursor)
-  return admissionSummaryPageSchema.parse(
-    await apiRequest<unknown>(`/api/company-admissions/mine/page?${query}`, requestContext(owner, signal)),
-  )
+  return apiRequest(`/api/company-admissions/mine/page?${query}`, {
+    schema: admissionSummaryPageSchema, ...requestContext(owner, signal),
+  })
 }
 
 export async function withdrawMyAdmission(id: string, context: RequestContext): Promise<AdmissionDetail> {
   const { owner, signal } = context
-  return admissionDetailSchema.parse(
-    await apiRequest<unknown>(`/api/company-admissions/${encodeURIComponent(id)}/withdraw`, {
-      ...requestContext(owner, signal), method: 'POST',
-    }),
-  )
+  return apiRequest(`/api/company-admissions/${encodeURIComponent(id)}/withdraw`, {
+    schema: admissionDetailSchema, ...requestContext(owner, signal), method: 'POST',
+  })
 }

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -148,7 +149,7 @@ async def test_transfer_user_to_org_moves_member(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_user_to_org_blocks_platform_admin():
-    user = UserRecord(id=uuid.uuid4(), role="platform_admin")
+    user = UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN)
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.attach_user_to_org(user, _tenant())
 
@@ -184,7 +185,7 @@ def test_cannot_delete_system_or_default_org():
 
 @pytest.mark.asyncio
 async def test_transfer_user_to_org_blocks_org_admin():
-    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
     with pytest.raises(membership.AlreadyInOrgError):
         await membership.transfer_user_to_org(user, _tenant())
 
@@ -202,15 +203,22 @@ def test_cannot_disable_system_org():
 
 
 @pytest.mark.asyncio
-async def test_consume_invitation_code_increments(monkeypatch):
-    code = SimpleNamespace(used_count=1, max_uses=5)
-    update = AsyncMock()
-    monkeypatch.setattr(membership.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
-    monkeypatch.setattr(membership.invitation_code_dao, "update", update)
-    await membership.consume_invitation_code("ABCD")
-    update.assert_awaited_once()
-    assert update.await_args is not None
-    assert update.await_args.kwargs["obj_in"]["used_count"] == 2
+async def test_consume_invitation_code_spends_one_use_atomically_for_the_recipient(monkeypatch):
+    consume = AsyncMock(return_value=True)
+    monkeypatch.setattr(membership.invitation_code_dao, "consume", consume)
+    user_id = uuid.uuid4()
+
+    await membership.consume_invitation_code("ABCD", user_id=user_id, email=" Bob@Example.COM ")
+
+    consume.assert_awaited_once_with("ABCD", user_id=user_id, email="bob@example.com")
+
+
+@pytest.mark.asyncio
+async def test_consume_invitation_code_rejects_a_lost_race(monkeypatch):
+    monkeypatch.setattr(membership.invitation_code_dao, "consume", AsyncMock(return_value=False))
+
+    with pytest.raises(membership.InvitationError):
+        await membership.consume_invitation_code("ABCD")
 
 
 @pytest.mark.asyncio

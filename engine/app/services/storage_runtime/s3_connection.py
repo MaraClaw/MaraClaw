@@ -93,6 +93,7 @@ class S3Connection(StorageBackend):
         max_pool_connections: int = 50,
         write_workers: int = 32,
     ):
+        del write_workers
         self.bucket: str = bucket
         self.prefix: str = normalize_storage_key(prefix)
         self.region: str = region

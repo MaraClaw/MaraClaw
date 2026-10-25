@@ -71,12 +71,12 @@ def test_s3_backend_passes_max_pool_connections(monkeypatch):
 
     real_import = builtins.__import__
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def fake_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
         if name == "boto3":
             return fake_boto3
         if name == "botocore.config":
             return FakeBotocoreConfigModule()
-        return real_import(name, globals, locals, fromlist, level)
+        return real_import(name, global_namespace, local_namespace, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 

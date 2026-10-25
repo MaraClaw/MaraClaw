@@ -6,7 +6,7 @@ import { authSession, type SessionOwner } from '@/lib/auth-session'
 import { createAuthSessionController } from '@/lib/auth-session-controller'
 import { getStoredToken } from '@/lib/auth-storage'
 import { ApiError, StaleSessionError } from '@/lib/http'
-import { isMultiTenantResponse, isPlatformAdminUser, isTokenResponse, userMustChangePassword } from '@/lib/types/auth'
+import { isMultiTenantResponse, isTokenResponse } from '@/lib/types/auth'
 import type { LoginRequest } from '@/lib/types/auth'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -28,9 +28,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!authSession.isCurrent(owner)) throw new StaleSessionError(owner)
     const result = await loginRequest(input, undefined, owner)
     if (!authSession.isCurrent(owner)) throw new StaleSessionError(owner)
-    if (isTokenResponse(result) && isPlatformAdminUser(result.user)) {
-      throw new ApiError(403, 'Platform operators sign in on the admin console, not this member site.')
-    }
     if (isTokenResponse(result) || isMultiTenantResponse(result)) return result
     throw new ApiError(500, 'Unexpected login response')
   }, [])
@@ -38,8 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => { authSession.logout(snapshot.owner) }, [snapshot.owner])
   const value = useMemo<AuthContextValue>(() => ({
     ...snapshot,
-    needsOrgConfirm: Boolean(snapshot.user && snapshot.user.tenant_id == null),
-    mustChangePassword: userMustChangePassword(snapshot.user),
+    needsOrgConfirm: snapshot.status === 'authenticated' && snapshot.user?.tenant_id == null,
     capture: authSession.capture,
     isCurrent: authSession.isCurrent,
     login,

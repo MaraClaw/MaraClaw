@@ -106,10 +106,10 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
                 )
                 return None, (
                     "Your previous tool call arguments were not valid JSON. "
-                    + f"The affected tool was `{tool_name or 'unknown'}`. "
-                    + "Retry the tool call now with `function.arguments` as one valid JSON object string. "
-                    + "Escape all quotes and newlines inside long HTML, CSS, JavaScript, or markdown content. "
-                    + "Do not explain; only retry with a valid tool call."
+                    f"The affected tool was `{tool_name or 'unknown'}`. "
+                    "Retry the tool call now with `function.arguments` as one valid JSON object string. "
+                    "Escape all quotes and newlines inside long HTML, CSS, JavaScript, or markdown content. "
+                    "Do not explain; only retry with a valid tool call."
                 )
             args_str = raw_args
         elif args_are_container:
@@ -117,8 +117,8 @@ def _sanitize_tool_calls_for_context(tool_calls: list[LLMToolCall]) -> tuple[lis
         else:
             return None, (
                 "Your previous tool call arguments had an unsupported type. "
-                + f"The affected tool was `{tool_name or 'unknown'}`. "
-                + "Retry the tool call with `function.arguments` as one valid JSON object string."
+                f"The affected tool was `{tool_name or 'unknown'}`. "
+                "Retry the tool call with `function.arguments` as one valid JSON object string."
             )
 
         new_tc: LLMToolCall = {
@@ -344,8 +344,8 @@ def _allowed_tool_names(tools_for_llm: Sequence[Mapping[str, object]] | None) ->
 def _tool_not_enabled_message(tool_name: str) -> str:
     return (
         f"Tool `{tool_name}` is not enabled for this agent. "
-        + "Do not call it again. Use only the tools currently available to you, "
-        + "or explain that the required capability is not enabled."
+        "Do not call it again. Use only the tools currently available to you, "
+        "or explain that the required capability is not enabled."
     )
 
 
@@ -363,6 +363,7 @@ async def _process_tool_call(
     side_effect_guard: Callable[[], None] | None = None,
 ) -> str:
     """Process a single tool call and return result."""
+    del allowed_tool_names
     fn = tc.get("function") or {}
     tool_name = fn.get("name") or ""
     raw_args = fn.get("arguments", "{}")
@@ -372,7 +373,7 @@ async def _process_tool_call(
     if isinstance(raw_args, str):
         try:
             # Provider JSON is not guaranteed to be an object; it is forwarded unchanged.
-            args: ToolPayload = cast(ToolPayload, json.loads(raw_args)) if raw_args else {}
+            args: ToolPayload = cast("ToolPayload", json.loads(raw_args)) if raw_args else {}
         except json.JSONDecodeError:
             args = {}
     elif args_are_mapping:
@@ -385,27 +386,7 @@ async def _process_tool_call(
     if not should_execute:
         return error_msg
 
-    # if tool_name not in allowed_tool_names:
-    #     result = _tool_not_enabled_message(tool_name)
-    #     logger.warning(f"[LLM] Blocked disabled tool call: {tool_name} agent_id={agent_id}")
-    #     if on_tool_call:
-    #         try:
-    #             await on_tool_call({
-    #                 "name": tool_name,
-    #                 "call_id": tc.get("id", ""),
-    #                 "args": args,
-    #                 "status": "done",
-    #                 "result": result,
-    #                 "reasoning_content": full_reasoning_content
-    #             })
-    #         except Exception:
-    #             pass
-    #     api_messages.append(LLMMessage(
-    #         role="tool",
-    #         tool_call_id=tc["id"],
-    #         content=result,
-    #     ))
-    #     return ""
+    # Tool visibility is not enforced here; dispatch retains authorization ownership.
 
     # Notify client about tool call (in-progress)
     if on_tool_call:
@@ -512,6 +493,7 @@ async def call_llm(
     side_effect_guard: Callable[[], None] | None = None,
 ) -> str:
     """Call LLM via unified client with function-calling tool loop."""
+    del on_chunk
     # Get agent config for tool rounds
     _max_tool_rounds, _token_limit_msg = await _get_agent_config(agent_id, agent=turn.agent if turn else None)
     if _token_limit_msg not in (None, ""):
@@ -609,8 +591,8 @@ async def call_llm(
                     role="user",
                     content=(
                         f"⚠️ You have used {round_i}/{_max_tool_rounds} tool-call rounds. "
-                        + "If the task is incomplete, use upsert_focus_item to save progress "
-                        + "and set a continuation trigger with set_trigger before the remaining rounds end."
+                        "If the task is incomplete, use upsert_focus_item to save progress "
+                        "and set a continuation trigger with set_trigger before the remaining rounds end."
                     ),
                 )
             )
@@ -651,7 +633,7 @@ async def call_llm(
 
             response = await client.stream(
                 messages=api_messages,
-                tools=tools_for_llm if tools_for_llm else None,
+                tools=tools_for_llm or None,
                 temperature=model.temperature,
                 max_tokens=max_tokens,
                 on_chunk=_buffer_chunk,

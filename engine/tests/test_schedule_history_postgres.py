@@ -10,10 +10,12 @@ from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from app.schemas.schedule_history import ScheduleHistoryPage
 from test_schedule_occurrence_postgres import (
-    live_schedule as live_schedule,
-    manual_http as manual_http,
-    manual_schedule as manual_schedule,
+    live_schedule,
+    manual_http,
+    manual_schedule,
 )
+
+__all__ = ["live_schedule", "manual_http", "manual_schedule"]
 
 
 @pytest.mark.parametrize("outcome", ["all", "success", "failure", "cancelled", "unknown"])

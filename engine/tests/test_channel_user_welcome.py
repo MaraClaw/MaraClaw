@@ -9,7 +9,9 @@ from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services import channel_user_service as channel_users
-from company_admission_fixtures import AdmissionScenario, admission_scenario as admission_scenario
+from company_admission_fixtures import AdmissionScenario, admission_scenario
+
+__all__ = ["admission_scenario"]
 
 
 @pytest.fixture

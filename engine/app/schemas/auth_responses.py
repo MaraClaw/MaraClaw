@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, NotRequired
 
 from typing_extensions import TypedDict
 
@@ -14,6 +14,12 @@ class ForgotPasswordResponse(TypedDict):
 
 class ResetPasswordResponse(TypedDict):
     ok: bool
+
+
+class ChangePasswordResponse(TypedDict):
+    ok: bool
+    must_change_password: bool
+    access_token: NotRequired[str]
 
 
 class EmailConflict(TypedDict):

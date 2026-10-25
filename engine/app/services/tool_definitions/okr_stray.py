@@ -8,8 +8,8 @@ OKR_STRAY_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Update KR Content",
         "description": (
             "Update the content fields of one of YOUR OWN Key Results. "
-            + "Call get_my_okr first to obtain the kr_id, then change title, target_value, unit, "
-            + "focus_ref, or status as needed. This does not record a progress update."
+            "Call get_my_okr first to obtain the kr_id, then change title, target_value, unit, "
+            "focus_ref, or status as needed. This does not record a progress update."
         ),
         "category": "okr",
         "icon": "✏️",

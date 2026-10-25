@@ -86,7 +86,7 @@ async def test_get_returns_absent_when_warm_tenant_deleted_in_owning_transaction
     row_memo.clear_row_memo()
     # When
     async with connection_ctx():
-        await tenant_dao.delete(id=tenant_id)
+        await tenant_dao.delete(record_id=tenant_id)
         result = await tenant_dao.get(tenant_id)
         # Then: no premature deletion/publication while SQL is still uncommitted.
         assert result is None

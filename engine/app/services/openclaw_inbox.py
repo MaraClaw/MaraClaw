@@ -204,16 +204,14 @@ def _wake_body(content: str, message_id: UUID | None = None, *, session_key: str
     if message_id is not None:
         prompt = (
             "Answer the MaraClaw user now. Then POST "
-            + f"{guest_engine_base_url()}/api/gateway/report "
-            + "header X-Api-Key=$MARACLAW_GATEWAY_API_KEY JSON "
-            + f'{{"message_id":"{message_id}","result":"<reply>"}}.\n\n'
-            + content
+            f"{guest_engine_base_url()}/api/gateway/report "
+            "header X-Api-Key=$MARACLAW_GATEWAY_API_KEY JSON "
+            f'{{"message_id":"{message_id}","result":"<reply>"}}.\n\n' + content
         )
     else:
         prompt = (
             "A MaraClaw inbox item is waiting. Use the maraclaw-sync skill: "
-            + "poll, answer, and report.\n\n"
-            + content[:4000]
+            "poll, answer, and report.\n\n" + content[:4000]
         )
     body: WakeBody = {"message": prompt, "wakeMode": "now", "name": "MaraClaw"}
     if session_key is not None:

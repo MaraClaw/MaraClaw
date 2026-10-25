@@ -40,6 +40,16 @@ class CompanyAdmissionDAO(BaseDAO[CompanyAdmissionRecord]):
             )
             return self.record_factory(row) if row is not None else None
 
+    async def has_invitation_history(self, applicant_id: UUID) -> bool:
+        async with self.session() as db:
+            return bool(
+                await db.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM company_admission_requests "
+                    "WHERE applicant_user_id=%(id)s AND method='invitation')",
+                    {"id": applicant_id},
+                )
+            )
+
     async def tenant(self, tenant_id: UUID) -> TenantRecord | None:
         async with self.session() as db:
             row = await db.fetchone("SELECT * FROM tenants WHERE id=%(id)s", {"id": tenant_id})

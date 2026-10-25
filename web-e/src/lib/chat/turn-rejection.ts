@@ -20,9 +20,9 @@ export function recoverRejectedTurn(lines: readonly ChatLine[], rejection: ChatT
   readonly notice: string
   readonly matched: boolean
 } {
-  if (rejection.client_submission_id === undefined) return {
+  if (!('client_submission_id' in rejection)) return {
     lines: [...lines], restoredText: '', matched: false,
-    notice: `Onboarding could not start. ${rejection.content} ${rejection.reason === 'enqueue_failed'
+    notice: `${rejection.reason === 'invalid_submission_id' ? 'Message not sent.' : 'Onboarding could not start.'} ${rejection.content} ${rejection.reason === 'enqueue_failed'
       ? 'Ask an admin to check this agent.' : recoverySteps[rejection.reason]}`,
   }
   const index = lines.findIndex((line) => line.role === 'user' && line.pending && line.delivery !== 'accepted'
@@ -33,7 +33,7 @@ export function recoverRejectedTurn(lines: readonly ChatLine[], rejection: ChatT
   const notice = `Message not sent. ${rejection.content} ${recoverySteps[rejection.reason]}${attachmentStep}`
   return {
     lines: lines.map((line, position) => position === index ? { ...line, pending: false, delivery: 'rejected',
-      rejectionNotice: notice, retryable: rejection.reason !== 'invalid_submission_id' && rejection.reason !== 'submission_conflict'
+      rejectionNotice: notice, retryable: rejection.reason !== 'submission_conflict'
         && rejection.reason !== 'invalid_attachments' } : line),
     restoredText: rejected?.composerText ?? rejected?.content ?? '',
     notice,

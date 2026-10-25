@@ -167,5 +167,5 @@ async def delete_trigger(
     if not trigger:
         raise HTTPException(404, "Trigger not found")
 
-    _ = await agent_trigger_dao.delete(id=trigger.id)
+    _ = await agent_trigger_dao.delete(record_id=trigger.id)
     return {"ok": True}

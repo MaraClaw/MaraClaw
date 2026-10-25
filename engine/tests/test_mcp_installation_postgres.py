@@ -40,7 +40,7 @@ async def installation_db() -> AsyncIterator[tuple[UUID, UUID, str]]:
             await raw.execute("CREATE TABLE agents (id UUID PRIMARY KEY)")
             baseline = await anyio.Path("scripts/schema_baseline.sql").read_text()
             for table in ("tools", "agent_tools"):
-                definition = re.search(rf"CREATE TABLE IF NOT EXISTS {table} \(.*?\n\);", baseline, re.S)
+                definition = re.search(rf"CREATE TABLE IF NOT EXISTS {table} \(.*?\n\);", baseline, re.DOTALL)
                 assert definition is not None
                 await DbConnection(raw).execute(definition.group())
             for agent in agents:

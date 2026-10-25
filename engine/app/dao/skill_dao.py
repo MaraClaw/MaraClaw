@@ -65,7 +65,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             if tenant_id is not None:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM skills "
-                    + "WHERE tenant_id IS NULL OR tenant_id = %(tenant_id)s ORDER BY name",
+                    "WHERE tenant_id IS NULL OR tenant_id = %(tenant_id)s ORDER BY name",
                     {"tenant_id": tenant_id},
                 )
             else:
@@ -145,7 +145,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
             skill_ids = [row["id"] for row in skill_rows]
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
-                + "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
+                "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
                 {"skill_ids": skill_ids},
             )
             files_by_skill: dict[UUID, list[SkillFileRecord]] = {}
@@ -183,7 +183,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
                 return list[SkillRecord]()
             file_rows = await db.fetchall(
                 f"SELECT {skill_file_dao._select_list()} FROM skill_files "
-                + "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
+                "WHERE skill_id = ANY(%(skill_ids)s) ORDER BY path",
                 {"skill_ids": [row["id"] for row in skill_rows]},
             )
             files_by_skill: dict[UUID, list[SkillFileRecord]] = {}
@@ -254,7 +254,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         if drop_missing_files:
             for path, existing_file in existing_files.items():
                 if path not in seen:
-                    _ = await skill_file_dao.delete(id=existing_file.id)
+                    _ = await skill_file_dao.delete(record_id=existing_file.id)
         skill.files = list(await skill_file_dao.list_for_skill(skill.id))
         return skill
 

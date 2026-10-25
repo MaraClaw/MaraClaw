@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import advanced
+from app.core.domain.users import UserRole
 from app.dao.template_dao import agent_template_dao
 from app.dao.user_dao import user_dao
 from app.records.identity import IdentityRecord
@@ -18,7 +19,7 @@ async def test_delete_template_confines_org_admin_to_non_builtin_own_tenant_crea
     actor = UserRecord(
         id=uuid.uuid4(),
         tenant_id=None if case == "tenantless" else uuid.uuid4(),
-        role="platform_admin" if platform else "org_admin",
+        role=UserRole.PLATFORM_ADMIN if platform else UserRole.ORG_ADMIN,
     )
     creator = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4() if case == "foreign" else actor.tenant_id)
     template = AgentTemplateRecord(
@@ -35,7 +36,7 @@ async def test_delete_template_confines_org_admin_to_non_builtin_own_tenant_crea
 
     if platform or case == "own":
         await advanced.delete_template(template.id, actor)
-        deletion.assert_awaited_once_with(id=template.id)
+        deletion.assert_awaited_once_with(record_id=template.id)
         if platform:
             lookup.assert_not_awaited()
     else:
@@ -47,7 +48,7 @@ async def test_delete_template_confines_org_admin_to_non_builtin_own_tenant_crea
 
 async def test_identity_platform_admin_can_delete_builtin_template(monkeypatch):
     actor = UserRecord(
-        id=uuid.uuid4(), role="org_admin", identity=IdentityRecord(id=uuid.uuid4(), is_platform_admin=True)
+        id=uuid.uuid4(), role=UserRole.ORG_ADMIN, identity=IdentityRecord(id=uuid.uuid4(), is_platform_admin=True)
     )
     template = AgentTemplateRecord(id=uuid.uuid4(), name="Builtin", is_builtin=True)
     deletion = AsyncMock(return_value=True)
@@ -56,14 +57,14 @@ async def test_identity_platform_admin_can_delete_builtin_template(monkeypatch):
 
     await advanced.delete_template(template.id, actor)
 
-    deletion.assert_awaited_once_with(id=template.id)
+    deletion.assert_awaited_once_with(record_id=template.id)
 
 
 async def test_delete_missing_template_preserves_not_found(monkeypatch):
     deletion = AsyncMock()
     monkeypatch.setattr(agent_template_dao, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_template_dao, "delete", deletion)
-    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
+    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
 
     with pytest.raises(HTTPException) as error:
         await advanced.delete_template(uuid.uuid4(), actor)

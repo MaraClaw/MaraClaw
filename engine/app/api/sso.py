@@ -14,7 +14,7 @@ from app.schemas.organization_response_sso import (
     SSOStatusResponse,
     sso_user_payload,
 )
-from app.schemas.schemas import UserOut
+from app.schemas.schemas import AuthUser
 from app.services.sso_scan_sessions import ScanLoginUnavailableError, redeem_scan_session
 
 router = APIRouter(tags=["sso"])
@@ -57,7 +57,7 @@ async def get_sso_session_status(sid: uuid.UUID) -> SSOStatusResponse:
             return {"status": "failed", "provider_type": session.provider_type, "error_msg": "Unable to sign in"}
         if login is not None:
             response["access_token"] = login.access_token
-            response["user"] = sso_user_payload(UserOut.model_validate(login.user))
+            response["user"] = sso_user_payload(AuthUser.model_validate(login.user))
         else:
             current = await sso_scan_session_dao.get(sid)
             if current is not None:

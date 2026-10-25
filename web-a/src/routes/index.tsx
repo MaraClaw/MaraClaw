@@ -3,13 +3,14 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 
 import { AdminShell } from '@/components/layout/admin-shell'
 import { useAuth } from '@/hooks/use-auth'
-import { canReviewAdmissions, canSendBroadcast } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
 
 const AccountPage = lazy(() => import('@/pages/account').then((module) => ({ default: module.AccountPage })))
 const BroadcastPage = lazy(() => import('@/pages/broadcast').then((module) => ({ default: module.BroadcastPage })))
+const InvitationsPage = lazy(() => import('@/pages/invitations').then((module) => ({ default: module.InvitationsPage })))
 const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((module) => ({ default: module.ForgotPasswordPage })))
 const LoginPage = lazy(() => import('@/pages/login').then((module) => ({ default: module.LoginPage })))
 const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({ default: module.CompaniesPage })))
@@ -29,15 +30,27 @@ const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
 const TransferPaymentsPage = lazy(() => import('@/pages/transfer-payments').then((module) => ({ default: module.TransferPaymentsPage })))
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
+const AgentDeletionRequestsPage = lazy(() => import('@/pages/agent-deletion-requests').then((module) => ({ default: module.AgentDeletionRequestsPage })))
+const AgentDeletionRequestDetailPage = lazy(() => import('@/pages/agent-deletion-request-detail').then((module) => ({ default: module.AgentDeletionRequestDetailPage })))
 
 function BroadcastRoute() {
   const { user } = useAuth()
   return canSendBroadcast(user) ? <Outlet /> : <Navigate to="/" replace />
 }
 
+function InvitationsRoute() {
+  const { user } = useAuth()
+  return canManageInvitations(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
 function AdmissionReviewRoute() {
   const { user } = useAuth()
   return canReviewAdmissions(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
+function AgentDeletionReviewRoute() {
+  const { user } = useAuth()
+  return canReviewAgentDeletions(user) ? <Outlet /> : <Navigate to="/" replace />
 }
 
 export function AppRouter() {
@@ -55,6 +68,10 @@ export function AppRouter() {
               <Route path="account" element={<AccountPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="activity" element={<AdminAuditPage />} />
+              <Route element={<AgentDeletionReviewRoute />}>
+                <Route path="agent-deletion-requests" element={<AgentDeletionRequestsPage />} />
+                <Route path="agent-deletion-requests/:id" element={<AgentDeletionRequestDetailPage />} />
+              </Route>
               <Route element={<TransferReviewRoute />}>
                 <Route path="transfer-payments" element={<TransferPaymentsPage />} />
                 <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
@@ -65,6 +82,9 @@ export function AppRouter() {
               </Route>
               <Route element={<BroadcastRoute />}>
                 <Route path="broadcast" element={<BroadcastPage />} />
+              </Route>
+              <Route element={<InvitationsRoute />}>
+                <Route path="invitations" element={<InvitationsPage />} />
               </Route>
               <Route element={<PlatformAdminRoute />}>
                 <Route path="openclaw-updates" element={<OpenClawUpdatesPage />} />

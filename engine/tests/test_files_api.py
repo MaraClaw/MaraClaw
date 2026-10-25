@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api import files as files_api
 from app.core import security
+from app.core.domain.users import UserRole
 from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -24,7 +25,7 @@ def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
     return UserRecord(
         id=uuid.uuid4(),
         display_name="Alice",
-        role="member",
+        role=UserRole.MEMBER,
         tenant_id=uuid.uuid4(),
         is_active=True,
         identity=identity,

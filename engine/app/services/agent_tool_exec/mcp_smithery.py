@@ -36,10 +36,10 @@ async def _execute_via_smithery_connect(
     if not api_key:
         return (
             "❌ Smithery API key not configured.\n\n"
-            + "Provide your Smithery API key. Get one by following these steps:\n"
-            + "1. Sign up or sign in at https://smithery.ai\n"
-            + "2. Open https://smithery.ai/account/api-keys and create an API key\n"
-            + "3. Provide the key and I will configure it"
+            "Provide your Smithery API key. Get one by following these steps:\n"
+            "1. Sign up or sign in at https://smithery.ai\n"
+            "2. Open https://smithery.ai/account/api-keys and create an API key\n"
+            "3. Provide the key and I will configure it"
         )
 
     # Get namespace + connection from tool config, or use defaults
@@ -65,7 +65,7 @@ async def _execute_via_smithery_connect(
     if namespace in (None, "") or connection_id in (None, ""):
         return (
             "❌ Smithery Connect namespace/connection not configured. "
-            + "Please set smithery_namespace and smithery_connection_id in the tool configuration."
+            "Please set smithery_namespace and smithery_connection_id in the tool configuration."
         )
 
     # Smithery Connect (and many MCP servers) emit SSE responses for tools/call.
@@ -112,7 +112,7 @@ async def _execute_via_smithery_connect(
                 if line.startswith("data: "):
                     try:
                         parsed = json_loads_value(line[6:])
-                        data = cast(JsonObject, parsed) if isinstance(parsed, dict) else None
+                        data = cast("JsonObject", parsed) if isinstance(parsed, dict) else None
                         break
                     except json_mod.JSONDecodeError:
                         pass
@@ -123,7 +123,7 @@ async def _execute_via_smithery_connect(
                     parsed = json_loads_value(raw)
                     if not isinstance(parsed, dict):
                         return f"❌ Unexpected response from Smithery: {raw[:300]}"
-                    data = cast(JsonObject, parsed)
+                    data = cast("JsonObject", parsed)
                 except json_mod.JSONDecodeError:
                     return f"❌ Unexpected response from Smithery: {raw[:300]}"
 
@@ -175,6 +175,7 @@ async def _smithery_auto_recover(
     Re-creates the Smithery Connect connection. If OAuth is needed,
     returns the auth URL for the user. Returns None if recovery fails silently.
     """
+    del namespace
     try:
         from app.services.resource_discovery import _ensure_smithery_connection
 
@@ -184,7 +185,7 @@ async def _smithery_auto_recover(
         if "error" in conn_result:
             return (
                 f"❌ MCP tool connection expired and auto-recovery failed: {conn_result['error']}\n\n"
-                + '💡 Please re-authorize by telling me: `import_mcp_server(server_id="...", reauthorize=true)`'
+                '💡 Please re-authorize by telling me: `import_mcp_server(server_id="...", reauthorize=true)`'
             )
 
         auth_url = conn_result.get("auth_url")
@@ -195,9 +196,9 @@ async def _smithery_auto_recover(
             # replacement. The user-facing auth URL is enough for recovery.
             return (
                 "🔐 MCP tool connection expired. Re-authorization needed.\n\n"
-                + "Please visit the following URL to re-authorize:\n"
-                + f"{auth_url}\n\n"
-                + "After completing authorization, the tools will work again automatically."
+                "Please visit the following URL to re-authorize:\n"
+                f"{auth_url}\n\n"
+                "After completing authorization, the tools will work again automatically."
             )
 
         # Update stored config with new connection info

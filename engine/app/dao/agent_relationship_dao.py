@@ -43,11 +43,11 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT m.user_id FROM org_members m "
-                + "JOIN agent_relationships r ON r.member_id = m.id "
-                + "WHERE r.agent_id = %(agent_id)s "
-                + "AND m.tenant_id = %(tenant_id)s "
-                + "AND m.status = 'active' "
-                + "AND m.user_id = ANY(%(user_ids)s)",
+                "JOIN agent_relationships r ON r.member_id = m.id "
+                "WHERE r.agent_id = %(agent_id)s "
+                "AND m.tenant_id = %(tenant_id)s "
+                "AND m.status = 'active' "
+                "AND m.user_id = ANY(%(user_ids)s)",
                 {"agent_id": agent_id, "tenant_id": tenant_id, "user_ids": list(user_ids)},
             )
             return {uuid_from_row(row["user_id"]) for row in rows if row.get("user_id")}
@@ -56,7 +56,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_relationships "
-                + "WHERE agent_id = %(agent_id)s AND member_id = %(member_id)s LIMIT 1",
+                "WHERE agent_id = %(agent_id)s AND member_id = %(member_id)s LIMIT 1",
                 {"agent_id": agent_id, "member_id": member_id},
             )
             return AgentRelationshipRecord.from_row(row) if row is not None else None
@@ -65,9 +65,9 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('r')} FROM agent_relationships r "
-                + "JOIN org_members m ON m.id = r.member_id "
-                + "WHERE r.agent_id = %(agent_id)s AND m.user_id = %(user_id)s "
-                + "AND m.status = 'active' LIMIT 1",
+                "JOIN org_members m ON m.id = r.member_id "
+                "WHERE r.agent_id = %(agent_id)s AND m.user_id = %(user_id)s "
+                "AND m.status = 'active' LIMIT 1",
                 {"agent_id": agent_id, "user_id": user_id},
             )
             return AgentRelationshipRecord.from_row(row) if row is not None else None
@@ -93,19 +93,19 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT "
-                + "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
-                + "r.relation AS r_relation, r.description AS r_description, "
-                + "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
-                + "m.unionid AS m_unionid, m.external_id AS m_external_id, "
-                + "m.provider_id AS m_provider_id, m.email AS m_email, "
-                + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
-                + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title "
-                + "FROM agent_relationships r "
-                + "JOIN org_members m ON m.id = r.member_id "
-                + "WHERE r.agent_id = %(agent_id)s AND m.status = 'active' "
-                + "AND (m.external_id = %(feishu_id)s OR m.open_id = %(feishu_id)s) "
-                + "LIMIT 1",
+                "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
+                "r.relation AS r_relation, r.description AS r_description, "
+                "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
+                "m.unionid AS m_unionid, m.external_id AS m_external_id, "
+                "m.provider_id AS m_provider_id, m.email AS m_email, "
+                "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
+                "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
+                "m.title AS m_title "
+                "FROM agent_relationships r "
+                "JOIN org_members m ON m.id = r.member_id "
+                "WHERE r.agent_id = %(agent_id)s AND m.status = 'active' "
+                "AND (m.external_id = %(feishu_id)s OR m.open_id = %(feishu_id)s) "
+                "LIMIT 1",
                 {"agent_id": agent_id, "feishu_id": feishu_id},
             )
             if row is None:
@@ -123,19 +123,19 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT "
-                + "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
-                + "r.relation AS r_relation, r.description AS r_description, "
-                + "r.created_by_user_id AS r_created_by_user_id, "
-                + "r.updated_by_user_id AS r_updated_by_user_id, "
-                + "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
-                + "m.unionid AS m_unionid, m.external_id AS m_external_id, "
-                + "m.provider_id AS m_provider_id, m.email AS m_email, "
-                + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
-                + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title "
-                + "FROM agent_relationships r "
-                + "JOIN org_members m ON m.id = r.member_id "
-                + f"WHERE r.agent_id = %(agent_id)s{status_sql}",
+                "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
+                "r.relation AS r_relation, r.description AS r_description, "
+                "r.created_by_user_id AS r_created_by_user_id, "
+                "r.updated_by_user_id AS r_updated_by_user_id, "
+                "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
+                "m.unionid AS m_unionid, m.external_id AS m_external_id, "
+                "m.provider_id AS m_provider_id, m.email AS m_email, "
+                "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
+                "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
+                "m.title AS m_title "
+                "FROM agent_relationships r "
+                "JOIN org_members m ON m.id = r.member_id "
+                f"WHERE r.agent_id = %(agent_id)s{status_sql}",
                 {"agent_id": agent_id},
             )
             return [_relationship_with_member(row) for row in rows]
@@ -145,21 +145,21 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT "
-                + "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
-                + "r.relation AS r_relation, r.description AS r_description, "
-                + "r.created_by_user_id AS r_created_by_user_id, "
-                + "r.updated_by_user_id AS r_updated_by_user_id, "
-                + "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
-                + "m.unionid AS m_unionid, m.external_id AS m_external_id, "
-                + "m.provider_id AS m_provider_id, m.email AS m_email, "
-                + "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
-                + "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
-                + "m.title AS m_title, "
-                + "p.name AS provider_name, p.provider_type AS provider_type "
-                + "FROM agent_relationships r "
-                + "LEFT JOIN org_members m ON m.id = r.member_id "
-                + "LEFT JOIN identity_providers p ON p.id = m.provider_id "
-                + "WHERE r.agent_id = %(agent_id)s",
+                "r.id AS r_id, r.agent_id AS r_agent_id, r.member_id AS r_member_id, "
+                "r.relation AS r_relation, r.description AS r_description, "
+                "r.created_by_user_id AS r_created_by_user_id, "
+                "r.updated_by_user_id AS r_updated_by_user_id, "
+                "m.id AS m_id, m.name AS m_name, m.open_id AS m_open_id, "
+                "m.unionid AS m_unionid, m.external_id AS m_external_id, "
+                "m.provider_id AS m_provider_id, m.email AS m_email, "
+                "m.phone AS m_phone, m.status AS m_status, m.tenant_id AS m_tenant_id, "
+                "m.user_id AS m_user_id, m.avatar_url AS m_avatar_url, "
+                "m.title AS m_title, "
+                "p.name AS provider_name, p.provider_type AS provider_type "
+                "FROM agent_relationships r "
+                "LEFT JOIN org_members m ON m.id = r.member_id "
+                "LEFT JOIN identity_providers p ON p.id = m.provider_id "
+                "WHERE r.agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
             return [_relationship_with_member(row, include_provider=True) for row in rows]
@@ -176,7 +176,7 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_relationships "
-                + "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
+                "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"rel_id": rel_id, "agent_id": agent_id},
             )
             return AgentRelationshipRecord.from_row(row) if row is not None else None

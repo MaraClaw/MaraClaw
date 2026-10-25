@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import MISSING, fields, is_dataclass
+from enum import StrEnum
 from typing import ClassVar
 from uuid import UUID, uuid4
 
@@ -41,12 +42,12 @@ class BaseDAO[RecordT]:
             return ", ".join(f"{alias}.{col}" for col in self.columns)
         return ", ".join(self.columns)
 
-    async def get(self, id: UUID) -> RecordT | None:
+    async def get(self, record_id: UUID) -> RecordT | None:
         """Fetch one row by primary key."""
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM {self.table} WHERE {self.pk} = %(id)s",
-                {"id": id},
+                {"id": record_id},
             )
             return self.record_factory(row) if row is not None else None
 
@@ -111,7 +112,7 @@ class BaseDAO[RecordT]:
             if isinstance(value, (dict, list)):
                 params[col] = as_jsonb(value)
             else:
-                params[col] = value
+                params[col] = value.value if isinstance(value, StrEnum) else value
         col_sql = ", ".join(cols)
         val_sql = ", ".join(f"%({c})s" for c in cols)
         async with self.session() as db:
@@ -133,26 +134,29 @@ class BaseDAO[RecordT]:
         assignments: list[str] = []
         for col, raw_value in data.items():
             value: object = raw_value
-            params[col] = as_jsonb(value) if isinstance(value, (dict, list)) else value
+            if isinstance(value, (dict, list)):
+                params[col] = as_jsonb(value)
+            else:
+                params[col] = value.value if isinstance(value, StrEnum) else value
             assignments.append(f"{col} = %({col})s")
         if "updated_at" in self.columns and "updated_at" not in data:
             assignments.append("updated_at = NOW()")
         async with self.session() as db:
             row = await db.fetchone(
                 f"UPDATE {self.table} SET {', '.join(assignments)} "
-                + f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
+                f"WHERE {self.pk} = %({self.pk})s RETURNING {self._select_list()}",
                 params,
             )
             if row is None:
                 return db_obj
             return self.record_factory(row)
 
-    async def delete(self, *, id: UUID) -> RecordT | None:
+    async def delete(self, *, record_id: UUID) -> RecordT | None:
         """Delete by primary key and return the deleted row when present."""
         async with self.session() as db:
             row = await db.fetchone(
                 f"DELETE FROM {self.table} WHERE {self.pk} = %(id)s RETURNING {self._select_list()}",
-                {"id": id},
+                {"id": record_id},
             )
             return self.record_factory(row) if row is not None else None
 

@@ -7,7 +7,9 @@ from botocore.exceptions import ClientError
 
 from app.api import file_previews
 from app.services.storage_runtime.s3 import S3StorageBackend
-from file_preview_fixtures import preview_context as preview_context
+from file_preview_fixtures import preview_context
+
+__all__ = ["preview_context"]
 
 
 class TrackedBody(BytesIO):

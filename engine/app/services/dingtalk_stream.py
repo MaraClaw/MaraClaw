@@ -15,6 +15,7 @@ from typing import TypedDict, cast, override
 
 import httpx
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.runtime.tasks import EventTasks
@@ -253,8 +254,8 @@ async def _process_media_message(
 
         return (
             combined_text,
-            image_base64_list if image_base64_list else None,
-            saved_file_paths if saved_file_paths else None,
+            image_base64_list or None,
+            saved_file_paths or None,
         )
 
     if msgtype == "audio":
@@ -581,16 +582,16 @@ class DingTalkStreamManager:
             try:
                 # Parse the raw data
                 incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
-                raw_data = cast(object, message.data)
+                raw_data = cast("object", message.data)
                 if isinstance(raw_data, dict):
                     parsed_data = json_object_from(raw_data)
                 elif isinstance(raw_data, (str, bytes, bytearray)):
                     loaded = json_loads_value(raw_data)
                     if not isinstance(loaded, dict):
-                        raise ValueError("DingTalk callback payload must be an object")
+                        raise TypeError("DingTalk callback payload must be an object")
                     parsed_data = json_object_from(loaded)
                 else:
-                    raise ValueError("DingTalk callback payload must be an object")
+                    raise TypeError("DingTalk callback payload must be an object")
                 msg_data = _parse_dingtalk_message(parsed_data)
 
                 msgtype = msg_data.get("msgtype", "text")
@@ -740,7 +741,7 @@ class DingTalkStreamManager:
         if message_id:
             from app.dao.channel_config_dao import channel_config_dao
 
-            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
             if config is None:
                 return
             body = msg_data.get("content", {})
@@ -831,7 +832,7 @@ class DingTalkStreamManager:
         logger.info("[DingTalk Stream] Initializing all active DingTalk channels...")
         from app.dao.channel_config_dao import channel_config_dao
 
-        configs = await channel_config_dao.list_configured("dingtalk")
+        configs = await channel_config_dao.list_configured(ChannelType.DINGTALK)
 
         logger.info(f"[DingTalk Stream] Found {len(configs)} configured DingTalk channel(s)")
 

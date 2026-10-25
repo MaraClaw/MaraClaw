@@ -76,7 +76,7 @@ def _can_access_existing_okr_target(ctx: _OKRRequestContext, owner_type: str, ow
         if owner_type != "user" or owner_id != ctx["requester_user_id"]:
             return _okr_permission_denied(
                 "non-admin requests may only create or modify the requester's own personal OKRs. "
-                + "Do not create or edit company OKRs or other members' OKRs."
+                "Do not create or edit company OKRs or other members' OKRs."
             )
         return None
 
@@ -93,7 +93,7 @@ def _can_create_okr_target(ctx: _OKRRequestContext, owner_type: str, owner_id: u
         if owner_type != "user" or owner_id != ctx["requester_user_id"]:
             return _okr_permission_denied(
                 "non-admin requests may only create the requester's own personal OKRs. "
-                + "Creating company OKRs or other members' OKRs requires an org admin."
+                "Creating company OKRs or other members' OKRs requires an org admin."
             )
         return None
 

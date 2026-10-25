@@ -36,12 +36,12 @@ app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=li
 
 
 @app.exception_handler(PublicBaseUrlNotConfiguredError)
-async def public_base_url_not_configured(request: Request, exc: PublicBaseUrlNotConfiguredError) -> JSONResponse:
+async def public_base_url_not_configured(_request: Request, exc: PublicBaseUrlNotConfiguredError) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.exception_handler(OpenClawUpdateGateError)
-async def openclaw_update_gate(request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
+async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
@@ -72,6 +72,9 @@ from app.api.admin_linkup import router as admin_linkup_router
 from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
+from app.api.agent_deletion_requests import router as agent_deletion_requests_router
+from app.api.agent_ownership_transfers import router as agent_ownership_transfers_router
+from app.api.agent_setup import router as agent_setup_router
 from app.api.agentbay_control import router as agentbay_control_router
 from app.api.agents import router as agents_router
 from app.api.atlassian import router as atlassian_router
@@ -91,6 +94,7 @@ from app.api.gogcli import router as gogcli_router
 from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
 from app.api.linkup_proxy import router as linkup_proxy_router
+from app.api.member_auth import router as member_auth_router
 from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
 from app.api.okr import router as okr_router
@@ -106,6 +110,7 @@ from app.api.slack import router as slack_router
 from app.api.sso import router as sso_router
 from app.api.tasks import router as tasks_router
 from app.api.teams import router as teams_router
+from app.api.tenant_email import router as tenant_email_router
 from app.api.tenants import router as tenants_router
 from app.api.tools import router as tools_router
 from app.api.triggers import router as triggers_router
@@ -120,7 +125,11 @@ from app.api.whatsapp import router as whatsapp_router
 # Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound.
 _CRUD_DB = [Depends(bind_crud_connection)]
 app.include_router(auth_router, prefix=settings.API_PREFIX)
+app.include_router(member_auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(agent_setup_router)
+app.include_router(agent_deletion_requests_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(agent_ownership_transfers_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(departments_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_router, prefix=settings.API_PREFIX)
@@ -129,6 +138,7 @@ app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
+app.include_router(tenant_email_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(relationships_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

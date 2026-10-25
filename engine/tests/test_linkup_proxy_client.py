@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from uuid import UUID, uuid4
 
 import pytest
@@ -64,8 +64,8 @@ class MemoryKeyDao:
             setattr(db_obj, key, value)
         return db_obj
 
-    async def delete(self, *, id: UUID) -> LinkupApiKeyRecord | None:
-        return self.rows.pop(id, None)
+    async def delete(self, *, record_id: UUID) -> LinkupApiKeyRecord | None:
+        return self.rows.pop(record_id, None)
 
     async def get_cursor_key_id(self) -> UUID | None:
         return self.cursor
@@ -105,7 +105,7 @@ class FakeClient:
         self._responses = responses
         self._calls = calls
 
-    async def __aenter__(self) -> FakeClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args) -> bool:

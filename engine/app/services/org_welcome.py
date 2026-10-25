@@ -1,5 +1,6 @@
 """Private in-app welcomes for approved company admissions."""
 
+from app.core.notification_kinds import NotificationKind
 from app.records.notification import NotificationRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -12,7 +13,7 @@ async def send_organization_welcome(user: UserRecord, tenant: TenantRecord) -> N
         return None
     return await notification_service.send_notification(
         user_id=user.id,
-        type="organization_welcome",
+        notification_kind=NotificationKind.ORGANIZATION_WELCOME,
         title=f"Welcome to {tenant.name}"[:200],
         body=f"You are now a member of {tenant.name}. Your organization's workspace is ready for you.",
         ref_id=tenant.id,

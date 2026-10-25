@@ -1,9 +1,4 @@
-"""System-owned outbound email service.
-
-Supports both:
-1. Platform-level configuration via environment variables
-2. Tenant-level configuration via system_settings table
-"""
+"""System email delivery; identity mail is platform-only, organization mail is scoped."""
 
 from __future__ import annotations
 
@@ -17,26 +12,36 @@ from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid
 from functools import partial
 from typing import Literal, TypedDict
+from uuid import UUID
 
 import anyio
 
 from app.core.email import send_smtp_email
 from app.core.json_types import json_as_str, json_object_from
 from app.core.logging import get_logger
+from app.core.outbound_policy import OutboundPolicyError
+from app.services.email_config import (
+    SystemEmailConfig,
+    resolve_email_config_async,
+)
+
+__all__ = [
+    "DEFAULT_EMAIL_TEMPLATES",
+    "EMAIL_TEMPLATE_VARIABLES",
+    "EmailAttemptOutcome",
+    "EmailTemplate",
+    "EmailTemplates",
+    "SystemEmailConfig",
+    "attempt_email",
+    "get_email_templates",
+    "render_email_template",
+    "resolve_email_config_async",
+    "send_company_invitation_email",
+    "send_password_reset_email",
+    "send_system_email",
+]
 
 logger = get_logger(__name__)
-
-
-def _setting_int(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float | str):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class EmailTemplate(TypedDict):
@@ -47,20 +52,6 @@ class EmailTemplate(TypedDict):
 type EmailTemplates = dict[str, EmailTemplate]
 
 
-@dataclass(slots=True)
-class SystemEmailConfig:
-    """Resolved system email configuration."""
-
-    from_address: str
-    from_name: str
-    smtp_host: str
-    smtp_port: int
-    smtp_username: str
-    smtp_password: str
-    smtp_ssl: bool
-    smtp_timeout_seconds: int
-
-
 @dataclass(frozen=True, slots=True)
 class EmailAttemptOutcome:
     """Broadcast SMTP result; error codes never include message content or credentials."""
@@ -69,13 +60,16 @@ class EmailAttemptOutcome:
     error: str | None = None
 
 
-async def attempt_email(to: str, subject: str, body: str, *, message_id: str) -> EmailAttemptOutcome:
+async def attempt_email(
+    to: str, subject: str, body: str, *, message_id: str, tenant_id: UUID | None = None
+) -> EmailAttemptOutcome:
     """Attempt one broadcast message without inheriting a caller's DB transaction.
 
     Cancellation propagates, even while the native SMTP thread is still running.
     The worker must then exit without settling or starting another batch.
     """
-    config = await asyncio.create_task(resolve_email_config_async(), context=Context())
+    resolution = resolve_email_config_async() if tenant_id is None else resolve_email_config_async(tenant_id)
+    config = await asyncio.create_task(resolution, context=Context())
     if config is None:
         return EmailAttemptOutcome("not_configured", "not_configured")
     send = partial(
@@ -95,53 +89,14 @@ async def attempt_email(to: str, subject: str, body: str, *, message_id: str) ->
     except smtplib.SMTPResponseException as exc:
         kind = "permanent" if 500 <= exc.smtp_code < 600 else "transient"
         return EmailAttemptOutcome(kind, f"smtp_{exc.smtp_code}")
-    except (smtplib.SMTPNotSupportedError, ValueError, UnicodeError) as exc:
+    except (smtplib.SMTPNotSupportedError, ValueError, UnicodeError, OutboundPolicyError) as exc:
         return EmailAttemptOutcome("permanent", type(exc).__name__)
     except (smtplib.SMTPException, OSError) as exc:
         return EmailAttemptOutcome("transient", type(exc).__name__)
     return EmailAttemptOutcome("sent")
 
 
-async def resolve_email_config_async(*, include_disabled: bool = False) -> SystemEmailConfig | None:
-    """Resolve email configuration from the 'system_email_platform' system setting.
-
-    The lookup goes through ``system_setting_dao`` which manages its own session.
-    """
-    from app.dao import system_setting_dao
-
-    # Try platform-level config in DB
-    try:
-        v_raw: object = await system_setting_dao.get_value("system_email_platform", {})
-        v = json_object_from(v_raw)
-        if v:
-            if v.get("SYSTEM_EMAIL_ENABLED") is False and not include_disabled:
-                return None
-            if (
-                (from_address := v.get("SYSTEM_EMAIL_FROM_ADDRESS")) is not None
-                and from_address
-                and (smtp_host := v.get("SYSTEM_SMTP_HOST")) is not None
-                and smtp_host
-            ):
-                port_raw: object = v.get("SYSTEM_SMTP_PORT", 465)
-                timeout_raw: object = v.get("SYSTEM_SMTP_TIMEOUT_SECONDS", 15)
-                return SystemEmailConfig(
-                    from_address=str(v.get("SYSTEM_EMAIL_FROM_ADDRESS", "")).strip(),
-                    from_name=str(v.get("SYSTEM_EMAIL_FROM_NAME", "MaraClaw")).strip() or "MaraClaw",
-                    smtp_host=str(v.get("SYSTEM_SMTP_HOST", "")).strip(),
-                    smtp_port=_setting_int(port_raw),
-                    smtp_username=str(v.get("SYSTEM_SMTP_USERNAME", "")).strip()
-                    or str(v.get("SYSTEM_EMAIL_FROM_ADDRESS", "")).strip(),
-                    smtp_password=str(v.get("SYSTEM_SMTP_PASSWORD", "")),
-                    smtp_ssl=bool(v.get("SYSTEM_SMTP_SSL", True)),
-                    smtp_timeout_seconds=max(1, _setting_int(timeout_raw)),
-                )
-    except Exception as e:
-        logger.warning(f"Error resolving platform email config: {e}")
-
-    return None
-
-
-async def send_system_email(to: str, subject: str, body: str) -> None:
+async def send_system_email(to: str, subject: str, body: str, *, tenant_id: UUID | None = None) -> None:
     """Send a plain-text system email without blocking the event loop.
 
     Args:
@@ -149,10 +104,10 @@ async def send_system_email(to: str, subject: str, body: str) -> None:
         subject: Email subject
         body: Email body text
     """
-    config = await resolve_email_config_async()
+    config = await resolve_email_config_async() if tenant_id is None else await resolve_email_config_async(tenant_id)
 
     if not config:
-        logger.warning(f"System email not configured, skipped sending to {to}")
+        logger.warning("System email not configured, skipped sending to {recipient}", recipient=to)
         return
 
     await asyncio.to_thread(_send_email_with_config_sync, config, to, subject, body)
@@ -180,6 +135,7 @@ def _send_email_with_config_sync(
         msg_string=msg.as_string(),
         use_ssl=config.smtp_ssl,
         timeout=config.smtp_timeout_seconds,
+        public_only=config.public_only,
     )
 
 
@@ -211,6 +167,10 @@ async def send_company_invitation_email(
     inviter_name: str,
     company_name: str,
     invite_url: str,
+    *,
+    tenant_id: UUID,
+    invite_code: str,
+    expires_at: datetime,
 ) -> None:
     """Send a company invitation email using the configured template.
 
@@ -219,14 +179,21 @@ async def send_company_invitation_email(
         inviter_name: Name of the person inviting
         company_name: Name of the company
         invite_url: Registration URL with invitation code
+        invite_code: The single-use code, also embedded in the URL
+        expires_at: When the code stops working
     """
+    expires_text = expires_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
     variables = {
         "inviter_name": inviter_name,
         "company_name": company_name,
         "invite_url": invite_url,
+        "invite_code": invite_code,
+        "expires_at": expires_text,
     }
     subject, body = await render_email_template("company_invitation", variables)
-    await send_system_email(to, subject, body)
+    if expires_text not in body:
+        body += f"\n\nThis invitation expires on {expires_text}."
+    await send_system_email(to, subject, body, tenant_id=tenant_id)
 
 
 # ── Email Templates ──────────────────────────────────────────────────────────
@@ -238,31 +205,33 @@ DEFAULT_EMAIL_TEMPLATES: EmailTemplates = {
         "subject": "Verify your MaraClaw email address",
         "body": (
             "Hello {{display_name}},\n\n"
-            + "Welcome to MaraClaw! Please use the following 6-digit code to verify your email address:\n\n"
-            + "Verification code: {{verification_code}}\n\n"
-            + "Or open this link: {{verification_url}}\n\n"
-            + "This code expires in {{expiry_minutes}} minutes. "
-            + "If you did not create an account, you can ignore this email."
+            "Welcome to MaraClaw! Please use the following 6-digit code to verify your email address:\n\n"
+            "Verification code: {{verification_code}}\n\n"
+            "Or open this link: {{verification_url}}\n\n"
+            "This code expires in {{expiry_minutes}} minutes. "
+            "If you did not create an account, you can ignore this email."
         ),
     },
     "password_reset": {
         "subject": "Reset your MaraClaw password",
         "body": (
             "Hello {{display_name}},\n\n"
-            + "We received a request to reset your MaraClaw password.\n\n"
-            + "Reset link: {{reset_url}}\n\n"
-            + "This link expires in {{expiry_minutes}} minutes. "
-            + "If you did not request this, you can ignore this email."
+            "We received a request to reset your MaraClaw password.\n\n"
+            "Reset link: {{reset_url}}\n\n"
+            "This link expires in {{expiry_minutes}} minutes. "
+            "If you did not request this, you can ignore this email."
         ),
     },
     "company_invitation": {
         "subject": "{{inviter_name}} invited you to join {{company_name}} on MaraClaw",
         "body": (
             "Hello,\n\n"
-            + "{{inviter_name}} has invited you to join their team '{{company_name}}' on MaraClaw.\n\n"
-            + "To accept the invitation and create your account, please click the link below:\n\n"
-            + "{{invite_url}}\n\n"
-            + "If you don't want to join this team or didn't expect this invitation, you can ignore this email."
+            "{{inviter_name}} has invited you to join their team '{{company_name}}' on MaraClaw.\n\n"
+            "To accept the invitation and create your account, please click the link below:\n\n"
+            "{{invite_url}}\n\n"
+            "Invitation code: {{invite_code}}\n"
+            "It can only be used by this email address and expires on {{expires_at}}.\n\n"
+            "If you don't want to join this team or didn't expect this invitation, you can ignore this email."
         ),
     },
 }
@@ -271,7 +240,7 @@ DEFAULT_EMAIL_TEMPLATES: EmailTemplates = {
 EMAIL_TEMPLATE_VARIABLES: dict[str, list[str]] = {
     "email_verification": ["display_name", "verification_code", "verification_url", "expiry_minutes"],
     "password_reset": ["display_name", "reset_url", "expiry_minutes"],
-    "company_invitation": ["inviter_name", "company_name", "invite_url"],
+    "company_invitation": ["inviter_name", "company_name", "invite_url", "invite_code", "expires_at"],
 }
 
 
@@ -304,7 +273,7 @@ async def _load_templates_from_db(templates: EmailTemplates) -> EmailTemplates:
                 if body not in (None, ""):
                     templates[key]["body"] = body
     except Exception as e:
-        logger.warning(f"Error loading email templates from DB: {e}")
+        logger.warning("Error loading email templates from DB: {error}", error=e)
 
     return templates
 
@@ -337,23 +306,3 @@ async def render_email_template(
     subject = _render_template(template.get("subject", ""), variables)
     body = _render_template(template.get("body", ""), variables)
     return subject, body
-
-
-async def send_test_email(to: str) -> None:
-    """Send a test email to verify SMTP configuration.
-
-    Args:
-        to: Recipient email address
-    """
-    config = await resolve_email_config_async(include_disabled=True)
-
-    if not config:
-        raise RuntimeError("System email SMTP settings are not configured.")
-
-    subject = "MaraClaw Test Email"
-    body = (
-        "This is a test email from your MaraClaw platform.\n\n"
-        + "If you received this email, your SMTP configuration is working correctly.\n\n"
-        + "-- MaraClaw System"
-    )
-    await asyncio.to_thread(_send_email_with_config_sync, config, to, subject, body)

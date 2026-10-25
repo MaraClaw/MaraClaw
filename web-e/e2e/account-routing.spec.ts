@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import type { UserOut } from '../src/lib/types/auth'
+import type { ChangePasswordResponse, UserOut } from '../src/lib/types/auth'
+import type { OnboardingStatus } from '../src/lib/onboarding-api'
 
 const tokenKey = 'maraclaw-enduser-token'
 const syntheticToken = 'account-routing-synthetic-session'
@@ -11,7 +12,7 @@ const company = {
 const member: UserOut = {
   id: 'f936188e-a374-4edf-9b05-ac6c9cb236a6', email: 'member@routing.test',
   display_name: 'Routing member', role: 'member', tenant_id: company.id, email_verified: true,
-  is_platform_admin: false,
+  is_active: true, created_at: '2026-10-25T08:00:00Z',
 }
 
 async function prepareMember(page: Page, mustChangePassword: boolean) {
@@ -26,7 +27,7 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     switch (path) {
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         identityRequests.push(route.request().method())
         await route.fulfill({ json: { ...member, must_change_password: requiresPassword } })
         break
@@ -34,7 +35,7 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
         expect(route.request().method()).toBe('PUT')
         passwordRequests.push(route.request().postDataJSON())
         requiresPassword = false
-        await route.fulfill({ json: { ok: true, must_change_password: false } })
+        await route.fulfill({ json: { ok: true, must_change_password: false, access_token: syntheticToken } satisfies ChangePasswordResponse })
         break
       case '/api/auth/providers':
       case '/api/auth/my-tenants':
@@ -46,6 +47,9 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
       case '/api/notifications/unread-count':
         await route.fulfill(requiresPassword ? passwordRequired : { json: { unread_count: 0 } })
         break
+      case '/api/company-admissions/mine/page':
+        await route.fulfill(requiresPassword ? passwordRequired : { json: { items: [], next_cursor: null } })
+        break
       case '/api/agents/':
         onboardingRequests.push(path)
         await route.fulfill(requiresPassword ? passwordRequired : { json: [] })
@@ -53,7 +57,8 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
       case '/api/onboarding/status':
         onboardingRequests.push(path)
         await route.fulfill(requiresPassword ? passwordRequired : {
-          json: { exists: false, status: 'not_started', current_step: 'welcome' },
+          json: { exists: false, status: 'not_started', current_step: 'welcome', entry_mode: null,
+            personal_assistant_agent_id: null, completed_at: null } satisfies OnboardingStatus,
         })
         break
       default:
@@ -111,7 +116,7 @@ for (const path of ['/app', '/app/agents', '/app/onboarding', '/app/agents/restr
   })
 }
 
-for (const path of ['/app', '/app/agents']) {
+for (const path of ['/app', '/app/agents', '/app/notifications']) {
   test(`${path} opens onboarding for an ordinary first-run member`, async ({ page }) => {
     // Given
     const { onboardingRequests } = await prepareMember(page, false)
@@ -131,7 +136,7 @@ test('settings saves the trimmed profile and refreshes the signed-in identity', 
   const updated = { ...member, display_name: 'Updated member' }
   const updates: unknown[] = []
   let refreshes = 0
-  await page.route('**/api/auth/me', async (route) => {
+  await page.route('**/api/member/auth/me', async (route) => {
     if (route.request().method() === 'PATCH') {
       updates.push(route.request().postDataJSON())
       await route.fulfill({ json: member })
@@ -224,7 +229,7 @@ test('settings places active connected sign-in after password and retains unlink
     { id: 'inactive', provider_type: 'hidden', name: 'Inactive sign-in', is_active: false },
   ] }))
   const unlinks: unknown[] = []
-  await page.route('**/api/auth/example/unbind', async (route) => {
+  await page.route('**/api/member/auth/example/unbind', async (route) => {
     expect(route.request().method()).toBe('POST')
     unlinks.push(route.request().postDataJSON())
     await route.fulfill({ json: member })

@@ -28,6 +28,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Admin: `get_current_admin` / `require_role(...)` (both inherit `must_change_password` gate from `get_current_user`).
 - Agents: `await check_agent_access(current_user, agent_id)`; no discarded DB argument is accepted.
 - Persistence: DAOs. Short CRUD routers bind `bind_crud_connection` in `app.main` (one checkout). Do not attach that dependency to websocket / connector inbound / gateway / `linkup_proxy`. Extra `async with connection_ctx():` still joins.
+- `agent_setup.py` is self-prefixed `/api/agents/{agent_id}/setup` and mounts without `API_PREFIX` or request-wide CRUD binding. Manage-only `GET` returns safe status; `POST /retry` accepts eligible failed setup with 202, otherwise 409. The service freshly authorizes, owns explicit transactions and rechecks authorization after acquiring the per-agent flock; never move row locks ahead of that flock.
 - `admin_search_analytics.py`: platform_admin only. Live SQL over `web_search_events`. Never return raw queries.
 - Handlers use canonical arguments without legacy DB placeholders; preserve real `DbConnection` parameters in transaction/locking helpers.
 - `websocket.py` redeems single-use `chat_tickets` and freshly loads the bound principal; `files.py` download takes Bearer (`load_user_from_access_token`, identity + force-change) or a single-use `file_download_tickets` ticket from `POST .../files/download-ticket`, freshly re-authorized on redemption; no query JWT. `gateway.py` uses agent API keys.
@@ -36,7 +37,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 ## Auth / admin genesis
 
 - Registration uses `POST /auth/register/init`; OAuth registration/login uses `POST /auth/{provider}/callback`. Fresh-only installs do not expose `/auth/register`, `/auth/register/sso`, or `/auth/email-hint`. Auth responses use `needs_org_confirm`, not `needs_company_setup`.
-- `auth.py`: password login returns `must_change_password` on `TokenResponse` / `UserOut` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation). Reset/verify emails resolve the frontend via `frontend_origin` (allowlisted Origin/Referer).
+- `auth.py`: password login returns `must_change_password` on `TokenResponse` / `AuthUser` / `IdentityOut`. Open registration hard-codes `is_platform_admin=False` (never first-user elevation). Reset/verify emails resolve the frontend via `frontend_origin` (allowlisted Origin/Referer).
 - `PUT /auth/me/password` uses `get_authenticated_user`; rejects `new_password == old_password`; clears `must_change_password`. Password reset also clears the flag.
 - `admin.py`: `POST /companies` requires `name`, `admin_email`, `admin_password` (optional display name). Creates tenant + genesis `org_admin` with `must_change_password=True` via `tenant_provisioning`. Unique email race → 409. `POST /platform-admins` is **genesis platform admin only**. Genesis PA may `PATCH /platform-admins/{id}/active`. Admin trail: `GET /audit-logs`.
 - `tenants.py`: `POST /` is platform-admin only and creates a tenant with its genesis org admin (same service as `POST /admin/companies`). Join always assigns `member`. Assign-user cannot set `org_admin`.
@@ -56,3 +57,9 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 - Large: `feishu.py` (event/file still in-router; LLM is `channels/llm_bridge.py`), `okr.py` (schemas + period math extracted; gap/outreach still here), `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`, `slack.py`.
 - Split new domain logic out of those files. Do not expose secrets in response models.
+
+## Agent deletion and ownership
+
+- `DELETE /agents/{id}` is `platform_admin` only; everyone else (even the creator or an org admin) gets 403 `agent_deletion_requires_request`.
+- `agent-deletion-requests.py` (`/api/agent-deletion-requests`): `POST` `{agent_id, reason}` (owner or org admin with manage; reason trimmed, 1..1000), `GET` list (`status`, `agent_id`, `limit`, `cursor` → `{items, next_cursor}`; members see their own, eligible org admins the company), `GET /{id}` (records an eligible org admin's view), `POST /{id}/approve` (idempotent; needs a prior view), `POST /{id}/cancel` (requester withdraw). Two distinct fresh-eligible org admins, or the active genesis org admin, execute through `snapshot_agent_teardown` + `agent_dao.delete_with_related` + `schedule_agent_teardown`. Stale owner/tenant/agent cancels the request (`cancel_reason`). Lock order: tenant → sorted users → agent → request.
+- `POST /agent-ownership-transfers` `{from_user_id, to_user_id, agent_ids}`: active same-company org admin; source `member`/`agent_admin` (active or not), target active `member`/`agent_admin`; atomic, quota-checked, cancels pending deletion requests (`owner_changed`). `POST /agents/{id}/handover` reuses the same service (`services/agent_ownership_transfer.py`).

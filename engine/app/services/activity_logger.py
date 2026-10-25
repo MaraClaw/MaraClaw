@@ -2,6 +2,7 @@
 
 import uuid
 
+from app.core.domain.activity import ActivityAction
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.activity_log_dao import agent_activity_log_dao
@@ -9,7 +10,7 @@ from app.dao.activity_log_dao import agent_activity_log_dao
 
 async def log_activity(
     agent_id: uuid.UUID,
-    action_type: str,
+    action_type: ActivityAction,
     summary: str,
     detail: JsonObject | None = None,
     related_id: uuid.UUID | None = None,

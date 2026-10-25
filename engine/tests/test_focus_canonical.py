@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.records.agent import AgentRecord
 from app.records.focus import AgentFocusItemRecord
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRProgressLogRecord
@@ -77,7 +78,7 @@ async def test_focus_list_filters_completed_and_other_agents(monkeypatch: pytest
     dao = FocusDAO(
         [
             AgentFocusItemRecord(uuid4(), agent_id, "active"),
-            AgentFocusItemRecord(uuid4(), agent_id, "done", status="completed"),
+            AgentFocusItemRecord(uuid4(), agent_id, "done", status=FocusStatus.COMPLETED),
             AgentFocusItemRecord(uuid4(), uuid4(), "foreign"),
         ]
     )
@@ -91,7 +92,7 @@ async def test_focus_list_filters_completed_and_other_agents(monkeypatch: pytest
 async def test_focus_update_merges_metadata_and_reopens_item(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given: an existing completed canonical item.
     agent_id = uuid4()
-    item = AgentFocusItemRecord(uuid4(), agent_id, "ship", status="completed", item_metadata={"kept": 1})
+    item = AgentFocusItemRecord(uuid4(), agent_id, "ship", status=FocusStatus.COMPLETED, item_metadata={"kept": 1})
     dao = FocusDAO([item])
     monkeypatch.setattr(focus_service, "agent_focus_item_dao", dao)
     # When: the item is updated through the current service.
@@ -130,8 +131,8 @@ async def test_render_focus_uses_db_items_and_caps_completed(monkeypatch: pytest
     agent_id = uuid4()
     rows = [
         AgentFocusItemRecord(uuid4(), agent_id, "ship", description="Release", title="Launch"),
-        AgentFocusItemRecord(uuid4(), agent_id, "system:okr", description="Report", kind="system"),
-        *[AgentFocusItemRecord(uuid4(), agent_id, f"done{i}", status="completed") for i in range(13)],
+        AgentFocusItemRecord(uuid4(), agent_id, "system:okr", description="Report", kind=FocusKind.SYSTEM),
+        *[AgentFocusItemRecord(uuid4(), agent_id, f"done{i}", status=FocusStatus.COMPLETED) for i in range(13)],
     ]
     monkeypatch.setattr(focus_service, "agent_focus_item_dao", FocusDAO(rows))
     # When: context is rendered.

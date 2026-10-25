@@ -19,7 +19,7 @@ def test_cleanup_resolves_baseline_foreign_keys_before_deleting_parents(statemen
         match = re.match(r"DELETE FROM (\w+)", statement)
         if match:
             deletes.setdefault(match[1], index)
-    tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", baseline, re.S)
+    tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", baseline, re.DOTALL)
     tables.extend(re.findall(r"ALTER TABLE (\w+) ADD CONSTRAINT \w+ (FOREIGN KEY[^;]+);", baseline))
     checked = []
     for child, body in tables:

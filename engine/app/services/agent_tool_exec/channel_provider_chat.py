@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -25,7 +26,7 @@ async def _send_slack_message(
     from app.api.slack import _send_slack_messages
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="slack")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.SLACK)
         if not config:
             return "❌ This agent has no Slack channel configured"
         user_id = (target_member.external_id or "").strip()
@@ -80,7 +81,7 @@ async def _send_teams_channel_message(
     from app.api.teams import _send_teams_message
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="microsoft_teams")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
         if not config:
             return "❌ This agent has no Teams channel configured"
         service_url = (json_as_str(json_object_from(config.extra_config).get("service_url")) or "").strip()
@@ -128,7 +129,7 @@ async def _send_google_chat_message(
     from app.services.channels.google_chat import parse_external_conv_id, send_google_chat_message
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="google_chat")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.GOOGLE_CHAT)
         if not config:
             return "❌ This agent has no Google Chat channel configured"
 
@@ -168,7 +169,7 @@ async def _send_google_chat_message(
         if session is None or not external:
             return (
                 f"❌ Google Chat proactive send to {member_name} requires them to message the bot first "
-                + "(DM preferred; group rooms work after any message in that space)"
+                "(DM preferred; group rooms work after any message in that space)"
             )
 
         try:
@@ -207,7 +208,7 @@ async def _send_wechat_channel_message(
     from app.services.wechat_channel import WECHAT_ILINK_BASE_URL, get_wechat_context_entry, send_wechat_text_message
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="wechat")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.WECHAT)
         if not config:
             return "❌ This agent has no WeChat channel configured"
         user_id = (target_member.external_id or "").strip()

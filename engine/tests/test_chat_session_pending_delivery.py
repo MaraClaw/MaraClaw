@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.api import chat_sessions
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
@@ -135,7 +136,7 @@ async def test_delete_checks_permissions_before_pending_delivery_disclosure(
 ):
     lookup = AsyncMock(side_effect=AssertionError("Unauthorized callers must not inspect delivery state"))
     monkeypatch.setattr(gateway_report_delivery_dao, "has_outstanding_session", lookup)
-    viewer = UserRecord(id=uuid4(), role="member")
+    viewer = UserRecord(id=uuid4(), role=UserRole.MEMBER)
     with pytest.raises(HTTPException) as rejected:
         async with transaction(receipt_db.first):
             await chat_sessions.delete_session(receipt_db.agent.id, receipt_db.session_id, viewer)

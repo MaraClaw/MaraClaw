@@ -72,7 +72,7 @@ async def init_pool(
     _pool = typed_pool
     logger.info(
         f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s "
-        + f"max_idle={max_idle}s max_lifetime={max_lifetime}s"
+        f"max_idle={max_idle}s max_lifetime={max_lifetime}s"
     )
     return typed_pool
 

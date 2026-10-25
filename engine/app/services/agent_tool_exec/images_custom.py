@@ -109,7 +109,7 @@ def _render_json_template(template_json: str, variables: dict[str, str]) -> dict
     template_value: JsonValue = template
     rendered = render(template_value)
     if not isinstance(rendered, dict):
-        raise ValueError("Request body template must be a JSON object.")
+        raise TypeError("Request body template must be a JSON object.")
     return rendered
 
 
@@ -281,7 +281,7 @@ async def _generate_image_custom_api(
             preview = json.dumps(agent_tools._json_structure_preview(data), ensure_ascii=False)
             raise ValueError(
                 "No image found in custom image API response. "
-                + f"Check response_image_path. Response structure: {preview[:800]}"
+                f"Check response_image_path. Response structure: {preview[:800]}"
             )
 
         return await agent_tools._custom_image_reference_to_bytes(image_ref, client)

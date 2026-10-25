@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar, final
 from uuid import UUID, uuid4
 
+from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
@@ -44,9 +45,9 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO approval_requests "
-                + "(id, agent_id, action_type, details, status, created_at) "
-                + "VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, 'pending', %(created_at)s) "
-                + f"RETURNING {self._select_list()}",
+                "(id, agent_id, action_type, details, status, created_at) "
+                "VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, 'pending', %(created_at)s) "
+                f"RETURNING {self._select_list()}",
                 {
                     "id": approval_id,
                     "agent_id": agent_id,
@@ -63,7 +64,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         self,
         approval: ApprovalRequestRecord,
         *,
-        status: str,
+        status: ApprovalStatus,
         resolved_by: UUID,
     ) -> ApprovalRequestRecord:
         """Mark an approval approved/rejected and return the refreshed row."""
@@ -71,11 +72,11 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE approval_requests SET status = %(status)s, "
-                + "resolved_at = %(resolved_at)s, resolved_by = %(resolved_by)s "
-                + f"WHERE id = %(id)s RETURNING {self._select_list()}",
+                "resolved_at = %(resolved_at)s, resolved_by = %(resolved_by)s "
+                f"WHERE id = %(id)s RETURNING {self._select_list()}",
                 {
                     "id": approval.id,
-                    "status": status,
+                    "status": status.value,
                     "resolved_at": resolved_at,
                     "resolved_by": resolved_by,
                 },
@@ -97,18 +98,18 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         self,
         agent_id: UUID,
         *,
-        status: str | None = None,
+        status: ApprovalStatus | None = None,
     ) -> Sequence[ApprovalRequestRecord]:
         params: dict[str, Any] = {"agent_id": agent_id}
         status_sql = ""
-        if status not in (None, ""):
+        if status is not None:
             status_sql = " AND status = %(status)s"
-            params["status"] = status
+            params["status"] = status.value
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM approval_requests "
-                + f"WHERE agent_id = %(agent_id)s{status_sql} "
-                + "ORDER BY created_at DESC NULLS LAST",
+                f"WHERE agent_id = %(agent_id)s{status_sql} "
+                "ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [ApprovalRequestRecord.from_row(row) for row in rows]
@@ -118,7 +119,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         *,
         tenant_id: UUID | None = None,
         creator_id: UUID | None = None,
-        status: str | None = None,
+        status: ApprovalStatus | None = None,
     ) -> Sequence[ApprovalRequestRecord]:
         """List approvals optionally scoped to tenant agents and/or creator."""
         params: dict[str, Any] = {}
@@ -132,9 +133,9 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
                 "WHERE a.creator_id = %(creator_id)s AND a.tenant_id IS NOT DISTINCT FROM u.tenant_id)"
             )
             params["creator_id"] = creator_id
-        if status not in (None, ""):
+        if status is not None:
             clauses.append("status = %(status)s")
-            params["status"] = status
+            params["status"] = status.value
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.session() as db:
             rows = await db.fetchall(

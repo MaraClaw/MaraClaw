@@ -17,6 +17,7 @@ from python_on_whales.components.container import cli_wrapper
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.api import advanced
+from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_object_from
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
@@ -30,7 +31,7 @@ def agent() -> AgentRecord:
         UUID("12345678-1234-4321-8765-123456789abc"),
         "Worker",
         uuid4(),
-        status="stopped",
+        status=AgentStatus.STOPPED,
         container_id="container-id",
         container_port=19876,
     )

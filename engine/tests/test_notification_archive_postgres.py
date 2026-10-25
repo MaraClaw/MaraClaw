@@ -4,9 +4,12 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import TypeAdapter
 
+from app.core.notification_kinds import NotificationKind
 from app.dao.notification_dao import notification_dao
 from app.schemas.notification_responses import NotificationResponse
-from notification_archive_fixtures import ArchiveScenario, archive_scenario as archive_scenario, schema_db as schema_db
+from notification_archive_fixtures import ArchiveScenario, archive_scenario, schema_db
+
+__all__ = ["archive_scenario", "schema_db"]
 
 ROWS = TypeAdapter(list[NotificationResponse])
 
@@ -174,10 +177,10 @@ async def test_bulk_read_covers_all_active_matches_without_reading_archived_or_o
     )
     archived = await scenario.notice()
     await notification_dao.archive_for_user(archived.id, scenario.owner.id)
-    mention = await scenario.notice(kind="mention")
-    tool = await scenario.notice(kind="autonomy_l2")
+    mention = await scenario.notice(kind=NotificationKind.MENTION)
+    tool = await scenario.notice(kind=NotificationKind.AUTONOMY_L2)
     foreign = await notification_dao.create(
-        obj_in={"user_id": scenario.colleague.id, "type": "broadcast", "title": "Foreign"}
+        obj_in={"user_id": scenario.colleague.id, "type": NotificationKind.BROADCAST.value, "title": "Foreign"}
     )
     # When all active broadcasts are marked read, without a page limit.
     response = await scenario.client.post(

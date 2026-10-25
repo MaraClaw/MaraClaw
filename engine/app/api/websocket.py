@@ -18,6 +18,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
+from app.schemas.chat_wire import ChatEventType, serialize_chat_server_event
 from app.services import chat_tickets
 from app.services.chat_persist import persist_chat_message
 from app.services.chat_submissions import (
@@ -60,6 +61,10 @@ def _json_object_payload(value: object) -> dict[str, object]:
 
 def _payload_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else default
+
+
+async def _send_chat_event(websocket: WebSocket, message: RealtimeMessage) -> None:
+    await websocket.send_json(serialize_chat_server_event(message))
 
 
 class ConnectionManager:
@@ -114,7 +119,7 @@ class ConnectionManager:
             try:
                 if not await authorize_chat_delivery(ws, agent_id, sid):
                     continue
-                await ws.send_json(payload)
+                await _send_chat_event(ws, payload)
             except Exception as error:
                 report_exception(error, source="websocket", operation="pubsub-delivery")
                 logger.warning(f"[WS] Failed to send message to connected client: {error}")
@@ -122,7 +127,7 @@ class ConnectionManager:
     async def send_message(self, agent_id: str, message: RealtimeMessage):
         await realtime_router.route_message(
             agent_id=agent_id,
-            message=message,
+            message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
         )
 
@@ -137,7 +142,7 @@ class ConnectionManager:
         wanted = session_id.strip().lower()
         await realtime_router.route_message(
             agent_id=agent_id,
-            message=message,
+            message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
             session_id=wanted,
             user_id=None if is_shared_target(agent_id, wanted) else user_id,
@@ -147,7 +152,7 @@ class ConnectionManager:
         """Send message to all live WebSocket sessions of a given platform user for an agent."""
         await realtime_router.route_message(
             agent_id=agent_id,
-            message=message,
+            message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
             user_id=user_id,
         )
@@ -265,7 +270,7 @@ class WebSocketChatHandler:
                 await self.websocket.close(code=4001)
             except HTTPException as exc:
                 code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
-                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
                 await self.websocket.close(code=code)
             except WebSocketDisconnect:
                 pass
@@ -281,7 +286,7 @@ class WebSocketChatHandler:
 
     async def setup(self) -> bool:
         self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-        await chat_tickets.authorized_session(self.binding)
+        await chat_tickets.authorized_session(self.binding, self.user, self.agent)
         self.websocket.state.chat_binding = self.binding
         self.conv_id = str(self.binding.session_id)
         self.agent_name = self.agent.name
@@ -292,7 +297,7 @@ class WebSocketChatHandler:
         self.user_display_name = (self.user.display_name or "").strip() or "there"
         await self._load_history()
         await manager.connect(str(self.agent_id), self.websocket, self.conv_id, str(self.user.id))
-        await self.websocket.send_json({"type": "connected", "session_id": self.conv_id})
+        await _send_chat_event(self.websocket, {"type": ChatEventType.CONNECTED, "session_id": self.conv_id})
         self.conversation = self._build_conversation_context()
         return True
 
@@ -319,7 +324,9 @@ class WebSocketChatHandler:
         """Core message processing loop."""
         # Send welcome message on new session (no history)
         if self.welcome_message and not self.history_messages:
-            await self.websocket.send_json({"type": "done", "role": "assistant", "content": self.welcome_message})
+            await _send_chat_event(
+                self.websocket, {"type": ChatEventType.DONE, "role": "assistant", "content": self.welcome_message}
+            )
 
         while True:
             data = _json_object_payload(json_loads_value(await self.websocket.receive_text()))
@@ -336,9 +343,9 @@ class WebSocketChatHandler:
 
             try:
                 self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-                await chat_tickets.authorized_session(self.binding)
+                await chat_tickets.authorized_session(self.binding, self.user, self.agent)
             except HTTPException as exc:
-                await self.websocket.send_json({"type": "error", "content": exc.detail})
+                await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
                 await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
                 return
 
@@ -357,18 +364,18 @@ class WebSocketChatHandler:
                     rejection: RealtimeMessage
                     if any(error["loc"][0] == "client_submission_id" for error in exc.errors()):
                         rejection = {
-                            "type": "turn_rejected",
+                            "type": ChatEventType.TURN_REJECTED,
                             "reason": "invalid_submission_id",
                             "content": "Submission UUID required.",
                         }
                     else:
                         rejection = {
-                            "type": "turn_rejected",
+                            "type": ChatEventType.TURN_REJECTED,
                             "reason": "invalid_attachments",
                             "client_submission_id": _payload_str(data.get("client_submission_id")),
                             "content": "Attachment references must be valid agent-relative files.",
                         }
-                    await self.websocket.send_json(rejection)
+                    await _send_chat_event(self.websocket, rejection)
                     continue
                 if not await self._handle_submission(submission):
                     return
@@ -394,22 +401,24 @@ class WebSocketChatHandler:
                 prepared = await prepare_openclaw_message(agent=self.agent, content=content, history=self.conversation)
             except NoCompanyModelError as exc:
                 logger.warning("[WS] OpenClaw preparation blocked: {}", exc)
-                await self.websocket.send_json(
-                    {"type": "turn_rejected", "reason": "no_company_model", "content": str(exc)}
+                await _send_chat_event(
+                    self.websocket,
+                    {"type": ChatEventType.TURN_REJECTED, "reason": "no_company_model", "content": str(exc)},
                 )
                 continue
             except OpenClawUpdateGateError as gate:
-                await self.websocket.send_json({"type": "turn_rejected", **gate.rejection()})
+                await _send_chat_event(self.websocket, {"type": ChatEventType.TURN_REJECTED, **gate.rejection()})
                 continue
             except GuestConfigWriteError as error:
                 report_exception(error, source="websocket", operation="onboarding-prepare")
                 logger.warning("[WS] Guest config preparation failed for {}", self.agent_id)
-                await self.websocket.send_json(
+                await _send_chat_event(
+                    self.websocket,
                     {
-                        "type": "turn_rejected",
+                        "type": ChatEventType.TURN_REJECTED,
                         "reason": "guest_config_failed",
                         "content": "Guest configuration could not be updated. Please try again.",
-                    }
+                    },
                 )
                 continue
 
@@ -420,36 +429,40 @@ class WebSocketChatHandler:
                         raise HTTPException(403, "Session unavailable")
                     require_writable_session(session)
                     if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
-                        await self.websocket.send_json({"type": "onboarded", "agent_id": str(self.agent_id)})
+                        await _send_chat_event(
+                            self.websocket, {"type": ChatEventType.ONBOARDED, "agent_id": str(self.agent_id)}
+                        )
                         continue
                     await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
                     _ = await enqueue_prepared_openclaw_message(
                         prepared, sender_user_id=self.user.id, conversation_id=self.conv_id
                     )
             except QuotaExceeded as exc:
-                await self.websocket.send_json(
-                    {"type": "turn_rejected", "reason": "quota_exceeded", "content": exc.message}
+                await _send_chat_event(
+                    self.websocket,
+                    {"type": ChatEventType.TURN_REJECTED, "reason": "quota_exceeded", "content": exc.message},
                 )
                 continue
             except Exception as error:
                 report_exception(error, source="websocket", operation="onboarding-turn")
                 logger.exception("[WS] Turn transaction failed")
-                await self.websocket.send_json(
+                await _send_chat_event(
+                    self.websocket,
                     {
-                        "type": "turn_rejected",
+                        "type": ChatEventType.TURN_REJECTED,
                         "reason": "enqueue_failed",
                         "content": "Your message could not be sent. Please try again.",
-                    }
+                    },
                 )
                 continue
 
             self.conversation.append({"role": "user", "content": content})
-            await self.websocket.send_json({"type": "status", "content": "thinking"})
+            await _send_chat_event(self.websocket, {"type": ChatEventType.STATUS, "content": "thinking"})
             logger.info("[WS] OpenClaw: message queued for gateway poll")
 
     async def _handle_submission(self, submission: ChatSubmission) -> bool:
         rejection: RealtimeMessage = {
-            "type": "turn_rejected",
+            "type": ChatEventType.TURN_REJECTED,
             "client_submission_id": str(submission.client_submission_id),
         }
         try:
@@ -479,7 +492,7 @@ class WebSocketChatHandler:
         except QuotaExceeded as exc:
             rejection.update(reason="quota_exceeded", content=exc.message)
         except HTTPException as exc:
-            await self.websocket.send_json({"type": "error", "content": exc.detail})
+            await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
             await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
             return False
         except Exception as error:
@@ -487,13 +500,14 @@ class WebSocketChatHandler:
             logger.exception("[WS] Turn transaction failed")
             rejection.update(reason="enqueue_failed", content="Your message could not be sent. Please try again.")
         else:
-            await self.websocket.send_json(
+            await _send_chat_event(
+                self.websocket,
                 {
-                    "type": "turn_accepted",
+                    "type": ChatEventType.TURN_ACCEPTED,
                     "message_id": str(accepted.message.id),
                     "session_id": str(self.binding.session_id),
                     "client_submission_id": str(submission.client_submission_id),
-                }
+                },
             )
             if not accepted.replayed:
                 self.current_user_text = submission.content
@@ -503,7 +517,7 @@ class WebSocketChatHandler:
                         str(self.agent_id),
                         self.conv_id,
                         {
-                            "type": "done",
+                            "type": ChatEventType.DONE,
                             "role": "user",
                             "content": accepted.message.content,
                             "message_id": str(accepted.message.id),
@@ -516,20 +530,21 @@ class WebSocketChatHandler:
                             ),
                         },
                     )
-                await self.websocket.send_json({"type": "status", "content": "thinking"})
+                await _send_chat_event(self.websocket, {"type": ChatEventType.STATUS, "content": "thinking"})
             return True
-        await self.websocket.send_json(rejection)
+        await _send_chat_event(self.websocket, rejection)
         return True
 
     async def _handle_onboarding_trigger_guard(self) -> bool:
         """Returns True if the onboarding trigger was ignored (already started)."""
         if await is_onboarded(self.agent_id, self.user.id):
             logger.info("[WS] Onboarding trigger ignored - pair already onboarded")
-            await self.websocket.send_json(
+            await _send_chat_event(
+                self.websocket,
                 {
-                    "type": "onboarded",
+                    "type": ChatEventType.ONBOARDED,
                     "agent_id": str(self.agent_id),
-                }
+                },
             )
             return True
         return False
@@ -540,7 +555,9 @@ class WebSocketChatHandler:
             await check_agent_expired(self.agent_id)
             return True
         except AgentExpired as ae:
-            await self.websocket.send_json({"type": "turn_rejected", "reason": "agent_expired", "content": ae.message})
+            await _send_chat_event(
+                self.websocket, {"type": ChatEventType.TURN_REJECTED, "reason": "agent_expired", "content": ae.message}
+            )
             return False
 
     async def _save_user_message(self, content: str, display_content: str, file_name: str, is_onboarding_trigger: bool):
@@ -549,7 +566,7 @@ class WebSocketChatHandler:
         if has_image_marker:
             saved_content = f"[file:{file_name}]\n{content}" if file_name else content
         else:
-            saved_content = display_content if display_content else content
+            saved_content = display_content or content
             if file_name:
                 saved_content = f"[file:{file_name}]\n{saved_content}"
 
@@ -565,7 +582,7 @@ class WebSocketChatHandler:
                 title_if_default="Onboarding",
             )
         else:
-            title_src = display_content if display_content else content
+            title_src = display_content or content
             clean_title = title_src.replace("[图片] ", "📷 ").replace("[image_data:", "").strip()
             if file_name and not clean_title:
                 clean_title = f"📎 {file_name}"

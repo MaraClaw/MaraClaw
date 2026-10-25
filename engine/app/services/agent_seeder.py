@@ -4,6 +4,8 @@ import uuid
 from typing import Any, TypedDict
 
 from app.config import get_settings
+from app.core.domain.agents import AgentStatus, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
@@ -220,7 +222,7 @@ async def seed_default_agents():
     than by agent name, so the seeder does NOT re-run if the user renames or
     deletes the default agents.  Delete the marker manually to re-seed.
     """
-    admin = await user_dao.first_by_role("platform_admin")
+    admin = await user_dao.first_by_role(UserRole.PLATFORM_ADMIN)
     if not admin:
         logger.warning("[AgentSeeder] No platform admin found, skipping default agents")
         return
@@ -252,7 +254,7 @@ async def seed_default_agents():
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
-                "status": "idle",
+                "status": AgentStatus.IDLE,
             }
         )
         created_agents.append(morty)
@@ -269,7 +271,7 @@ async def seed_default_agents():
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
-                "status": "idle",
+                "status": AgentStatus.IDLE,
             }
         )
         created_agents.append(meeseeks)
@@ -289,7 +291,11 @@ async def seed_default_agents():
                 }
             )
         _ = await agent_permission_dao.create(
-            obj_in={"agent_id": agent.id, "scope_type": "company", "access_level": "manage"}
+            obj_in={
+                "agent_id": agent.id,
+                "scope_type": PermissionGrantScope.COMPANY,
+                "access_level": PermissionAccessLevel.MANAGE,
+            }
         )
 
     for agent, soul_content in [(morty, MORTY_SOUL), (meeseeks, MEESEEKS_SOUL)]:
@@ -355,7 +361,7 @@ async def seed_default_agents():
 
     logger.info(
         "[AgentSeeder] Default agent seeding complete: "
-        + f"Morty ({morty.id}), Meeseeks ({meeseeks.id}), created={len(created_agents)}"
+        f"Morty ({morty.id}), Meeseeks ({meeseeks.id}), created={len(created_agents)}"
     )
 
     await get_storage_backend().write_text(
@@ -379,7 +385,7 @@ async def seed_okr_agent():
         await _append_seed_marker("okr_agent=existing")
         return
 
-    admin = await user_dao.first_by_role("platform_admin")
+    admin = await user_dao.first_by_role(UserRole.PLATFORM_ADMIN)
     if not admin:
         logger.warning("[AgentSeeder] No platform admin, skipping OKR Agent creation")
         return
@@ -390,17 +396,17 @@ async def seed_okr_agent():
                 "name": "OKR Agent",
                 "role_description": (
                     "OKR system coordinator - monitors team Objectives and Key Results, "
-                    + "collects progress updates, and generates daily/weekly reports"
+                    "collects progress updates, and generates daily/weekly reports"
                 ),
                 "bio": (
                     "I am the OKR Agent. I help this team stay aligned on goals by tracking "
-                    + "Objectives and Key Results, collecting progress from team members, and "
-                    + "generating clear reports. My job is to surface insights and flag risks early."
+                    "Objectives and Key Results, collecting progress from team members, and "
+                    "generating clear reports. My job is to surface insights and flag risks early."
                 ),
                 "avatar_url": "",
                 "creator_id": admin.id,
                 "tenant_id": admin.tenant_id,
-                "status": "idle",
+                "status": AgentStatus.IDLE,
                 "is_system": True,
                 "heartbeat_enabled": False,
             }
@@ -426,7 +432,11 @@ async def seed_okr_agent():
         )
 
     _ = await agent_permission_dao.create(
-        obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"}
+        obj_in={
+            "agent_id": okr_agent.id,
+            "scope_type": PermissionGrantScope.COMPANY,
+            "access_level": PermissionAccessLevel.USE,
+        }
     )
 
     await agent_manager.initialize_agent_files(okr_agent)
@@ -441,10 +451,10 @@ async def seed_okr_agent():
         "memory/memory.md",
         (
             b"# Memory\n\n"
-            + b"## OKR System State\n"
-            + b"- Last report generated: (none)\n"
-            + b"- Last progress collection: (none)\n"
-            + b"- Team members tracked: (pending)\n"
+            b"## OKR System State\n"
+            b"- Last report generated: (none)\n"
+            b"- Last progress collection: (none)\n"
+            b"- Team members tracked: (pending)\n"
         ),
         content_type="text/markdown; charset=utf-8",
     )
@@ -535,8 +545,8 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
             "config": {"expr": "0 10 1,15 * *"},
             "reason": (
                 "System trigger: fires on the 1st and 15th of every month at 10:00 "
-                + "to perform the mandatory bi-weekly OKR check-in. This trigger is always "
-                + "enabled and cannot be disabled - OKR check-in is a core non-optional feature."
+                "to perform the mandatory bi-weekly OKR check-in. This trigger is always "
+                "enabled and cannot be disabled - OKR check-in is a core non-optional feature."
             ),
             "cooldown_seconds": 3600,
             "is_system": True,
@@ -547,7 +557,7 @@ async def _seed_okr_triggers(agent_id: uuid.UUID) -> None:
             "config": {"expr": "0 9 1 * *"},
             "reason": (
                 "System trigger: fires at 09:00 on the 1st of every month to generate "
-                + "the previous month's company OKR report."
+                "the previous month's company OKR report."
             ),
             "cooldown_seconds": 3600,
             "is_system": True,
@@ -635,7 +645,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
             "is_enabled": bool(settings.enabled),
             "reason": (
                 "System trigger: fires on the 1st and 15th of every month at 10:00 "
-                + "to perform the mandatory bi-weekly OKR check-in."
+                "to perform the mandatory bi-weekly OKR check-in."
             ),
         },
         "monthly_okr_report": {
@@ -643,7 +653,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
             "is_enabled": bool(settings.enabled),
             "reason": (
                 "System trigger: fires at 09:00 on the 1st of every month to generate "
-                + "the previous month's company OKR report."
+                "the previous month's company OKR report."
             ),
         },
     }
@@ -740,17 +750,17 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
             "name": "OKR Agent",
             "role_description": (
                 "OKR system coordinator - monitors team Objectives and Key Results, "
-                + "collects progress updates, and generates daily/weekly reports"
+                "collects progress updates, and generates daily/weekly reports"
             ),
             "bio": (
                 "I am the OKR Agent. I help this team stay aligned on goals by tracking "
-                + "Objectives and Key Results, collecting progress from team members, and "
-                + "generating clear reports. My job is to surface insights and flag risks early."
+                "Objectives and Key Results, collecting progress from team members, and "
+                "generating clear reports. My job is to surface insights and flag risks early."
             ),
             "avatar_url": "",
             "creator_id": creator_id,
             "tenant_id": tenant_id,
-            "status": "idle",
+            "status": AgentStatus.IDLE,
             "is_system": True,
             "heartbeat_enabled": False,
         }
@@ -768,7 +778,11 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
         )
 
     _ = await agent_permission_dao.create(
-        obj_in={"agent_id": okr_agent.id, "scope_type": "company", "access_level": "use"}
+        obj_in={
+            "agent_id": okr_agent.id,
+            "scope_type": PermissionGrantScope.COMPANY,
+            "access_level": PermissionAccessLevel.USE,
+        }
     )
 
     settings = await okr_settings_dao.get_or_create(tenant_id)
@@ -786,10 +800,10 @@ async def seed_okr_agent_for_tenant(tenant_id: uuid.UUID, creator_id: uuid.UUID)
         "memory/memory.md",
         (
             b"# Memory\n\n"
-            + b"## OKR System State\n"
-            + b"- Last report generated: (none)\n"
-            + b"- Last progress collection: (none)\n"
-            + b"- Team members tracked: (pending)\n"
+            b"## OKR System State\n"
+            b"- Last report generated: (none)\n"
+            b"- Last progress collection: (none)\n"
+            b"- Team members tracked: (pending)\n"
         ),
         content_type="text/markdown; charset=utf-8",
     )

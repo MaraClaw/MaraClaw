@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import tenants as tenants_api
+from app.core.domain.users import UserRole
 from app.dao.tenant_dao import TENANT_DELETE_CLEANUP_SQL, TenantDAO
 from app.db.connection import DbConnection
 from app.records.tenant import TenantRecord
@@ -19,7 +20,7 @@ def make_user(tenant_id: uuid.UUID, role: str) -> UserRecord:
     return UserRecord(
         id=uuid.uuid4(),
         display_name="Tenant deletion test user",
-        role=role,
+        role=UserRole(role),
         tenant_id=tenant_id,
         identity_id=uuid.uuid4(),
     )

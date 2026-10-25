@@ -9,18 +9,22 @@ from tests.trigger_history_fixtures import (
     SECRET,
     TRIGGER_ID,
     execution,
-    history_raw as history_raw,
+    history_raw,
 )
-from tests.trigger_history_http_fixtures import HistoryHTTP, history_http as history_http
+from tests.trigger_history_http_fixtures import HistoryHTTP, history_http
 
+from app.core.domain.triggers import TriggerExecutionStatus
+from app.core.domain.users import UserRole
 from app.core.json_types import json_object_from, json_object_from_response
 from app.schemas.trigger_execution import TriggerExecutionCursor, TriggerExecutionHistoryPage
+
+__all__ = ["history_http", "history_raw"]
 
 
 @pytest.mark.parametrize("role", ["member", "org_admin", "platform_admin"])
 async def test_history_manager_and_accessible_admin_can_read(history_http: HistoryHTTP, role: str) -> None:
     # Given
-    history_http.scope.user.role = role
+    history_http.scope.user.role = UserRole(role)
     history_http.scope.access_level = "manage" if role == "member" else "use"
     history_http.raw.rows = {UUID(int=1): execution(1)}
     # When
@@ -62,7 +66,7 @@ async def test_history_use_only_denied_before_trigger_and_cursor_lookup(history_
 @pytest.mark.parametrize("role", ["member", "org_admin"])
 async def test_history_foreign_tenant_denied_before_trigger_lookup(history_http: HistoryHTTP, role: str) -> None:
     # Given
-    history_http.scope.user.role = role
+    history_http.scope.user.role = UserRole(role)
     history_http.scope.user.tenant_id = UUID(int=999)
     # When
     response = await history_http.client.get(history_http.url, params={"cursor": SECRET})
@@ -106,7 +110,12 @@ async def test_history_requires_http_authentication(history_http: HistoryHTTP) -
 
 async def test_history_serializes_only_safe_stored_fields_without_side_effects(history_http: HistoryHTTP) -> None:
     # Given
-    row = replace(execution(1), source="new-source", status="new-status", started_at=datetime(2026, 10, 23, tzinfo=UTC))
+    row = replace(
+        execution(1),
+        source="new-source",
+        status=TriggerExecutionStatus.PROCESSING,
+        started_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
     history_http.raw.rows = {row.id: row, UUID(int=2): replace(execution(2), agent_id=UUID(int=999))}
     original = asdict(row), asdict(history_http.scope.trigger)
     # When
@@ -120,7 +129,7 @@ async def test_history_serializes_only_safe_stored_fields_without_side_effects(h
     assert set(json_object_from(items[0])) == set(HISTORY_COLUMNS)
     item = TriggerExecutionHistoryPage.model_validate_json(response.content).items[0]
     assert (item.id, item.trigger_id, item.agent_id) == (row.id, TRIGGER_ID, AGENT_ID)
-    assert (item.source, item.status) == ("new-source", "new-status")
+    assert (item.source, item.status) == ("new-source", "processing")
     assert (item.scheduled_at, item.created_at, item.started_at, item.finished_at) == (
         row.scheduled_at,
         row.created_at,
@@ -163,14 +172,14 @@ async def test_history_http_cursor_continuation_after_insert_and_status_change(h
     first = TriggerExecutionHistoryPage.model_validate_json(first_response.content)
     assert first.next_cursor is not None
     history_http.raw.rows[UUID(int=5)] = execution(5)
-    history_http.raw.rows[UUID(int=2)].status = "done"
+    history_http.raw.rows[UUID(int=2)].status = TriggerExecutionStatus.COMPLETED
     # When
     response = await history_http.client.get(history_http.url, params={"limit": 2, "cursor": first.next_cursor})
     # Then
     assert response.status_code == 200
     page = TriggerExecutionHistoryPage.model_validate_json(response.content)
     assert [item.id.int for item in page.items] == [2, 1]
-    assert page.items[0].status == "done"
+    assert page.items[0].status == "completed"
     assert page.next_cursor is None
 
 

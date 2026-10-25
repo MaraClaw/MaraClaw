@@ -10,7 +10,9 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from schedule_occurrence_persistence_fakes import SLOT_COLUMNS
-from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool as pool
+from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool
+
+__all__ = ["pool"]
 
 
 async def test_reclaim_preserves_snapshot_and_advance_after_unstarted_interruption(pool: _Pool) -> None:

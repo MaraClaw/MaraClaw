@@ -73,7 +73,7 @@ async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArgum
             return result
         return (
             f"Failed to send file to '{member_name}': recipient not reachable via configured channels. "
-            + "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
+            "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
         )
 
     sender = channel_context.channel_file_sender.get()
@@ -106,15 +106,16 @@ async def _send_file_to_recipient(
     message: str = "",
 ) -> str | None:
     """Resolve a recipient by name and send file via their reachable channel."""
+    from app.core.domain.channels import ChannelType
     from app.dao.channel_config_dao import channel_config_dao
 
-    feishu_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    feishu_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if feishu_config:
         feishu_result = await _send_file_via_feishu(agent_id, feishu_config, file_path, member_name, message)
         if feishu_result not in (None, ""):
             return feishu_result
 
-    slack_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
+    slack_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.SLACK)
     if slack_config:
         slack_result = await _send_file_via_slack(agent_id, slack_config, file_path, member_name, message)
         if slack_result not in (None, ""):
@@ -134,9 +135,9 @@ async def _resolve_feishu_recipient(
     oid_match = re.search(r"open_id: `(ou_[A-Za-z0-9]+)`", search_result)
 
     if uid_match:
-        return (cast(str, uid_match.group(1)), "user_id")
+        return (cast("str", uid_match.group(1)), "user_id")
     if oid_match:
-        return (cast(str, oid_match.group(1)), "open_id")
+        return (cast("str", oid_match.group(1)), "open_id")
 
     from app.dao.agent_relationship_dao import agent_relationship_dao
 

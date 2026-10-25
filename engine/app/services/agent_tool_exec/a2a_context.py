@@ -105,13 +105,13 @@ async def _build_a2a_context(
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
+                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target.is_expired or (target.expires_at and datetime.now(UTC) >= target.expires_at):
             return (
                 f"⚠️ {target.name} is currently unavailable - their service period has ended. "
-                + "Please contact the platform administrator."
+                "Please contact the platform administrator."
             )
 
         rels = await agent_agent_relationship_dao.list_for_agent(from_agent_id)
@@ -119,14 +119,14 @@ async def _build_a2a_context(
         if not rel:
             return (
                 f"❌ You do not have a relationship with {target.name}. Only agents in your relationship list "
-                + "can be contacted. Ask your administrator to add a relationship if needed."
+                "can be contacted. Ask your administrator to add a relationship if needed."
             )
         status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target.name} is not active "
-                + f"({status_info['access_status_reason'] or 'restricted'}). "
-                + "Ask a manager of both agents to review Relationships."
+                f"({status_info['access_status_reason'] or 'restricted'}). "
+                "Ask a manager of both agents to review Relationships."
             )
 
         src_participant = await participant_dao.get_by_type_ref("agent", from_agent_id)

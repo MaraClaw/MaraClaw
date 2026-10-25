@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.services.wecom_stream as wecom_stream
 from app.core.json_types import JsonObject
+from app.services import wecom_stream
 from app.services.wecom_stream import (
     WeComStreamManager,
     _build_wecom_conv_id,
@@ -105,7 +105,6 @@ class FakeWSClient:
 class ReplacementClient:
     def on(self, event: str, handler: Callable[[wecom_stream._WeComFrame], Awaitable[None]]) -> None:
         del event, handler
-        return
 
     async def connect_async(self) -> None:
         return
@@ -123,7 +122,6 @@ class ReplacementClient:
 
     async def reply_welcome(self, frame: wecom_stream._WeComFrame, message: JsonObject) -> None:
         del frame, message
-        return
 
 
 class FakeWSClientOptions:

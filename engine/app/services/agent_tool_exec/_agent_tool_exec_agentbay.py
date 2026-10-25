@@ -92,7 +92,7 @@ def _load_agentbay_helper(helper_name: str) -> AgentbayHelper:
     loaded = object_attr(module, helper_name)
     if not callable(loaded):
         raise TypeError(f"AgentBay helper {helper_name} is not callable")
-    return cast(AgentbayHelper, loaded)
+    return cast("AgentbayHelper", loaded)
 
 
 _settings = get_settings()

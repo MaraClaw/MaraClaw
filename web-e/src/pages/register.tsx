@@ -11,6 +11,7 @@ import { SsoButtons } from '@/components/auth/sso-buttons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
@@ -20,7 +21,11 @@ import type { SuggestedOrg } from '@/lib/types/auth'
 const registerSchema = z.object({
   email: z.string().trim().email('Enter a valid email').max(254),
   password: z.string().min(6, 'Use at least 6 characters').max(128),
+  confirm_password: z.string().min(1, 'Confirm your password'),
   invitation_code: z.string().trim().max(128).optional(),
+}).refine((data) => data.password === data.confirm_password, {
+  message: 'Passwords do not match',
+  path: ['confirm_password'],
 })
 
 type RegisterFormValues = z.infer<typeof registerSchema>
@@ -76,7 +81,7 @@ export function RegisterPage() {
     formState: { errors, isSubmitting },
   } = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { email: '', password: '', invitation_code: '' },
+    defaultValues: { email: '', password: '', confirm_password: '', invitation_code: '' },
   })
 
   if (status === 'authenticated') {
@@ -189,6 +194,14 @@ export function RegisterPage() {
           </div>
           {errors.password ? <p className="text-xs text-destructive">{errors.password.message}</p> : null}
         </div>
+
+        <PasswordField
+          label="Confirm password"
+          autoComplete="new-password"
+          disabled={isSubmitting}
+          error={errors.confirm_password?.message}
+          {...register('confirm_password')}
+        />
 
         <div className="space-y-2">
           <Label htmlFor={`${formId}-invite`}>Invitation code{inviteRequired ? '' : ' (optional)'}</Label>

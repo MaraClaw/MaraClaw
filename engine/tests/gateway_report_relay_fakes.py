@@ -138,8 +138,10 @@ class RelayStore:
         row.available_at, row.claim_token, row.lease_expires_at = now, None, None
         return True
 
-    async def finish_terminal(self, id: UUID, claim_token: UUID, reason: TerminalReason, *, now: datetime) -> bool:
-        row = self.rows[id]
+    async def finish_terminal(
+        self, delivery_id: UUID, claim_token: UUID, reason: TerminalReason, *, now: datetime
+    ) -> bool:
+        row = self.rows[delivery_id]
         claim = replace(row, claim_token=claim_token)
         if not await self.lock_claim(claim, now=now):
             return False

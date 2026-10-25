@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail if app modules import loguru directly.
 
 Application code must use ``app.core.logging``. Bundled skill-creator

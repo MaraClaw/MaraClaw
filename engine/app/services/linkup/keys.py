@@ -96,7 +96,7 @@ async def remove_key(key_id: UUID) -> LinkupApiKeyRecord:
         raise LinkupKeyNotFoundError(str(key_id))
 
     cursor = await linkup_api_key_dao.get_cursor_key_id()
-    deleted = await linkup_api_key_dao.delete(id=key_id)
+    deleted = await linkup_api_key_dao.delete(record_id=key_id)
     if deleted is None:
         raise LinkupKeyNotFoundError(str(key_id))
 
@@ -189,8 +189,6 @@ async def ensure_env_key_seeded() -> None:
 async def should_use_linkup_proxy() -> bool:
     settings = get_settings()
     if not settings.LINKUP_PROXY_ENABLED:
-        return False
-    if not settings.LINKUP_PROXY_BASE_URL.strip():
         return False
     await ensure_env_key_seeded()
     return await has_active_keys() or bool(settings.LINKUP_API_KEY.strip())

@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from app.core import session_cache, tenant_cache
 from app.core.cache_contracts import SessionSnapshot, TenantSnapshot
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -201,7 +202,7 @@ def test_session_producer_matches_serialized_contract(populated: bool) -> None:
             display_name="Alice",
             avatar_url="/avatar",
             title="Owner",
-            role="org_admin",
+            role=UserRole.ORG_ADMIN,
             is_active=False,
             registration_source="sso",
             created_at=timestamp,

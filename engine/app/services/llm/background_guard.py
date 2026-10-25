@@ -111,7 +111,7 @@ class BackgroundToolLoop:
                 try:
                     response = await client.complete(
                         messages=api_messages,
-                        tools=self.tools if self.tools else None,
+                        tools=self.tools or None,
                         temperature=model.temperature,
                         max_tokens=max_tokens,
                         llm_provider=model.provider,

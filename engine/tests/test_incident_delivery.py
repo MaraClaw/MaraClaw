@@ -5,7 +5,9 @@ from uuid import UUID
 import pytest
 from anyio import Event, create_task_group, fail_after
 
+from app.core.domain.users import UserRole
 from app.core.logging.adapter import Logger
+from app.core.notification_kinds import NotificationKind
 from app.db import session
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
@@ -21,7 +23,7 @@ def admin(index: int, email: str | None = None) -> UserRecord:
         id=UUID(int=index),
         identity_id=identity.id,
         tenant_id=UUID(int=index + 2000),
-        role="platform_admin",
+        role=UserRole.PLATFORM_ADMIN,
         is_genesis=index == 1,
         identity=identity,
     )
@@ -55,7 +57,13 @@ async def test_notifies_every_membership_when_admins_exceed_a_page(
     assert channels[0].await_count == len(users)
     channels[0].assert_has_awaits(
         [
-            call(user.id, type="system_alert", title=report.title, body=report.body, sender_name="System")
+            call(
+                user.id,
+                notification_kind=NotificationKind.SYSTEM_ALERT,
+                title=report.title,
+                body=report.body,
+                sender_name="System",
+            )
             for user in users
         ],
         any_order=True,

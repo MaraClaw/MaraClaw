@@ -88,17 +88,15 @@ class GeminiClient(LLMClient):
     def _normalize_model_name(self) -> str:
         """Normalize model id for native Gemini endpoint path."""
         model = (self.model or "").strip()
-        if model.startswith("models/"):
-            model = model[len("models/") :]
-        return model
+        return model.removeprefix("models/")
 
     def _parse_data_url_image(self, data_url: str) -> tuple[str, str] | None:
         """Parse data URL into (mime_type, base64_data)."""
         m = re.match(r"^data:([^;]+);base64,([A-Za-z0-9+/=]+)$", data_url or "")
         if not m:
             return None
-        mime_type = cast(str, m.group(1))
-        base64_data = cast(str, m.group(2))
+        mime_type = cast("str", m.group(1))
+        base64_data = cast("str", m.group(2))
         return mime_type, base64_data
 
     def _content_to_gemini_parts(self, content: object) -> list[JsonObject]:
@@ -165,7 +163,7 @@ class GeminiClient(LLMClient):
 
         declarations: list[dict[str, Any]] = []
         for tool in tools:
-            tool_data = cast(Mapping[str, object], tool)
+            tool_data = cast("Mapping[str, object]", tool)
             if tool_data.get("type") != "function":
                 continue
             function = tool.get("function")
@@ -247,7 +245,7 @@ class GeminiClient(LLMClient):
                     contents.append({"role": "model", "parts": parts})
                 continue
 
-            if cast(str, msg.role) == "tool":
+            if cast("str", msg.role) == "tool":
                 name = tool_name_map.get(msg.tool_call_id or "", msg.tool_call_id or "tool_result")
                 response_content = msg.content or ""
                 if isinstance(response_content, str):

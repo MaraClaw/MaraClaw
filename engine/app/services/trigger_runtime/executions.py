@@ -10,8 +10,10 @@ from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
+from typing import Self
 
 from app.config import get_settings
+from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import json_as_str, json_object_from
 from app.core.logging import get_trace_id, logger, set_trace_id
 from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
@@ -88,7 +90,11 @@ async def mark_trigger_executions_completed(leases: Sequence[ExecutionLease]) ->
                 execution_id
                 for execution_id in lease.execution_ids
                 if await trigger_execution_dao.finish(
-                    execution_id, lease_token=lease.token, status="completed", error_text=None, now=now
+                    execution_id,
+                    lease_token=lease.token,
+                    status=TriggerExecutionStatus.COMPLETED,
+                    error_text=None,
+                    now=now,
                 )
             ]
             lost = set(lease.execution_ids) - set(changed)
@@ -109,7 +115,11 @@ async def mark_trigger_executions_failed(leases: Sequence[ExecutionLease], error
                 execution_id
                 for execution_id in lease.execution_ids
                 if await trigger_execution_dao.finish(
-                    execution_id, lease_token=lease.token, status="failed", error_text=error_text, now=now
+                    execution_id,
+                    lease_token=lease.token,
+                    status=TriggerExecutionStatus.FAILED,
+                    error_text=error_text,
+                    now=now,
                 )
             ]
             lost = set(lease.execution_ids) - set(changed)
@@ -143,7 +153,7 @@ class ExecutionLeaseHold:
         self.fired_reason: str | None = None
         self.heartbeat_task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> ExecutionLeaseHold:
+    async def __aenter__(self) -> Self:
         if not self.leases:
             return self
         self.loop = asyncio.get_running_loop()
@@ -291,7 +301,7 @@ async def claim_pending_trigger_executions(
         await agent_trigger_dao.record_first_starts(first_start_ids, now=now)
         for execution, trigger in rows:
             started_at = execution.started_at or now
-            execution.status = "processing"
+            execution.status = TriggerExecutionStatus.PROCESSING
             execution.started_at = started_at
             execution.finished_at = None
             execution.lease_owner = lease_token

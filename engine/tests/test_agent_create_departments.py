@@ -1,6 +1,6 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -14,7 +14,7 @@ from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.org_department import OrgDepartmentRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate
-from app.services import onboarding
+from app.services import agent_provisioning, onboarding
 from openclaw_update_gate_fixtures import open_guest_write_gate
 
 
@@ -33,18 +33,19 @@ class CreationStore:
     write_key: Mock = field(default_factory=Mock)
     relationships: AsyncMock = field(default_factory=AsyncMock)
     flush: AsyncMock = field(default_factory=AsyncMock)
-    setup: AsyncMock = field(default_factory=AsyncMock)
+    setup: Callable[[AgentRecord, AgentCreate, str], Awaitable[None]] = field(default_factory=AsyncMock)
 
     @asynccontextmanager
     async def transaction(self):
+        agents, participants, grants = list(self.agent_rows), list(self.participants), list(self.grants)
         self.in_transaction = True
         self.events.append("begin")
         try:
             yield
         except RuntimeError, HTTPException:
-            self.agent_rows.clear()
-            self.participants.clear()
-            self.grants.clear()
+            self.agent_rows[:] = agents
+            self.participants[:] = participants
+            self.grants[:] = grants
             self.events.append("rollback")
             raise
         else:
@@ -79,7 +80,9 @@ class CreationStore:
         return row
 
     async def update_agent(self, *, db_obj: AgentRecord, obj_in: Mapping[str, object]) -> AgentRecord:
-        return replace(db_obj, api_key_hash=str(obj_in["api_key_hash"]))
+        row = AgentRecord.from_row({**asdict(db_obj), **obj_in})
+        self.agent_rows[:] = [row if existing.id == row.id else existing for existing in self.agent_rows]
+        return row
 
     async def persist_setup(self, agent: AgentRecord, data: AgentCreate, raw_key: str) -> None:
         assert self.in_transaction
@@ -111,6 +114,9 @@ async def creation(monkeypatch):
     monkeypatch.setattr(agents, "connection_ctx", store.transaction)
     monkeypatch.setattr(agents, "lock_tenants", AsyncMock())
     monkeypatch.setattr(agents, "lock_user", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "connection_ctx", store.transaction)
+    monkeypatch.setattr(agent_provisioning, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "lock_user", AsyncMock())
 
     async def fresh_actor(_user_id: UUID, *, fresh: bool = False) -> UserRecord:
         assert fresh
@@ -124,10 +130,12 @@ async def creation(monkeypatch):
     monkeypatch.setattr(agents.agent_permission_dao, "create", store.create_grant)
     monkeypatch.setattr(agents.org_department_dao, "get_many", store.get_departments)
     monkeypatch.setattr(agents.tenant_dao, "get", AsyncMock(return_value=None))
-    monkeypatch.setattr(agents, "check_agent_creation_quota", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", AsyncMock())
     monkeypatch.setattr(agents, "assert_models_in_tenant_pool", AsyncMock())
     monkeypatch.setattr(agents, "ensure_access_granted_platform_relationships", relationships)
     monkeypatch.setattr(agents, "mint_openclaw_gateway_key", mint_key)
+    monkeypatch.setattr(agent_provisioning, "ensure_access_granted_platform_relationships", relationships)
+    monkeypatch.setattr(agent_provisioning, "mint_openclaw_gateway_key", mint_key)
     monkeypatch.setattr(agents, "write_gateway_api_key", write_key)
     monkeypatch.setattr(agents, "flush_request_transaction", flush)
     monkeypatch.setattr(agents, "persist_agent_setup", store.persist_setup)
@@ -329,3 +337,18 @@ async def test_create_returns_one_time_key_without_running_setup_in_request(crea
     assert store.events == ["begin", "agent", "participant", "company", "setup", "commit"]
     store.setup.assert_awaited_once()
     store.write_key.assert_not_called()
+
+
+async def test_creation_quota_is_checked_inside_creation_transaction(creation, monkeypatch):
+    # Given a quota guard that observes the transaction protecting the insert.
+    store, client = creation
+
+    async def quota(_user):
+        assert store.in_transaction, "quota must be serialized with creation"
+
+    monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota)
+    # When creating through the real HTTP route.
+    response = await client.post("/api/agents/", json={"name": "Serialized"})
+    # Then the ordinary durable setup contract is retained.
+    assert response.status_code == 201
+    assert store.agent_rows[0].setup_pending

@@ -4,7 +4,7 @@ import signal
 
 import pytest
 
-import app.services.document_parser.worker_cleanup as worker_cleanup
+from app.services.document_parser import worker_cleanup
 
 
 class GroupProcess:

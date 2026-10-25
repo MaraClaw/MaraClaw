@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from pydantic import BaseModel, ValidationError
 
 from app.api import okr as okr_api
+from app.core.domain.okr import KeyResultStatus, PeriodFrequency
+from app.core.domain.users import UserRole
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.user import UserRecord
+from app.schemas.okr import OKRSettingsOut, OKRSettingsUpdate
 
 TENANT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 USER_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -21,11 +26,11 @@ KR_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
 
 
 def _admin() -> UserRecord:
-    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role="org_admin", display_name="Admin")
+    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=UserRole.ORG_ADMIN, display_name="Admin")
 
 
 def _member() -> UserRecord:
-    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role="member", display_name="Member")
+    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=UserRole.MEMBER, display_name="Member")
 
 
 def _settings(
@@ -37,7 +42,7 @@ def _settings(
     daily_report_skip_non_workdays: bool = True,
     weekly_report_enabled: bool = True,
     weekly_report_day: int = 4,
-    period_frequency: str = "quarterly",
+    period_frequency: PeriodFrequency = PeriodFrequency.QUARTERLY,
     period_length_days: int | None = None,
     okr_agent_id: uuid.UUID | None = None,
 ) -> OKRSettingsRecord:
@@ -54,6 +59,27 @@ def _settings(
         period_length_days=period_length_days,
         okr_agent_id=okr_agent_id,
     )
+
+
+@pytest.mark.parametrize("model", [OKRSettingsOut, OKRSettingsUpdate])
+def test_settings_when_period_frequency_is_unsupported_rejects_payload(model: type[BaseModel]) -> None:
+    # Given
+    payload = {**asdict(_settings()), "period_frequency": "unknown-contract-value"}
+    # When / Then
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
+
+
+@pytest.mark.parametrize("model", [OKRSettingsOut, OKRSettingsUpdate])
+@pytest.mark.parametrize("frequency", ["monthly", "quarterly", "custom"])
+def test_settings_when_period_frequency_is_supported_preserves_payload(model: type[BaseModel], frequency: str) -> None:
+    # Given
+    payload = {**asdict(_settings()), "period_frequency": frequency, "period_length_days": 45}
+    # When
+    result = model.model_validate(payload)
+    # Then
+    assert result.model_dump(mode="json")["period_frequency"] == frequency
+    assert result.model_dump(mode="json")["period_length_days"] == 45
 
 
 @pytest.mark.asyncio
@@ -102,7 +128,9 @@ async def test_update_settings_locks_period_after_first_enable(monkeypatch: pyte
     monkeypatch.setattr(okr_api, "_get_or_create_settings", AsyncMock(return_value=locked))
 
     with pytest.raises(HTTPException) as exc:
-        await okr_api.update_okr_settings(okr_api.OKRSettingsUpdate(period_frequency="monthly"), user=_admin())
+        await okr_api.update_okr_settings(
+            okr_api.OKRSettingsUpdate(period_frequency=PeriodFrequency.MONTHLY), user=_admin()
+        )
     assert exc.value.status_code == 400
     assert "locked" in str(exc.value.detail)
 
@@ -161,7 +189,7 @@ async def test_kr_progress_auto_status_buckets(monkeypatch: pytest.MonkeyPatch) 
         title="Users",
         current_value=10.0,
         target_value=100.0,
-        status="behind",
+        status=KeyResultStatus.BEHIND,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         last_updated_at=None,
     )
@@ -171,7 +199,7 @@ async def test_kr_progress_auto_status_buckets(monkeypatch: pytest.MonkeyPatch) 
         title="Users",
         current_value=75.0,
         target_value=100.0,
-        status="on_track",
+        status=KeyResultStatus.ON_TRACK,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         last_updated_at=datetime(2026, 2, 1, tzinfo=UTC),
     )

@@ -6,7 +6,9 @@ import pytest
 
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.services import broadcast_email_worker as worker, system_email_service as email
-from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue
+from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, enqueue
+
+__all__ = ["broadcast_db"]
 
 
 async def test_cancel_queued_sibling_while_claimed_smtp_continues(

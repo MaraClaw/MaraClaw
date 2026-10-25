@@ -61,7 +61,7 @@ async def workspace_locks(
     *,
     ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
 ):
-    normalized = sorted({_normalize_workspace_path(path) or "." for path in paths if cast(object, path) is not None})
+    normalized = sorted({_normalize_workspace_path(path) or "." for path in paths if cast("object", path) is not None})
     owner_token = uuid.uuid4().hex
     acquired: list[str] = []
     try:

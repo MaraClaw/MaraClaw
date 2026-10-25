@@ -7,7 +7,9 @@ import pytest
 
 from app.records.identity import IdentityRecord
 from app.services import org_departments
-from test_department_api import directory as directory
+from test_department_api import directory
+
+__all__ = ["directory"]
 
 
 @pytest.mark.parametrize("role", ["org_admin", "member", "agent_admin", "platform_admin"])

@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from app.core.domain.triggers import TriggerExecutionStatus
+
 
 class TriggerExecutionHistoryItem(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, from_attributes=True)
@@ -15,7 +17,7 @@ class TriggerExecutionHistoryItem(BaseModel):
     trigger_id: UUID
     agent_id: UUID
     source: str
-    status: str
+    status: TriggerExecutionStatus
     scheduled_at: AwareDatetime
     started_at: AwareDatetime | None
     finished_at: AwareDatetime | None

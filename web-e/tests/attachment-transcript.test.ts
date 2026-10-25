@@ -123,13 +123,14 @@ for (const { content, text } of [
 ]) {
   test(`shared done retains attachment cards and text before history refetch: ${JSON.stringify(content)}`, () => {
     // Given
-    const frame = { type: 'done', role: 'user', content, message_id: 'shared', attachments }
+    const frame = { type: 'done', role: 'user', content, message_id: '11111111-1111-4111-8111-111111111111', attachments }
     // When
     const event = inboundSchema.parse(frame)
+    if (event.type !== 'done') throw new Error('Expected done event')
     const completed = appendCompletion([], {
       role: event.role ?? 'assistant', content: event.content ?? '',
-      ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
-      ...(event.message_id === undefined ? {} : { message_id: event.message_id }),
+      ...(event.attachments == null ? {} : { attachments: event.attachments }),
+      ...(event.message_id == null ? {} : { message_id: event.message_id }),
     })
     // Then
     assert.deepEqual(completed[0]?.attachments, attachments)
@@ -138,7 +139,7 @@ for (const { content, text } of [
 }
 
 for (const malformed of [
-  null, {}, 'report.pdf', [null], [42], [{}],
+  {}, 'report.pdf', [null], [42], [{}],
   [{ path: uploaded.workspace_path }], [{ name: uploaded.filename }],
   [{ path: 42, name: uploaded.filename }], [{ path: uploaded.workspace_path, name: 42 }],
   [{ path: '', name: uploaded.filename }], [{ path: uploaded.workspace_path, name: '' }],

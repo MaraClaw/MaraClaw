@@ -89,9 +89,7 @@ class OpenAICompatibleClient(LLMClient):
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing /chat/completions."""
         url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        if url.endswith("/chat/completions"):
-            url = url[: -len("/chat/completions")]
-        return url
+        return url.removesuffix("/chat/completions")
 
     def _build_payload(
         self,

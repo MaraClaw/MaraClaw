@@ -161,7 +161,7 @@ class Settings(BaseSettings):
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"
-    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.6"
+    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.7"
     OPENCLAW_GATEWAY_PORT: int = 18789
     # Trial limits for newly created/replacement guests; never auto-update existing guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
@@ -208,7 +208,7 @@ class Settings(BaseSettings):
     XAI_API_KEY: str = ""
     # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
     LINKUP_PROXY_ENABLED: bool = True
-    LINKUP_PROXY_BASE_URL: str = "http://maraclaw-engine:8000/api/linkup"
+    LINKUP_PROXY_BASE_URL: str = ""
     # Search analytics: capture billed Linkup POSTs; export is off until a bucket is set.
     WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED: bool = True
     WEB_SEARCH_ANALYTICS_EXPORT_ENABLED: bool = False

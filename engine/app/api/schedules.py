@@ -171,7 +171,7 @@ async def delete_schedule(
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    _ = await agent_schedule_dao.delete(id=sched.id)
+    _ = await agent_schedule_dao.delete(record_id=sched.id)
 
 
 @router.post("/{schedule_id}/run", response_model=None)

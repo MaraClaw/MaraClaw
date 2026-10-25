@@ -4,6 +4,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,7 +22,7 @@ class _FakeCursor:
     def __init__(self, raw: _FakeRawConnection) -> None:
         self.raw = raw
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:

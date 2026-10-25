@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import pytest
 
 from app.core.json_types import JsonObject, is_json_object
@@ -28,7 +30,7 @@ def test_payload_temperature_when_optional(
     client = client_type("secret", model="test-model")
 
     # When
-    payload: dict[str, object] = client._build_payload([], None, temperature, None)
+    payload: Mapping[str, object] = client._build_payload([], None, temperature, None)
 
     # Then
     config = payload if config_key is None else payload[config_key]
@@ -65,7 +67,7 @@ def test_gemini_temperature_when_reasoning_and_max_tokens_are_set(temperature: f
         expected["temperature"] = temperature
 
     # When
-    payload: dict[str, object] = client._build_payload([], None, temperature, 1024, reasoning_effort="high")
+    payload: Mapping[str, object] = client._build_payload([], None, temperature, 1024, reasoning_effort="high")
 
     # Then
     assert payload["generationConfig"] == expected

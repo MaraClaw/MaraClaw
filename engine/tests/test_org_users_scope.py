@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import organization
+from app.core.domain.users import UserRole
 from app.dao.identity_dao import identity_dao
 from app.dao.user_dao import user_dao
 from app.records.identity import IdentityRecord
@@ -21,7 +22,7 @@ def _user(tenant_id: uuid.UUID | None, role: str = "member") -> UserRecord:
         identity_id=identity.id,
         identity=identity,
         tenant_id=tenant_id,
-        role=role,
+        role=UserRole(role),
         display_name="Before",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -106,7 +107,7 @@ async def test_patch_rejects_entire_request_for_protected_identities(monkeypatch
     target = actor if protection == "genesis_self" else _user(actor.tenant_id)
     target.is_genesis = protection in ("genesis", "genesis_self")
     if protection == "platform_role":
-        target.role = "platform_admin"
+        target.role = UserRole.PLATFORM_ADMIN
     if protection == "platform_identity":
         assert target.identity is not None
         target.identity.is_platform_admin = True

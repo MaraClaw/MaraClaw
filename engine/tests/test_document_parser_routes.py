@@ -347,6 +347,7 @@ async def test_preview_when_xlsx_then_preserves_sheets_payload(monkeypatch: pyte
 
     result = await files_api.preview_file(agent_id=agent.id, path=rel, current_user=user)
     assert result["kind"] == "xlsx"
+    assert "sheets" in result
     assert result["sheets"][0]["title"] == "Metrics"
     rows = result["sheets"][0]["rows"]
     assert isinstance(rows, list)
@@ -431,7 +432,7 @@ async def test_read_document_handler_when_storage_backed_then_uses_bridge(
     )
 
     result = await cast(
-        Awaitable[str],
+        "Awaitable[str]",
         read_document(
             arguments={"path": "workspace/report.pdf", "max_chars": 90000},
             agent_id=agent_id,

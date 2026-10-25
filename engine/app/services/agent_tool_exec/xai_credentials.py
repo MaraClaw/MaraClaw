@@ -32,5 +32,5 @@ def resolve_xai_base_url(config_base_url: str) -> tuple[str, str | None]:
 def missing_xai_key_message(tool_label: str) -> str:
     return (
         f"❌ {tool_label} API key not configured. "
-        + "Set XAI_API_KEY or PUT /api/tools/{id} with config.api_key for this tool."
+        "Set XAI_API_KEY or PUT /api/tools/{id} with config.api_key for this tool."
     )

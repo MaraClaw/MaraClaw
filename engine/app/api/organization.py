@@ -10,7 +10,7 @@ from app.dao.identity_dao import identity_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
 from app.records.user import UserRecord
-from app.schemas.schemas import UserOut, UserUpdate
+from app.schemas.schemas import AuthUser, UserUpdate
 from app.services.admin_audit import field_change, write_admin_audit
 
 router = APIRouter(prefix="/org", tags=["organization"])
@@ -19,10 +19,10 @@ router = APIRouter(prefix="/org", tags=["organization"])
 # ─── Users Management ──────────────────────────────────
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=list[AuthUser])
 async def list_users(
     tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[UserOut]:
+) -> list[AuthUser]:
     """List users, optionally filtered by tenant."""
     if (
         current_user.role == "org_admin"
@@ -42,10 +42,10 @@ async def list_users(
         include_identity=True,
         order_by_display_name=True,
     )
-    return [UserOut.model_validate(u) for u in users]
+    return [AuthUser.model_validate(u) for u in users]
 
 
-@router.patch("/users/{user_id}", response_model=UserOut)
+@router.patch("/users/{user_id}", response_model=AuthUser)
 async def admin_update_user(
     user_id: uuid.UUID, data: UserUpdate, current_user: UserRecord = Depends(get_current_admin)
 ):
@@ -138,4 +138,4 @@ async def admin_update_user(
                 # Avatar URLs can contain credentials; record only the change indicator.
                 details={"avatar_changed": avatar_changed},
             )
-        return UserOut.model_validate(result)
+        return AuthUser.model_validate(result)

@@ -11,6 +11,7 @@ import pytest
 from starlette.requests import Request
 
 from app.api import background_tasks, feishu as feishu_api
+from app.core.domain.channels import ChannelType
 from app.db import session as session_module
 from app.records.channel_config import ChannelConfigRecord
 from app.schemas.schemas import ChannelConfigCreate
@@ -176,7 +177,7 @@ async def test_config_connector_waits_for_save_and_commit(monkeypatch, existing,
     config = ChannelConfigRecord(
         id=uuid.uuid4(),
         agent_id=AGENT_ID,
-        channel_type="feishu",
+        channel_type=ChannelType.FEISHU,
         app_id="app",
         app_secret="secret",
         encrypt_key="",

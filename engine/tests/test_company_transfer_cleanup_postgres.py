@@ -12,7 +12,6 @@ from app.core.permissions import check_agent_access
 from app.dao.agent_dao import agent_dao
 from app.dao.company_transfer_cleanup_dao import company_transfer_cleanup_dao as cleanup
 from app.records.agent import AgentRecord
-from app.schemas.company_admission import PendingAdmissionResponse
 from app.services import (
     company_transfer_cleanup as service,
     company_transfer_credentials as credentials,
@@ -21,6 +20,7 @@ from app.services import (
 )
 from app.services.openclaw_update_gate import assert_work_allowed
 from company_admission_fixtures import AdmissionScenario, admission_scenario
+from company_transfer_blocker_fixtures import submit_free
 from test_company_transfer_postgres import submit_paid, transfer_scenario
 from test_company_transfer_retention_postgres import seed_retained_data
 
@@ -88,18 +88,7 @@ async def test_failed_free_cleanup_retries_to_completion_without_touching_retain
         return await original_remove(agent)
 
     monkeypatch.setattr(service.agent_manager, "remove_container", remove)
-    response = await scenario.client.post(
-        "/api/tenants/transfer",
-        headers=scenario.headers(scenario.applicant),
-        json={
-            "password": "qa-password",
-            "invitation_code": "JOIN",
-            "transfer_choice": "free",
-            "free_destructive_consent": True,
-        },
-    )
-    assert response.status_code == 202, response.text
-    admission_id = PendingAdmissionResponse.model_validate_json(response.content).request.id
+    admission_id = await submit_free(scenario)
     response = await scenario.client.post(
         f"/api/company-admissions/{admission_id}/decision",
         json={"decision": "approved"},

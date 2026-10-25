@@ -107,15 +107,15 @@ export async function toggleCompany(companyId: string): Promise<{ ok: boolean; i
 }
 
 export async function getCompanyDeletionPreview(companyId: string, signal?: AbortSignal): Promise<CompanyDeletionPreview> {
-  return companyDeletionPreviewSchema.parse(await apiRequest<unknown>(
-    `/api/tenants/${encodeURIComponent(companyId)}/deletion-preview`, { signal },
-  ))
+  return apiRequest(
+    `/api/tenants/${encodeURIComponent(companyId)}/deletion-preview`, { schema: companyDeletionPreviewSchema, signal },
+  )
 }
 
 export async function deleteCompany(companyId: string): Promise<CompanyDeletionResponse> {
-  return companyDeletionResponseSchema.parse(await apiRequest<unknown>(
-    `/api/tenants/${encodeURIComponent(companyId)}`, { method: 'DELETE' },
-  ))
+  return apiRequest(
+    `/api/tenants/${encodeURIComponent(companyId)}`, { schema: companyDeletionResponseSchema, method: 'DELETE' },
+  )
 }
 
 export async function listEmailDomains(tenantId: string, signal?: AbortSignal): Promise<EmailDomain[]> {

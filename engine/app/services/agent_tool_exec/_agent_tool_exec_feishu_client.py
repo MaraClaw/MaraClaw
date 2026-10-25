@@ -6,6 +6,7 @@ import uuid
 from httpx import Response
 
 from app.config import get_settings
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
 from app.dao.channel_config_dao import channel_config_dao
 
@@ -34,7 +35,7 @@ async def _get_feishu_credentials(agent_id: uuid.UUID) -> tuple[str, str]:
     app_secret = settings.FEISHU_APP_SECRET
 
     try:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
         if config and config.app_id not in (None, "") and config.app_secret not in (None, ""):
             app_id = config.app_id
             app_secret = config.app_secret
@@ -130,21 +131,21 @@ def _check_feishu_err(resp: object) -> str | None:
         if is_perm_error:
             return (
                 f"Failed: Permission denied (code: {code}, msg: {msg}). "
-                + "The bot app does not have access to this document/Bitable. "
-                + "CRITICAL INSTRUCTION for the Agent: You MUST explicitly output ALL of the following "
-                + "step-by-step instructions to the user in your reply. Do NOT omit or summarize any step:\n\n"
-                + "---\n"
-                + "**The bot needs to be added to this document/table as an authorized app. "
-                + "Please follow these steps:**\n\n"
-                + "1. Open the target document or Bitable in the Feishu client (web or desktop).\n"
-                + "2. Click the **「...」** menu button in the top-right corner of the page.\n"
-                + "3. In the dropdown menu, hover over **「更多」** (More) at the bottom.\n"
-                + "4. In the sub-menu that appears, click **「添加文档应用」** (Add Document App).\n"
-                + "5. In the search box, type the name of your Feishu bot app (the one bound to this Agent's channel), then click to add it.\n"
-                + "6. After adding, retry the same operation.\n\n"
-                + "If you cannot find 「添加文档应用」, it means the document owner may need to enable this option, "
-                + "or you can try: click **「分享」** (Share) button -> invite the bot app directly.\n"
-                + "---"
+                "The bot app does not have access to this document/Bitable. "
+                "CRITICAL INSTRUCTION for the Agent: You MUST explicitly output ALL of the following "
+                "step-by-step instructions to the user in your reply. Do NOT omit or summarize any step:\n\n"
+                "---\n"
+                "**The bot needs to be added to this document/table as an authorized app. "
+                "Please follow these steps:**\n\n"
+                "1. Open the target document or Bitable in the Feishu client (web or desktop).\n"
+                "2. Click the **「...」** menu button in the top-right corner of the page.\n"
+                "3. In the dropdown menu, hover over **「更多」** (More) at the bottom.\n"
+                "4. In the sub-menu that appears, click **「添加文档应用」** (Add Document App).\n"
+                "5. In the search box, type the name of your Feishu bot app (the one bound to this Agent's channel), then click to add it.\n"
+                "6. After adding, retry the same operation.\n\n"
+                "If you cannot find 「添加文档应用」, it means the document owner may need to enable this option, "
+                "or you can try: click **「分享」** (Share) button -> invite the bot app directly.\n"
+                "---"
             )
         return f"Failed: API Error {code} - {msg}"
     return None

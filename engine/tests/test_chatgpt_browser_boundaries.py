@@ -5,9 +5,11 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
-from tests.chatgpt_subscription_fakes import callback, oauth_store as oauth_store
+from tests.chatgpt_subscription_fakes import callback, oauth_store
 from tests.test_chatgpt_subscription import _ACCESS, _model, _user
-from tests.test_enterprise_transaction_boundaries import owned_pool as owned_pool
+from tests.test_enterprise_transaction_boundaries import owned_pool
+
+__all__ = ["oauth_store", "owned_pool"]
 
 from app.dao.user_dao import user_dao
 from app.db import session

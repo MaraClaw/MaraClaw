@@ -14,10 +14,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import agents as agents_api, files as files_api
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
+from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
 from app.services import agent_stops, openclaw_update_exclusion as exclusion
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
+from app.services.agent_start_store import start_store
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 
 
@@ -215,7 +218,9 @@ async def test_lifecycle_section_404s_a_deleted_agent_under_the_lock(gate: Gate,
 
 @pytest.fixture
 def lifecycle(gate: Gate, monkeypatch: pytest.MonkeyPatch):
-    stale = AgentRecord(id=uuid.uuid4(), name="A", creator_id=uuid.uuid4(), container_id="old", status="running")
+    stale = AgentRecord(
+        id=uuid.uuid4(), name="A", creator_id=uuid.uuid4(), container_id="old", status=AgentStatus.RUNNING
+    )
     fresh = replace(stale, container_id="published-by-cutover", openclaw_image_id="sha256:pinned")
     user = UserRecord(id=uuid.uuid4())
     persisted: list[AgentRecord] = []
@@ -227,10 +232,18 @@ def lifecycle(gate: Gate, monkeypatch: pytest.MonkeyPatch):
         persisted.append(agent)
         return agent
 
+    async def publish(_operation: AgentStartOperation, agent: AgentRecord) -> bool:
+        await persist(agent)
+        return True
+
     monkeypatch.setattr(agents_api, "check_agent_access", access)
     monkeypatch.setattr(agents_api, "_persist_agent_runtime", persist)
     monkeypatch.setattr(agents_api, "_agent_to_out", AsyncMock(return_value="out"))
     monkeypatch.setattr(exclusion.agent_dao, "get", AsyncMock(return_value=fresh))
+    operation = AgentStartOperation(fresh.id, uuid.uuid4(), "pending")
+    monkeypatch.setattr(start_store, "begin", AsyncMock(return_value=(operation, fresh)))
+    monkeypatch.setattr(start_store, "publish", publish)
+    monkeypatch.setattr(start_store, "cancel", AsyncMock())
     start, stop = AsyncMock(return_value="cid"), AsyncMock(return_value=True)
     monkeypatch.setattr(agents_api.agent_manager, "start_container", start)
     monkeypatch.setattr(agents_api.agent_manager, "stop_container", stop)
@@ -257,7 +270,9 @@ async def test_start_and_stop_are_refused_while_an_upgrade_is_active(lifecycle):
 
 
 async def test_reconciliation_stop_waits_for_an_in_flight_cutover(gate: Gate, tmp_path: Path, monkeypatch):
-    agent = AgentRecord(id=uuid.uuid4(), name="A", creator_id=uuid.uuid4(), container_id="c", status="stopped")
+    agent = AgentRecord(
+        id=uuid.uuid4(), name="A", creator_id=uuid.uuid4(), container_id="c", status=AgentStatus.STOPPED
+    )
     current = AsyncMock(return_value=replace(agent))
     stop = AsyncMock(return_value=True)
     monkeypatch.setattr(agent_stops.agent_dao, "get", current)

@@ -110,6 +110,7 @@ class StorageBackend:
         Backends must implement a native atomic primitive. Capability, provider,
         and transport failures raise; they must never become absence/conflicts.
         """
+        del data, content_type
         raise AtomicCreateUnsupportedError(type(self).__name__, key)
 
     async def write_text(self, key: str, content: str, encoding: str = "utf-8") -> None:
@@ -187,9 +188,11 @@ class StorageBackend:
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
 
     async def local_path_for(self, key: str) -> Path | None:
+        del key
         return None
 
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
+        del key, filename, inline
         return None
 
 

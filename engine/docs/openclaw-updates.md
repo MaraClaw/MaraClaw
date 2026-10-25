@@ -34,11 +34,17 @@ Seams: `openclaw_routing.prepare_openclaw_message` (before model/config side eff
 
 Guest-visible writes (`files.py` PUT/DELETE content, restore, import-skill/clawhub/url, `/files/upload`, `/chat/upload` with an agent, and API-key rotation via `POST /agents/{id}/api-key`) run in `guest_write_exclusion`/`guest_write_section`: gate check, **shared** `setup_workspace_lock`, recheck. API-key rotation holds this exclusion across both the database hash update and guest key-file write so rollback cannot restore a mismatched key. MCP installations and skill/tool assignments are database rows (`mcp_installation.py` touches no agent files); `openclaw.json` MCP/skill/plugin entries are guest-owned and the engine only rewrites the file in the gated work path (`prepare_openclaw_message`) and in cutover starts, which preserve those entries. Agent start/stop use `locked_fresh_agent` (gate, exclusive lock, fresh row re-read, recheck); reconciliation stops and deletion teardown take the exclusive lock.
 
+## Image preparation and retry
+
+- Bare references without a digest or repository slash (for example, `openclaw:2026.10.7` or `openclaw`) are local-only. Before publishing a notice, build the configured version with `./build-openclaw-local-dockerfile.sh` from `engine/`, using the same Docker daemon as the worker. Keep the configured image tag and build version aligned; do not retag an older release as the target version.
+- Namespaced/registry references and all digest-pinned references are freshly pulled during upgrades, even when cached. A registry failure never falls back to a cached image.
+- A missing local image fails with `pull_failed` without pulling or touching the old guest. Prepare the exact target image, then retry the same notice with `POST /agents/{id}/openclaw-update` and its `notice_id`. An outstanding mandatory notice still gates work until an upgrade succeeds.
+
 ## Cutover (worker role only)
 
 `openclaw_update_worker` polls active runs every 5 s. A separate task reconciles successful-run artifacts at startup and every 60 s, paging through runs completed in the last 30 days without blocking active polling. Exclusion is the per-agent `setup_workspace_lock` flock on the shared filesystem: whoever holds it owns the run. No leases, heartbeats or fencing.
 
-1. Pending: fresh `docker pull` of the configured image, capture its immutable id. Failure → `pull_failed`, old guest untouched. Agent not desired-running → `not_running`.
+1. Pending: inspect a bare, non-digest local reference once, or fresh `docker pull` of a namespaced/registry or digest-pinned reference; capture its immutable id. Failure → `pull_failed`, old guest untouched. Agent not desired-running → `not_running`.
 2. Under the exclusive lock, journal old container id/image/port, target, parked name and snapshot path in `journal`, CAS `pending → cutover`.
 3. `restart=no`, stop and rename the old container to `maraclaw-agent-<id8>-prev-<run8>`; requeue deliveries claimed by the stopped guest; snapshot the **whole** agent directory to `_upgrade_snapshots/<run>` (copy to `.tmp`, one atomic rename).
 4. `AgentManager.start_container(copy with container_id=None, image=<id>, rehydrate=False)`: no storage materialization or gogcli restore; MCP/skills/plugins in `openclaw.json` are preserved.

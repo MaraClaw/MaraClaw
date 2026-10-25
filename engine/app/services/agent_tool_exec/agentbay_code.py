@@ -22,6 +22,7 @@ def _integer_argument(arguments: ToolArguments, name: str, default: int) -> int:
 
 async def _agentbay_code_execute(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Execute code in the AgentBay code environment."""
+    del ws  # Remote code handlers retain the shared workspace keyword.
     if not agent_id:
         return "❌ AgentBay tools require an agent context."
 
@@ -57,6 +58,7 @@ async def _agentbay_code_execute(agent_id: uuid.UUID | None, ws: Path, arguments
 
 async def _agentbay_code_write_file(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Write a text file in the AgentBay Code Sandbox."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
 
@@ -92,6 +94,7 @@ async def _agentbay_code_write_file(agent_id: uuid.UUID | None, ws: Path, argume
 
 async def _agentbay_code_read_file(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Read a text file from the AgentBay Code Sandbox."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
 
@@ -120,6 +123,7 @@ async def _agentbay_code_read_file(agent_id: uuid.UUID | None, ws: Path, argumen
 
 async def _agentbay_code_edit_file(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Edit a text file in the AgentBay Code Sandbox."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
 
@@ -163,6 +167,7 @@ async def _agentbay_code_edit_file(agent_id: uuid.UUID | None, ws: Path, argumen
 
 async def _agentbay_command_exec(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Execute a shell command in the AgentBay environment."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
 

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
 import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
-import { canReviewAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 const navItems: {
@@ -20,7 +20,9 @@ const navItems: {
   end?: boolean
   platformAdminOnly?: boolean
   broadcastOnly?: boolean
+  invitationsOnly?: boolean
   admissionReviewOnly?: boolean
+  agentDeletionReviewOnly?: boolean
   paymentReviewOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
@@ -29,8 +31,10 @@ const navItems: {
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/openclaw-updates', label: 'Updates', icon: 'tools', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/invitations', label: 'Invitations', icon: 'users', invitationsOnly: true },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
+  { to: '/agent-deletion-requests', label: 'Agent deletions', icon: 'tools', agentDeletionReviewOnly: true },
   { to: '/transfer-payments', label: 'Payments', icon: 'analytics', paymentReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
@@ -105,10 +109,12 @@ function NavItems({
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, admissionReviewOnly, paymentReviewOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
+        if (invitationsOnly && !canManageInvitations(user)) return null
         if (admissionReviewOnly && !canReviewAdmissions(user)) return null
+        if (agentDeletionReviewOnly && !canReviewAgentDeletions(user)) return null
         if (paymentReviewOnly && !paymentAccess.canReview) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/account' && to !== '/settings'

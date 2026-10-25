@@ -36,9 +36,11 @@ Search the live web and return:
 
 ### Endpoint
 
-```http
+```shell
 
-POST https://api.linkup.so/v1/search
+curl -sS -X POST "$LINKUP_API_BASE/v1/search" \
+  -H "Authorization: Bearer $LINKUP_PROXY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"q":"Who is the CEO of Stripe?","depth":"standard","outputType":"sourcedAnswer"}'
 
 ```
 
@@ -347,9 +349,11 @@ Useful when an agent already knows which page it wants.
 
 ### Endpoint
 
-```http
+```shell
 
-POST https://api.linkup.so/v1/fetch
+curl -sS -X POST "$LINKUP_API_BASE/v1/fetch" \
+  -H "Authorization: Bearer $LINKUP_PROXY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://openai.com"}'
 
 ```
 
@@ -401,9 +405,11 @@ Designed for:
 
 ### Endpoint
 
-```http
+```shell
 
-POST https://api.linkup.so/v1/research
+curl -sS -X POST "$LINKUP_API_BASE/v1/research" \
+  -H "Authorization: Bearer $LINKUP_PROXY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"q":"...","mode":"research","reasoningDepth":"M","outputType":"sourcedAnswer"}'
 
 ```
 
@@ -453,13 +459,13 @@ This is a key advantage over raw LLM generation.
 
 # Authentication
 
-Use a Linkup API key.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. Use only this proxy for Linkup requests.
 
 Header:
 
-```http
+```shell
 
-Authorization: Bearer LINKUP_API_KEY
+-H "Authorization: Bearer $LINKUP_PROXY_TOKEN"
 
 ```
 

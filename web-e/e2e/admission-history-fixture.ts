@@ -25,6 +25,7 @@ export async function prepareHistory(page: Page) {
   await page.route(`**${historyPath}*`, async (route) => {
     const request = route.request()
     const query = new URL(request.url()).searchParams
+    if (query.get('limit') === '100') return route.fallback()
     const token = request.headers().authorization
     const status = query.get('status')
     const cursor = query.get('cursor')

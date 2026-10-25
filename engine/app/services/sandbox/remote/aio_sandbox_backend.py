@@ -99,7 +99,7 @@ class AioSandboxBackend(BaseSandboxBackend):
             # Build command based on language
             if language == "bash":
                 cmd = code
-            elif language == "node" or language == "javascript":
+            elif language in {"node", "javascript"}:
                 cmd = f"node -e {code!r}"
             else:
                 return ExecutionResult(
@@ -137,8 +137,7 @@ class AioSandboxBackend(BaseSandboxBackend):
                 result = json_object_from_response(response)
 
                 # Parse response
-                # Shell: {"success": true, "data": {"output": "...", "exit_code": 0}}
-                # Jupyter: {"success": true, "data": {"status": "ok", "outputs": [{"text": "..."}]}}
+                # Shell data contains output/exit_code; Jupyter data contains status/outputs.
 
                 stdout = ""
                 stderr = ""

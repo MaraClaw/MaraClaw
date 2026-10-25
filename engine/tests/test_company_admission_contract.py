@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
 from app.api.company_admissions import router
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.company_admission import AdmissionStatus, CompanyAdmissionRecord
 from app.records.user import UserRecord
@@ -66,7 +67,7 @@ async def test_reviewer_withdrawal_payload_is_rejected_over_http():
     # Given an authenticated reviewer and the real request-validation boundary.
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role="org_admin")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.ORG_ADMIN)
 
     # When withdrawal is sent as a reviewer decision.
     try:
@@ -97,7 +98,7 @@ async def test_review_page_rejects_invalid_query_contract(params: dict[str, str 
     # Given an authenticated HTTP boundary with invalid pagination inputs.
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role="org_admin")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.ORG_ADMIN)
 
     # When framework query parsing runs before any database call.
     try:

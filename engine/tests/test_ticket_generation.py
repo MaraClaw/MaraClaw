@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from app.services import chat_tickets, file_download_tickets
+from app.api import auth
+from app.records.identity import IdentityRecord
+from app.records.user import UserRecord
+from app.services import chat_tickets, file_download_tickets, password_reset_service
 from test_chat_tickets import TicketRedis
 
 
@@ -104,6 +107,45 @@ async def test_revoked_generation_rejects_ticket_despite_unchanged_principal_sna
         await authorize(binding)
 
     # Then revocation denies admission without restoring the consumed ticket.
+    assert error.value.status_code == 401
+    with pytest.raises(HTTPException) as retry:
+        await transport.service.redeem(issued.ticket)
+    assert retry.value.status_code == 400
+
+
+@pytest.mark.parametrize("flow", ["change", "reset"])
+async def test_password_write_rejects_preexisting_ticket(transport, monkeypatch, flow):
+    # Given a ticket issued before the actual password handler runs.
+    issued = await transport.service.issue(transport.binding)
+    identity = IdentityRecord(id=transport.user.identity.id, password_hash="old-hash")
+    user = UserRecord(id=transport.user.id, identity_id=identity.id, identity=identity)
+    monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=user))
+    monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth.identity_dao, "update", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth, "verify_password_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(auth, "hash_password_async", AsyncMock(return_value="new-hash"))
+    monkeypatch.setattr(auth, "create_access_token", AsyncMock(return_value="replacement-token"))
+    monkeypatch.setattr(
+        password_reset_service, "consume_password_reset_token", AsyncMock(return_value={"identity_id": identity.id})
+    )
+
+    async def bump(identity_id):
+        assert identity_id == identity.id
+        transport.current.generation += 1
+        return transport.current.generation
+
+    monkeypatch.setattr(auth.identity_dao, "bump_auth_generation", bump)
+    # When either password handler commits a credential change.
+    if flow == "change":
+        await auth.change_password(
+            auth.ChangePasswordRequest(old_password="old-password", new_password="new-password"), user
+        )
+    else:
+        await auth.reset_password(auth.ResetPasswordRequest(token="r" * 32, new_password="new-password"))
+    # Then redemption cannot upgrade the old generation and remains single-use.
+    binding = await transport.service.redeem(issued.ticket)
+    with pytest.raises(HTTPException) as error:
+        await authorize(binding)
     assert error.value.status_code == 401
     with pytest.raises(HTTPException) as retry:
         await transport.service.redeem(issued.ticket)

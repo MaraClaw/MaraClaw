@@ -4,6 +4,9 @@ import pytest
 from app.api import background_tasks
 from app.runtime import lifecycle
 from app.services import audit_logger, company_transfer_cleanup as cleanup
+from producer_admission_fixtures import producer_admission
+
+__all__ = ["producer_admission"]
 
 
 @pytest.mark.parametrize("role", ["api", "connector"])

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { apiRequest } from './http.ts'
+import { TransferChoiceSchema, TransferStatusSchema } from './engine-contracts.generated.ts'
 
 export const TRANSFER_REVIEW_LIMIT = 50
 export const TRANSFER_REASON_LIMIT = 2000
@@ -11,8 +12,8 @@ export const transferSummarySchema = z.object({
   applicant_user_id: z.uuid(),
   source_tenant_id: z.uuid(),
   target_tenant_id: z.uuid(),
-  choice: z.enum(['paid', 'free']),
-  status: z.enum(['payment_review', 'admission_created', 'rejected', 'withdrawn']),
+  choice: TransferChoiceSchema,
+  status: TransferStatusSchema,
   fee_amount_minor: z.number().int(),
   currency: z.string(),
   instructions: z.string(),
@@ -40,19 +41,20 @@ export type TransferDecision = z.infer<typeof transferDecisionSchema>
 export type ReviewTenant = z.infer<typeof reviewTenantSchema>
 
 export async function fetchTransferReviews(signal?: AbortSignal) {
-  return transferReviewsSchema.parse(await apiRequest<unknown>(`/api/company-admissions/transfers/review?limit=${TRANSFER_REVIEW_LIMIT}`, { signal }))
+  return apiRequest(`/api/company-admissions/transfers/review?limit=${TRANSFER_REVIEW_LIMIT}`, { schema: transferReviewsSchema, signal })
 }
 
 export async function fetchTransferDetail(id: TransferId, signal?: AbortSignal) {
-  return transferSummarySchema.parse(await apiRequest<unknown>(`/api/company-admissions/transfers/${id}`, { signal }))
+  return apiRequest(`/api/company-admissions/transfers/${id}`, { schema: transferSummarySchema, signal })
 }
 
 export async function decideTransferPayment(id: TransferId, decision: TransferDecision) {
-  return transferSummarySchema.parse(await apiRequest<unknown>(`/api/company-admissions/transfers/${id}/decision`, {
+  return apiRequest(`/api/company-admissions/transfers/${id}/decision`, {
+    schema: transferSummarySchema,
     method: 'POST', body: transferDecisionSchema.parse(decision),
-  }))
+  })
 }
 
 export async function fetchReviewTenant(signal?: AbortSignal) {
-  return reviewTenantSchema.parse(await apiRequest<unknown>('/api/tenants/me', { signal }))
+  return apiRequest('/api/tenants/me', { schema: reviewTenantSchema, signal })
 }

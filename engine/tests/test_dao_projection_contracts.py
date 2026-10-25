@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta, timezone
-from typing import assert_type
+from typing import Self, assert_type
 from uuid import UUID
 
 import pytest
@@ -18,7 +18,7 @@ class _FakeCursor:
     def __init__(self, raw: _FakeRawConnection) -> None:
         self.raw: _FakeRawConnection = raw
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -99,8 +99,10 @@ async def test_agent_projection_preserves_native_uuid_name_and_nullable_avatar(
     assert TypeAdapter(list[AgentNameAvatarProjection]).validate_python(result, strict=True) == raw.rows
     assert raw.executed == [
         (
-            "SELECT id, name, avatar_url FROM agents WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
-            "AND NOT (status = ANY(%(exclude_statuses)s))",
+            (
+                "SELECT id, name, avatar_url FROM agents WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
+                "AND NOT (status = ANY(%(exclude_statuses)s))"
+            ),
             {"tenant_id": tenant_id, "exclude_statuses": ["stopped", "error"]},
         )
     ]
@@ -124,9 +126,11 @@ async def test_user_projection_preserves_sql_selected_display_name_and_avatar(
     assert TypeAdapter(list[UserNameAvatarProjection]).validate_python(result, strict=True) == raw.rows
     assert raw.executed == [
         (
-            "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name, "
-            "u.avatar_url FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-            "WHERE u.tenant_id = %(tenant_id)s",
+            (
+                "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name, "
+                "u.avatar_url FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.tenant_id = %(tenant_id)s"
+            ),
             {"tenant_id": tenant_id},
         )
     ]
@@ -167,8 +171,10 @@ async def test_conversation_stats_preserve_count_and_native_timestamp(
     assert result[1] is last_at
     assert raw.executed == [
         (
-            "SELECT COUNT(*) AS cnt, MAX(created_at) AS last_at "
-            "FROM chat_messages WHERE conversation_id = %(conversation_id)s",
+            (
+                "SELECT COUNT(*) AS cnt, MAX(created_at) AS last_at "
+                "FROM chat_messages WHERE conversation_id = %(conversation_id)s"
+            ),
             {"conversation_id": conversation_id},
         )
     ]

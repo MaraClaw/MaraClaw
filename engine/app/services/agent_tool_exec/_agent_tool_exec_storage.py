@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.services import focus_service
 from app.services.focus_service import is_focus_file_path
 
@@ -84,13 +85,17 @@ async def upsert_focus_item(
     description = _string_argument(arguments, "description").strip()
     if not description:
         return "❌ Missing required argument 'description' for upsert_focus_item"
+    try:
+        kind = FocusKind(_string_argument(arguments, "kind", "normal"))
+    except ValueError:
+        return "❌ Invalid focus kind"
     item = await focus_service.upsert_focus_item(
         agent_id,
         key=_string_argument(arguments, "key") or None,
         title=_string_argument(arguments, "title") or None,
         description=description,
-        status="in_progress",
-        kind=_string_argument(arguments, "kind", "normal"),
+        status=FocusStatus.IN_PROGRESS,
+        kind=kind,
         source=_string_argument(arguments, "source", "user"),
         metadata={"tool": "upsert_focus_item"},
     )

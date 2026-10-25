@@ -9,6 +9,7 @@ from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth, enterprise, google_chat, google_workspace, slack, sso, teams
 from app.config import Settings
+from app.core.domain.users import UserRole
 from app.core.security import get_current_admin, get_current_user
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.db import session
@@ -21,7 +22,7 @@ from app.services import google_workspace_oauth, platform_service as platform_mo
 
 @pytest.fixture
 def url_actor(monkeypatch):
-    actor = UserRecord(id=uuid4(), tenant_id=uuid4(), identity_id=uuid4(), role="platform_admin")
+    actor = UserRecord(id=uuid4(), tenant_id=uuid4(), identity_id=uuid4(), role=UserRole.PLATFORM_ADMIN)
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
     monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: actor)
@@ -86,7 +87,7 @@ async def test_platform_setting_rejects_public_base_url_before_writes(monkeypatc
 
 @pytest.mark.asyncio
 async def test_invitation_missing_base_reports_clear_error_before_creating_codes(monkeypatch, url_actor):
-    url_actor.role = "org_admin"
+    url_actor.role = UserRole.ORG_ADMIN
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -152,7 +153,7 @@ async def test_sso_callback_config_requires_base_even_with_custom_tenant_domain(
 @pytest.mark.parametrize("redirect_enabled", [False, True])
 async def test_tenant_switch_requires_base_only_when_redirecting(monkeypatch, url_actor, redirect_enabled):
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example")
-    target = UserRecord(id=uuid4(), identity_id=url_actor.identity_id, tenant_id=tenant.id, role="member")
+    target = UserRecord(id=uuid4(), identity_id=url_actor.identity_id, tenant_id=tenant.id, role=UserRole.MEMBER)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(auth.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=target))
     monkeypatch.setattr(auth.tenant_dao, "get", AsyncMock(return_value=tenant))

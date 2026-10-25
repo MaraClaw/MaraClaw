@@ -16,11 +16,11 @@ test('transfer choice traps focus, cancels safely and restores its trigger witho
   await expect(cancel).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Transfer with invite', exact: true })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Continue transfer', exact: true })).toBeFocused()
   expect(state.submissions).toEqual([])
 })
 
-for (const width of [390, 1440]) for (const theme of ['light', 'dark'] as const) {
+for (const width of [390, 1440, 1920]) for (const theme of ['light', 'dark'] as const) {
   test(`free consent is explicit and stays contained at ${width}px in ${theme}`, async ({ page }, testInfo) => {
     // Given
     const state = await prepareTransfers(page)
@@ -43,18 +43,18 @@ for (const width of [390, 1440]) for (const theme of ['light', 'dark'] as const)
     await submit.click()
     // Then
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByRole('status').filter({ hasText: 'Awaiting review' })).toBeVisible()
+    await expect(page).toHaveURL(/\/app\/agents$/)
     expect(state.submissions).toEqual([{ password: 'synthetic-password', invitation_code: 'synthetic-invite', transfer_choice: 'free', free_destructive_consent: true }])
-    expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('source-token')
-    expect(state.switches).toBe(0)
+    expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('target-token')
+    expect(state.switches).toBe(1)
   })
 }
 
-for (const method of ['invite', 'domain'] as const) {
+for (const method of ['invite'] as const) {
   test(`paid ${method} saves server policy and survives reload without installing a destination session`, async ({ page }, testInfo) => {
     // Given
     const state = await prepareTransfers(page)
-    await openTransferChoice(page, method)
+    await openTransferChoice(page)
     const dialog = page.getByRole('alertdialog')
     await dialog.getByRole('radio', { name: /^Paid/ }).check()
     await expect(dialog).toContainText('¥123')
@@ -64,7 +64,7 @@ for (const method of ['invite', 'domain'] as const) {
     // Then
     await expect(page.getByRole('status').filter({ hasText: 'Awaiting payment review' })).toContainText('KWD')
     await expect(page.getByRole('status').filter({ hasText: 'Awaiting payment review' })).toContainText('1.234')
-    expect(state.submissions).toEqual([{ password: 'synthetic-password', ...(method === 'invite' ? { invitation_code: 'synthetic-invite' } : { tenant_id: target.id }), transfer_choice: 'paid' }])
+    expect(state.submissions).toEqual([{ password: 'synthetic-password', invitation_code: 'synthetic-invite', transfer_choice: 'paid' }])
     await page.getByRole('link', { name: 'View transfer request', exact: true }).click()
     await page.reload()
     await expect(page.getByRole('region', { name: 'Saved transfer policy' })).toContainText(payment.instructions)
@@ -111,17 +111,15 @@ test('payment approval links to a still-pending destination admission, never ope
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('source-token')
 })
 
-test('a non-default source cannot submit through either destination path', async ({ page }) => {
+test('a non-default source cannot validate or reveal a destination', async ({ page }) => {
   // Given
   const state = await prepareTransfers(page, { eligible: false })
   await page.goto('/transfer')
   // When
-  await page.getByLabel('Current password').fill('synthetic-password')
-  await page.getByLabel('Invitation code', { exact: true }).fill('synthetic-invite')
   // Then
   await expect(page.getByRole('alert')).toContainText('Transfers from one company to another are not supported')
-  await expect(page.getByRole('button', { name: 'Transfer with invite', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: `Transfer to ${target.name}`, exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Validate invitation', exact: true })).toBeDisabled()
+  await expect(page.getByLabel('Current password')).toHaveCount(0)
   expect(state.submissions).toEqual([])
 })
 
@@ -130,13 +128,12 @@ test('a failed quote blocks transfer and can be retried without losing form valu
   const state = await prepareTransfers(page)
   await page.route('**/api/company-admissions/transfer-quote', (route) => route.fulfill({ status: 503, json: { detail: 'Synthetic quote unavailable' } }))
   await page.goto('/transfer')
-  await page.getByLabel('Current password').fill('synthetic-password')
-  await expect(page.getByRole('button', { name: 'Transfer with invite', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Validate invitation', exact: true })).toBeDisabled()
   await page.unroute('**/api/company-admissions/transfer-quote')
   // When
   await page.getByRole('button', { name: 'Retry transfer options', exact: true }).click()
   // Then
-  await expect(page.getByRole('button', { name: 'Transfer with invite', exact: true })).toBeEnabled()
-  await expect(page.getByLabel('Current password')).toHaveValue('synthetic-password')
+  await page.getByLabel('Invitation code', { exact: true }).fill('synthetic-invite')
+  await expect(page.getByRole('button', { name: 'Validate invitation', exact: true })).toBeEnabled()
   expect(state.submissions).toEqual([])
 })

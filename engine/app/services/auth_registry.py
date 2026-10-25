@@ -117,7 +117,7 @@ class AuthProviderRegistry:
             return False
 
         provider_type = provider.provider_type
-        _ = await identity_provider_dao.delete(id=provider_uuid)
+        _ = await identity_provider_dao.delete(record_id=provider_uuid)
         self._clear_cache(provider_type)
         return True
 

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.api import google_chat
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
@@ -23,7 +24,7 @@ async def test_missing_sender_is_acknowledged_without_transcript_access(
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=agent.id,
-        channel_type="google_chat",
+        channel_type=ChannelType.GOOGLE_CHAT,
         verification_token="token",
         is_configured=True,
         extra_config={"service_account_json": {"client_email": "bot@example.com"}} if use_async else {},

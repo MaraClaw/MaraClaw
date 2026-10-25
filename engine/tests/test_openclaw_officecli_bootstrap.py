@@ -241,8 +241,8 @@ def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: P
     assert not release.joinpath("skill", "SKILL.md").is_symlink()
     assert release.joinpath("skill", "SKILL.md").stat().st_size > 0
     assert "tag=v1.2.3" in release.joinpath("metadata").read_text(encoding="utf-8")
-    assert os.readlink(fixture.state_dir / ".officecli" / "current") == "releases/v1.2.3"
-    assert os.readlink(fixture.state_dir / "skills" / "officecli") == "../.officecli/current/skill"
+    assert str((fixture.state_dir / ".officecli" / "current").readlink()) == "releases/v1.2.3"
+    assert str((fixture.state_dir / "skills" / "officecli").readlink()) == "../.officecli/current/skill"
     assert fixture.requested_urls() == expected_urls("v1.2.3")
 
 
@@ -264,7 +264,7 @@ def test_refreshes_same_tag_without_skipping_then_selects_newer_tag_on_every_sta
     assert newer_tag_result.returncode == 0, newer_tag_result.stderr
     assert "first" in root.joinpath("releases", "v1.0.0", "officecli").read_text(encoding="utf-8")
     assert "newer-release" in root.joinpath("releases", "v1.0.1", "officecli").read_text(encoding="utf-8")
-    assert os.readlink(root / "current") == "releases/v1.0.1"
+    assert str((root / "current").readlink()) == "releases/v1.0.1"
     assert fixture.requested_urls() == expected_urls("v1.0.0") * 2 + expected_urls("v1.0.1")
 
 

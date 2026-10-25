@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "contracts:generate": "node ../engine/scripts/contract_codegen/generate.mjs --input ../engine/contracts/api-contract.json --output src/lib/engine-contracts.generated.ts",
+    "contracts:check": "node ../engine/scripts/contract_codegen/generate.mjs --input ../engine/contracts/api-contract.json --output src/lib/engine-contracts.generated.ts --check",
     "test": "tsc -p tsconfig.tests.json && node --test tests/*.test.ts",
     "test:e2e": "playwright test"
   },
@@ -19,7 +21,7 @@
     "@radix-ui/react-navigation-menu": "^1.4.1",
     "@radix-ui/react-separator": "^1.2.0",
     "@radix-ui/react-slot": "^1.5.0",
-    "@silurus/ooxml": "0.89.3",
+    "@silurus/ooxml": "0.89.4",
     "@tanstack/react-query": "^5.104.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.domain.agents import AgentStatus
 from app.core.logging import get_trace_id, set_trace_id
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.agent_dao import agent_dao
@@ -15,9 +16,11 @@ from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
 from app.services import schedule_lease, scheduler, scheduler_tasks
 from app.services.llm.background_guard import BackgroundCallOutcome
-from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _schedule, pool as pool
+from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _schedule, pool
 from test_scheduler import _Clock
-from test_scheduler_tasks import owner as owner
+from test_scheduler_tasks import owner
+
+__all__ = ["owner", "pool"]
 
 
 @pytest.fixture
@@ -27,7 +30,7 @@ async def occurrence(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> AgentSched
     (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
     monkeypatch.setattr(scheduler, "datetime", _Clock)
     monkeypatch.setattr(schedule_lease, "datetime", _Clock)
-    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status=AgentStatus.RUNNING)
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("static", "dynamic")))
     monkeypatch.setattr(
@@ -100,7 +103,7 @@ async def test_periodic_ineligible_agent_terminally_skips_before_count(
         id=occurrence.agent_id,
         name="Agent",
         creator_id=occurrence.created_by,
-        status="stopped" if state == "stopped" else "running",
+        status=AgentStatus.STOPPED if state == "stopped" else AgentStatus.RUNNING,
         is_expired=state == "expired",
     )
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None if state == "missing" else agent))

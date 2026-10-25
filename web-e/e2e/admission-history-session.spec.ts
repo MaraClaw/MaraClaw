@@ -6,7 +6,7 @@ import { originalUser, replacementToken, tokenKey, writeFromOtherTab } from './s
 test('tenantless applicants can filter their persisted requests without entering membership', async ({ page }) => {
   // Given
   await prepareHistory(page)
-  await page.route('**/api/auth/me', (route) => route.fulfill({ json: { ...originalUser, tenant_id: null } }))
+  await page.route('**/api/member/auth/me', (route) => route.fulfill({ json: { ...originalUser, tenant_id: null } }))
   await page.goto('/app/admissions')
   await expect(page.getByRole('listitem')).toHaveCount(2)
   // When

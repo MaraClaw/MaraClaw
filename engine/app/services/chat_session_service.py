@@ -20,6 +20,7 @@ async def get_primary_platform_session(
     user_id: uuid.UUID,
 ) -> ChatSessionRecord | None:
     """Return the canonical first-party session, without promoting private history."""
+    del user_id
     session = await chat_session_dao.get_for_agent(shared_session_id(agent_id), agent_id)
     return session if session is not None and is_shared_session(session) else None
 
@@ -30,6 +31,7 @@ async def ensure_primary_platform_session(
     guard: Callable[[], None] | None = None,
 ) -> ChatSessionRecord:
     """Resolve the agent's shared human session; user_id remains caller provenance only."""
+    del user_id
     if guard is not None:
         guard()
         return await ensure_shared_session(agent_id, guard=guard)
@@ -55,7 +57,7 @@ async def save_tool_call_log(
         "name": tool_name,
         "args": arguments or {},
         "status": status,
-        "result": str(result) if cast(object, result) is not None else "",
+        "result": str(result) if cast("object", result) is not None else "",
         "tool_call_id": tool_call_id,
         "reasoning_content": reasoning_content,
     }

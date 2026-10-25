@@ -34,6 +34,7 @@ class PlatformService:
 
     async def get_public_base_url(self, request: Request | None = None) -> str:
         """Resolve Settings.PUBLIC_BASE_URL or raise PublicBaseUrlNotConfiguredError."""
+        del request
         base_url = get_settings().PUBLIC_BASE_URL.strip().rstrip("/")
         if not base_url:
             raise PublicBaseUrlNotConfiguredError

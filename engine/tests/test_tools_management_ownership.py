@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.api import tools
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.records.identity import IdentityRecord
 from app.records.tool import ToolRecord
@@ -27,7 +28,7 @@ class WriteState:
 def writes(monkeypatch: pytest.MonkeyPatch) -> WriteState:
     tenant_id = uuid4()
     state = WriteState(
-        UserRecord(id=uuid4(), tenant_id=tenant_id, role="org_admin"),
+        UserRecord(id=uuid4(), tenant_id=tenant_id, role=UserRole.ORG_ADMIN),
         {
             label: ToolRecord(id=uuid4(), name=label, type="mcp", source=source, tenant_id=owner)
             for label, source, owner in [
@@ -56,8 +57,8 @@ def writes(monkeypatch: pytest.MonkeyPatch) -> WriteState:
     async def delete_assignments(tool_id: UUID) -> None:
         state.deletes.append(("assignments", tool_id))
 
-    async def delete(*, id: UUID) -> None:
-        state.deletes.append(("record", id))
+    async def delete(*, record_id: UUID) -> None:
+        state.deletes.append(("record", record_id))
 
     @asynccontextmanager
     async def transaction() -> AsyncGenerator[None]:
@@ -143,7 +144,7 @@ async def test_bulk_skips_missing_ids_and_updates_owned_records(client: httpx.As
     record = writes.records["own"]
     # When toggling both.
     response = await client.put(
-        "/api/tools/bulk", json=[{"tool_id": str(id), "enabled": False} for id in [uuid4(), record.id]]
+        "/api/tools/bulk", json=[{"tool_id": str(tool_id), "enabled": False} for tool_id in [uuid4(), record.id]]
     )
     # Then the missing ID is silently skipped.
     assert response.status_code == 200
@@ -165,7 +166,7 @@ async def test_org_admin_delete_denies_before_assignment_cleanup(
 @pytest.mark.parametrize("role", ["org_admin", "platform_admin"])
 async def test_builtin_type_delete_preserves_400(client: httpx.AsyncClient, writes: WriteState, role: str) -> None:
     # Given an otherwise mutable record with builtin type.
-    writes.user.role = role
+    writes.user.role = UserRole(role)
     record = writes.records["own"]
     record.type = "builtin"
     # When deleting it.
@@ -180,7 +181,7 @@ async def test_actor_without_concrete_ownership_cannot_write(
     client: httpx.AsyncClient, writes: WriteState, operation: str, actor: str
 ) -> None:
     # Given a non-manager or an org admin whose tenant is NULL, like the shared row.
-    writes.user.role = "member" if actor == "member" else "org_admin"
+    writes.user.role = UserRole.MEMBER if actor == "member" else UserRole.ORG_ADMIN
     writes.user.tenant_id = None
     record = writes.records["global"]
     # When attempting any catalog row mutation.
@@ -202,10 +203,10 @@ async def test_authorized_manager_preserves_catalog_mutations(
 ) -> None:
     # Given a PA (including identity-backed PA) or an OA's own record.
     if actor == "identity_platform_admin":
-        writes.user.role = "member"
+        writes.user.role = UserRole.MEMBER
         writes.user.identity = IdentityRecord(id=uuid4(), is_platform_admin=True)
     else:
-        writes.user.role = actor
+        writes.user.role = UserRole(actor)
     record = writes.records["own" if actor == "org_admin" else "foreign"]
     # When performing a permitted mutation.
     if operation == "delete":
@@ -228,9 +229,9 @@ async def test_builtin_config_target_guard_precedes_writes(
     client: httpx.AsyncClient, writes: WriteState, actor: str, target: str
 ) -> None:
     # Given a concrete foreign target or a caller without any target tenant.
-    writes.user.role = actor
+    writes.user.role = UserRole.MEMBER if actor == "identity_platform_admin" else UserRole(actor)
     if actor == "identity_platform_admin":
-        writes.user.role = "member"
+        writes.user.role = UserRole.MEMBER
         writes.user.identity = IdentityRecord(id=uuid4(), is_platform_admin=True)
     if target == "none":
         writes.user.tenant_id = None

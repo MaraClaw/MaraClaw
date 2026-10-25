@@ -24,8 +24,9 @@ const resultSchema = z.object({
 export type OpenClawUpdateResult = z.infer<typeof resultSchema>
 
 export async function sendOpenClawUpdate(payload: OpenClawUpdateRequest): Promise<OpenClawUpdateResult> {
-  return resultSchema.parse(await apiRequest<unknown>('/api/admin/openclaw-updates', {
+  return apiRequest('/api/admin/openclaw-updates', {
+    schema: resultSchema,
     method: 'POST',
     body: openClawUpdateRequestSchema.parse(payload),
-  }))
+  })
 }

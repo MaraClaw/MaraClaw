@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 import type { AgentOut } from '../src/lib/workspace-api'
 import { chatPath, prepareChat, submitted } from './chat-identity-fixture'
-import { originalAgent, originalToken, originalUser, prepareWorkspace } from './session-fencing-fixture'
+import { originalAgent, originalToken, originalUser, prepareWorkspace, replacementUser } from './session-fencing-fixture'
 
 const settingsPath = `/app/agents/${originalAgent.id}/settings`
 const lifecycleCases = [
@@ -14,8 +14,10 @@ async function routeAgent(page: Page, initial: AgentOut = originalAgent) {
   let agent = initial
   let reads = 0
   let metricsReads = 0
+  await page.route('**/api/agent-deletion-requests?*', (route) => route.fulfill({ json: { items: [], next_cursor: null } }))
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => {
     expect(route.request().method()).toBe('GET')
+    expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
     reads++
     return route.fulfill({ json: agent })
   })
@@ -160,12 +162,19 @@ for (const rights of [
   test(`Settings preserves lifecycle, form and delete rights for a ${rights.name}`, async ({ page }) => {
     await prepareWorkspace(page)
     await routeAgent(page, {
-      ...originalAgent, creator_id: rights.creator ? originalUser.id : 'another-creator',
+      ...originalAgent, creator_id: rights.creator ? originalUser.id : replacementUser.id,
       access_level: rights.access, is_system: rights.system,
     })
-    await page.route('**/api/auth/me', (route) => route.fulfill({ json: {
+    await page.route('**/api/member/auth/me', (route) => route.fulfill({ json: {
       ...originalUser, role: rights.admin ? 'org_admin' : 'member',
     } }))
+    let setupReads = 0
+    await page.route(`**/api/agents/${originalAgent.id}/setup`, (route) => {
+      expect(route.request().method()).toBe('GET')
+      expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
+      setupReads++
+      return route.fulfill({ json: { setup_pending: true, state: 'failed', failure_code: null, retryable: true } })
+    })
 
     await page.goto(settingsPath)
 
@@ -176,6 +185,9 @@ for (const rights of [
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(rights.creator || rights.admin ? 1 : 0)
-    await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(rights.creator && !rights.system ? 1 : 0)
+    await expect(page.getByRole('button', { name: 'Request deletion', exact: true })).toHaveCount(rights.creator && !rights.system ? 1 : 0)
+    await expect(page.getByRole('button', { name: 'Retry setup', exact: true })).toHaveCount(rights.manage ? 1 : 0)
+    if (rights.manage) expect(setupReads).toBeGreaterThanOrEqual(1)
+    else expect(setupReads).toBe(0)
   })
 }

@@ -9,8 +9,10 @@ from app.core.acl_locks import lock_tenants
 from app.db.connection import DbConnection
 from app.db.session import transaction
 from app.services import org_departments
-from department_delete_postgres_fixtures import DepartmentStore, department_store as department_store, request
-from test_bootstrap_postgres import schema_db as schema_db
+from department_delete_postgres_fixtures import DepartmentStore, department_store, request
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["department_store", "schema_db"]
 
 
 @pytest.mark.parametrize("mutation", ["create", "assign", "permission", "delete"])

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
 from app.config import get_settings
+from app.core.domain.channels import ChannelType
 from app.core.json_types import http_header, json_as_str_or, json_object_from_response
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -95,7 +96,7 @@ async def get_wechat_qrcode_status(
             raise HTTPException(status_code=resp.status_code, detail=str(payload)[:300])
 
     if payload.get("status") == "confirmed":
-        existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+        existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
         extra: dict[str, Any] = {
             "bot_token": json_as_str_or(payload.get("bot_token")),
             "ilink_user_id": json_as_str_or(payload.get("ilink_user_id")),
@@ -160,7 +161,7 @@ async def get_wechat_qrcode_image(agent_id: uuid.UUID, url: str, current_user: U
 @router.get("/agents/{agent_id}/wechat-channel", response_model=ChannelConfigOut)
 async def get_wechat_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
     if not config:
         raise HTTPException(status_code=404, detail="WeChat not configured")
     return ChannelConfigOut.model_validate(config)
@@ -172,9 +173,9 @@ async def delete_wechat_channel(agent_id: uuid.UUID, current_user: UserRecord = 
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
     if not config:
         raise HTTPException(status_code=404, detail="WeChat not configured")
 
     await wechat_poll_manager.stop_client(agent_id)
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)

@@ -23,7 +23,7 @@ class _OpenpyxlModule(Protocol):
 def _convert_csv_to_xlsx(src_file: Path, tgt_file: Path, target_path: str) -> str:
     import csv
 
-    openpyxl = cast(_OpenpyxlModule, importlib.import_module("openpyxl"))
+    openpyxl = cast("_OpenpyxlModule", importlib.import_module("openpyxl"))
 
     text = src_file.read_text(encoding="utf-8-sig")
     lines = [line.strip() for line in text.splitlines() if line.strip()][:10]

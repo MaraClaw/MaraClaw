@@ -5,7 +5,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import security
-from file_preview_fixtures import preview_context as preview_context
+from file_preview_fixtures import preview_context
+
+__all__ = ["preview_context"]
 
 
 async def test_metadata_returns_exact_local_version_when_file_exists(preview_context):

@@ -1,8 +1,8 @@
 """File upload API for chat - saves files to agent workspace and extracts text."""
 
 import base64
-import os
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -105,7 +105,8 @@ async def upload_file(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    ext = os.path.splitext(filename)[1].lower()
+    suffix = Path(filename.lstrip(".")).suffix
+    ext = suffix.lower()
     is_image = ext in IMAGE_EXTENSIONS
     max_bytes = IMAGE_UPLOAD_MAX_BYTES if is_image else MAX_INPUT_BYTES
     try:
@@ -123,7 +124,7 @@ async def upload_file(
         _ = await check_agent_access(current_user, agent_uuid)
         async with guest_write_section(agent_uuid):
             storage = get_storage_backend()
-            stem, suffix = os.path.splitext(filename)
+            stem = filename.removesuffix(suffix)
             for counter in range(100):
                 candidate = filename if counter == 0 else f"{stem}_{counter}{suffix}"
                 candidate_path = f"workspace/uploads/{candidate}"

@@ -3,6 +3,8 @@ from uuid import UUID
 
 from typing_extensions import TypedDict
 
+from app.core.domain.users import UserRole
+
 
 class TenantRegistrationResponse(TypedDict):
     tenant_creation: Literal["platform_admin_only"]
@@ -34,7 +36,7 @@ class TenantAssignmentResponse(TypedDict):
     status: Literal["ok"]
     user_id: str
     tenant_id: str
-    role: str
+    role: UserRole
 
 
 class TenantDeletedResponse(TypedDict):

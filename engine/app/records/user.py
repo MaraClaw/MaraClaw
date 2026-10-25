@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.core.domain.users import UserRole
 from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 from app.records.identity import IdentityRecord
 
@@ -22,7 +23,7 @@ class UserRecord:
     avatar_url: str | None = None
     title: str | None = None
     timezone: str | None = None
-    role: str = "member"
+    role: UserRole = UserRole.MEMBER
     is_active: bool = True
     registration_source: str | None = "web"
     created_at: datetime | None = None
@@ -46,7 +47,7 @@ class UserRecord:
             avatar_url=str_from_row(row.get("avatar_url")) or None,
             title=str_from_row(row.get("title")) or None,
             timezone=str_from_row(row.get("timezone")) or None,
-            role=str_from_row(row.get("role"), "member") or "member",
+            role=UserRole(str_from_row(row.get("role"), "member")),
             is_active=bool(row.get("is_active", True)),
             registration_source=str_from_row(row["registration_source"]) or None,
             created_at=datetime_from_row(row.get("created_at")),

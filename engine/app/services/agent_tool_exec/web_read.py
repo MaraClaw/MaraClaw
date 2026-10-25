@@ -143,7 +143,7 @@ async def _read_webpage(arguments: ToolArguments) -> str:
                         redirects += 1
                         continue
 
-                    content_length = cast(str | None, resp.headers.get("content-length"))
+                    content_length = cast("str | None", resp.headers.get("content-length"))
                     if isinstance(content_length, str) and content_length.isdigit() and int(content_length) > max_bytes:
                         return f"❌ Page is too large to read safely ({content_length} bytes, limit {max_bytes} bytes)"
 

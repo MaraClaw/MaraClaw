@@ -8,11 +8,13 @@ from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding
 from channel_shared_webhook_fixtures import (
     WEBHOOKS,
-    context as context,
+    context,
     invoke_webhook,
-    pipeline as pipeline,
-    webhook_pipeline as webhook_pipeline,
+    pipeline,
+    webhook_pipeline,
 )
+
+__all__ = ["context", "pipeline", "webhook_pipeline"]
 
 
 @pytest.mark.parametrize("webhook", WEBHOOKS)

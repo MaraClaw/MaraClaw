@@ -30,6 +30,7 @@ def _string_list_argument(arguments: ToolArguments, name: str) -> list[str]:
 
 
 async def _agentbay_computer_click(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws  # Desktop handlers retain the shared workspace keyword.
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -67,6 +68,7 @@ async def _agentbay_computer_click(agent_id: uuid.UUID | None, ws: Path, argumen
 
 
 async def _agentbay_computer_input_text(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -88,6 +90,7 @@ async def _agentbay_computer_input_text(agent_id: uuid.UUID | None, ws: Path, ar
 
 
 async def _agentbay_computer_press_keys(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -114,6 +117,7 @@ async def _agentbay_computer_press_keys(agent_id: uuid.UUID | None, ws: Path, ar
 
 
 async def _agentbay_computer_scroll(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -138,6 +142,7 @@ async def _agentbay_computer_scroll(agent_id: uuid.UUID | None, ws: Path, argume
 
 
 async def _agentbay_computer_move_mouse(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -157,6 +162,7 @@ async def _agentbay_computer_move_mouse(agent_id: uuid.UUID | None, ws: Path, ar
 
 
 async def _agentbay_computer_drag_mouse(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -182,6 +188,7 @@ async def _agentbay_computer_drag_mouse(agent_id: uuid.UUID | None, ws: Path, ar
 
 
 async def _agentbay_computer_get_screen_size(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent

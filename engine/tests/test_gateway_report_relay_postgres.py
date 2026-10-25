@@ -11,7 +11,9 @@ from app.db import session as db_session
 from app.db.session import get_connection, transaction
 from app.services import gateway_report_relay as relay
 from test_channel_delivery_transport import transport
-from test_gateway_report_delivery_postgres import delivery_db as delivery_db, receipt_db as receipt_db
+from test_gateway_report_delivery_postgres import delivery_db, receipt_db
+
+__all__ = ["delivery_db", "receipt_db"]
 
 
 @pytest.fixture

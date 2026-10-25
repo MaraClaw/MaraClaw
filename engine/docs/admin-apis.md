@@ -42,6 +42,46 @@ the caller's exact tenant scope (including no tenant).
 | Exact roles | `require_role("…")` | Exact match; identity platform flag counts if `platform_admin` is listed |
 | Hierarchy | `ROLE_HIERARCHY` | `member` < `agent_admin` < `org_admin` < `platform_admin` |
 
+### Member auth audience
+
+The engine selects the member audience from `/api/member/auth`, never from `Origin`,
+`Referer`, or a JWT audience claim. These routes share the existing credential,
+verification, registration, SSO, password-change and session-generation behavior:
+
+| Method | Member path | Response |
+|--------|-------------|----------|
+| `POST` | `/api/member/auth/login` | `MemberTokenResponse` or `MultiTenantResponse` |
+| `POST` | `/api/member/auth/register/init` | `MemberRegisterInitResponse` (201) |
+| `POST` | `/api/member/auth/verify-email` | `MemberTokenResponse` |
+| `POST` | `/api/member/auth/{provider}/callback` | `MemberTokenResponse` or `MultiTenantResponse` |
+| `GET`, `PATCH` | `/api/member/auth/me` | `MemberAuthUser` |
+| `POST` | `/api/member/auth/{provider}/bind`, `/unbind` | `MemberAuthUser` |
+
+`org_admin`, `agent_admin`, and `member` are eligible. A platform-admin membership
+or `identity.is_platform_admin` rejects member sign-in with **403**:
+`{"detail":{"code":"member_audience_rejected","message":"Platform operators sign in on the admin console."}}`.
+Correct credentials are checked before this password-login rejection; an incorrect
+password remains **401**. Eligibility is checked before session issuance or OAuth
+pending-token caching, including redemption of a previously cached OAuth step.
+Known operator identities are rejected before registration admission or identity-link
+side effects. Eligible multi-company selection, tenantless onboarding and forced
+password changes retain their existing behavior. Member `GET /me` remains available
+while a password change is required; member profile writes retain the force-change gate.
+
+Member user and identity DTOs project domain records independently and never expose
+`is_platform_admin`, including nested token fields. Shared `/api/auth/*` and `/api/sso/*`
+retain their existing operator access and JSON contracts. The broad public model remains
+named `AuthUser`, not `AdminAuthUser`, because it is also used by shared auth, SSO and
+user APIs rather than exclusively by the admin console.
+
+Password changes (`PUT /api/auth/me/password`), tenant switching
+(`POST /api/auth/switch-tenant`) and QR scan status (`GET /api/sso/session/{sid}/status`)
+remain shared. Before installing a token from these flows, member clients must refresh
+through `GET /api/member/auth/me` and accept only a successful member projection.
+Password recovery, verification resend, OAuth authorization and provider discovery
+also remain shared; they do not issue a member user DTO. This is a route-level sign-in
+boundary, not a new JWT claim or a replacement for resource authorization.
+
 ### Genesis admin bootstrap
 
 | Account | How created | First-login rule |
@@ -148,8 +188,9 @@ is_system, is_default_end_user_org, can_disable
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/join` | Invite-code company admission request, **202** pending for active OpenClaw or unassigned users. Company members must use `/transfer` (**409**). Invalid invites are **400**. |
-| `POST` | `/api/tenants/transfer` | Body `{ password, invitation_code?, tenant_id? }`. Password required. Company targets return **202** pending; OpenClaw remains immediate. Invite or verified email-domain / OpenClaw target. Protected admins blocked. |
+| `POST` | `/api/tenants/join` | Invitation join for **unassigned** users only: a valid recipient-bound code admits immediately, **200** `{ status: "approved", request: RequestSummary }`. Any existing member (OpenClaw or company) gets **409** and must use `/transfer`. Invalid, expired, spent or wrong-recipient codes are **400**. |
+| `POST` | `/api/tenants/invitations/preview` | Body `{ invitation_code }`. Authenticated eligible unassigned/default-org member only. **200** `{ tenant: { id, name } }`; every other outcome is the same **400** `Invitation is invalid or no longer available`. Read-only. |
+| `POST` | `/api/tenants/transfer` | Body `{ password, invitation_code?, tenant_id?, transfer_choice?, free_destructive_consent? }`. Password required. A company target requires `invitation_code` (**403** otherwise; no verified-domain path to a company); a valid code admits at once, **200** `{ status: "approved", request }`, after the default-source, free-consent and paid-fee rules (paid stays **202** `payment_review` until payment is approved, then admits without destination approval). OpenClaw targets remain immediate. Protected admins blocked. |
 | `POST` | `/api/tenants/join-suggested` | Verified email-domain company admission request, **202** pending for active OpenClaw or unassigned users. Company members must use `/transfer` (**409**). Protected admins blocked. |
 | `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
 | `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
@@ -211,10 +252,10 @@ does not include an existing-database migration.
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `GET` | `/api/users/` | platform / org | Query: `tenant_id?` (platform only) | `UserOut[]` with quotas + `agents_count` |
+| `GET` | `/api/users/` | platform / org | Query: `tenant_id?` (platform only) | `AdminUserSummary[]` with quotas + `agents_count` |
 | `GET` | `/api/users/{user_id}` | platform / org | - | `UserDetailOut`: user fields plus `agents[]` (`id`, `name`, `status`, `is_expired`, `role_description`, `last_active_at`). Org admin: own company only. |
-| `PATCH` | `/api/users/{user_id}/active` | platform / org | `{ is_active }` | Activate or deactivate an **end user** (`member` or `agent_admin`). Org admin: own company only. Cannot target self or admins (use org-admin / platform-admin active routes). Deactivate also stops that user's agents and turns off their triggers/schedules. `UserOut` |
-| `PATCH` | `/api/users/{user_id}/quota` | platform / org | `UserQuotaUpdate`: `quota_message_limit?`, `quota_message_period?` (`permanent`\|`daily`\|`weekly`\|`monthly`), `quota_max_agents?`, `quota_agent_ttl_hours?` | Same-tenant only. `UserOut` |
+| `PATCH` | `/api/users/{user_id}/active` | platform / org | `{ is_active }` | Activate or deactivate an **end user** (`member` or `agent_admin`). Org admin: own company only. Cannot target self or admins (use org-admin / platform-admin active routes). Deactivate also stops that user's agents and turns off their triggers/schedules. `AdminUserSummary` |
+| `PATCH` | `/api/users/{user_id}/quota` | platform / org | `UserQuotaUpdate`: `quota_message_limit?`, `quota_message_period?` (`permanent`\|`daily`\|`weekly`\|`monthly`), `quota_max_agents?`, `quota_agent_ttl_hours?` | Same-tenant only. `AdminUserSummary` |
 | `POST` | `/api/users/org-admins` | genesis org_admin | `{ admin_email, admin_password, admin_display_name? }` | **201** `{ user_id, tenant_id, admin_email, must_change_password: true }`. Own tenant only. |
 | `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
@@ -232,7 +273,7 @@ the existing force-password-change gate still applies. Changing filters requires
 root request without a cursor. These pages are not a snapshot: refresh from the root to
 include new inserts or late commits. The existing array endpoints remain unchanged.
 
-#### `UserOut` (users router)
+#### `AdminUserSummary` (users router)
 
 ```text
 id, email, display_name, role, is_active, is_genesis, tenant_id,
@@ -310,16 +351,72 @@ Default admin gate: `get_current_admin` unless noted.
 | `GET` | `/api/enterprise/tenant-quotas` | auth + tenant | - | Default limits: messages, agents, TTL, LLM calls/day, heartbeat floor, triggers, poll/webhook ceilings |
 | `PATCH` | `/api/enterprise/tenant-quotas` | admin | Same fields optional | May adjust existing agent heartbeats. `{ message, heartbeat_agents_adjusted }` |
 
+#### Organization SMTP (own organization only)
+
+Source: `app/api/tenant_email.py`, `app/schemas/tenant_email.py`,
+`app/services/tenant_email_admin.py` and `app/services/email_config.py`.
+
+All four routes require an active administrator with `is_genesis=true`, role
+`org_admin` or `platform_admin`, and their own non-null `tenant_id`. Additional
+admins cannot view, configure, delete or test SMTP. Optional query `tenant_id`
+defaults to the caller's organization; a foreign organization is forbidden
+(**403**), including for platform admins. The password-change gate still applies.
+For SMTP, MaraClaw and OpenClaw are ordinary isolated organizations with no
+cross-organization privileges. The `web-a` control belongs only in Settings,
+visible to eligible admins, with no organization picker.
+
+| Method | Path | Request | Response / notes |
+|--------|------|---------|------------------|
+| `GET` | `/api/enterprise/tenant-email` | Query: `tenant_id?` | **200** `TenantEmailOut`: saved fields below plus `has_password: boolean`, `effective_source: "tenant" \| "none"`. Never returns `password` or ciphertext. |
+| `PUT` | `/api/enterprise/tenant-email` | Query: `tenant_id?`; JSON `TenantEmailUpdate` below | **200** `TenantEmailOut`. Replaces non-password fields; omitted fields take their defaults. An omitted password preserves the saved secret. |
+| `DELETE` | `/api/enterprise/tenant-email` | Query: `tenant_id?` | **204**, no body. Removes the saved configuration. |
+| `POST` | `/api/enterprise/tenant-email/test` | Query: `tenant_id?`; no request body | **200** `{ message: "Test email sent to your administrator email address" }`. Tests the saved configuration, even when disabled, and sends only to the caller's own administrator email. No arbitrary recipient or unsaved SMTP settings. |
+
+`TenantEmailUpdate` accepts these fields; extra fields are forbidden:
+
+| Field | Type / constraints | Default |
+|-------|--------------------|---------|
+| `enabled` | boolean; enabling requires `from_address` and `smtp_host` | `false` |
+| `from_address` | email address, or empty while disabled; max 320 characters | `""` |
+| `from_name` | string, max 200 characters; empty stays empty | `""` |
+| `smtp_host` | hostname or IP address, not a URL; max 253 characters | `""` |
+| `smtp_port` | integer, 1..65535 | `465` |
+| `smtp_username` | string, max 320 characters | `""` |
+| `smtp_ssl` | boolean | `true` |
+| `smtp_timeout_seconds` | integer, 1..30 | `15` |
+| `password` | optional write-only string, max 4096 characters; encrypted at rest | Omitted, null or empty preserves saved password |
+
+`has_password` reports whether a secret is stored. `effective_source="tenant"`
+means the enabled saved configuration has a host and sender; otherwise it is
+`"none"`. This reports configuration selection, not SMTP connectivity.
+Disabling or deleting the configuration stops tenant email delivery. Invitations
+and broadcast email require that tenant's own enabled SMTP; another
+organization is never a fallback. A test requires a saved
+host and sender and an administrator email address; missing prerequisites or an
+SMTP test failure return **400**. Testing does not enable delivery.
+
 #### System email & settings
 
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
-| `POST` | `/api/enterprise/system-email/test` | admin | `{ email }` | SMTP probe |
 | `GET` | `/api/enterprise/email-templates` | admin | - | templates + variables + defaults |
 | `PUT` | `/api/enterprise/email-templates` | admin | `{ templates: object }` | Persist templates |
-| `GET` | `/api/enterprise/system-settings/{key}` | auth | - | `{ key, value, updated_at? }` |
-| `PUT` | `/api/enterprise/system-settings/{key}` | admin | `{ value: object }` | Key **`platform`**: **platform admin only**; may regenerate all SSO domains |
+| `GET` | `/api/enterprise/system-settings/{key}` | auth | - | `{ key, value, updated_at? }`; retired SMTP key is unavailable. |
+| `PUT` | `/api/enterprise/system-settings/{key}` | admin; `platform` platform_admin only | `{ value: object }` | `platform` may regenerate all SSO domains; retired SMTP key is unavailable. |
 | `GET` | `/api/enterprise/system-settings/notification_bar/public` | public | - | Notification bar config |
+
+There is only one SMTP configuration path: encrypted organization settings.
+Identity verification/password-reset mail and platform incident/admission mail
+resolve the system organization with slug `maraclaw` and use only its enabled,
+complete saved SMTP. Missing or disabled MaraClaw SMTP means no delivery, never
+an OpenClaw or other organization fallback. Explicit organization delivery never
+consults MaraClaw as a fallback. The platform genesis administrator must configure
+their own MaraClaw SMTP in Settings before sending email broadcasts.
+
+The retired key `system_email_platform` returns **404** for GET and PUT for every
+role, before any stored value is read or written. Existing retired rows remain
+untouched and are not used for delivery. `/api/enterprise/system-email/test` has
+been removed; use the own-organization test route above.
 
 #### Identity providers / SSO
 
@@ -346,9 +443,9 @@ Fresh `scripts/schema_baseline.sql` initialization no longer creates `org_depart
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
-| `POST` | `/api/enterprise/invitation-codes` | `{ count=1, max_uses=1 }` (count ≤ 100) | `{ created, codes[] }` |
-| `POST` | `/api/enterprise/invite-users` | `{ emails: EmailStr[] }` | Needs system SMTP. `{ invited, message }` |
-| `GET` | `/api/enterprise/invitation-codes` | Query: `page`, `page_size`, `search` | Paginated list |
+| `POST` | `/api/enterprise/invitation-codes` | `{ email, count=1, ttl_hours=336 }` (`email` required; `ttl_hours` 1-336; count ≤ 100; `max_uses` may only be 1) | `{ created, codes[] }`. Codes are 22-character random tokens, bound to the normalized `email`, single-use, expiring at a server-computed time |
+| `POST` | `/api/enterprise/invite-users` | `{ emails: EmailStr[], ttl_hours=336 }` | Requires the caller's tenant SMTP, configured and enabled; no platform fallback. One recipient-bound single-use code per address; the mail carries the link and expiry. `{ invited, message }` |
+| `GET` | `/api/enterprise/invitation-codes` | Query: `page`, `page_size`, `search` | Paginated list. Items: `id, code, max_uses, used_count, is_active, created_at` plus `expires_at, invited_email, redeemed_at` (latest redemption) and derived `status` (`revoked` > `used` > `expired` > `active`) |
 | `GET` | `/api/enterprise/invitation-codes/export` | - | CSV download |
 | `DELETE` | `/api/enterprise/invitation-codes/{code_id}` | - | Soft-deactivate |
 
@@ -424,7 +521,7 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 | `POST` | `/api/notifications/read-all` | authenticated user | Query: `category?` | `{ ok: true }`; marks matching active notices read, including unloaded pages, without changing archived notices. |
 | `POST` | `/api/notifications/{id}/archive` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, preserving `is_read` and the first archive timestamp. Missing or foreign IDs return the same **404**. |
 | `POST` | `/api/notifications/{id}/restore` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, clearing `archived_at` without changing `is_read`. Missing or foreign IDs return the same **404**. |
-| `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email needs system SMTP. Fan-out to tenant users/agents |
+| `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email requires that tenant's configured, enabled SMTP; no platform fallback. Fan-out to tenant users/agents |
 
 Archive state is independent of read state: restoring an unread notice adds it back to
 active unread counts. Category filters retain their existing overlapping membership
@@ -493,6 +590,7 @@ These are **not** dedicated admin routers; admins receive wider access:
 | Activate / deactivate end users | Any tenant | Own tenant (`member` / `agent_admin`) |
 | LLM pool, IDPs, invitations, KB, skills, tools catalog | Yes (global/tenant) | Own tenant |
 | System setting key `platform` | Yes | **No** |
+| Organization SMTP view/configure/delete/test | Active genesis PA, own tenant only | Active genesis OA, own tenant only |
 | Broadcast / OKR company settings | With tenant context | Yes |
 
 ---
@@ -506,6 +604,8 @@ These are **not** dedicated admin routers; admins receive wider access:
 | Tenants | `engine/app/api/tenants.py` |
 | Users | `engine/app/api/users.py`, `organization.py` |
 | Enterprise / SSO / LLM / invites | `engine/app/api/enterprise.py` |
+| Organization SMTP | `engine/app/api/tenant_email.py`, `app/schemas/tenant_email.py`, `app/services/tenant_email_admin.py`, `app/services/email_config.py` |
+| SMTP delivery | `engine/app/services/system_email_service.py`, `engine/app/core/email.py`, `engine/app/core/smtp_policy.py` |
 | Tools / skills / KB | `tools.py`, `skills.py`, `files.py` |
 | OKR admin | `engine/app/api/okr.py` |
 | Router mount map | `engine/app/main.py` (include_router block) |

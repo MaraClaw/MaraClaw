@@ -7,7 +7,9 @@ from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.db.errors import CheckViolationError, UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.broadcast_email import NewBroadcastEmail
-from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue
+from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, enqueue
+
+__all__ = ["broadcast_db"]
 
 
 async def test_retry_backoff_and_five_attempt_limit(broadcast_db: PersistenceDB):

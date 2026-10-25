@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
 from app.api.background_tasks import schedule_background_task
+from app.core.domain.activity import ActivityAction
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     JsonValue,
@@ -82,7 +84,7 @@ _TOOL_STATUS_KEEP_LINES = 20
 
 _USER_RESOLUTION_ERROR_TIP = (
     "Sorry, we could not reliably identify your Feishu account. This request was stopped to avoid creating a duplicate account. "
-    + "Please try again later or ask an administrator to check Feishu Contact API permissions."
+    "Please try again later or ask an administrator to check Feishu Contact API permissions."
 )
 
 
@@ -105,7 +107,7 @@ def _storage_mtime(entry: object) -> float:
         return float(raw)
     except ValueError:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+            return datetime.fromisoformat(raw).timestamp()
         except ValueError:
             return 0.0
 
@@ -404,7 +406,7 @@ async def configure_channel(
     extra_config = data.extra_config or {}
     if extra_config.get("connection_mode", "webhook") != "websocket" and not (data.verification_token or "").strip():
         raise HTTPException(status_code=422, detail="verification_token is required for webhook mode")
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -461,7 +463,7 @@ async def get_channel_config(
 ) -> ChannelConfigOut:
     """Get Feishu channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
     return ChannelConfigOut.model_validate(config)
@@ -482,10 +484,10 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 # ─── Feishu Event Webhook ───────────────────────────────
@@ -504,7 +506,7 @@ async def feishu_event_webhook(
     if await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE) is None:
         raise HTTPException(status_code=413, detail="Webhook payload too large")
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if not config or (config.extra_config or {}).get("connection_mode") == "websocket":
         raise HTTPException(status_code=404, detail="Feishu webhook not configured")
     try:
@@ -536,7 +538,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
     # Mark only after successful handling so retries work on crash.
     event_id = json_as_str_or(header.get("event_id"), "")
     # ── Phase 1: Load config + agent/model for LLM (pure-psycopg DAOs) ──
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
     if not config:
         return {"code": 1, "msg": "Channel not found"}
     from app.services.channels.feishu_submissions import accept_feishu_event
@@ -919,8 +921,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
                         _fallback_parts.append(f"📎 {_fp.name}\n🔗 {_dl_url}")
                     _fallback_parts.append(
                         f"⚠️ Direct file delivery failed ({_upload_err})\n"
-                        + "To let the agent send Feishu files directly, enable the "
-                        + "`im:resource` (that is, `im:resource:upload`) permission for the app in the Feishu Open Platform and publish the version."
+                        "To let the agent send Feishu files directly, enable the "
+                        "`im:resource` (that is, `im:resource:upload`) permission for the app in the Feishu Open Platform and publish the version."
                     )
                     _ = await feishu_service.send_message(
                         app_id,
@@ -1205,7 +1207,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
 
             await log_activity(
                 agent_id,
-                "chat_reply",
+                ActivityAction.CHAT_REPLY,
                 f"Replied to Feishu message: {final_reply_text[:80]}",
                 detail={"channel": "feishu", "user_text": user_text[:200], "reply": final_reply_text[:500]},
             )
@@ -1615,7 +1617,7 @@ async def _handle_feishu_file(
 
         await log_activity(
             agent_id,
-            "chat_reply",
+            ActivityAction.CHAT_REPLY,
             f"Replied to Feishu image message: {reply_text[:80]}",
             detail={"channel": "feishu", "type": "image"},
         )

@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import enterprise
+from app.core.domain.users import UserRole
 from app.dao.audit_log_dao import AuditLogRecord, audit_log_dao
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -13,7 +14,7 @@ from app.records.user import UserRecord
 
 @pytest.mark.parametrize("tenant_filter", ["omitted", "empty", "own"])
 async def test_org_admin_audit_logs_keep_own_tenant_with_agent_filter(monkeypatch, tenant_filter):
-    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
+    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
     agent_id = uuid.uuid4()
     log = AuditLogRecord(id=uuid.uuid4(), action="test", agent_id=agent_id, created_at=datetime(2026, 1, 1, tzinfo=UTC))
     listing = AsyncMock(return_value=[log])
@@ -27,7 +28,7 @@ async def test_org_admin_audit_logs_keep_own_tenant_with_agent_filter(monkeypatc
 
 
 async def test_org_admin_foreign_audit_tenant_is_refused_not_ignored(monkeypatch):
-    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
+    actor = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
     listing = AsyncMock(return_value=[])
     monkeypatch.setattr(audit_log_dao, "list_scoped", listing)
 
@@ -45,7 +46,7 @@ async def test_platform_admin_audit_scope_is_unchanged(monkeypatch, scope, ident
     actor = UserRecord(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
-        role="org_admin" if identity_admin else "platform_admin",
+        role=UserRole.ORG_ADMIN if identity_admin else UserRole.PLATFORM_ADMIN,
         identity=IdentityRecord(id=uuid.uuid4(), is_platform_admin=identity_admin),
     )
     selected = uuid.uuid4() if scope == "foreign" else tenant_id

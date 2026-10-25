@@ -77,9 +77,7 @@ class OpenAIResponsesClient(LLMClient):
     def _normalize_base_url(self) -> str:
         """Normalize base URL by stripping trailing /responses endpoint."""
         url = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        if url.endswith("/responses"):
-            url = url[: -len("/responses")]
-        return url
+        return url.removesuffix("/responses")
 
     def _format_content_for_input(self, content: object) -> object:
         """Convert OpenAI chat-style content into Responses API input content."""
@@ -100,7 +98,7 @@ class OpenAIResponsesClient(LLMClient):
                 formatted.append({"type": "input_image", "image_url": json_as_str_or(img.get("url"))})
             else:
                 formatted.append(part)
-        return formatted if formatted else content_parts
+        return formatted or content_parts
 
     def _messages_to_input(self, messages: list[LLMMessage]) -> list[dict[str, Any]]:
         """Convert canonical message format to Responses API input format."""
@@ -195,14 +193,14 @@ class OpenAIResponsesClient(LLMClient):
         if orphaned_fco:
             logger.warning(
                 "[OpenAIResponses] Removing %d orphaned function_call_output item(s) "
-                + "with no matching function_call: %s",
+                "with no matching function_call: %s",
                 len(orphaned_fco),
                 orphaned_fco,
             )
         if orphaned_fc:
             logger.warning(
                 "[OpenAIResponses] Removing %d orphaned function_call item(s) "
-                + "with no matching function_call_output: %s",
+                "with no matching function_call_output: %s",
                 len(orphaned_fc),
                 orphaned_fc,
             )
@@ -224,7 +222,7 @@ class OpenAIResponsesClient(LLMClient):
 
         converted: list[dict[str, Any]] = []
         for tool in tools:
-            tool_data = cast(Mapping[str, object], tool)
+            tool_data = cast("Mapping[str, object]", tool)
             if tool_data.get("type") != "function":
                 continue
             function = tool.get("function")

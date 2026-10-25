@@ -13,7 +13,7 @@ from app.services.feishu_service import FeishuService
 
 def _feishu_service() -> FeishuService:
     module = importlib.import_module("app.services.feishu_service")
-    return cast(FeishuService, object_attr(module, "feishu_service"))
+    return cast("FeishuService", object_attr(module, "feishu_service"))
 
 
 async def _feishu_approval_create(agent_id: uuid.UUID, arguments: ToolArguments) -> str:

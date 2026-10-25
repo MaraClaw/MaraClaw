@@ -54,7 +54,7 @@ export function AdmissionsPage() {
         <h1 className="font-display text-2xl font-semibold">Organization admissions</h1>
         <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching} onClick={scope.effect(refresh)}>Refresh status</Button>
       </div>
-      <p className="text-sm text-muted-foreground">Track your company admission requests. Pending and rejected requests do not change your current organization.</p>
+      <p className="text-sm text-muted-foreground">Your organization admission history. New invitations join automatically; paid transfers join after payment approval. Historical pending and rejected requests remain here.</p>
       <TransferRequests refreshVersion={refreshVersion} />
       <h2 className="font-display text-lg font-semibold">Destination admission requests</h2>
       <div className="max-w-xs space-y-2">

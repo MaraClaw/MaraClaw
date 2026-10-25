@@ -43,7 +43,7 @@ def test_normalize_accepts_highest_presets(value: str, expected: str) -> None:
 @pytest.mark.parametrize("schema", [LLMModelCreate, LLMModelUpdate])
 @pytest.mark.parametrize("effort", [None, "none", "low", "medium", "high", "xhigh", "max", "ultra"])
 def test_model_schemas_preserve_canonical_effort(
-    schema: type[LLMModelCreate] | type[LLMModelUpdate], effort: str | None
+    schema: type[LLMModelCreate | LLMModelUpdate], effort: str | None
 ) -> None:
     # Given an API request for a model's reasoning preset.
     request = {
@@ -62,9 +62,7 @@ def test_model_schemas_preserve_canonical_effort(
 
 @pytest.mark.parametrize("schema", [LLMModelCreate, LLMModelUpdate])
 @pytest.mark.parametrize("effort", ["", "maximum", "ultra+", "MAX", " ultra "])
-def test_model_schemas_reject_noncanonical_effort(
-    schema: type[LLMModelCreate] | type[LLMModelUpdate], effort: str
-) -> None:
+def test_model_schemas_reject_noncanonical_effort(schema: type[LLMModelCreate | LLMModelUpdate], effort: str) -> None:
     # Given a noncanonical API value (runtime normalization does not loosen API validation).
     request = {
         "provider": "openai",
@@ -195,7 +193,7 @@ def test_compatible_payload_uses_provider_ceiling(provider: str, effort: str, ex
     ],
 )
 def test_native_payload_uses_provider_ceiling(
-    client_type: type[AnthropicClient] | type[OpenAIResponsesClient] | type[GeminiClient],
+    client_type: type[AnthropicClient | OpenAIResponsesClient | GeminiClient],
     effort: str,
     expected: JsonObject,
 ) -> None:

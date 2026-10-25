@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import cast
+from typing import Self, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -30,7 +30,7 @@ class _Transaction:
         self.force_rollback = force_rollback
         self.prior_locks: set[str] = set()
 
-    async def __aenter__(self) -> _Transaction:
+    async def __aenter__(self) -> Self:
         self.prior_locks = self.raw.locks.copy()
         self.raw.blocks.append(self)
         self.raw.events.append("begin rollback" if self.force_rollback else "begin")
@@ -50,7 +50,7 @@ class _Cursor:
         self.raw = raw
         self.row: dict[str, object] | None = None
 
-    async def __aenter__(self) -> _Cursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -121,7 +121,7 @@ class _Raw:
 @pytest.fixture
 def raw() -> Iterator[_Raw]:
     raw = _Raw()
-    db = DbConnection(cast(AsyncConnection[DictRow], raw))
+    db = DbConnection(cast("AsyncConnection[DictRow]", raw))
     token = session_module._conn_ctx.set(db)
     try:
         yield raw

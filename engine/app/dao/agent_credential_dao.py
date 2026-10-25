@@ -35,7 +35,7 @@ class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_credentials "
-                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentCredentialRecord.from_row(row) for row in rows]
@@ -45,8 +45,8 @@ class AgentCredentialDAO(BaseDAO[AgentCredentialRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_credentials "
-                + "WHERE agent_id = %(agent_id)s AND status = 'active' "
-                + "AND cookies_json IS NOT NULL",
+                "WHERE agent_id = %(agent_id)s AND status = 'active' "
+                "AND cookies_json IS NOT NULL",
                 {"agent_id": agent_id},
             )
             return [AgentCredentialRecord.from_row(row) for row in rows]

@@ -35,21 +35,21 @@ class DailyCollectionResult(TypedDict):
 def _human_request_message(target_name: str, report_day: date) -> str:
     return (
         f"你好，{target_name}！我是 OKR Agent，需要收集你今天的日报（{report_day.isoformat()}）。请回复以下内容：\n"
-        + "- 今天取得的进展\n"
-        + "- 遇到的风险或阻碍\n"
-        + "- 下一步计划\n\n"
-        + "我收到后会帮你整理并记入 OKR 日报。谢谢！"
+        "- 今天取得的进展\n"
+        "- 遇到的风险或阻碍\n"
+        "- 下一步计划\n\n"
+        "我收到后会帮你整理并记入 OKR 日报。谢谢！"
     )
 
 
 def _agent_request_message(target_name: str, report_day: date) -> str:
     return (
         f"Hi {target_name}, this is OKR Agent collecting your daily report for {report_day.isoformat()}.\n"
-        + "Please review today's progress and reply to me with:\n"
-        + "- progress made today\n"
-        + "- risks or blockers\n"
-        + "- next step\n\n"
-        + "Please keep the final reply concise so I can record it directly."
+        "Please review today's progress and reply to me with:\n"
+        "- progress made today\n"
+        "- risks or blockers\n"
+        "- next step\n\n"
+        "Please keep the final reply concise so I can record it directly."
     )
 
 

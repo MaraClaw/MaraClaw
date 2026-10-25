@@ -13,6 +13,7 @@ from tests.transaction_pool_fakes import CountingPool
 from typing_extensions import TypeForm
 
 from app.api import files, pages, plaza, skills, upload
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.db import session as db_session
 from app.records.agent import AgentRecord
@@ -34,7 +35,7 @@ def _open_guest_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def actor() -> UserRecord:
-    return UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin")
+    return UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
 
 
 @pytest.fixture
@@ -459,7 +460,7 @@ async def test_token_status_transport_preserves_masking_and_authorization(
     masked: str,
     status: int,
 ) -> None:
-    actor.role = role
+    actor.role = UserRole(role)
     actor.tenant_id = actor.tenant_id if tenant else None
     monkeypatch.setattr(skills, "_get_github_token", AsyncMock(return_value=token))
     monkeypatch.setattr(skills, "_get_clawhub_key", AsyncMock(return_value=""))

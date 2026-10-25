@@ -2,7 +2,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-from tests.chatgpt_subscription_fakes import TicketRedis, callback, oauth_store as oauth_store
+from tests.chatgpt_subscription_fakes import TicketRedis, callback, oauth_store
+
+__all__ = ["oauth_store"]
 from tests.test_chatgpt_subscription import FakeChatGPTTransport, _user
 
 from app.services import (

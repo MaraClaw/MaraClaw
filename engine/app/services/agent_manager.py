@@ -19,6 +19,7 @@ from python_on_whales import ClientNotFoundError, Container, DockerClient
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
+from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_object_from
 from app.core.logging import logger
 from app.core.security import decrypt_data
@@ -37,7 +38,7 @@ from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_f
 from app.services.guest_admission import GuestStartPreflightError, guest_admission
 from app.services.guest_identity import (
     GuestOwnershipError,
-    guest_container_name as guest_container_name,
+    guest_container_name,
     owned_guest_containers,
     stop_guest_containers,
 )
@@ -54,6 +55,24 @@ from app.services.openclaw_inbox import (
 )
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
+
+__all__ = [
+    "AgentManager",
+    "ContainerStatus",
+    "InspectedContainerStatus",
+    "agent_manager",
+    "ensure_fresh_access_token",
+    "guest_container_name",
+    "guest_model_ref",
+    "guest_provider_env_key",
+    "guest_provider_id",
+    "is_chatgpt_subscription",
+    "is_grok_subscription",
+    "looks_like_oauth_access_token",
+    "looks_like_xai_console_key",
+    "openai_oauth_credential",
+    "xai_oauth_credential",
+]
 
 settings = get_settings()
 
@@ -329,13 +348,13 @@ class AgentManager:
             with sqlite3.connect(db_path) as conn:
                 _ = conn.execute(
                     "CREATE TABLE IF NOT EXISTS auth_profile_store "
-                    + "(store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+                    "(store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
                 )
                 _ = conn.execute(
                     "INSERT INTO auth_profile_store (store_key, store_json, updated_at) "
-                    + "VALUES ('primary', ?, ?) "
-                    + "ON CONFLICT(store_key) DO UPDATE SET store_json = excluded.store_json, "
-                    + "updated_at = excluded.updated_at",
+                    "VALUES ('primary', ?, ?) "
+                    "ON CONFLICT(store_key) DO UPDATE SET store_json = excluded.store_json, "
+                    "updated_at = excluded.updated_at",
                     (payload, now_ms),
                 )
         except sqlite3.Error as exc:
@@ -430,7 +449,6 @@ class AgentManager:
             secondary=secondary,
             fallback=fallback,
             selected=selected,
-            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
         wrote = self._atomic_write_json(path, preserve_guest_resources(path, config))
         if not wrote:
@@ -451,7 +469,6 @@ class AgentManager:
         secondary: LLMModelRecord | None = None,
         fallback: LLMModelRecord | None = None,
         selected: LLMModelRecord | None = None,
-        linkup_proxy: bool = False,
     ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
         chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
@@ -490,17 +507,17 @@ class AgentManager:
             config["auth"] = {"profiles": auth_profiles, "order": auth_order}
 
         linkup_skill_env: JsonObject = {}
-        if linkup_proxy:
+        if settings.LINKUP_PROXY_ENABLED:
             from app.services.linkup.tokens import make_proxy_token
 
-            linkup_skill_env["LINKUP_API_BASE"] = settings.LINKUP_PROXY_BASE_URL
-            linkup_skill_env["LINKUP_API_KEY"] = make_proxy_token(agent.id)
-        elif settings.LINKUP_API_KEY:
-            linkup_skill_env["LINKUP_API_KEY"] = settings.LINKUP_API_KEY
+            linkup_skill_env["LINKUP_API_BASE"] = (
+                settings.LINKUP_PROXY_BASE_URL.strip().rstrip("/") or f"{guest_engine_base_url()}/api/linkup"
+            )
+            linkup_skill_env["LINKUP_PROXY_TOKEN"] = make_proxy_token(agent.id)
         config["skills"] = {
             "entries": {
                 folder_name: {
-                    "enabled": True,
+                    "enabled": settings.LINKUP_PROXY_ENABLED,
                     "env": linkup_skill_env,
                 }
                 for folder_name in linkup_default_skill_folder_names()
@@ -521,6 +538,21 @@ class AgentManager:
     async def start_container(
         self, agent: AgentRecord, *, image: str | None = None, rehydrate: bool = True
     ) -> str | None:
+        from app.services.guest_start import start_guest
+
+        if image is not None or not rehydrate:
+            return await self.replace_container(agent, image=image, rehydrate=rehydrate)
+        return await start_guest(self, agent)
+
+    async def replace_container(
+        self,
+        agent: AgentRecord,
+        *,
+        image: str | None = None,
+        rehydrate: bool = True,
+        create_only: bool = False,
+        operation_id: uuid.UUID | None = None,
+    ) -> str | None:
         """Start an OpenClaw Gateway Docker container for the agent.
 
         ``image`` overrides the agent's pinned image, which overrides the configured one.
@@ -532,7 +564,7 @@ class AgentManager:
             raise ValueError("Agent setup is incomplete")
         if not self.docker_client:
             logger.info("Docker not available, skipping container start")
-            agent.status = "idle"
+            agent.status = AgentStatus.IDLE
             agent.last_active_at = datetime.now(UTC)
             return None
 
@@ -575,7 +607,6 @@ class AgentManager:
                 secondary=secondary,
                 fallback=fallback,
                 selected=primary,
-                linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
             )
             config_dir = agent_dir / ".openclaw"
             config_dir.mkdir(parents=True, exist_ok=True)
@@ -614,6 +645,8 @@ class AgentManager:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
             except (ClientNotFoundError, DockerException) as exc:
                 raise GuestStartPreflightError("Guest ownership inspection failed") from exc
+            if create_only and guests:
+                raise GuestStartPreflightError("Guest appeared during creation preparation")
 
             def run_container(container_port: int) -> Container:
                 return client.run(
@@ -641,6 +674,7 @@ class AgentManager:
                     labels={
                         "maraclaw.agent_id": str(agent.id),
                         "maraclaw.agent_name": agent.name,
+                        **({"maraclaw.start_operation": str(operation_id)} if operation_id else {}),
                     },
                 )
 
@@ -661,14 +695,14 @@ class AgentManager:
                     for target in (original, agent):
                         target.container_id = container.id
                         target.container_port = container_port
-                        target.status = "running"
+                        target.status = AgentStatus.RUNNING
                         target.last_active_at = now
                     logger.info("Started guest {} for agent {} on port {}", container.id[:12], agent.id, container_port)
                     return container.id
             except (ClientNotFoundError, DockerException, GuestOwnershipError) as exc:
                 logger.error("Guest start failed for agent {}: {}", agent.id, type(exc).__name__)
                 for target in (original, agent):
-                    target.status = "error"
+                    target.status = AgentStatus.ERROR
                     target.container_id = None
                     target.container_port = None
                 return None
@@ -684,18 +718,18 @@ class AgentManager:
     async def stop_container(self, agent: AgentRecord) -> bool:
         """Stop the agent's Docker container."""
         if not self.docker_client:
-            agent.status = "stopped"
+            agent.status = AgentStatus.STOPPED
             return True
 
         try:
             found = await to_thread.run_sync(stop_guest_containers, self.docker_client, agent)
             if not found:
                 agent.container_id = None
-            agent.status = "stopped"
+            agent.status = AgentStatus.STOPPED
             logger.info("Stopped guest for agent {}", agent.id)
             return True
         except NoSuchContainer:
-            agent.status = "stopped"
+            agent.status = AgentStatus.STOPPED
             agent.container_id = None
             return True
         except GuestOwnershipError as exc:

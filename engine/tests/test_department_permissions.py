@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.api import agents
 from app.core import access_cache, permissions
+from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.identity import IdentityRecord
 from app.records.org_department import OrgDepartmentRecord
@@ -19,9 +20,15 @@ from app.records.user import UserRecord
 def directory(monkeypatch):
     tenant = uuid4()
     owner = UserRecord(id=uuid4(), tenant_id=tenant)
-    agent = AgentRecord(id=uuid4(), name="Sales", creator_id=owner.id, tenant_id=tenant, access_mode="custom")
+    agent = AgentRecord(
+        id=uuid4(), name="Sales", creator_id=owner.id, tenant_id=tenant, access_mode=AgentSharingMode.CUSTOM
+    )
     department = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant, name="Sales", created_at=datetime.now(UTC))
-    grants = [AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type="department", scope_id=department.id)]
+    grants = [
+        AgentPermissionRecord(
+            id=uuid4(), agent_id=agent.id, scope_type=PermissionGrantScope.DEPARTMENT, scope_id=department.id
+        )
+    ]
 
     async def list_grants(_id):
         return list(grants)
@@ -76,7 +83,9 @@ async def test_acl_write_rejects_fresh_actor_password_change_before_deletion(dir
     monkeypatch.setattr(agents, "lock_agent", AsyncMock())
     monkeypatch.setattr(agents.user_dao, "get_with_identity", AsyncMock(return_value=actor))
     with pytest.raises(HTTPException) as error:
-        await agents.update_agent_permissions(agent.id, agents.AgentPermissionUpdate(scope_type="private"), owner)
+        await agents.update_agent_permissions(
+            agent.id, agents.AgentPermissionUpdate(scope_type=AgentSharingMode.PRIVATE), owner
+        )
     assert error.value.status_code == 403
     assert grants == before
 
@@ -89,7 +98,7 @@ async def test_custom_department_selection_roundtrip(directory, selection, expec
     selection_ids = None if selection == "omitted" else [] if selection == "empty" else [department.id]
     # When custom permissions are saved with an omitted/empty/explicit selection.
     result = await agents.update_agent_permissions(
-        agent.id, agents.AgentPermissionUpdate(scope_type="custom", department_ids=selection_ids), owner
+        agent.id, agents.AgentPermissionUpdate(scope_type=AgentSharingMode.CUSTOM, department_ids=selection_ids), owner
     )
     # Then the selection round trips, use-only, and the creator remains a manager.
     response = await agents.get_agent_permissions(agent.id, owner)
@@ -120,7 +129,7 @@ async def test_unknown_department_rejects_before_deleting_existing_permissions(d
     before = list(grants)
     with pytest.raises(HTTPException) as error:
         await agents.update_agent_permissions(
-            agent.id, agents.AgentPermissionUpdate(scope_type="custom", department_ids=[uuid4()]), owner
+            agent.id, agents.AgentPermissionUpdate(scope_type=AgentSharingMode.CUSTOM, department_ids=[uuid4()]), owner
         )
     assert error.value.status_code == 422
     assert grants == before
@@ -164,11 +173,19 @@ async def test_multiple_department_grants_preserve_use_only_and_direct_manage(di
     owner, agent, department, grants = directory
     member = UserRecord(id=uuid4(), tenant_id=owner.tenant_id)
     second = replace(department, id=uuid4(), name="Project")
-    grants.append(AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type="department", scope_id=second.id))
+    grants.append(
+        AgentPermissionRecord(
+            id=uuid4(), agent_id=agent.id, scope_type=PermissionGrantScope.DEPARTMENT, scope_id=second.id
+        )
+    )
     if direct_manage:
         grants.append(
             AgentPermissionRecord(
-                id=uuid4(), agent_id=agent.id, scope_type="user", scope_id=member.id, access_level="manage"
+                id=uuid4(),
+                agent_id=agent.id,
+                scope_type=PermissionGrantScope.USER,
+                scope_id=member.id,
+                access_level=PermissionAccessLevel.MANAGE,
             )
         )
     before = list(grants)

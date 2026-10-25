@@ -71,7 +71,7 @@ async def list_credentials(
     """List all credentials for an agent (sensitive data excluded)."""
     # Verify the user has manage-level access to this agent
     _agent, access_level = await check_agent_access(current_user, agent_id)
-    if access_level not in ("manage",) and current_user.role not in ("platform_admin", "org_admin"):
+    if access_level != "manage" and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Manage access required to view credentials",
@@ -90,7 +90,7 @@ async def create_credential(
     Sensitive fields (cookies_json) are encrypted before storage.
     """
     _agent, access_level = await check_agent_access(current_user, agent_id)
-    if access_level not in ("manage",) and current_user.role not in ("platform_admin", "org_admin"):
+    if access_level != "manage" and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Manage access required to create credentials",
@@ -103,8 +103,8 @@ async def create_credential(
         try:
             parsed = json_loads_value(data.cookies_json)
             if not isinstance(parsed, list):
-                raise ValueError("cookies_json must be a JSON array")
-        except (json.JSONDecodeError, ValueError) as e:
+                raise TypeError("cookies_json must be a JSON array")
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid cookies_json format: {e}",
@@ -140,7 +140,7 @@ async def update_credential(
     If cookies_json is updated, status is reset to 'active'.
     """
     _agent, access_level = await check_agent_access(current_user, agent_id)
-    if access_level not in ("manage",) and current_user.role not in ("platform_admin", "org_admin"):
+    if access_level != "manage" and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Manage access required to update credentials",
@@ -168,9 +168,9 @@ async def update_credential(
                     raise ValueError("cookies_json must be a JSON array")
                 parsed = json_loads_value(cookies_json)
                 if not isinstance(parsed, list):
-                    raise ValueError("cookies_json must be a JSON array")
+                    raise TypeError("cookies_json must be a JSON array")
                 update_data["cookies_json"] = cookies_json
-            except (json.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid cookies_json format: {e}",
@@ -193,7 +193,7 @@ async def delete_credential(
 ) -> None:
     """Delete a credential."""
     _agent, access_level = await check_agent_access(current_user, agent_id)
-    if access_level not in ("manage",) and current_user.role not in ("platform_admin", "org_admin"):
+    if access_level != "manage" and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Manage access required to delete credentials",
@@ -203,4 +203,4 @@ async def delete_credential(
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    _ = await agent_credential_dao.delete(id=cred.id)
+    _ = await agent_credential_dao.delete(record_id=cred.id)

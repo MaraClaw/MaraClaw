@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-from tests.test_enterprise_transaction_boundaries import _actor, _model, owned_pool as owned_pool
+from tests.test_enterprise_transaction_boundaries import _actor, _model, owned_pool
+
+__all__ = ["owned_pool"]
 
 from app.dao.user_dao import user_dao
 from app.db import session

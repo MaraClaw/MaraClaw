@@ -15,6 +15,7 @@ import pytest
 from anyio import Event, create_task_group, fail_after
 from python_on_whales.exceptions import DockerException
 
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
 from app.services import openclaw_update_executor as executor_module
@@ -33,7 +34,7 @@ class Harness:
             id=uuid.uuid4(),
             name="Ada",
             creator_id=uuid.uuid4(),
-            status="running",
+            status=AgentStatus.RUNNING,
             container_id="old-id",
             container_port=18800,
         )

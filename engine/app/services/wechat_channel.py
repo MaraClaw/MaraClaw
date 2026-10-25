@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     json_as_str,
@@ -173,7 +174,7 @@ async def remember_wechat_context(
     context_token: str,
     conv_id: str,
 ) -> None:
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
     if not config:
         return
     new_extra = update_wechat_context_cache(
@@ -238,7 +239,7 @@ class WeChatPollManager:
 
     async def reconcile_clients(self) -> None:
         configured_agent_ids: set[uuid.UUID] = set()
-        configs = await channel_config_dao.list_configured("wechat")
+        configs = await channel_config_dao.list_configured(ChannelType.WECHAT)
         for cfg in configs:
             token = json_as_str_or(json_object_from(cfg.extra_config).get("bot_token")).strip()
             if token:
@@ -338,10 +339,10 @@ class WeChatPollManager:
             return data
 
     async def _load_config(self, agent_id: uuid.UUID):
-        return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+        return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
 
     async def _update_extra(self, agent_id: uuid.UUID, updates: JsonObject) -> None:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
         if not config:
             return
         extra = json_object_from(config.extra_config)
@@ -349,7 +350,7 @@ class WeChatPollManager:
         _ = await channel_config_dao.update(db_obj=config, obj_in={"extra_config": extra})
 
     async def _set_connected(self, agent_id: uuid.UUID, connected: bool) -> None:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wechat")
+        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECHAT)
         if not config:
             return
         _ = await channel_config_dao.update(db_obj=config, obj_in={"is_connected": connected})

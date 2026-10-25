@@ -35,9 +35,9 @@ export class ChatGPTSubscriptionError extends Error {
   }
 }
 
-async function request<T>(schema: z.ZodType<T>, response: Promise<unknown>): Promise<T> {
+async function request<T>(response: Promise<T>): Promise<T> {
   try {
-    return schema.parse(await response)
+    return await response
   } catch (error) {
     if (error instanceof StaleSessionError) throw error
     if (error instanceof DOMException && error.name === 'AbortError') throw error
@@ -47,11 +47,12 @@ async function request<T>(schema: z.ZodType<T>, response: Promise<unknown>): Pro
 
 export function startChatGPTSubscription(tenantId?: string): Promise<ChatGPTSubscriptionStart> {
   const scope = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  return request(startSchema, apiRequest<unknown>(`/api/enterprise/llm-models/chatgpt-subscription/start${scope}`, { method: 'POST' }))
+  return request(apiRequest(`/api/enterprise/llm-models/chatgpt-subscription/start${scope}`, { schema: startSchema, method: 'POST' }))
 }
 
 export function completeChatGPTSubscription(input: ChatGPTSubscriptionComplete): Promise<ChatGPTSubscriptionStatus> {
-  return request(statusSchema, apiRequest<unknown>('/api/enterprise/llm-models/chatgpt-subscription/complete', {
+  return request(apiRequest('/api/enterprise/llm-models/chatgpt-subscription/complete', {
+    schema: statusSchema,
     method: 'POST',
     body: { attempt_id: input.attempt_id, callback_url: input.callback_url },
   }))
@@ -59,5 +60,5 @@ export function completeChatGPTSubscription(input: ChatGPTSubscriptionComplete):
 
 export function getChatGPTSubscriptionStatus(attemptId: string, signal?: AbortSignal): Promise<ChatGPTSubscriptionStatus> {
   const query = new URLSearchParams({ attempt_id: attemptId })
-  return request(statusSchema, apiRequest<unknown>(`/api/enterprise/llm-models/chatgpt-subscription/status?${query}`, { signal }))
+  return request(apiRequest(`/api/enterprise/llm-models/chatgpt-subscription/status?${query}`, { schema: statusSchema, signal }))
 }

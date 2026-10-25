@@ -55,8 +55,8 @@ class MemoryKeyDao:
         self.rows[record.id] = record
         return record
 
-    async def delete(self, *, id: UUID) -> LinkupApiKeyRecord | None:
-        return self.rows.pop(id, None)
+    async def delete(self, *, record_id: UUID) -> LinkupApiKeyRecord | None:
+        return self.rows.pop(record_id, None)
 
     async def get_cursor_key_id(self) -> UUID | None:
         return self.cursor

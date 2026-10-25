@@ -22,7 +22,6 @@ import {
   createLlmModel,
   deleteLlmModel,
   getGrokSubscriptionStatus,
-  isReasoningEffort,
   listLlmModels,
   listLlmProviders,
   REASONING_EFFORTS,
@@ -39,6 +38,7 @@ import {
   type LlmModel,
 } from '@/lib/llm-models-api'
 import { isPlatformAdminUser } from '@/lib/types/auth'
+import { availableReasoningEffort, reasoningEffortWrite } from '@/lib/reasoning-efforts'
 import { cn } from '@/lib/utils'
 import { ChatGPTSubscriptionCard } from '@/pages/chatgpt-subscription-card'
 
@@ -49,7 +49,7 @@ const schema = z.object({
   api_key: z.string().trim().min(1, 'Enter an API key').max(512),
   base_url: z.string().trim().max(500).optional(),
   temperature: z.string().optional(),
-  reasoning_effort: z.enum(REASONING_EFFORTS),
+  reasoning_effort: z.enum(REASONING_EFFORTS).or(z.literal('')),
   enabled: z.boolean(),
   supports_vision: z.boolean(),
 })
@@ -179,14 +179,8 @@ export function LlmModelsPage() {
     if (nextLabel) {
       setValue('label', nextLabel)
     }
-    const currentEffort = watch('reasoning_effort')
-    if (addEfforts.length > 0 && currentEffort && !addEfforts.includes(currentEffort)) {
-      const next = addEfforts.includes('none') ? 'none' : addEfforts[0]
-      if (isReasoningEffort(next)) {
-        setValue('reasoning_effort', next)
-      }
-    }
-  }, [providerMeta?.default_base_url, providerMeta?.default_model, addEfforts, setValue, watch])
+    setValue('reasoning_effort', availableReasoningEffort(watch('reasoning_effort'), addEfforts) ?? '')
+  }, [providerMeta, addEfforts, setValue, watch])
 
   async function onSubmit(values: FormValues) {
     setFormError(null)
@@ -203,7 +197,7 @@ export function LlmModelsPage() {
           api_key: values.api_key.trim(),
           base_url: values.base_url?.trim() || null,
           temperature: parseOptionalNumber(values.temperature),
-          reasoning_effort: values.reasoning_effort || 'none',
+          ...reasoningEffortWrite(values.reasoning_effort, addEfforts),
           enabled: values.enabled,
           supports_vision: values.supports_vision,
         },
@@ -217,7 +211,7 @@ export function LlmModelsPage() {
         api_key: '',
         base_url: providerMeta?.default_base_url ?? '',
         temperature: '',
-        reasoning_effort: values.reasoning_effort,
+        reasoning_effort: availableReasoningEffort(values.reasoning_effort, addEfforts) ?? '',
         enabled: true,
         supports_vision: false,
       })
@@ -249,9 +243,10 @@ export function LlmModelsPage() {
       </div>
 
       {platformAdmin ? (
-        <label className="grid w-auto gap-1.5 text-sm">
+        <label htmlFor={`${formId}-company`} className="grid w-auto gap-1.5 text-sm">
           <span className="text-muted-foreground">Company</span>
           <Select
+            id={`${formId}-company`}
             fit
             value={companyId}
             onChange={(event) => {
@@ -353,7 +348,7 @@ export function LlmModelsPage() {
                 {...register('api_key')}
               />
             </div>
-            <div className="space-y-2">
+            {addEfforts.length > 0 ? <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
               <Select id={`${formId}-effort`} {...register('reasoning_effort')}>
                 {addEfforts.map((effort) => (
@@ -365,7 +360,7 @@ export function LlmModelsPage() {
               <p className="text-xs text-muted-foreground">
                 How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
               </p>
-            </div>
+            </div> : null}
             <div className="flex flex-col justify-end gap-2 pb-1">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4 rounded border-input" {...register('enabled')} />
@@ -546,7 +541,7 @@ function GrokSubscriptionCard({
   )
 }
 
-function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
+function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string[] }) {
   const queryClient = useQueryClient()
   const formId = useId()
   const [editing, setEditing] = useState(false)
@@ -557,6 +552,9 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
   const [enabled, setEnabled] = useState(item.enabled)
   const [supportsVision, setSupportsVision] = useState(item.supports_vision)
   const [effort, setEffort] = useState(item.reasoning_effort || 'none')
+  useEffect(() => {
+    setEffort((current) => availableReasoningEffort(current, efforts) ?? '')
+  }, [efforts])
   const [pendingRemove, setPendingRemove] = useState(false)
   const [forceRemove, setForceRemove] = useState(false)
   const [removeHint, setRemoveHint] = useState<string | null>(null)
@@ -576,7 +574,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
             }),
         enabled,
         supports_vision: supportsVision,
-        reasoning_effort: effort || 'none',
+        ...reasoningEffortWrite(effort, efforts),
       }),
     onSuccess: (updated) => {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
@@ -710,11 +708,11 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
                 <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
               </div>
             )}
-            <div className="space-y-2">
+            {efforts.length > 0 ? <div className="space-y-2">
               <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
               <Select
                 id={`${formId}-effort`}
-                value={effort || (efforts.includes('none') ? 'none' : (efforts[0] ?? 'none'))}
+                value={availableReasoningEffort(effort, efforts) ?? ''}
                 onChange={(event) => setEffort(event.target.value)}
               >
                 {efforts.map((value) => (
@@ -726,7 +724,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: string[] }) {
               <p className="text-xs text-muted-foreground">
                 How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
               </p>
-            </div>
+            </div> : null}
             {subscription ? null : (
               <div className="sm:col-span-2">
                 <PasswordField

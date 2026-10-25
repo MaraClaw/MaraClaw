@@ -4,11 +4,12 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.core.notification_kinds import NotificationKind
 from app.core.permissions import check_agent_access
 from app.dao.agent_dao import agent_dao
 from app.dao.notification_dao import notification_dao
 from app.db.errors import ForeignKeyViolationError
-from app.schemas.company_admission import PendingAdmissionResponse
+from app.records.company_transfer import TransferChoice
 from app.services import (
     company_transfer_cleanup,
     company_transfer_fence,
@@ -16,6 +17,7 @@ from app.services import (
     company_transfer_requests as requests,
 )
 from company_admission_fixtures import AdmissionScenario, admission_scenario
+from invitation_fixtures import pending_domain_transfer
 from test_company_transfer_postgres import submit_paid, transfer_scenario
 
 __all__ = ["admission_scenario", "transfer_scenario"]
@@ -35,20 +37,34 @@ async def seed_retained_data(scenario: AdmissionScenario) -> UUID:
     params = {"agent": agent.id, "user": scenario.applicant.id, "tenant": scenario.source_id}
     statements = (
         "INSERT INTO chat_sessions(id,agent_id,user_id,title) VALUES(gen_random_uuid(),%(agent)s,%(user)s,'retained')",
-        "INSERT INTO chat_messages(id,agent_id,user_id,role,content,conversation_id) "
-        "VALUES(gen_random_uuid(),%(agent)s,%(user)s,'user','retained','history')",
-        "INSERT INTO tasks(id,agent_id,title,type,status,priority,assignee,created_by,remind_schedule) "
-        "VALUES(gen_random_uuid(),%(agent)s,'retained','supervision','pending','medium','agent',%(user)s,'daily')",
-        "INSERT INTO audit_logs(id,user_id,agent_id,action,details) "
-        "VALUES(gen_random_uuid(),%(user)s,%(agent)s,'retained','{}')",
-        "INSERT INTO approval_requests(id,agent_id,action_type,details,status) "
-        "VALUES(gen_random_uuid(),%(agent)s,'retained','{}','pending')",
-        "INSERT INTO plaza_posts(id,author_id,author_type,author_name,content,tenant_id,likes_count,comments_count) "
-        "VALUES(gen_random_uuid(),%(agent)s,'agent','Retained','retained',%(tenant)s,0,0)",
-        "INSERT INTO agent_credentials(id,agent_id,credential_type,platform,display_name,status,cookies_json) "
-        "VALUES(gen_random_uuid(),%(agent)s,'cookies','personal','User-owned','active','secret')",
-        "INSERT INTO published_pages(id,short_id,agent_id,user_id,tenant_id,source_path,title,view_count) "
-        "VALUES(gen_random_uuid(),'retained',%(agent)s,%(user)s,%(tenant)s,'report.html','Retained',0)",
+        (
+            "INSERT INTO chat_messages(id,agent_id,user_id,role,content,conversation_id) "
+            "VALUES(gen_random_uuid(),%(agent)s,%(user)s,'user','retained','history')"
+        ),
+        (
+            "INSERT INTO tasks(id,agent_id,title,type,status,priority,assignee,created_by,remind_schedule) "
+            "VALUES(gen_random_uuid(),%(agent)s,'retained','supervision','pending','medium','agent',%(user)s,'daily')"
+        ),
+        (
+            "INSERT INTO audit_logs(id,user_id,agent_id,action,details) "
+            "VALUES(gen_random_uuid(),%(user)s,%(agent)s,'retained','{}')"
+        ),
+        (
+            "INSERT INTO approval_requests(id,agent_id,action_type,details,status) "
+            "VALUES(gen_random_uuid(),%(agent)s,'retained','{}','pending')"
+        ),
+        (
+            "INSERT INTO plaza_posts(id,author_id,author_type,author_name,content,tenant_id,likes_count,comments_count) "
+            "VALUES(gen_random_uuid(),%(agent)s,'agent','Retained','retained',%(tenant)s,0,0)"
+        ),
+        (
+            "INSERT INTO agent_credentials(id,agent_id,credential_type,platform,display_name,status,cookies_json) "
+            "VALUES(gen_random_uuid(),%(agent)s,'cookies','personal','User-owned','active','secret')"
+        ),
+        (
+            "INSERT INTO published_pages(id,short_id,agent_id,user_id,tenant_id,source_path,title,view_count) "
+            "VALUES(gen_random_uuid(),'retained',%(agent)s,%(user)s,%(tenant)s,'report.html','Retained',0)"
+        ),
     )
     for sql in statements:
         await scenario.db.execute(sql, params)
@@ -78,18 +94,8 @@ async def test_final_approval_retains_history_and_seals_or_migrates_agents(
         assert response.status_code == 200, response.text
         admission_id = response.json()["admission_request_id"]
     else:
-        response = await scenario.client.post(
-            "/api/tenants/transfer",
-            headers=scenario.headers(scenario.applicant),
-            json={
-                "password": "qa-password",
-                "invitation_code": "JOIN",
-                "transfer_choice": "free",
-                "free_destructive_consent": True,
-            },
-        )
-        assert response.status_code == 202, response.text
-        admission_id = PendingAdmissionResponse.model_validate_json(response.content).request.id
+        admission = await pending_domain_transfer(scenario, TransferChoice.FREE)
+        admission_id = admission.id
     before = await agent_dao.get(agent_id)
     assert before is not None
     assert before.creator_id == scenario.applicant.id
@@ -143,7 +149,7 @@ async def test_final_approval_retains_history_and_seals_or_migrates_agents(
                 "id": uuid4(),
                 "user_id": scenario.applicant.id,
                 "agent_id": agent_id,
-                "type": "system",
+                "type": NotificationKind.SYSTEM.value,
                 "title": "Late reminder",
                 "body": "retained",
             }

@@ -1,13 +1,13 @@
 import { clearStoredToken, getStoredToken, setStoredToken } from './auth-storage.ts'
-import { isPlatformAdminUser, sessionMustChangePassword } from './types/auth.ts'
+import { sessionMustChangePassword } from './types/auth.ts'
 import type { TokenResponse, UserOut } from './types/auth.ts'
 
 const ownerBrand: unique symbol = Symbol('session owner')
 export type SessionOwner = Readonly<{ [ownerBrand]: symbol }>
-export type AuthSnapshot = Readonly<{ owner: SessionOwner } & (
+export type AuthSnapshot = Readonly<{ owner: SessionOwner; mustChangePassword: boolean } & (
   | { status: 'anonymous'; token: null; user: null }
   | { status: 'loading'; token: string; user: null }
-  | { status: 'authenticated'; token: string; user: Readonly<UserOut> }
+  | { status: 'authenticated'; token: string; user: Readonly<UserOut> | null }
 )>
 export type SessionStorage = {
   readonly read: () => string | null
@@ -26,8 +26,8 @@ function newOwner(): SessionOwner {
 
 function pendingSnapshot(token: string | null): AuthSnapshot {
   return token
-    ? Object.freeze({ owner: newOwner(), status: 'loading', token, user: null })
-    : Object.freeze({ owner: newOwner(), status: 'anonymous', token: null, user: null })
+    ? Object.freeze({ owner: newOwner(), status: 'loading', token, user: null, mustChangePassword: false })
+    : Object.freeze({ owner: newOwner(), status: 'anonymous', token: null, user: null, mustChangePassword: false })
 }
 
 /** All async callers must capture an owner before starting work. */
@@ -58,14 +58,12 @@ export function createAuthSessionStore(storage: SessionStorage) {
     },
     applySession(owner: SessionOwner, session: TokenResponse): boolean {
       if (!isCurrent(owner)) return false
-      if (isPlatformAdminUser(session.user)) {
-        expire(owner)
-        return false
-      }
+      const mustChangePassword = sessionMustChangePassword(session)
       storage.write(session.access_token)
       publish(Object.freeze({
         owner: newOwner(), status: 'authenticated', token: session.access_token,
-        user: Object.freeze({ ...session.user, must_change_password: sessionMustChangePassword(session) }),
+        mustChangePassword,
+        user: session.user === null ? null : Object.freeze({ ...session.user, must_change_password: mustChangePassword }),
       }))
       return true
     },
@@ -88,20 +86,17 @@ export function createAuthSessionStore(storage: SessionStorage) {
     },
     commitRefresh(candidate: RefreshAttempt, user: UserOut): boolean {
       if (attempt !== candidate || !isCurrent(candidate.owner)) return false
-      if (isPlatformAdminUser(user)) {
-        expire(candidate.owner)
-        return false
-      }
       publish(Object.freeze({
         owner: candidate.owner, status: 'authenticated', token: candidate.token,
+        mustChangePassword: user.must_change_password === true,
         user: Object.freeze({ ...user }),
       }))
       return true
     },
-    failRefresh(candidate: RefreshAttempt, status?: number): boolean {
+    failRefresh(candidate: RefreshAttempt, failure?: number | 'member_audience_rejected'): boolean {
       if (attempt !== candidate || !isCurrent(candidate.owner)) return false
       attempt = null
-      if (status === 401 || snapshot.status === 'loading') return expire(candidate.owner)
+      if (failure === 401 || failure === 'member_audience_rejected' || snapshot.status === 'loading') return expire(candidate.owner)
       // Transport, 5xx, and permission failures do not invalidate a validated identity.
       return false
     },

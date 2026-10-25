@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { useAuth } from '@/hooks/use-auth'
+import { AgentSharingModeSchema, PermissionAccessLevelSchema } from '@/lib/engine-contracts.generated'
+import type { AgentSharingMode } from '@/lib/engine-contracts.generated'
 import {
   getAgentPermissions,
   handoverAgent,
@@ -22,7 +24,7 @@ import {
 
 type AccessDraft = {
   readonly agentId: string
-  readonly scopeType: string
+  readonly scopeType: AgentSharingMode
   readonly departmentIds: readonly string[]
 }
 
@@ -38,7 +40,7 @@ export function AgentPermissionsPage() {
   const perms = useQuery({ queryKey: ['permissions', agent.id], queryFn: () => getAgentPermissions(agent.id) })
   const canManage = agent.access_level === 'manage' && perms.data?.can_manage !== false
   const fetchedScope = perms.data?.scope_type ?? agent.access_mode ?? 'company'
-  const savedScope = fetchedScope === 'user' ? 'private' : fetchedScope
+  const savedScope = AgentSharingModeSchema.parse(fetchedScope === 'user' ? 'private' : fetchedScope)
   const currentDraft = draft?.agentId === agent.id ? draft : null
   const scope = currentDraft?.scopeType ?? savedScope
   const savedDepartmentIds = perms.data?.department_ids ?? []
@@ -103,7 +105,7 @@ export function AgentPermissionsPage() {
               id="agent-access-scope"
               value={scope}
               disabled={save.isPending || !perms.isSuccess}
-              onChange={session.effect((event) => setDraft({ agentId: agent.id, scopeType: event.target.value, departmentIds }))}
+              onChange={session.effect((event) => setDraft({ agentId: agent.id, scopeType: AgentSharingModeSchema.parse(event.target.value), departmentIds }))}
             >
               <option value="private">Private (creator only)</option>
               <option value="company">Whole company</option>
@@ -129,10 +131,10 @@ export function AgentPermissionsPage() {
                 agentId: agent.id,
                 body: {
                   scope_type: scope,
-                  access_level: perms.data.access_level ?? 'use',
+                  access_level: PermissionAccessLevelSchema.parse(perms.data.access_level ?? 'use'),
                   scope_ids: perms.data.scope_ids ?? [],
                   user_access: (perms.data.user_access ?? []).map((row) => ({ id: row.id, access_level: row.access_level })),
-                  department_ids: scope === 'custom' ? departmentIds : [],
+                  department_ids: scope === 'custom' ? [...departmentIds] : [],
                 },
               })
             }}

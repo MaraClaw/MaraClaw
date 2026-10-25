@@ -16,6 +16,7 @@ from app.dao.participant_dao import participant_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.schemas.chat_wire import ChatEventType
 from app.services.channels.types import normalize_channel_type
 from app.services.openclaw_update_gate import assert_work_allowed
 from app.services.shared_chat import shared_session_id
@@ -127,7 +128,11 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
         try:
             from app.api.websocket import manager
 
-            event: dict[str, object] = {"type": "done", "role": "assistant", "content": message.result or ""}
+            event: dict[str, object] = {
+                "type": ChatEventType.DONE,
+                "role": "assistant",
+                "content": message.result or "",
+            }
             if report.assistant_message_id is not None:
                 event["message_id"] = str(report.assistant_message_id)
                 event["entry_id"] = str(report.assistant_message_id)

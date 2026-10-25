@@ -29,7 +29,7 @@ export function attachmentFixture(fetchRequest: typeof fetch = () => Promise.res
   const http = createHttpClient(store, fetchRequest, (path) => `https://api.example${path}`)
   const previews = createAttachmentPreviewClient({
     metadata(resource, { owner, signal }) {
-      return http.apiRequest<unknown>(
+      return http.apiRequest(
         `/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-metadata?${new URLSearchParams({ path: resource.path })}`,
         { owner, signal, cache: 'no-store' },
       )

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 
 # ─── MaraClaw end-user UI (web-e) ───────────────────────────────────────────
 # Multi-stage production image:
@@ -19,7 +19,7 @@ WORKDIR /app
 
 # Install by lockfile only - reproducible builds, maximizes layer cache.
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund \
+RUN npm install -g npm@12.2.1 && npm ci --no-audit --no-fund \
   && npm cache clean --force
 
 # ─── Build ──────────────────────────────────────────────────────────────────

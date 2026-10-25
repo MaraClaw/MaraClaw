@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.domain.users import UserRole
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
@@ -83,7 +84,7 @@ async def test_fresh_admin_principal_is_exempt_without_dao_reads(monkeypatch: py
     monkeypatch.setattr(user_dao, "charge_message_quota", charge)
     monkeypatch.setattr(user_dao, "get", read)
 
-    await quota_guard.charge_conversation_quota(UserRecord(id=uuid4(), role=role, quota_message_limit=0))
+    await quota_guard.charge_conversation_quota(UserRecord(id=uuid4(), role=UserRole(role), quota_message_limit=0))
 
     charge.assert_not_awaited()
     read.assert_not_awaited()
@@ -169,3 +170,31 @@ async def test_agent_daily_consumer_uses_atomic_result_without_cached_reads(monk
     charge.assert_awaited_once_with(agent.id)
     read.assert_not_awaited()
     update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("role", ["platform_admin", "org_admin"])
+async def test_creation_uses_fresh_admin_exemption_without_cached_principal(monkeypatch, role):
+    actor = UserRecord(id=uuid4(), role=UserRole(role), quota_max_agents=0)
+    read, count = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(user_dao, "get", read)
+    monkeypatch.setattr(agent_dao, "count_active_for_creator", count)
+
+    await quota_guard.check_agent_creation_quota(actor)
+
+    read.assert_not_awaited()
+    count.assert_not_awaited()
+
+
+async def test_creation_checks_fresh_member_limit_instead_of_cached_allowance(monkeypatch):
+    actor = UserRecord(id=uuid4(), role=UserRole.MEMBER, quota_max_agents=1)
+    read = AsyncMock(return_value=UserRecord(id=actor.id, role=UserRole.PLATFORM_ADMIN, quota_max_agents=99))
+    count = AsyncMock(return_value=1)
+    monkeypatch.setattr(user_dao, "get", read)
+    monkeypatch.setattr(agent_dao, "count_active_for_creator", count)
+
+    with pytest.raises(quota_guard.QuotaExceeded) as error:
+        await quota_guard.check_agent_creation_quota(actor)
+
+    assert error.value.quota_type == "max_agents"
+    read.assert_not_awaited()
+    count.assert_awaited_once_with(actor.id)

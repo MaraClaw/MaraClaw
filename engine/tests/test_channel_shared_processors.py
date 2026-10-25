@@ -17,7 +17,9 @@ from app.services import discord_gateway, openclaw_routing, wechat_message_proce
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding, submissions
 from app.services.channels.google_chat import parse_google_chat_event
-from test_channel_shared_binding import context as context
+from test_channel_shared_binding import context
+
+__all__ = ["context"]
 
 PROCESSORS = ["dingtalk", "wecom", "wecom_kf", "wecom_stream", "wechat", "discord_gateway", "google_chat"]
 GROUP_PROCESSORS = ["dingtalk", "wecom", "wecom_stream", "discord_gateway", "google_chat"]

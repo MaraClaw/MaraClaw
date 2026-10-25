@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 from app.api import admin as admin_api, auth as auth_api
 from app.core import security as security_mod
+from app.core.domain.users import UserRole
 from app.core.json_types import object_mapping_from
 from app.core.security import hash_password
 from app.records.identity import IdentityRecord
@@ -84,7 +85,7 @@ def _user_record(identity: IdentityRecord, *, role="platform_admin", tenant_id=N
         identity_id=identity.id,
         tenant_id=tenant_id,
         display_name="Admin",
-        role=role,
+        role=UserRole(role),
         is_active=True,
         registration_source="bootstrap",
         created_at=_NOW,
@@ -210,7 +211,8 @@ async def test_load_user_from_access_token_enforces_password_change(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_change_password_clears_must_change_flag(monkeypatch):
+async def test_change_password_clears_must_change_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a forced-change genesis admin and persisted identity generation.
     identity = _identity_record(must_change_password=True, password="old-password")
     user = _user_record(identity)
     updated = []
@@ -224,12 +226,21 @@ async def test_change_password_clears_must_change_flag(monkeypatch):
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr("app.dao.identity_dao.get", AsyncMock(return_value=identity))
     monkeypatch.setattr("app.dao.identity_dao.update", fake_update)
+    bump = AsyncMock(return_value=8)
+    monkeypatch.setattr(auth_api.identity_dao, "bump_auth_generation", bump)
+    monkeypatch.setattr(auth_api.identity_dao, "get_auth_generation", AsyncMock(return_value=8))
 
-    data: Any = SimpleNamespace(old_password="old-password", new_password="new-secure-password")
+    # When the admin replaces the initial password.
+    data = auth_api.ChangePasswordRequest(old_password="old-password", new_password="new-secure-password")
     result = await auth_api.change_password(data, current_user=user)
+    # Then the force-change flag clears and the caller receives the revoked generation's successor.
     assert result["ok"] is True
     assert result["must_change_password"] is False
     assert updated[0]["must_change_password"] is False
+    bump.assert_awaited_once_with(identity.id)
+    assert "access_token" in result
+    claims = security_mod.decode_access_token(result["access_token"])
+    assert (claims["sub"], claims["role"], claims["gen"]) == (str(user.id), user.role, 8)
 
 
 @pytest.mark.asyncio
@@ -244,7 +255,8 @@ async def test_change_password_rejects_same_password(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reset_password_clears_must_change_flag(monkeypatch):
+async def test_reset_password_clears_must_change_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a forced-change identity and a valid single-use reset token.
     identity = _identity_ns(must_change_password=True)
     updated = []
 
@@ -258,12 +270,21 @@ async def test_reset_password_clears_must_change_flag(monkeypatch):
     )
     monkeypatch.setattr("app.dao.identity_dao.get", AsyncMock(return_value=identity))
     monkeypatch.setattr("app.dao.identity_dao.update", fake_update)
+    bump = AsyncMock(return_value=8)
+    monkeypatch.setattr(auth_api.identity_dao, "bump_auth_generation", bump)
+    mint = AsyncMock()
+    monkeypatch.setattr(auth_api, "create_access_token", mint)
 
-    data: Any = SimpleNamespace(token="a" * 32, new_password="brand-new-password")
+    # When the anonymous reset replaces the initial password.
+    data = auth_api.ResetPasswordRequest(token="a" * 32, new_password="brand-new-password")
     result = await auth_api.reset_password(data)
+    # Then the force-change flag clears and sessions revoke without issuing credentials.
     assert result["ok"] is True
     assert updated[0]["must_change_password"] is False
     assert "password_hash" in updated[0]
+    bump.assert_awaited_once_with(identity.id)
+    assert result == {"ok": True}
+    mint.assert_not_awaited()
 
 
 @pytest.mark.asyncio

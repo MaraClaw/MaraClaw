@@ -3,6 +3,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException
 
+from app.core.domain.agents import AgentSharingMode, AgentStatus
 from app.dao.agent_dao import agent_dao
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.dao.company_transfer_disposition_sql import FREE_INTEGRATION_DELETES, NEUTRALIZE_NOTIFICATIONS_SQL
@@ -85,9 +86,9 @@ async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> 
             obj_in={
                 **bindings,
                 "tenant_id": transfer.target_tenant_id,
-                "status": "stopped",
+                "status": AgentStatus.STOPPED,
                 "api_key_hash": None,
-                "access_mode": "private",
+                "access_mode": AgentSharingMode.PRIVATE,
                 "heartbeat_enabled": False,
             },
         )
@@ -130,7 +131,7 @@ async def seal_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> Non
             db_obj=agent,
             obj_in={
                 "creator_id": holder_id,
-                "status": "stopped",
+                "status": AgentStatus.STOPPED,
                 "is_expired": True,
                 "heartbeat_enabled": False,
                 "api_key_hash": None,
@@ -138,7 +139,7 @@ async def seal_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> Non
                 "secondary_model_id": None,
                 "fallback_model_id": None,
                 "autonomy_policy": {},
-                "access_mode": "private",
+                "access_mode": AgentSharingMode.PRIVATE,
                 "company_access_level": "",
                 "gogcli_enabled": False,
                 "setup_pending": False,

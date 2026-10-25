@@ -463,9 +463,14 @@ CREATE TABLE IF NOT EXISTS invitation_codes (
 	is_active BOOLEAN NOT NULL DEFAULT true, 
 	created_by UUID, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() + interval '336 hours'),
+	invited_email VARCHAR(320) NOT NULL,
+	redeemed_at TIMESTAMP WITH TIME ZONE,
+	redeemed_by UUID REFERENCES users(id) ON DELETE SET NULL,
 	PRIMARY KEY (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id), 
-	FOREIGN KEY(created_by) REFERENCES users (id)
+	FOREIGN KEY(created_by) REFERENCES users (id),
+	CHECK (invited_email = lower(btrim(invited_email)) AND invited_email <> '' AND max_uses = 1)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_invitation_codes_code ON invitation_codes (code);
@@ -692,6 +697,43 @@ CREATE TABLE IF NOT EXISTS company_transfer_runtime_cleanup (
 
 CREATE INDEX IF NOT EXISTS ix_company_transfer_cleanup_pending
 ON company_transfer_runtime_cleanup(created_at,agent_id) WHERE state='pending';
+
+-- No foreign keys: cleanup must survive agent, user and tenant deletion.
+CREATE TABLE IF NOT EXISTS agent_deletion_cleanup (
+    agent_id UUID PRIMARY KEY,
+    name TEXT NOT NULL,
+    creator_id UUID NOT NULL,
+    tenant_id UUID,
+    container_id TEXT,
+    workspace_path TEXT NOT NULL,
+    archive_path TEXT NOT NULL UNIQUE,
+    task_history TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'pending' CHECK (phase IN ('pending', 'removing', 'archiving', 'completed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CHECK ((phase = 'completed') = (completed_at IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS ix_agent_deletion_cleanup_pending
+ON agent_deletion_cleanup(attempts,created_at,agent_id) WHERE phase <> 'completed';
+
+-- No foreign keys: cancelled start cleanup must survive agent, user and tenant deletion.
+CREATE TABLE IF NOT EXISTS agent_start_operations (
+    agent_id uuid PRIMARY KEY,
+    operation_id uuid NOT NULL UNIQUE,
+    state text NOT NULL CHECK (state IN ('pending', 'succeeded', 'cancelled')),
+    creator_id uuid NOT NULL,
+    tenant_id uuid,
+    expected_container_id text,
+    candidate_id text,
+    candidate_port integer,
+    cleanup_complete boolean NOT NULL DEFAULT false,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_start_operations_pending_idx
+    ON agent_start_operations(updated_at) WHERE state = 'pending';
 
 CREATE TABLE IF NOT EXISTS agent_setups (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -1628,5 +1670,47 @@ CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_pending
     ON agent_schedule_manual_runs (lease_expires_at, created_at, id) WHERE finished_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_schedule
     ON agent_schedule_manual_runs (schedule_id);
+
+CREATE TABLE IF NOT EXISTS agent_deletion_requests (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL,
+    agent_name VARCHAR(100) NOT NULL,
+    agent_creator_id UUID NOT NULL,
+    reason TEXT NOT NULL CHECK (btrim(reason) <> '' AND char_length(reason) <= 1000),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','executed','cancelled')),
+    cancel_reason VARCHAR(24)
+        CHECK (cancel_reason IN ('withdrawn','owner_changed','tenant_changed','agent_gone')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    CHECK ((status = 'pending' AND resolved_at IS NULL AND cancel_reason IS NULL)
+        OR (status = 'executed' AND resolved_at IS NOT NULL AND cancel_reason IS NULL)
+        OR (status = 'cancelled' AND resolved_at IS NOT NULL AND cancel_reason IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_deletion_pending_agent
+    ON agent_deletion_requests(agent_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_tenant
+    ON agent_deletion_requests(tenant_id, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_requester
+    ON agent_deletion_requests(requester_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS agent_deletion_request_views (
+    request_id UUID NOT NULL REFERENCES agent_deletion_requests(id) ON DELETE CASCADE,
+    reviewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (request_id, reviewer_id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_views_reviewer
+    ON agent_deletion_request_views(reviewer_id);
+
+CREATE TABLE IF NOT EXISTS agent_deletion_request_approvals (
+    request_id UUID NOT NULL REFERENCES agent_deletion_requests(id) ON DELETE CASCADE,
+    reviewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (request_id, reviewer_id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_approvals_reviewer
+    ON agent_deletion_request_approvals(reviewer_id);
 
 COMMIT;

@@ -37,11 +37,19 @@ export function formatApiDetail(detail: unknown): string | null {
   return null
 }
 
-type RequestOptions = {
+export type RequestOptions = {
   readonly method?: string
   readonly body?: unknown
   readonly token?: string | null
   readonly signal?: AbortSignal
+}
+
+export type ResponseSchema<T> = {
+  readonly parse: (input: unknown) => T
+}
+
+export type SchemaRequestOptions<T> = RequestOptions & {
+  readonly schema: ResponseSchema<T>
 }
 
 type Transport = {
@@ -50,7 +58,7 @@ type Transport = {
 }
 
 export function createApiRequest(policy: SessionPolicy, transport: Transport) {
-  return async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  async function execute(path: string, options: RequestOptions): Promise<unknown> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     const current = policy.capture()
     const token = options.token === undefined ? current.token : options.token
@@ -81,7 +89,7 @@ export function createApiRequest(policy: SessionPolicy, transport: Transport) {
         signal,
       })
       assertOwner()
-      if (response.status === 204) return undefined as T
+      if (response.status === 204) return undefined
 
       const text = await response.text()
       assertOwner()
@@ -100,7 +108,7 @@ export function createApiRequest(policy: SessionPolicy, transport: Transport) {
         if (response.status === 401 && owner) policy.expire(owner)
         throw new ApiError(response.status, detail)
       }
-      return data as T
+      return data
     } catch (error) {
       // Expiry has already notified auth; preserve that request's ApiError.
       if (error instanceof ApiError && error.status === 401) throw error
@@ -109,6 +117,21 @@ export function createApiRequest(policy: SessionPolicy, transport: Transport) {
       throw error
     }
   }
+
+  function apiRequest<T>(path: string, options: SchemaRequestOptions<T>): Promise<T>
+  function apiRequest<T = unknown>(
+    path: string,
+    options?: RequestOptions & { readonly schema?: never },
+  ): Promise<T>
+  async function apiRequest<T>(
+    path: string,
+    options: RequestOptions & { readonly schema?: ResponseSchema<T> } = {},
+  ): Promise<T> {
+    const data = await execute(path, options)
+    return options.schema ? options.schema.parse(data) : (data as T)
+  }
+
+  return apiRequest
 }
 
 export const apiRequest = createApiRequest(adminSession, {

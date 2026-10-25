@@ -13,8 +13,10 @@ from fastapi import HTTPException
 from app.api import schedules
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.db.connection import DbConnection
-from test_schedule_dao import NOW, pool as pool
-from test_scheduler_api import _HTTP, api as api
+from test_schedule_dao import NOW, pool
+from test_scheduler_api import _HTTP, api
+
+__all__ = ["api", "pool"]
 
 
 class _History:
@@ -32,15 +34,15 @@ class _History:
         schedule_id: UUID,
         *,
         created_at: datetime | None,
-        id: UUID | None = None,
+        log_id: UUID | None = None,
         action: str = "schedule_run",
         detail: Mapping[str, object] | None = None,
     ) -> UUID:
-        log_id = id or uuid4()
+        row_id = log_id or uuid4()
         self.db.execute(
             "INSERT INTO agent_activity_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                str(log_id),
+                str(row_id),
                 str(agent_id),
                 action,
                 "summary",
@@ -49,7 +51,7 @@ class _History:
                 created_at.isoformat() if created_at else None,
             ),
         )
-        return log_id
+        return row_id
 
     async def fetch(self, query: str, params: Mapping[str, object]) -> list[dict[str, object]]:
         sql = re.sub(r"%\((\w+)\)s", r":\1", query)
@@ -142,7 +144,7 @@ async def test_history_keyset_preserves_ties_nulls_and_position_during_new_inser
     expected = [UUID(int=value) for value in [6, 5, 4, 3, 2, 1]]
     for log_id in expected:
         date = NOW if log_id.int >= 4 else NOW - timedelta(days=1) if log_id.int == 3 else None
-        history.add(api.row.agent_id, api.row.id, created_at=date, id=log_id)
+        history.add(api.row.agent_id, api.row.id, created_at=date, log_id=log_id)
     cursor = None
     observed: list[str] = []
     for index in range(4):
@@ -154,7 +156,7 @@ async def test_history_keyset_preserves_ties_nulls_and_position_during_new_inser
         cursor = page["next_cursor"]
         if index == 0:
             history.add(api.row.agent_id, api.row.id, created_at=NOW + timedelta(days=1))
-            history.add(api.row.agent_id, api.row.id, created_at=NOW, id=UUID(int=7))
+            history.add(api.row.agent_id, api.row.id, created_at=NOW, log_id=UUID(int=7))
             history.db.execute("DELETE FROM agent_activity_logs WHERE id = ?", (str(expected[1]),))
     assert observed == [str(value) for value in expected]
     assert cursor is None

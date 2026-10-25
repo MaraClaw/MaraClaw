@@ -1,5 +1,6 @@
 import socket
 from collections.abc import Callable
+from typing import Unpack
 
 import pytest
 
@@ -9,14 +10,17 @@ from app.core.outbound_policy import (
     resolve_public_addresses,
     validate_public_url,
 )
+from builtin_keyword_fakes import SocketTypeKeyword
 
 
 @pytest.fixture
 def dns(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], None]:
     def configure(addresses: list[str]) -> None:
-        def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
-            assert type == socket.SOCK_STREAM
-            return [(socket.AF_INET, type, 6, "", (address, port)) for address in addresses]
+        def lookup(
+            host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+        ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+            assert kwargs["type"] == socket.SOCK_STREAM
+            return [(socket.AF_INET, kwargs["type"], 6, "", (address, port)) for address in addresses]
 
         monkeypatch.setattr(socket, "getaddrinfo", lookup)
 
@@ -103,7 +107,7 @@ async def test_fails_closed_on_empty_or_mixed_answers(addresses: list[str], dns:
 
 
 async def test_dns_error_does_not_include_path_or_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    def lookup(host: str, port: int, *, type: int) -> None:
+    def lookup(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]) -> None:
         raise socket.gaierror(socket.EAI_NONAME, "not found")
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)

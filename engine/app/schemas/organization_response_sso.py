@@ -4,7 +4,8 @@ from uuid import UUID
 
 from typing_extensions import TypedDict
 
-from app.schemas.schemas import UserOut
+from app.core.domain.users import UserRole
+from app.schemas.schemas import AuthUser
 
 
 class SSOSessionResponse(TypedDict):
@@ -18,7 +19,7 @@ class SSOUserPayload(TypedDict):
     email: str | None
     display_name: str
     avatar_url: str | None
-    role: str
+    role: UserRole
     is_platform_admin: bool
     tenant_id: UUID | None
     title: str | None
@@ -32,7 +33,7 @@ class SSOUserPayload(TypedDict):
     created_at: datetime
 
 
-def sso_user_payload(user: UserOut) -> SSOUserPayload:
+def sso_user_payload(user: AuthUser) -> SSOUserPayload:
     return {
         "id": user.id,
         "identity_id": user.identity_id,

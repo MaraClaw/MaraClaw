@@ -94,7 +94,7 @@ export function LoginPage() {
   }
 
   if (status === 'authenticated') {
-    return <Navigate to={needsOrgConfirm ? '/join' : from} replace />
+    return <Navigate to={needsOrgConfirm && !from.startsWith('/transfer#code=') ? '/join' : from} replace />
   }
 
   async function onSubmit(values: LoginFormValues) {
@@ -113,7 +113,7 @@ export function LoginPage() {
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
         toast.success('Signed in')
-        navigate(result.needs_org_confirm ? '/join' : from, {
+        navigate(result.needs_org_confirm && !from.startsWith('/transfer#code=') ? '/join' : from, {
           replace: true,
           state: { suggested: result.suggested_org },
         })
@@ -162,7 +162,7 @@ export function LoginPage() {
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
         toast.success(`Signed in to ${tenant.tenant_name}`)
-        navigate(result.needs_org_confirm ? '/join' : from, { replace: true })
+        navigate(result.needs_org_confirm && !from.startsWith('/transfer#code=') ? '/join' : from, { replace: true })
         return
       }
       setFormError('Unable to complete organization selection. Try again.')

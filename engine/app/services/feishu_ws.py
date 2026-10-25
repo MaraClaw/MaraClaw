@@ -10,6 +10,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import Protocol, TypeIs
 from unittest.mock import patch
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
@@ -111,7 +112,7 @@ def _feishu_event_body(data: object) -> JsonObject | None:
             if isinstance(content_raw, str):
                 try:
                     loaded = json_loads_object(content_raw)
-                    body_dict["event"] = loaded if loaded else {"content": content_raw}
+                    body_dict["event"] = loaded or {"content": content_raw}
                 except json.JSONDecodeError:
                     body_dict["event"] = {"content": content_raw}
 
@@ -197,8 +198,8 @@ def _make_no_proxy_connect(orig_connect: Callable[..., object]) -> Callable[[], 
 if not _HAS_LARK:
     logger.warning(
         "[Feishu WS] lark-oapi package not installed. "
-        + "Feishu WebSocket features will be disabled. "
-        + "Install with: pip install lark-oapi"
+        "Feishu WebSocket features will be disabled. "
+        "Install with: pip install lark-oapi"
     )
 
 
@@ -216,8 +217,10 @@ class FeishuWSManager:
 
     def _create_event_handler(self, agent_id: uuid.UUID) -> _EventHandler:
         """Create an event dispatcher for a specific agent."""
+        del agent_id
 
         def handle_message(data: object) -> None:
+            del data
             raise RuntimeError("Feishu message events require the asynchronous acceptance handler")
 
         if _lark_mod is None:
@@ -225,7 +228,7 @@ class FeishuWSManager:
         handler_cls: object = getattr(_lark_mod, "EventDispatcherHandler", None)
         builder_fn: object = getattr(handler_cls, "builder", None)
         if not callable(builder_fn):
-            raise RuntimeError("lark-oapi EventDispatcherHandler.builder is unavailable")
+            raise TypeError("lark-oapi EventDispatcherHandler.builder is unavailable")
         started: object = builder_fn("", "")
         if not _is_event_builder(started):
             raise RuntimeError("lark-oapi EventDispatcherHandler.builder returned an unexpected object")
@@ -376,8 +379,8 @@ class FeishuWSManager:
                         if not _was_disconnected:
                             logger.warning(
                                 f"[Feishu WS] Connection lost for agent {agent_id} "
-                                + f"(last conn_id={_last_conn_id}), "
-                                + "waiting for SDK auto-reconnect..."
+                                f"(last conn_id={_last_conn_id}), "
+                                "waiting for SDK auto-reconnect..."
                             )
                             _was_disconnected = True
                     elif bool(getattr(conn, "closed", False)):
@@ -395,7 +398,7 @@ class FeishuWSManager:
                         if curr_conn_id != _last_conn_id and curr_conn_id:
                             logger.info(
                                 f"[Feishu WS] Connection ID changed for agent {agent_id}: "
-                                + f"{_last_conn_id} → {curr_conn_id}"
+                                f"{_last_conn_id} → {curr_conn_id}"
                             )
                             _last_conn_id = curr_conn_id
                 except asyncio.CancelledError:
@@ -443,7 +446,7 @@ class FeishuWSManager:
             logger.info("[Feishu WS] lark-oapi not installed, skipping Feishu WS initialization")
             return
         logger.info("[Feishu WS] Initializing all active Feishu channels...")
-        configs = await channel_config_dao.list_configured("feishu")
+        configs = await channel_config_dao.list_configured(ChannelType.FEISHU)
 
         for config in configs:
             extra = json_object_from(config.extra_config)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.domain.users import UserRole
 from app.core.security import hash_password_async
 from app.dao.agent_dao import agent_dao
 from app.dao.identity_dao import identity_dao
@@ -72,7 +73,7 @@ async def create_additional_platform_admin(
                     "identity_id": identity.id,
                     "tenant_id": None,
                     "display_name": display_name,
-                    "role": "platform_admin",
+                    "role": UserRole.PLATFORM_ADMIN,
                     "registration_source": "platform_admin",
                     "is_active": True,
                     "is_genesis": False,
@@ -123,7 +124,7 @@ async def create_additional_org_admin(
                     "identity_id": identity.id,
                     "tenant_id": tenant.id,
                     "display_name": display_name,
-                    "role": "org_admin",
+                    "role": UserRole.ORG_ADMIN,
                     "registration_source": "org_admin",
                     "is_active": True,
                     "is_genesis": False,
@@ -168,15 +169,15 @@ def assert_join_may_rewrite_membership(user: UserRecord) -> None:
         raise AdminGuardError(403, "Platform admin membership cannot be converted by joining a company")
 
 
-async def _assert_not_last_active_admin(target: UserRecord, *, leaving_role: str) -> None:
+async def _assert_not_last_active_admin(target: UserRecord, *, leaving_role: UserRole) -> None:
     if not getattr(target, "is_active", True):
         return
     if leaving_role == "platform_admin":
-        count = await user_dao.count_active_by_role("platform_admin")
+        count = await user_dao.count_active_by_role(UserRole.PLATFORM_ADMIN)
         if count <= 1:
             raise AdminGuardError(400, "Cannot change the only active platform administrator. Create another first.")
     elif leaving_role == "org_admin":
-        count = await user_dao.count_active_by_role("org_admin", tenant_id=target.tenant_id)
+        count = await user_dao.count_active_by_role(UserRole.ORG_ADMIN, tenant_id=target.tenant_id)
         if count <= 1:
             raise AdminGuardError(
                 400, "Cannot change the only active organization administrator. Promote another first."
@@ -193,7 +194,7 @@ async def apply_user_role_change(
     *,
     actor: UserRecord,
     target: UserRecord,
-    new_role: str,
+    new_role: UserRole,
     ip_address: str | None = None,
 ) -> UserRecord:
     """Change a user's role using the same genesis / last-active rules as mint and deactivate."""
@@ -219,9 +220,9 @@ async def apply_user_role_change(
             raise AdminGuardError(403, "Cannot modify users outside your organization")
 
     if target.role == "platform_admin" and new_role != "platform_admin":
-        await _assert_not_last_active_admin(target, leaving_role="platform_admin")
+        await _assert_not_last_active_admin(target, leaving_role=UserRole.PLATFORM_ADMIN)
     elif target.role == "org_admin" and new_role != "org_admin":
-        await _assert_not_last_active_admin(target, leaving_role="org_admin")
+        await _assert_not_last_active_admin(target, leaving_role=UserRole.ORG_ADMIN)
 
     user_updates: dict[str, object] = {"role": new_role, "is_genesis": False}
     async with connection_ctx():
@@ -250,7 +251,7 @@ async def apply_user_assignment(
     actor: UserRecord,
     target: UserRecord,
     tenant_id: UUID,
-    role: str,
+    role: UserRole,
     ip_address: str | None = None,
 ) -> UserRecord:
     """Assign a same-company role without bypassing company admission."""
@@ -259,9 +260,9 @@ async def apply_user_assignment(
     if _flag(target, "is_genesis"):
         raise AdminGuardError(403, "Cannot reassign a genesis admin")
     if target.role == "platform_admin":
-        await _assert_not_last_active_admin(target, leaving_role="platform_admin")
+        await _assert_not_last_active_admin(target, leaving_role=UserRole.PLATFORM_ADMIN)
     elif target.role == "org_admin":
-        await _assert_not_last_active_admin(target, leaving_role="org_admin")
+        await _assert_not_last_active_admin(target, leaving_role=UserRole.ORG_ADMIN)
 
     if target.tenant_id != tenant_id:
         raise AdminGuardError(409, "Company changes require an admission request and genesis approval")

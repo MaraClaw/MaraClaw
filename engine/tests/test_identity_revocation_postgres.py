@@ -3,6 +3,7 @@ import sys
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
@@ -16,16 +17,24 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api import auth
 from app.config import get_settings
+from app.core.json_types import json_object_from_response
 from app.core.row_memo import clear_row_memo
-from app.core.security import create_access_token, load_user_principal
+from app.core.security import (
+    create_access_token,
+    hash_password,
+    load_user_from_access_token,
+    load_user_principal,
+    verify_password,
+)
 from app.core.session_cache import get_cached_user, set_cached_user
 from app.dao import identity_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection, connection_ctx, transaction
+from app.records.identity import IdentityRecord
 from app.scripts.bootstrap_db import SCHEMA_BASELINE, _statement_bodies
-from app.services import chat_tickets, file_download_tickets
+from app.services import chat_tickets, file_download_tickets, password_reset_service
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,15 @@ class RevocationDatabase:
             )
             assert row is not None
             return int(str(row["auth_generation"]))
+
+    async def credential_state(self) -> tuple[str, bool, int]:
+        async with await AsyncConnection[DictRow].connect(self.conninfo, row_factory=dict_row) as raw:
+            row = await DbConnection(raw).fetchone(
+                "SELECT password_hash, must_change_password, auth_generation FROM identities WHERE id = %(id)s",
+                {"id": self.identity_id},
+            )
+            assert row is not None
+            return str(row["password_hash"]), bool(row["must_change_password"]), int(str(row["auth_generation"]))
 
 
 @pytest.fixture
@@ -102,6 +120,121 @@ def auth_app() -> FastAPI:
     app = FastAPI()
     app.include_router(auth.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
     return app
+
+
+@pytest.fixture
+async def password_identity(live_identity: RevocationDatabase) -> IdentityRecord:
+    identity = await identity_dao.get(live_identity.identity_id)
+    assert identity is not None
+    return await identity_dao.update(
+        db_obj=identity, obj_in={"password_hash": hash_password("old-password"), "must_change_password": True}
+    )
+
+
+@pytest.mark.parametrize("flow", ["change", "reset"])
+async def test_password_http_revokes_both_memberships_and_commits_credentials(
+    live_identity: RevocationDatabase,
+    auth_app: FastAPI,
+    password_identity: IdentityRecord,
+    monkeypatch: pytest.MonkeyPatch,
+    flow: str,
+) -> None:
+    # Given a forced-change identity with two real generation-zero credentials.
+    live = live_identity
+    tokens = [await create_access_token(str(uid), "member", identity_id=live.identity_id) for uid in live.users]
+    monkeypatch.setattr(
+        password_reset_service,
+        "consume_password_reset_token",
+        AsyncMock(return_value={"identity_id": password_identity.id}),
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=auth_app), base_url="http://qa") as client:
+        # When the real HTTP password route writes the identity.
+        response = await client.request(
+            "PUT" if flow == "change" else "POST",
+            "/api/auth/me/password" if flow == "change" else "/api/auth/reset-password",
+            json={"old_password": "old-password", "new_password": "new-password", "token": "r" * 32},
+            headers={"Authorization": f"Bearer {tokens[0]}"} if flow == "change" else {},
+        )
+        # Then an independent SQL session sees both writes and both old memberships are revoked.
+        assert response.status_code == 200
+        new_hash, forced, generation = await live.credential_state()
+        assert verify_password("new-password", new_hash)
+        assert (forced, generation) == (False, 1)
+        for token in tokens:
+            assert (await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})).status_code == 401
+        body = json_object_from_response(response)
+        if flow == "reset":
+            assert body == {"ok": True}
+        else:
+            replacement = body["access_token"]
+            assert isinstance(replacement, str)
+            assert body["ok"] is True
+            assert body["must_change_password"] is False
+            assert (
+                await client.get("/api/auth/me", headers={"Authorization": f"Bearer {replacement}"})
+            ).status_code == 200
+            principal = await load_user_from_access_token(replacement, enforce_password_change=True)
+            assert principal.id == live.users[0]
+
+
+@pytest.mark.parametrize(("flow", "failpoint"), [("change", "bump"), ("reset", "bump"), ("change", "mint")])
+async def test_password_failure_rolls_back_hash_force_flag_and_generation(
+    live_identity: RevocationDatabase,
+    auth_app: FastAPI,
+    password_identity: IdentityRecord,
+    monkeypatch: pytest.MonkeyPatch,
+    flow: str,
+    failpoint: str,
+) -> None:
+    # Given committed credentials and failures after SQL revocation or during replacement minting.
+    live = live_identity
+    before = await live.credential_state()
+    token = await create_access_token(str(live.users[0]), "member", identity_id=live.identity_id)
+    original_update = identity_dao.update
+    original_bump = identity_dao.bump_auth_generation
+    write_connection: DbConnection | None = None
+
+    async def update(*, db_obj: IdentityRecord, obj_in: dict[str, object]) -> IdentityRecord:
+        nonlocal write_connection
+        write_connection = session_module.get_connection()
+        assert write_connection is not None
+        return await original_update(db_obj=db_obj, obj_in=obj_in)
+
+    async def bump(identity_id: UUID) -> int | None:
+        assert session_module.get_connection() is write_connection
+        result = await original_bump(identity_id)
+        assert result == 1
+        assert await live.credential_state() == before
+        if failpoint == "bump":
+            raise RuntimeError("injected post-bump failure")
+        return result
+
+    async def mint(user_id: str, role: str, *, identity_id: UUID) -> str:
+        assert session_module.get_connection() is write_connection
+        assert await identity_dao.get_auth_generation(identity_id) == 1
+        assert await live.credential_state() == before
+        raise RuntimeError("injected mint failure")
+
+    monkeypatch.setattr(identity_dao, "update", update)
+    monkeypatch.setattr(identity_dao, "bump_auth_generation", bump)
+    monkeypatch.setattr(auth, "create_access_token", mint)
+    monkeypatch.setattr(
+        password_reset_service,
+        "consume_password_reset_token",
+        AsyncMock(return_value={"identity_id": password_identity.id}),
+    )
+    transport = httpx.ASGITransport(app=auth_app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://qa") as client:
+        # When a later step fails inside the request-owned transaction.
+        response = await client.request(
+            "PUT" if flow == "change" else "POST",
+            "/api/auth/me/password" if flow == "change" else "/api/auth/reset-password",
+            json={"old_password": "old-password", "new_password": "new-password", "token": "r" * 32},
+            headers={"Authorization": f"Bearer {token}"} if flow == "change" else {},
+        )
+    # Then neither the password, forced-change flag nor revocation can partially commit.
+    assert response.status_code == 500
+    assert await live.credential_state() == before
 
 
 class CommitObserver:

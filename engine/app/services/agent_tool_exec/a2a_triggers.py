@@ -47,9 +47,9 @@ async def _create_on_message_trigger(
         async with connection_ctx() as db:
             value = await db.fetchval(
                 "SELECT m.created_at FROM chat_messages m "
-                + "JOIN chat_sessions s ON m.conversation_id = s.id::text "
-                + "WHERE s.agent_id = %(agent_id)s AND m.created_at IS NOT NULL "
-                + "ORDER BY m.created_at DESC LIMIT 1",
+                "JOIN chat_sessions s ON m.conversation_id = s.id::text "
+                "WHERE s.agent_id = %(agent_id)s AND m.created_at IS NOT NULL "
+                "ORDER BY m.created_at DESC LIMIT 1",
                 {"agent_id": agent_id},
             )
             created = datetime_from_row(value)

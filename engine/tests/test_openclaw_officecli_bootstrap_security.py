@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -30,7 +29,7 @@ def prepare_lkg(fixture: BootstrapFixture) -> tuple[bytes, bytes, bytes, str]:
         release.joinpath("officecli").read_bytes(),
         release.joinpath("skill", "SKILL.md").read_bytes(),
         release.joinpath("metadata").read_bytes(),
-        os.readlink(fixture.state_dir / ".officecli" / "current"),
+        str((fixture.state_dir / ".officecli" / "current").readlink()),
     )
 
 
@@ -43,7 +42,7 @@ def assert_lkg_execution(
     assert release.joinpath("officecli").read_bytes() == snapshot[0]
     assert release.joinpath("skill", "SKILL.md").read_bytes() == snapshot[1]
     assert release.joinpath("metadata").read_bytes() == snapshot[2]
-    assert os.readlink(fixture.state_dir / ".officecli" / "current") == snapshot[3]
+    assert str((fixture.state_dir / ".officecli" / "current").readlink()) == snapshot[3]
 
 
 def install_metadata_failure_chmod(fixture: BootstrapFixture) -> None:
@@ -353,5 +352,5 @@ def test_activation_replaces_current_with_gnu_atomic_rename(tmp_path: Path, monk
     current = fixture.state_dir / ".officecli" / "current"
     assert result.returncode == 0, result.stderr
     assert any(line.startswith("-Tf\0--\0") for line in mv_log.read_text(encoding="utf-8").splitlines())
-    assert os.readlink(current) == "releases/v1.2.3"
+    assert str(current.readlink()) == "releases/v1.2.3"
     assert not list((fixture.state_dir / ".officecli" / "releases").rglob(".current.*"))

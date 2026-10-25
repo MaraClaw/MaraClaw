@@ -8,6 +8,7 @@ import pytest
 from fastapi import Depends, FastAPI, Header
 
 from app.api import notification
+from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.dao.notification_dao import notification_dao
 from app.dao.tenant_dao import tenant_dao
@@ -17,7 +18,9 @@ from app.db.session import bind_crud_connection
 from app.records.notification import NotificationRecord
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
-from test_bootstrap_postgres import schema_db as schema_db
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["schema_db"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,9 +34,11 @@ class ArchiveScenario:
     def headers(self, user: UserRecord) -> dict[str, str]:
         return {"x-test-user": str(user.id)}
 
-    async def notice(self, *, is_read: bool = False, kind: str = "broadcast") -> NotificationRecord:
+    async def notice(
+        self, *, is_read: bool = False, kind: NotificationKind = NotificationKind.BROADCAST
+    ) -> NotificationRecord:
         return await notification_dao.create(
-            obj_in={"user_id": self.owner.id, "type": kind, "title": "Notice", "is_read": is_read}
+            obj_in={"user_id": self.owner.id, "type": kind.value, "title": "Notice", "is_read": is_read}
         )
 
 

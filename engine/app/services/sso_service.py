@@ -153,9 +153,9 @@ class SSOService:
         elif provider_type == "wecom":
             external_id = provider_user_id
 
-        open_id = cast(str, (raw_open_id or "").strip())
-        union_id = cast(str, (raw_union_id or "").strip())
-        normalized_external_id = cast(str, (external_id or "").strip())
+        open_id = cast("str", (raw_open_id or "").strip())
+        union_id = cast("str", (raw_union_id or "").strip())
+        normalized_external_id = cast("str", (external_id or "").strip())
         return union_id or None, open_id or None, normalized_external_id or None
 
     def _identity_lookup_chain(
@@ -240,8 +240,7 @@ class SSOService:
                 incoming_name = identity_data.get("name") or identity_data.get("display_name")
                 is_placeholder_name = (
                     not member.name
-                    or member.name == member.external_id
-                    or member.name == provider_user_id
+                    or member.name in (member.external_id, provider_user_id)
                     or member.name.startswith(f"{provider_type.capitalize()} User")
                 )
                 if incoming_name and is_placeholder_name:
@@ -346,7 +345,7 @@ class SSOService:
                 conflict_names.append(f"'{name}'")
             logger.warning(
                 f"[SSO] IP conflict: tenant_id={tenant_id} cannot enable SSO, "
-                + f"other tenants already have SSO enabled on IP base: {', '.join(conflict_names)}"
+                f"other tenants already have SSO enabled on IP base: {', '.join(conflict_names)}"
             )
         return len(other_providers) == 0
 

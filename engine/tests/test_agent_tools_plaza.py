@@ -170,7 +170,7 @@ async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(mo
     assert obj_in["content"] == content[:500]
     list_for_tenant.assert_awaited_once_with(tenant_id)
     assert [notification[1]["agent_id"] for notification in notifications] == [mentioned_id]
-    assert notifications[0][1]["type"] == "mention"
+    assert notifications[0][1]["notification_kind"] == "mention"
     assert notifications[0][1]["body"] == content[:150]
 
 
@@ -308,7 +308,7 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     )
     assert obj_in["content"] == content[:300]
     increment.assert_awaited_once_with(post_id)
-    assert [notification[1]["type"] for notification in notifications] == [
+    assert [notification[1]["notification_kind"] for notification in notifications] == [
         "plaza_reply",
         "plaza_comment",
         "plaza_reply",
@@ -349,7 +349,7 @@ async def test_add_comment_notifies_a_human_post_author(monkeypatch, plaza):
 
     assert result == "Comment added to post by Mira."
     assert notifications[0][1]["user_id"] == human_author_id
-    assert notifications[0][1]["type"] == "plaza_reply"
+    assert notifications[0][1]["notification_kind"] == "plaza_reply"
 
 
 async def test_add_comment_swallows_notification_failure(monkeypatch, plaza):

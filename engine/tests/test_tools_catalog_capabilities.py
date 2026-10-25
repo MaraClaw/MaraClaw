@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter, ValidationError
 
 from app.api import tools
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.records.identity import IdentityRecord
 from app.records.tool import ToolRecord
@@ -20,11 +21,15 @@ from app.services.tool_ownership import can_configure_tool, can_mutate_tool, too
 def test_policy_matches_record_ownership_matrix(actor: str, scope: str) -> None:
     # Given real membership/identity records and each ownership class.
     tenant_id = uuid4()
-    user = UserRecord(id=uuid4(), role=actor, tenant_id=tenant_id)
+    user = UserRecord(
+        id=uuid4(),
+        role=UserRole.MEMBER if actor in {"tenantless_org_admin", "identity_pa"} else UserRole(actor),
+        tenant_id=tenant_id,
+    )
     if actor == "tenantless_org_admin":
-        user.role, user.tenant_id = "org_admin", None
+        user.role, user.tenant_id = UserRole.ORG_ADMIN, None
     elif actor == "identity_pa":
-        user.role = "member"
+        user.role = UserRole.MEMBER
         user.identity = IdentityRecord(id=uuid4(), is_platform_admin=True)
     tool = ToolRecord(id=uuid4(), name="test", source="admin", type="mcp", tenant_id=tenant_id)
     if scope == "global":
@@ -60,7 +65,7 @@ def test_policy_matches_record_ownership_matrix(actor: str, scope: str) -> None:
 @pytest.mark.parametrize("target", ["own", "foreign", "none"])
 def test_builtin_configuration_requires_authorized_concrete_target(role: str, target: str) -> None:
     # Given a builtin whose malformed tenant tag must not grant ownership.
-    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role=role)
+    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole(role))
     tool = ToolRecord(id=uuid4(), name="builtin", source="builtin", tenant_id=user.tenant_id)
     target_id = {"own": user.tenant_id, "foreign": uuid4(), "none": None}[target]
     # When evaluating configuration rights for the resolved target.
@@ -73,7 +78,7 @@ def test_builtin_configuration_requires_authorized_concrete_target(role: str, ta
 
 @pytest.fixture
 def catalog(monkeypatch: pytest.MonkeyPatch) -> tuple[UserRecord, list[ToolRecord]]:
-    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role="org_admin")
+    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
     records = [
         ToolRecord(id=uuid4(), name="own", type="mcp", source="admin", tenant_id=user.tenant_id),
         ToolRecord(id=uuid4(), name="shared", type="mcp", source="admin"),
@@ -101,15 +106,15 @@ async def test_catalog_wire_exposes_required_ownership_and_capabilities(
 ) -> None:
     # Given a readable catalog and a real caller; PA selects a foreign target.
     user, records = catalog
-    user.role = actor
+    user.role = UserRole.MEMBER if actor in {"tenantless_org_admin", "identity_pa"} else UserRole(actor)
     params: dict[str, str] = {}
     if actor == "tenantless_org_admin":
-        user.role, user.tenant_id = "org_admin", None
+        user.role, user.tenant_id = UserRole.ORG_ADMIN, None
     elif actor in {"platform_admin", "identity_pa"}:
         user.tenant_id = None
         params["tenant_id"] = str(uuid4())
         if actor == "identity_pa":
-            user.role = "member"
+            user.role = UserRole.MEMBER
             user.identity = IdentityRecord(id=uuid4(), is_platform_admin=True)
     app = FastAPI()
     app.include_router(tools.router, prefix="/api")

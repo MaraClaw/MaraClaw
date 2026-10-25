@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { authorizeProvider, listAuthProviders } from '@/lib/auth-api'
-import { SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
+import { consumeSsoTransaction, SSO_STATE_KEY, storeSsoTransaction } from '@/lib/sso-storage'
 import type { AuthProvider } from '@/lib/types/auth'
 
 export function SsoButtons() {
+  const location = useLocation()
   const { owner, isCurrent } = useAuth()
   const [providers, setProviders] = useState<AuthProvider[]>([])
 
@@ -29,14 +31,19 @@ export function SsoButtons() {
     const expectedOwner = owner
     if (!isCurrent(expectedOwner)) return
     const state = crypto.randomUUID()
+    const transaction = { state, provider: provider.provider_type }
     const redirectUri = `${window.location.origin}/sso/callback`
+    storeSsoTransaction(transaction, location.state)
     try {
       const { authorization_url } = await authorizeProvider(provider.provider_type, redirectUri, { state, owner: expectedOwner })
-      if (!isCurrent(expectedOwner)) return
-      sessionStorage.setItem(SSO_STATE_KEY, state)
-      sessionStorage.setItem(SSO_PROVIDER_KEY, provider.provider_type)
+      if (!isCurrent(expectedOwner)) {
+        consumeSsoTransaction(transaction)
+        return
+      }
+      if (sessionStorage.getItem(SSO_STATE_KEY) !== state) return
       window.location.assign(authorization_url)
     } catch (error) {
+      consumeSsoTransaction(transaction)
       if (!isCurrent(expectedOwner)) return
       if (!(error instanceof Error)) throw error
     }

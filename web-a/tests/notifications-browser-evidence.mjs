@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { NotificationKind } from '../src/lib/notifications-api.ts'
+
 export const notificationFixture = (archived = false) => [false, true, false, true, true, true].map((is_read, index) => ({
-  id: `33333333-3333-4333-8333-${String(index + (archived ? 101 : 1)).padStart(12, '0')}`, is_read, type: 'broadcast',
+  id: `33333333-3333-4333-8333-${String(index + (archived ? 101 : 1)).padStart(12, '0')}`, is_read, type: NotificationKind.Broadcast,
   title: `${archived ? 'Saved: ' : ''}${['Operations update', 'Earlier team notice', 'Workspace maintenance', 'Account review', 'Team summary', 'Previous update'][index]}`,
   body: 'Review the latest workspace information with your team.\nUpdates remain available in your Inbox after they have been read.\nContact your organization administrator if you need assistance.',
   link: null, ref_id: null, sender_name: 'Workspace operations', created_at: '2026-10-20T12:00:00Z',

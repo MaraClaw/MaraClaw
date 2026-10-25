@@ -8,7 +8,9 @@ from app.services.storage_runtime import local
 from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
-from file_preview_fixtures import preview_context as preview_context
+from file_preview_fixtures import preview_context
+
+__all__ = ["preview_context"]
 
 
 async def test_bytes_conflict_when_requested_version_is_stale(preview_context, monkeypatch):

@@ -35,7 +35,13 @@ export function adminUser(id = 'admin-a'): UserOut {
 }
 
 export function tokenResponse(token = 'token-b'): TokenResponse {
-  return { access_token: token, token_type: 'bearer', user: adminUser('admin-b') }
+  return {
+    access_token: token, token_type: 'bearer',
+    user: {
+      ...adminUser('admin-b'), id: 'a1111111-1111-4111-8111-111111111111',
+      identity_id: 'a2222222-2222-4222-8222-222222222222', tenant_id: 'a3333333-3333-4333-8333-333333333333',
+    },
+  }
 }
 
 type StorageNotice = Pick<StorageEvent, 'key' | 'storageArea'> & {

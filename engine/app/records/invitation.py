@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.json_types import (
+    datetime_from_row,
+    int_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -22,6 +28,10 @@ class InvitationCodeRecord:
     is_active: bool = True
     created_by: UUID | None = None
     created_at: datetime | None = None
+    expires_at: datetime | None = None
+    invited_email: str = ""
+    redeemed_at: datetime | None = None
+    redeemed_by: UUID | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> InvitationCodeRecord:
@@ -34,4 +44,8 @@ class InvitationCodeRecord:
             is_active=bool(row.get("is_active", True)),
             created_by=uuid_from_row_opt(row.get("created_by")),
             created_at=datetime_from_row(row.get("created_at")),
+            expires_at=datetime_from_row(row.get("expires_at")),
+            invited_email=str_from_row(row.get("invited_email")),
+            redeemed_at=datetime_from_row(row.get("redeemed_at")),
+            redeemed_by=uuid_from_row_opt(row.get("redeemed_by")),
         )

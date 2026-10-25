@@ -2,7 +2,9 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pytest
-from tests.test_chat_submission_postgres import ReceiptDatabase, receipt_db as receipt_db
+from tests.test_chat_submission_postgres import ReceiptDatabase, receipt_db
+
+__all__ = ["receipt_db"]
 
 from app.api import background_tasks
 from app.core import access_cache

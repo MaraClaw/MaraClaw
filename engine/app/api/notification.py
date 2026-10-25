@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
@@ -26,15 +27,25 @@ from app.schemas.notification_responses import (
 router = APIRouter(tags=["notifications"])
 
 # Category -> type mapping for filtering
-CATEGORY_TYPE_MAP: dict[str, list[str]] = {
-    "tool": ["autonomy_l2"],
-    "approval": ["approval_pending", "approval_resolved", "company_admission_pending", "company_admission_resolved"],
-    "social": ["plaza_comment", "plaza_reply", "mention", "broadcast"],
-    "broadcast": ["broadcast"],
+CATEGORY_TYPE_MAP: dict[str, list[NotificationKind]] = {
+    "tool": [NotificationKind.AUTONOMY_L2],
+    "approval": [
+        NotificationKind.APPROVAL_PENDING,
+        NotificationKind.APPROVAL_RESOLVED,
+        NotificationKind.COMPANY_ADMISSION_PENDING,
+        NotificationKind.COMPANY_ADMISSION_RESOLVED,
+    ],
+    "social": [
+        NotificationKind.PLAZA_COMMENT,
+        NotificationKind.PLAZA_REPLY,
+        NotificationKind.MENTION,
+        NotificationKind.BROADCAST,
+    ],
+    "broadcast": [NotificationKind.BROADCAST],
 }
 
 
-def _types_for_category(category: str | None) -> list[str] | None:
+def _types_for_category(category: str | None) -> list[NotificationKind] | None:
     if category is None or category == "all":
         return None
     if category not in CATEGORY_TYPE_MAP:
@@ -193,9 +204,12 @@ async def broadcast_notification(
     if req.send_email:
         from app.services.system_email_service import resolve_email_config_async
 
-        email_config = await resolve_email_config_async()
+        email_config = await resolve_email_config_async(tenant_id)
         if not email_config:
-            raise HTTPException(400, "System email is not configured. Please configure it in Platform Settings.")
+            raise HTTPException(
+                400,
+                "Organization SMTP is not configured. Ask your genesis administrator to configure SMTP in Settings.",
+            )
 
     async with connection_ctx():
         users = await user_dao.list_active_for_tenant(
@@ -206,7 +220,7 @@ async def broadcast_notification(
         for user in users:
             _ = await send_notification(
                 user_id=user.id,
-                type="broadcast",
+                notification_kind=NotificationKind.BROADCAST,
                 title=req.title,
                 body=req.body,
                 sender_name=sender_name,
@@ -217,7 +231,7 @@ async def broadcast_notification(
         for agent in agents:
             _ = await send_notification(
                 agent_id=agent.id,
-                type="broadcast",
+                notification_kind=NotificationKind.BROADCAST,
                 title=req.title,
                 body=req.body,
                 sender_name=sender_name,

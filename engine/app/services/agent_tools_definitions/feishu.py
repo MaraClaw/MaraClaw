@@ -122,8 +122,8 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_doc_search",
             "description": (
                 "Search Feishu cloud documents by keyword using the official Feishu document search API. "
-                + "Use this when a wiki folder or knowledge base contains too many documents for feishu_wiki_list to be practical. "
-                + "Returns matching titles, document tokens, and document types so you can then read, share, or delete the target file."
+                "Use this when a wiki folder or knowledge base contains too many documents for feishu_wiki_list to be practical. "
+                "Returns matching titles, document tokens, and document types so you can then read, share, or delete the target file."
             ),
             "parameters": {
                 "type": "object",
@@ -159,10 +159,10 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_wiki_list",
             "description": (
                 "List all sub-pages (child nodes) of a Feishu Wiki (知识库) page. "
-                + "Works with wiki URLs like 'https://xxx.feishu.cn/wiki/NodeToken'. "
-                + "Use this when a wiki page has child pages you need to explore. "
-                + "Returns titles, node_tokens, and obj_tokens for each sub-page. "
-                + "Each sub-page can then be read with feishu_doc_read using its node_token."
+                "Works with wiki URLs like 'https://xxx.feishu.cn/wiki/NodeToken'. "
+                "Use this when a wiki page has child pages you need to explore. "
+                "Returns titles, node_tokens, and obj_tokens for each sub-page. "
+                "Each sub-page can then be read with feishu_doc_read using its node_token."
             ),
             "parameters": {
                 "type": "object",
@@ -186,10 +186,10 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_doc_read",
             "description": (
                 "Read the text content of a Feishu document or Wiki page. "
-                + "Works with both regular docx URLs (https://xxx.feishu.cn/docx/Token) "
-                + "and Wiki page URLs (https://xxx.feishu.cn/wiki/Token). "
-                + "Automatically handles wiki node tokens. "
-                + "If the page has sub-pages, use feishu_wiki_list to list them."
+                "Works with both regular docx URLs (https://xxx.feishu.cn/docx/Token) "
+                "and Wiki page URLs (https://xxx.feishu.cn/wiki/Token). "
+                "Automatically handles wiki node tokens. "
+                "If the page has sub-pages, use feishu_wiki_list to list them."
             ),
             "parameters": {
                 "type": "object",
@@ -379,10 +379,10 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_drive_share",
             "description": (
                 "Manage Feishu Drive file collaborators and permissions. "
-                + "Supports ALL file types: docx, bitable, sheet, doc, folder, mindnote, slides. "
-                + "Can add or remove collaborators with viewer/editor/full_access roles, "
-                + "or get the current collaborator list. "
-                + "Accepts colleague names (auto-searched) or open_ids directly."
+                "Supports ALL file types: docx, bitable, sheet, doc, folder, mindnote, slides. "
+                "Can add or remove collaborators with viewer/editor/full_access roles, "
+                "or get the current collaborator list. "
+                "Accepts colleague names (auto-searched) or open_ids directly."
             ),
             "parameters": {
                 "type": "object",
@@ -427,9 +427,9 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_drive_delete",
             "description": (
                 "Delete a file or folder from Feishu Drive (cloud space). "
-                + "The file will be moved to the recycle bin, not permanently deleted. "
-                + "For folders, the deletion is asynchronous. "
-                + "Requires ownership + parent folder edit permission, or parent folder full_access."
+                "The file will be moved to the recycle bin, not permanently deleted. "
+                "For folders, the deletion is asynchronous. "
+                "Requires ownership + parent folder edit permission, or parent folder full_access."
             ),
             "parameters": {
                 "type": "object",
@@ -454,9 +454,9 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "feishu_user_search",
             "description": (
                 "Search for a colleague in the Feishu (Lark) directory by name. "
-                + "Returns their open_id, email, and department so you can send messages, "
-                + "invite them to calendar events, or share documents. "
-                + "Use this whenever you need to find a colleague's Feishu identity."
+                "Returns their open_id, email, and department so you can send messages, "
+                "invite them to calendar events, or share documents. "
+                "Use this whenever you need to find a colleague's Feishu identity."
             ),
             "parameters": {
                 "type": "object",

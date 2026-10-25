@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.config import get_settings
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -85,7 +86,7 @@ async def test_teams_current_provider_writers_remain_resolvable(raw: str, persis
 async def test_earliest_platform_admin_cannot_supply_unpersisted_genesis_authority() -> None:
     # Given
     identity = IdentityRecord(id=uuid4(), email="old@example.com", password_hash="usable")
-    earliest = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity, role="platform_admin")
+    earliest = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity, role=UserRole.PLATFORM_ADMIN)
     settings = get_settings().model_copy(update={"PLATFORM_ADMIN_EMAIL": "", "PLATFORM_ADMIN_PASSWORD": ""})
     first = AsyncMock(return_value=earliest)
     update = AsyncMock()

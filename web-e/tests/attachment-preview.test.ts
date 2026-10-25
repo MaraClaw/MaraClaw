@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { ZodError } from 'zod'
 import { ApiError } from '../src/lib/http.ts'
 import { attachmentFixture, metadata, resource } from './attachment-fixture.ts'
 
@@ -111,6 +112,23 @@ for (const status of [403, 404, 409]) {
     assert.equal(fixture.cache.size, 0)
   })
 }
+
+test('malformed metadata rejects before fetching preview bytes or populating the cache', async (context) => {
+  // Given
+  let byteCalls = 0
+  const fixture = attachmentFixture((url) => {
+    if (String(url).includes('preview-metadata')) return Promise.resolve(Response.json({ ...metadata, size: '3' }))
+    byteCalls++
+    return Promise.resolve(new Response(new Uint8Array([1, 2, 3])))
+  })
+  context.after(fixture.dispose)
+  // When
+  const result = fixture.previews.open(fixture.scope, resource, new AbortController().signal)
+  // Then
+  await assert.rejects(result, ZodError)
+  assert.equal(byteCalls, 0)
+  assert.equal(fixture.cache.size, 0)
+})
 
 test('closing the last preview aborts transport and prevents late bytes from being cached', async (context) => {
   // Given

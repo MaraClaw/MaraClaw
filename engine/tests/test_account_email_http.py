@@ -176,6 +176,6 @@ async def test_retired_availability_query_has_no_account_lookup(monkeypatch, htt
 def test_public_account_schemas_have_no_username(http_app: FastAPI):
     schemas = http_app.openapi()["components"]["schemas"]
 
-    for name in ("RegisterInitRequest", "UserUpdate", "UserOut"):
+    for name in ("RegisterInitRequest", "UserUpdate", "AuthUser"):
         assert "username" not in schemas[name]["properties"]
     assert schemas["RegisterInitRequest"]["required"] == ["email", "password"]

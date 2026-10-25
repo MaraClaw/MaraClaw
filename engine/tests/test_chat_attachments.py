@@ -6,7 +6,9 @@ import pytest
 from app.api import websocket
 from app.services import chat_submissions
 from app.services.storage_runtime import LocalStorageBackend
-from test_websocket_turn_transaction import drive_turn, turn as turn
+from test_websocket_turn_transaction import drive_turn, turn
+
+__all__ = ["turn"]
 
 REF = {"path": "workspace/uploads/季度报告.docx", "name": "Quarterly report.docx"}
 

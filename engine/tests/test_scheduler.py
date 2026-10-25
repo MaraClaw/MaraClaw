@@ -6,14 +6,17 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.core.domain.agents import AgentStatus
 from app.core.logging import get_trace_id, set_trace_id
 from app.dao.agent_dao import agent_dao
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
 from app.services import scheduler, scheduler_tasks
-from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool as pool
-from test_scheduler_tasks import owner as owner
+from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool
+from test_scheduler_tasks import owner
+
+__all__ = ["owner", "pool"]
 
 
 class _Clock(datetime):
@@ -107,8 +110,8 @@ async def test_execution_skips_without_counting_when_agent_ineligible(
     # Given a persisted schedule and an agent no longer eligible at execution time.
     row = _schedule()
     pool.rows[row.id] = row
-    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
-    agent.status = "stopped" if state == "stopped" else "running"
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status=AgentStatus.RUNNING)
+    agent.status = AgentStatus.STOPPED if state == "stopped" else AgentStatus.RUNNING
     agent.is_expired = state == "expired"
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None if state == "missing" else agent))
     context = AsyncMock(side_effect=AssertionError("built ineligible context"))
@@ -137,7 +140,7 @@ async def test_execution_counts_started_attempt_before_detached_llm_and_retains_
     # Given a running agent, with real atomic bookkeeping and an external LLM seam.
     row = replace(_schedule(), is_enabled=enabled)
     pool.rows[row.id] = row
-    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status=AgentStatus.RUNNING)
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
     traces: list[str | None] = []
 
@@ -199,7 +202,7 @@ async def test_execution_retains_cancelled_history_when_owner_stops(
     # Given an owned execution blocked in its provider after the start committed.
     row = _schedule()
     pool.rows[row.id] = row
-    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status="running")
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=row.created_by, status=AgentStatus.RUNNING)
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
     started = asyncio.Event()
 

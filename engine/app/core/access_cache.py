@@ -10,6 +10,8 @@ from contextvars import ContextVar, Token
 from typing import ClassVar, Protocol, cast
 
 from app.config import get_settings
+from app.core.domain.agents import PermissionAccessLevel
+from app.core.domain.users import UserRole
 from app.core.events import get_redis
 from app.core.json_types import json_loads_object
 from app.core.logging import logger
@@ -21,14 +23,16 @@ _DECISION_KEY = "acl:v1:{agent_id}:{user_id}"
 
 class _UserLike(Protocol):
     id: uuid.UUID
-    role: str
+    role: UserRole
     tenant_id: uuid.UUID | None
 
 
 # (user_id, agent_id) -> (agent, level)
-_request_memo: ContextVar[dict[tuple[uuid.UUID, uuid.UUID], tuple[AgentRecord, str]] | None] = ContextVar(
-    "agent_access_memo",
-    default=None,
+_request_memo: ContextVar[dict[tuple[uuid.UUID, uuid.UUID], tuple[AgentRecord, PermissionAccessLevel]] | None] = (
+    ContextVar(
+        "agent_access_memo",
+        default=None,
+    )
 )
 
 # Queued aclver ops for the top-level connection_ctx (flushed after commit).
@@ -43,14 +47,14 @@ class _DeferredAcl:
         self.drops: set[uuid.UUID] = set()
 
 
-def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[AgentRecord, str] | None:
+def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[AgentRecord, PermissionAccessLevel] | None:
     memo = _request_memo.get()
     if memo is None or not memo:
         return None
     return memo.get((user_id, agent_id))
 
 
-def memo_set(user_id: uuid.UUID, agent_id: uuid.UUID, agent: AgentRecord, level: str) -> None:
+def memo_set(user_id: uuid.UUID, agent_id: uuid.UUID, agent: AgentRecord, level: PermissionAccessLevel) -> None:
     memo = _request_memo.get()
     if memo is None:
         memo = {}
@@ -83,7 +87,7 @@ def _tenant_token(user: _UserLike) -> str:
     return str(tenant_id) if tenant_id is not None else ""
 
 
-async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
+async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> PermissionAccessLevel | None:
     """Return a cached manage/use level, or None on miss / Redis disabled / error."""
     if _ttl_seconds() <= 0 or has_pending_acl_writes():
         return None
@@ -120,7 +124,7 @@ async def get_cached_level(user: _UserLike, agent_id: uuid.UUID) -> str | None:
     if level not in {"manage", "use"}:
         return None
     logger.debug("access_cache hit")
-    return "manage" if level == "manage" else "use"
+    return PermissionAccessLevel(str(level))
 
 
 async def read_acl_version(agent_id: uuid.UUID) -> str:
@@ -139,7 +143,7 @@ async def read_acl_version(agent_id: uuid.UUID) -> str:
 async def set_cached_level(
     user: _UserLike,
     agent_id: uuid.UUID,
-    level: str,
+    level: PermissionAccessLevel,
     *,
     observed_ver: str | None = None,
 ) -> None:
@@ -239,7 +243,9 @@ async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
 async def _incr_acl_version_now(agent_id: uuid.UUID) -> None:
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_redis_wait_seconds())
-        _ = await asyncio.wait_for(cast(Awaitable[int], client.incr(_ver_key(agent_id))), timeout=_redis_wait_seconds())
+        _ = await asyncio.wait_for(
+            cast("Awaitable[int]", client.incr(_ver_key(agent_id))), timeout=_redis_wait_seconds()
+        )
         ttl = max(_ttl_seconds() * 40, 3600)
         _ = await asyncio.wait_for(client.expire(_ver_key(agent_id), ttl), timeout=_redis_wait_seconds())
     except Exception as exc:

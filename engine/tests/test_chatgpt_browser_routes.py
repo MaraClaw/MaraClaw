@@ -3,7 +3,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
-from tests.chatgpt_subscription_fakes import callback, oauth_store as oauth_store
+from tests.chatgpt_subscription_fakes import callback, oauth_store
+
+__all__ = ["oauth_store"]
 from tests.test_chatgpt_subscription import FakeChatGPTTransport, _user
 
 from app.api import enterprise

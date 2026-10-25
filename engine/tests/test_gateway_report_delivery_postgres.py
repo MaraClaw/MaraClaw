@@ -10,7 +10,9 @@ from app.db.errors import CheckViolationError
 from app.db.session import transaction
 from app.records.outbound_plan import OutboundTarget
 from app.services.channels.outbound_plan import build_plan
-from test_chat_submission_postgres import ReceiptDatabase, receipt_db as receipt_db
+from test_chat_submission_postgres import ReceiptDatabase, receipt_db
+
+__all__ = ["receipt_db"]
 
 
 @pytest.fixture

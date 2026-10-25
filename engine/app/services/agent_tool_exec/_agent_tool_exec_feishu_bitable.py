@@ -35,11 +35,11 @@ class _RecordWrite:
 
 def _feishu_service() -> FeishuService:
     module = importlib.import_module("app.services.feishu_service")
-    return cast(FeishuService, object_attr(module, "feishu_service"))
+    return cast("FeishuService", object_attr(module, "feishu_service"))
 
 
 def _nested_mapping(value: object) -> Mapping[object, object]:
-    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
+    return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -73,7 +73,7 @@ def _filters_from(filter_info: ToolArgumentValue) -> dict[str, ToolArgumentValue
         return filter_info
     if isinstance(filter_info, str) and filter_info.strip():
         try:
-            loaded = cast(JsonValue, json_loads_value(filter_info))
+            loaded = cast("JsonValue", json_loads_value(filter_info))
         except json.JSONDecodeError:
             return {}
         return loaded if isinstance(loaded, dict) else {}
@@ -262,8 +262,8 @@ async def _write_record(
         bitable_url = await agent_tools._get_feishu_bitable_url(tenant_token, write.app_token, write.table_id)
         return (
             f"OK: Record {verb}. Record ID: {record.get('record_id')}\n"
-            + f"Fields: {json.dumps(record.get('fields', {}), ensure_ascii=False)}\n"
-            + f"🔗 多维表格链接: {bitable_url}"
+            f"Fields: {json.dumps(record.get('fields', {}), ensure_ascii=False)}\n"
+            f"🔗 多维表格链接: {bitable_url}"
         )
     except Exception as error:
         return f"Failed: {str(error)[:300]}"

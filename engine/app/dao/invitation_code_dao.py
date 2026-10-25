@@ -19,6 +19,16 @@ _COLUMNS = (
     "is_active",
     "created_by",
     "created_at",
+    "expires_at",
+    "invited_email",
+    "redeemed_at",
+    "redeemed_by",
+)
+
+# Unexpired, active, org-owned, and bound to the presented (normalized) recipient. A missing email matches nothing.
+_REDEEMABLE = (
+    "WHERE code = %(code)s AND is_active IS TRUE AND tenant_id IS NOT NULL AND expires_at > now() "
+    "AND invited_email = %(email)s"
 )
 
 
@@ -30,20 +40,39 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(InvitationCodeRecord.from_row)
 
-    async def get_active_by_code(self, code: str) -> InvitationCodeRecord | None:
+    async def get_active_by_code(self, code: str, *, email: str | None = None) -> InvitationCodeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM invitation_codes "
-                + "WHERE code = %(code)s AND is_active IS TRUE AND tenant_id IS NOT NULL LIMIT 1",
-                {"code": code},
+                f"SELECT {self._select_list()} FROM invitation_codes {_REDEEMABLE} LIMIT 1",
+                {"code": code, "email": email},
             )
             return InvitationCodeRecord.from_row(row) if row is not None else None
+
+    async def lock_redeemable(self, code: str, *, email: str | None) -> InvitationCodeRecord | None:
+        """Row-lock a code that can still be redeemed by ``email`` (normalized)."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM invitation_codes {_REDEEMABLE} "
+                "AND used_count < max_uses FOR UPDATE",
+                {"code": code, "email": email},
+            )
+            return InvitationCodeRecord.from_row(row) if row is not None else None
+
+    async def consume(self, code: str, *, user_id: UUID | None, email: str | None) -> bool:
+        """Atomically spend one use; False when it is expired, revoked, exhausted or bound elsewhere."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE invitation_codes SET used_count = used_count + 1, redeemed_at = now(), "
+                f"redeemed_by = %(user)s {_REDEEMABLE} AND used_count < max_uses RETURNING id",
+                {"code": code, "email": email, "user": user_id},
+            )
+            return row is not None
 
     async def get_for_tenant(self, code_id: UUID, tenant_id: UUID) -> InvitationCodeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                + "WHERE id = %(id)s AND tenant_id = %(tenant_id)s LIMIT 1",
+                "WHERE id = %(id)s AND tenant_id = %(tenant_id)s LIMIT 1",
                 {"id": code_id, "tenant_id": tenant_id},
             )
             return InvitationCodeRecord.from_row(row) if row is not None else None
@@ -81,8 +110,8 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                + f"WHERE tenant_id = %(tenant_id)s{search_sql} "
-                + "ORDER BY created_at DESC NULLS LAST OFFSET %(offset)s LIMIT %(limit)s",
+                f"WHERE tenant_id = %(tenant_id)s{search_sql} "
+                "ORDER BY created_at DESC NULLS LAST OFFSET %(offset)s LIMIT %(limit)s",
                 params,
             )
             return [InvitationCodeRecord.from_row(row) for row in rows]
@@ -91,7 +120,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM invitation_codes "
-                + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at ASC NULLS LAST",
+                "WHERE tenant_id = %(tenant_id)s ORDER BY created_at ASC NULLS LAST",
                 {"tenant_id": tenant_id},
             )
             return [InvitationCodeRecord.from_row(row) for row in rows]

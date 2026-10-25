@@ -10,6 +10,9 @@ from app.core import events
 from app.process_roles import parse_process_roles
 from app.runtime import lifecycle, readiness
 from app.runtime.tasks import OwnedTasks
+from producer_admission_fixtures import producer_admission
+
+__all__ = ["producer_admission"]
 
 
 @dataclass

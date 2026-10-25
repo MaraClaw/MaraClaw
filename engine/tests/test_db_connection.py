@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 from psycopg import AsyncConnection
@@ -17,7 +17,7 @@ class _FakeCursor:
         self._parent = parent
         self._rows: list[dict[str, Any]] = []
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
@@ -46,7 +46,7 @@ class _FakeCursor:
 
 
 class _FakeTransaction:
-    async def __aenter__(self) -> _FakeTransaction:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
@@ -81,7 +81,7 @@ class _FakeRawConnection:
 
 
 def _wrap(raw: _FakeRawConnection) -> DbConnection:
-    return DbConnection(cast(AsyncConnection[DictRow], raw))
+    return DbConnection(cast("AsyncConnection[DictRow]", raw))
 
 
 @pytest.mark.asyncio

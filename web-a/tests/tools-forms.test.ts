@@ -27,7 +27,7 @@ test('organization scope ignores a forged company query', () => {
 
 test('platform scope honors a selected company rather than its membership', () => {
   // Given
-  const user = { ...orgAdmin, role: 'platform_admin' }
+  const user: UserOut = { ...orgAdmin, role: 'platform_admin' }
   // When
   const tenant = toolsTenantId(user, 'selected-company')
   // Then
@@ -45,7 +45,7 @@ test('identity platform flag permits company selection', () => {
 
 test('platform current scope does not silently select its own company', () => {
   // Given
-  const user = { ...orgAdmin, role: 'platform_admin' }
+  const user: UserOut = { ...orgAdmin, role: 'platform_admin' }
   // When
   const tenant = toolsTenantId(user, null)
   // Then

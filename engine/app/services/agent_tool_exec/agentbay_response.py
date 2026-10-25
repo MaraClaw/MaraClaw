@@ -8,4 +8,4 @@ def _agentbay_response_text(value: object, fallback: str) -> str:
 
 
 def _agentbay_response_list(value: object) -> list[object]:
-    return cast(list[object], value) if isinstance(value, list) else []
+    return cast("list[object]", value) if isinstance(value, list) else []

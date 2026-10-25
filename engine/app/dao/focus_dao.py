@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from typing import Any, ClassVar, final, override
 from uuid import UUID
 
@@ -57,8 +58,8 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_focus_items "
-                + f"WHERE agent_id = %(agent_id)s{completed_sql} "
-                + "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
+                f"WHERE agent_id = %(agent_id)s{completed_sql} "
+                "ORDER BY status DESC, kind DESC, sort_order ASC, created_at ASC",
                 params,
             )
             return [AgentFocusItemRecord.from_row(row) for row in rows]
@@ -99,13 +100,16 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                     if col not in data:
                         continue
                     val: object = data[col]
-                    params[col] = as_jsonb(val) if isinstance(val, (dict, list)) else val
+                    if isinstance(val, (dict, list)):
+                        params[col] = as_jsonb(val)
+                    else:
+                        params[col] = val.value if isinstance(val, StrEnum) else val
                 cols = [c for c in self.columns if c in params]
                 col_sql = ", ".join(cols)
                 val_sql = ", ".join(f"%({c})s" for c in cols)
                 result = await db.fetchone(
                     f"INSERT INTO agent_focus_items ({col_sql}) VALUES ({val_sql}) "
-                    + "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
+                    "ON CONFLICT (agent_id, key) DO NOTHING RETURNING id",
                     params,
                 )
                 if result is not None:

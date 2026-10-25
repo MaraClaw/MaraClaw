@@ -77,4 +77,4 @@ async def test_unpublish_page_deletes_row() -> None:
     ):
         result = await pages_api.unpublish_page(page.id, _user())
     assert result == {"deleted": True}
-    delete.assert_awaited_once_with(id=page.id)
+    delete.assert_awaited_once_with(record_id=page.id)

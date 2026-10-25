@@ -120,6 +120,7 @@ async def _agentbay_visible_apps_note(client: AgentBayClient) -> str:
 
 
 async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws  # Retain the shared workspace keyword used by dispatch adapters.
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -193,6 +194,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
 
 
 async def _agentbay_computer_get_installed_apps(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -221,6 +223,7 @@ async def _agentbay_computer_get_installed_apps(agent_id: uuid.UUID | None, ws: 
 
 
 async def _agentbay_computer_list_visible_apps(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent

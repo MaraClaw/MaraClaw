@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { TransferPolicySettings } from './transfer-policy-settings'
+import { TenantEmailSettings } from './tenant-email-settings'
 
 export function SettingsPage() {
   const { user, logout } = useAuth()
@@ -25,6 +26,9 @@ export function SettingsPage() {
         </p>
       </div>
 
+      <TenantEmailSettings />
+      {isPlatformAdminUser(user) ? <TransferPolicySettings /> : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Session</CardTitle>
@@ -41,7 +45,6 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      {isPlatformAdminUser(user) ? <TransferPolicySettings /> : null}
     </div>
   )
 }

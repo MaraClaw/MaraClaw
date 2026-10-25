@@ -110,8 +110,8 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
                 lines.extend(
                     (
                         f"  - KR ({kr.status}): {kr.title}  "
-                        + f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
-                        + f" kr_id={kr.id}"
+                        f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
+                        f" kr_id={kr.id}"
                     )
                     for kr in krs
                 )
@@ -125,8 +125,8 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> str:
                 lines.extend(
                     (
                         f"  - KR ({kr.status}): {kr.title}  "
-                        + f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
-                        + f" kr_id={kr.id}"
+                        f"[{kr.current_value}/{kr.target_value} {kr.unit or ''}]  "
+                        f" kr_id={kr.id}"
                     )
                     for kr in krs
                 )
@@ -170,7 +170,7 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
         if not objectives:
             return (
                 f"You have no OKRs set for the current period ({ps} - {pe}). "
-                + "Contact the OKR Agent to set up your Objectives and Key Results."
+                "Contact the OKR Agent to set up your Objectives and Key Results."
             )
 
         obj_ids = [objective.id for objective in objectives]
@@ -196,8 +196,8 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: ToolArguments) -> s
             lines.extend(
                 (
                     f"  - [{kr.status}] {kr.title}  "
-                    + f"Progress: {kr.current_value}/{kr.target_value} {kr.unit or ''}  "
-                    + f"  kr_id={kr.id}"
+                    f"Progress: {kr.current_value}/{kr.target_value} {kr.unit or ''}  "
+                    f"  kr_id={kr.id}"
                 )
                 for kr in krs
             )

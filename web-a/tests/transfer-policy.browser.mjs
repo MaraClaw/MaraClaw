@@ -63,7 +63,9 @@ async function scenario(options, exercise) {
         } finally { exchange.delivered.resolve() }
         return
       }
-      const body = path === '/api/auth/me' ? state.user
+      const body = path === '/api/admin/companies' ? []
+            : path.startsWith('/api/enterprise/tenant-email') ? { enabled: false, from_address: '', from_name: '', smtp_host: '', smtp_port: 465, smtp_username: '', smtp_ssl: true, smtp_timeout_seconds: 15, has_password: false, effective_source: 'none' }
+        : path === '/api/auth/me' ? state.user
         : path === '/api/notifications/unread-count' ? { unread_count: 0 }
           : path === '/api/admin/search-analytics/summary' ? { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }
             : path === '/api/admin/search-analytics/orgs' ? [] : null

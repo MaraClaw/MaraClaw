@@ -10,6 +10,7 @@ from typing import TypedDict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
@@ -54,7 +55,7 @@ async def configure_dingtalk_channel(
     conn_mode = extra_config.get("connection_mode", "websocket")
     dingtalk_agent_id = extra_config.get("agent_id", "")
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -110,7 +111,7 @@ async def configure_dingtalk_channel(
 @router.get("/agents/{agent_id}/dingtalk-channel", response_model=ChannelConfigOut)
 async def get_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
     return ChannelConfigOut.model_validate(config)
@@ -121,10 +122,10 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
     from app.api.background_tasks import schedule_background_task
     from app.services.dingtalk_stream import dingtalk_stream_manager
@@ -154,7 +155,7 @@ async def process_dingtalk_message(
     sender_staff_id = (sender_staff_id or "").strip()
     if not message_id and native_event is None:
         raise HTTPException(status_code=400, detail="DingTalk message ID is required")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="dingtalk")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
     if config is None:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
     native = native_event or ChannelEvent(

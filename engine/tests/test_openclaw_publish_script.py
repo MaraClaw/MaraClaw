@@ -7,7 +7,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_SCRIPT = REPO_ROOT / "publish-openclaw-local-dockerfile.sh"
-OPENCLAW_VERSION = "2026.10.6"
+OPENCLAW_VERSION = "2026.10.7"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
@@ -16,13 +16,7 @@ def install_fake_docker(root: Path) -> tuple[Path, Path]:
     log_path = root / "docker.log"
     docker_path = bin_dir / "docker"
     docker_path.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env sh",
-                'printf \'%s\\n\' "$*" >> "$DOCKER_FAKE_LOG"',
-                "",
-            ]
-        ),
+        '#!/usr/bin/env sh\nprintf \'%s\\n\' "$*" >> "$DOCKER_FAKE_LOG"\n',
         encoding="utf-8",
     )
     docker_path.chmod(docker_path.stat().st_mode | stat.S_IXUSR)

@@ -148,7 +148,7 @@ class LLMMessage:
                                     },
                                 }
                             )
-                result_content = tool_content_blocks if tool_content_blocks else (self.content or "")
+                result_content = tool_content_blocks or (self.content or "")
             else:
                 result_content = self.content or ""
             return {

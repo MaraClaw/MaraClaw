@@ -40,17 +40,17 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
             if tenant_id is None:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    + "WHERE provider_type = %(provider_type)s AND tenant_id IS NULL "
-                    + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                    + "LIMIT 1",
+                    "WHERE provider_type = %(provider_type)s AND tenant_id IS NULL "
+                    "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                    "LIMIT 1",
                     {"provider_type": provider_type},
                 )
             else:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    + "WHERE provider_type = %(provider_type)s AND tenant_id = %(tenant_id)s "
-                    + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                    + "LIMIT 1",
+                    "WHERE provider_type = %(provider_type)s AND tenant_id = %(tenant_id)s "
+                    "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                    "LIMIT 1",
                     {"provider_type": provider_type, "tenant_id": tenant_id},
                 )
             return IdentityProviderRecord.from_row(row) if row is not None else None
@@ -87,9 +87,9 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + f"WHERE {' AND '.join(clauses)} "
-                + "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
-                + "LIMIT 1",
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC "
+                "LIMIT 1",
                 params,
             )
             return IdentityProviderRecord.from_row(row) if row is not None else None
@@ -105,7 +105,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + f"WHERE is_active IS TRUE AND sso_login_enabled IS TRUE{tenant_sql}",
+                f"WHERE is_active IS TRUE AND sso_login_enabled IS TRUE{tenant_sql}",
                 params,
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -115,14 +115,14 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
             if tenant_id is None:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    + "WHERE is_active IS TRUE AND tenant_id IS NULL "
-                    + "ORDER BY name"
+                    "WHERE is_active IS TRUE AND tenant_id IS NULL "
+                    "ORDER BY name"
                 )
             else:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM identity_providers "
-                    + "WHERE is_active IS TRUE AND tenant_id = %(tenant_id)s "
-                    + "ORDER BY name",
+                    "WHERE is_active IS TRUE AND tenant_id = %(tenant_id)s "
+                    "ORDER BY name",
                     {"tenant_id": tenant_id},
                 )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -132,7 +132,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + "WHERE provider_type = %(provider_type)s AND is_active IS TRUE",
+                "WHERE provider_type = %(provider_type)s AND is_active IS TRUE",
                 {"provider_type": provider_type},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -142,8 +142,8 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + "WHERE sso_login_enabled IS TRUE AND is_active IS TRUE "
-                + "AND tenant_id IS DISTINCT FROM %(tenant_id)s",
+                "WHERE sso_login_enabled IS TRUE AND is_active IS TRUE "
+                "AND tenant_id IS DISTINCT FROM %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -175,7 +175,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
+                "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
                 {"tenant_id": tenant_id},
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
@@ -184,7 +184,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM identity_providers "
-                + "WHERE tenant_id IS NULL ORDER BY created_at DESC NULLS LAST"
+                "WHERE tenant_id IS NULL ORDER BY created_at DESC NULLS LAST"
             )
             return [IdentityProviderRecord.from_row(row) for row in rows]
 
@@ -192,7 +192,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM identity_providers "
-                + "WHERE tenant_id = %(tenant_id)s AND sso_login_enabled IS TRUE AND is_active IS TRUE",
+                "WHERE tenant_id = %(tenant_id)s AND sso_login_enabled IS TRUE AND is_active IS TRUE",
                 {"tenant_id": tenant_id},
             )
             return int_from_row(value)

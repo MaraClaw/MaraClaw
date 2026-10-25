@@ -9,6 +9,8 @@ import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { actorId, auditEvent, ownAuditSession, tenantId } from './admin-audit-fixtures.ts'
 import { DeferredBodyResponse } from './helpers.ts'
 
+const pageEvent = { ...auditEvent, created_at: '2026-10-25T09:00:00Z' }
+
 test('every supported role and server filter participates in query identity', () => {
   // Given
   const scopes: readonly AdminAuditScope[] = [
@@ -127,7 +129,7 @@ for (const next of ['filter', 'back', 'refresh'] as const) {
     let signal: AbortSignal | null | undefined
     context.mock.method(globalThis, 'fetch', (url: RequestInfo | URL, options?: RequestInit) => {
       if (String(url).includes('cursor=old')) { signal = options?.signal; return response.promise }
-      return Promise.resolve(Response.json({ items: [{ ...auditEvent, action: 'current.page' }], next_cursor: 'current-next' }))
+      return Promise.resolve(Response.json({ items: [{ ...pageEvent, action: 'current.page' }], next_cursor: 'current-next' }))
     })
     const old = adminAuditPageOptions({ role: 'org_admin', cursor: 'old' })
     const observer = new QueryObserver(client, old)
@@ -136,7 +138,7 @@ for (const next of ['filter', 'back', 'refresh'] as const) {
     observer.setOptions(adminAuditPageOptions({ role: 'org_admin', ...(next === 'filter' ? { action: 'new.filter' } : {}) }, next === 'refresh' ? 1 : 0))
     assert.equal(observer.getCurrentResult().data, undefined)
     const result = await observer.refetch()
-    response.resolve(Response.json({ items: [auditEvent], next_cursor: 'retired-next' }))
+    response.resolve(Response.json({ items: [pageEvent], next_cursor: 'retired-next' }))
     // Then
     assert.equal(signal?.aborted, true)
     assert.equal(result.data?.items[0]?.action, 'current.page')
@@ -164,8 +166,8 @@ for (const transition of ['logout', 'same-token', 'different-token'] as const) f
     else session.replace(transition === 'same-token' ? 'synthetic-audit-token' : 'replacement-token')
     const current = createSessionQueryScope(session.capture())
     context.after(() => current.client.clear())
-    current.client.setQueryData(options.queryKey, adminAuditPageSchema.parse({ items: [{ ...auditEvent, action: 'replacement.page' }], next_cursor: null }))
-    body.resolve(JSON.stringify(status === 200 ? { items: [auditEvent], next_cursor: 'retired-next' } : { detail: 'Retired error' }))
+    current.client.setQueryData(options.queryKey, adminAuditPageSchema.parse({ items: [{ ...pageEvent, action: 'replacement.page' }], next_cursor: null }))
+    body.resolve(JSON.stringify(status === 200 ? { items: [pageEvent], next_cursor: 'retired-next' } : { detail: 'Retired error' }))
     await rejected
     // Then
     assert.equal(previous.client.getQueryCache().getAll().length, 0)
@@ -178,7 +180,7 @@ for (const transition of ['logout', 'same-token', 'different-token'] as const) f
 test('direct older-page body completion is fenced even without a query observer', async (context) => {
   // Given
   const session = ownAuditSession(context)
-  const response = new DeferredBodyResponse(200, Promise.resolve(JSON.stringify({ items: [auditEvent], next_cursor: null })))
+  const response = new DeferredBodyResponse(200, Promise.resolve(JSON.stringify({ items: [pageEvent], next_cursor: null })))
   context.mock.method(globalThis, 'fetch', async () => { session.replace('synthetic-audit-token'); return response })
   // When / Then
   await assert.rejects(fetchAdminAuditPage({ role: 'org_admin', cursor: 'old-owner' }), StaleSessionError)

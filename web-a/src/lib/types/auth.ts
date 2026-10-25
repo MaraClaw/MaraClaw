@@ -1,72 +1,31 @@
-export type UserRole = 'platform_admin' | 'org_admin' | 'agent_admin' | 'member' | string
+import { z } from 'zod'
+import {
+  AuthUserSchema,
+  MultiTenantResponseSchema,
+  TokenResponseSchema,
+} from '../engine-contracts.generated.ts'
 
-export type IdentityOut = {
-  id: string
-  email: string | null
-  phone: string | null
-  is_active: boolean
-  is_platform_admin: boolean
-  email_verified: boolean
-  must_change_password?: boolean
-  created_at: string
-  updated_at: string
-}
+export type {
+  IdentityOut,
+  TenantChoice,
+  UserRole,
+  UserLogin as LoginRequest,
+} from '../engine-contracts.generated.ts'
 
-export type UserOut = {
-  id: string
-  identity_id: string | null
-  email: string | null
-  display_name: string
-  avatar_url: string | null
-  role: UserRole
-  is_platform_admin: boolean
-  tenant_id: string | null
-  title: string | null
-  primary_mobile: string | null
-  registration_source: string | null
-  is_active: boolean
-  is_genesis?: boolean
-  email_verified: boolean
-  must_change_password?: boolean
-  created_at: string
-}
+// Admin sessions require a membership; other engine login flows may return no user.
+export const adminTokenResponseSchema = TokenResponseSchema.extend({ user: AuthUserSchema })
+export const adminMultiTenantResponseSchema = MultiTenantResponseSchema.extend({ requires_tenant_selection: z.literal(true) })
+export type TokenResponse = z.infer<typeof adminTokenResponseSchema>
+export type UserOut = TokenResponse['user']
+export type MultiTenantResponse = z.infer<typeof adminMultiTenantResponseSchema>
 
 export function isGenesisAdmin(user: UserOut | null | undefined): boolean {
   return user?.is_genesis === true
 }
 
-export type TokenResponse = {
-  access_token: string
-  token_type: string
-  user: UserOut
-  identity?: IdentityOut | null
-  tenant_name?: string | null
-  must_change_password?: boolean
-}
-
 export function userMustChangePassword(user: UserOut | null | undefined): boolean {
   if (!user) return false
   return user.must_change_password === true
-}
-
-export type TenantChoice = {
-  tenant_id: string | null
-  tenant_name: string
-  tenant_slug: string
-  logo_url: string | null
-}
-
-export type MultiTenantResponse = {
-  requires_tenant_selection: true
-  login_identifier: string
-  tenants: TenantChoice[]
-  pending_token?: string | null
-}
-
-export type LoginRequest = {
-  login_identifier: string
-  password: string
-  tenant_id?: string | null
 }
 
 export type NeedsVerificationDetail = {
@@ -76,22 +35,11 @@ export type NeedsVerificationDetail = {
 }
 
 export function isMultiTenantResponse(value: unknown): value is MultiTenantResponse {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'requires_tenant_selection' in value &&
-    (value as MultiTenantResponse).requires_tenant_selection === true
-  )
+  return adminMultiTenantResponseSchema.safeParse(value).success
 }
 
 export function isTokenResponse(value: unknown): value is TokenResponse {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'access_token' in value &&
-    typeof (value as TokenResponse).access_token === 'string' &&
-    'user' in value
-  )
+  return adminTokenResponseSchema.safeParse(value).success
 }
 
 export function isAdminUser(user: UserOut | null | undefined): boolean {
@@ -109,6 +57,14 @@ export function canSendBroadcast(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user)
 }
 
+export function canManageInvitations(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null
+}
+
 export function canReviewAdmissions(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && user.is_genesis === true
+}
+
+export function canReviewAgentDeletions(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active
 }

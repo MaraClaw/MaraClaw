@@ -8,10 +8,10 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Get OKR Board",
         "description": (
             "Get the full OKR board for the current period. Returns all Objectives and Key Results "
-            + "for the tenant, organized by company and member level. Includes objective_id values "
-            + "for every Objective and kr_id values for every Key Result, so you can update existing "
-            + "Objectives and KRs instead of creating duplicates. Used by the OKR Agent to generate "
-            + "progress reports and monitor team performance."
+            "for the tenant, organized by company and member level. Includes objective_id values "
+            "for every Objective and kr_id values for every Key Result, so you can update existing "
+            "Objectives and KRs instead of creating duplicates. Used by the OKR Agent to generate "
+            "progress reports and monitor team performance."
         ),
         "category": "okr",
         "icon": "🎯",
@@ -37,9 +37,9 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "My OKR",
         "description": (
             "Get your own OKR Objectives and Key Results for the current period. "
-            + "Returns a structured view of your goals, current progress values, plus objective_id and kr_id references "
-            + "you need to update existing OKRs correctly. Call this before changing progress, KR content, "
-            + "or Objective text so you reuse the current records instead of creating duplicates."
+            "Returns a structured view of your goals, current progress values, plus objective_id and kr_id references "
+            "you need to update existing OKRs correctly. Call this before changing progress, KR content, "
+            "or Objective text so you reuse the current records instead of creating duplicates."
         ),
         "category": "okr",
         "icon": "🎯",
@@ -65,9 +65,9 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Update KR Progress",
         "description": (
             "Update the current progress value for a Key Result. Use get_my_okr first to obtain "
-            + "the kr_id. The status (on_track / at_risk / behind / completed) is automatically "
-            + "computed from the progress ratio, or you can override it explicitly. "
-            + "A progress log entry is recorded for full audit history."
+            "the kr_id. The status (on_track / at_risk / behind / completed) is automatically "
+            "computed from the progress ratio, or you can override it explicitly. "
+            "A progress log entry is recorded for full audit history."
         ),
         "category": "okr",
         "icon": "📈",
@@ -103,10 +103,10 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Update KR Content",
         "description": (
             "Update the content fields of one of YOUR OWN Key Results, such as title, target value, unit, "
-            + "focus reference, or status. Use get_my_okr first to obtain the kr_id. "
-            + "This tool is for changing KR definition/content, not reporting progress. "
-            + "If the user says to change, revise, adjust, or replace an existing KR target or wording, "
-            + "prefer this tool instead of create_key_result."
+            "focus reference, or status. Use get_my_okr first to obtain the kr_id. "
+            "This tool is for changing KR definition/content, not reporting progress. "
+            "If the user says to change, revise, adjust, or replace an existing KR target or wording, "
+            "prefer this tool instead of create_key_result."
         ),
         "category": "okr",
         "icon": "✏️",
@@ -152,8 +152,8 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Collect OKR Progress",
         "description": (
             "Legacy batch sync for reported KR progress. Prefer direct OKR tools such as "
-            + "get_my_okr and update_kr_progress for new work. Returns a summary of how many "
-            + "KRs were updated."
+            "get_my_okr and update_kr_progress for new work. Returns a summary of how many "
+            "KRs were updated."
         ),
         "category": "okr",
         "icon": "📊",
@@ -174,10 +174,10 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Generate OKR Report",
         "description": (
             "Generate a structured OKR progress report (daily or weekly) for the current "
-            + "period. The report summarizes all Objectives and Key Results, highlights items "
-            + "at risk or behind, and shows overall team health metrics. The report is saved "
-            + "to the database and to your workspace/reports/ folder. Returns the full report "
-            + "markdown so you can post it to Plaza or share with the team."
+            "period. The report summarizes all Objectives and Key Results, highlights items "
+            "at risk or behind, and shows overall team health metrics. The report is saved "
+            "to the database and to your workspace/reports/ folder. Returns the full report "
+            "markdown so you can post it to Plaza or share with the team."
         ),
         "category": "okr",
         "icon": "📋",
@@ -203,8 +203,8 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Get OKR Settings",
         "description": (
             "Read the OKR configuration for this team, including whether daily/weekly "
-            + "reports are enabled, the configured report time, period frequency, and more. "
-            + "Use this at the start of your heartbeat to decide whether a report is due today."
+            "reports are enabled, the configured report time, period frequency, and more. "
+            "Use this at the start of your heartbeat to decide whether a report is due today."
         ),
         "category": "okr",
         "icon": "⚙️",
@@ -224,12 +224,12 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Create Objective",
         "description": (
             "Create an OKR Objective for the company, a specific user, or a specific agent. "
-            + "Call this after confirming the objective with the relevant person through conversation. "
-            + "Use this only when a new Objective needs to be created for the period. "
-            + "If the person already has a matching Objective and just wants to revise it, use update_objective instead. "
-            + "owner_type must be 'company', 'user', or 'agent'. "
-            + "owner_id is not required for company-level objectives. "
-            + "period_start and period_end must be ISO date strings (YYYY-MM-DD)."
+            "Call this after confirming the objective with the relevant person through conversation. "
+            "Use this only when a new Objective needs to be created for the period. "
+            "If the person already has a matching Objective and just wants to revise it, use update_objective instead. "
+            "owner_type must be 'company', 'user', or 'agent'. "
+            "owner_id is not required for company-level objectives. "
+            "period_start and period_end must be ISO date strings (YYYY-MM-DD)."
         ),
         "category": "okr",
         "icon": "🎯",
@@ -278,11 +278,11 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Create Key Result",
         "description": (
             "Create a Key Result (KR) under an existing Objective. "
-            + "Get the objective_id first using get_okr. "
-            + "Use this only for a brand-new KR. If the user is revising the wording, target value, unit, "
-            + "or focus reference of an existing KR, use update_kr_content instead. "
-            + "target_value is the goal number (e.g. 50000 for 50000 followers). "
-            + "unit is optional but recommended for clarity (e.g. '%', 'NPS', '万元', 'followers')."
+            "Get the objective_id first using get_okr. "
+            "Use this only for a brand-new KR. If the user is revising the wording, target value, unit, "
+            "or focus reference of an existing KR, use update_kr_content instead. "
+            "target_value is the goal number (e.g. 50000 for 50000 followers). "
+            "unit is optional but recommended for clarity (e.g. '%', 'NPS', '万元', 'followers')."
         ),
         "category": "okr",
         "icon": "🔑",
@@ -323,10 +323,10 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Update Objective",
         "description": (
             "Modify an Objective's title, description, status, or period dates. "
-            + "Regular agents can only update their own Objectives - call get_my_okr first "
-            + "to get your objective_id. The OKR Agent can update any member's Objective. "
-            + "Only provide the fields you want to change. If the request is to revise an existing OKR's "
-            + "goal text rather than create a new one, prefer this tool over create_objective."
+            "Regular agents can only update their own Objectives - call get_my_okr first "
+            "to get your objective_id. The OKR Agent can update any member's Objective. "
+            "Only provide the fields you want to change. If the request is to revise an existing OKR's "
+            "goal text rather than create a new one, prefer this tool over create_objective."
         ),
         "category": "okr",
         "icon": "✏️",
@@ -373,10 +373,10 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Update Any KR Progress",
         "description": (
             "Update the progress value of any team member's Key Result. "
-            + "This is the OKR Agent's exclusive version of update_kr_progress - it can update "
-            + "KRs belonging to any user or agent, not just the caller's own. "
-            + "Use this ONLY after confirming the value with the KR owner through conversation. "
-            + "Get kr_id from get_okr. Optionally provide a note explaining the source."
+            "This is the OKR Agent's exclusive version of update_kr_progress - it can update "
+            "KRs belonging to any user or agent, not just the caller's own. "
+            "Use this ONLY after confirming the value with the KR owner through conversation. "
+            "Get kr_id from get_okr. Optionally provide a note explaining the source."
         ),
         "category": "okr",
         "icon": "📈",
@@ -414,9 +414,9 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Generate Monthly OKR Report",
         "description": (
             "Generate the monthly OKR progress summary report. Covers all Objectives and Key "
-            + "Results for the current period, highlights completed and at-risk items, and provides "
-            + "a closing action note. Saved to WorkReport (report_type='monthly') and "
-            + "workspace/reports/. Returns the full Markdown so you can send it to admins."
+            "Results for the current period, highlights completed and at-risk items, and provides "
+            "a closing action note. Saved to WorkReport (report_type='monthly') and "
+            "workspace/reports/. Returns the full Markdown so you can send it to admins."
         ),
         "category": "okr",
         "icon": "📅",
@@ -435,8 +435,8 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "Upsert Member Daily Report",
         "description": (
             "Create or update the final normalized daily report for any member in the company. "
-            + "Use this after discussing progress with the member and distilling their update into "
-            + "one concise final report. The stored content should stay within 2000 characters."
+            "Use this after discussing progress with the member and distilling their update into "
+            "one concise final report. The stored content should stay within 2000 characters."
         ),
         "category": "okr",
         "icon": "📝",

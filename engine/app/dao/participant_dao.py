@@ -34,11 +34,11 @@ class ParticipantDAO(BaseDAO[ParticipantRecord]):
             }
         )
 
-    async def get_by_type_ref(self, type: str, ref_id: UUID) -> ParticipantRecord | None:
+    async def get_by_type_ref(self, participant_type: str, ref_id: UUID) -> ParticipantRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM participants WHERE type = %(type)s AND ref_id = %(ref_id)s LIMIT 1",
-                {"type": type, "ref_id": ref_id},
+                {"type": participant_type, "ref_id": ref_id},
             )
             return ParticipantRecord.from_row(row) if row is not None else None
 

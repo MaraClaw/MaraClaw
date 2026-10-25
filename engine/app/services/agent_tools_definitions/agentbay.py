@@ -183,16 +183,16 @@ AGENTBAY_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "agentbay_file_transfer",
             "description": (
                 "Transfer a file between any two endpoints: the agent workspace, "
-                + "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
-                + "VERIFIED PATH CONVENTIONS (all Linux environments run as user 'wuying', HOME=/home/wuying/):\n"
-                + "- code env:     use /home/wuying/<filename>  (working directory, e.g. /home/wuying/data.csv)\n"
-                + "- browser env:  use /home/wuying/下载/<filename>  (download folder, e.g. /home/wuying/下载/file.pdf)\n"
-                + "- computer env: use /home/wuying/桌面/<filename>  (Desktop, e.g. /home/wuying/桌面/report.xlsx)\n"
-                + "- workspace:    use relative path, e.g. 'workspace/data.csv'\n\n"
-                + "Transfer directions:\n"
-                + "- workspace -> env: upload a workspace file into a cloud environment\n"
-                + "- env -> workspace: download a file from a cloud environment into the workspace\n"
-                + "- env A -> env B:   transfer between environments (transparent backend temp, no workspace involvement)"
+                "the AgentBay browser environment, the cloud desktop (computer), or the code sandbox.\n\n"
+                "VERIFIED PATH CONVENTIONS (all Linux environments run as user 'wuying', HOME=/home/wuying/):\n"
+                "- code env:     use /home/wuying/<filename>  (working directory, e.g. /home/wuying/data.csv)\n"
+                "- browser env:  use /home/wuying/下载/<filename>  (download folder, e.g. /home/wuying/下载/file.pdf)\n"
+                "- computer env: use /home/wuying/桌面/<filename>  (Desktop, e.g. /home/wuying/桌面/report.xlsx)\n"
+                "- workspace:    use relative path, e.g. 'workspace/data.csv'\n\n"
+                "Transfer directions:\n"
+                "- workspace -> env: upload a workspace file into a cloud environment\n"
+                "- env -> workspace: download a file from a cloud environment into the workspace\n"
+                "- env A -> env B:   transfer between environments (transparent backend temp, no workspace involvement)"
             ),
             "parameters": {
                 "type": "object",
@@ -206,8 +206,8 @@ AGENTBAY_AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Source path. Relative if workspace (e.g. 'workspace/data.csv'). "
-                            + "Absolute if env: code → /home/wuying/file, "
-                            + "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
+                            "Absolute if env: code → /home/wuying/file, "
+                            "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
                         ),
                     },
                     "to_type": {
@@ -219,8 +219,8 @@ AGENTBAY_AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Destination path. Relative if workspace (e.g. 'workspace/output.csv'). "
-                            + "Absolute if env: code → /home/wuying/file, "
-                            + "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
+                            "Absolute if env: code → /home/wuying/file, "
+                            "browser → /home/wuying/下载/file, computer → /home/wuying/桌面/file."
                         ),
                     },
                 },

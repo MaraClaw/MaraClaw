@@ -97,7 +97,7 @@ async def publish_page(
     _agent, access_level = await check_agent_access(current_user, body.agent_id)
     _require_manage(current_user, access_level)
 
-    result = await _publish_page(body.agent_id, current_user.id, Path("."), {"path": body.path})
+    result = await _publish_page(body.agent_id, current_user.id, Path(), {"path": body.path})
     if not result.startswith("Published successfully"):
         raise HTTPException(status_code=400, detail=result)
 
@@ -119,5 +119,5 @@ async def unpublish_page(
 
     _agent, access_level = await check_agent_access(current_user, page.agent_id)
     _require_manage(current_user, access_level)
-    _ = await published_page_dao.delete(id=page_id)
+    _ = await published_page_dao.delete(record_id=page_id)
     return {"deleted": True}

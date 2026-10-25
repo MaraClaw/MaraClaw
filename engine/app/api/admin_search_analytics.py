@@ -19,14 +19,18 @@ from app.dao.web_search_event_dao import web_search_event_dao
 from app.records.user import UserRecord
 from app.schemas.operator_response_analytics import (
     SearchAnalyticsExportConfig,
+    SearchAnalyticsExportStatus,
     SearchAnalyticsExportStatusPassthrough,
     SearchAnalyticsExportStatusPayload,
+    SearchAnalyticsOrgRanking,
     SearchAnalyticsOrgsPassthrough,
     SearchAnalyticsSummary,
     SearchAnalyticsSummaryPassthrough,
     SearchAnalyticsSummaryScope,
+    SearchAnalyticsTimeBucket,
     SearchAnalyticsTimeseriesPassthrough,
     SearchAnalyticsTrendingPassthrough,
+    SearchAnalyticsTrendingQuery,
 )
 from app.services.linkup.export import analytics_bucket, analytics_prefix
 
@@ -69,7 +73,7 @@ def _window(start: datetime | None, end: datetime | None) -> tuple[datetime, dat
     return resolved_start, resolved_end
 
 
-@router.get("/summary", response_model=dict[str, object])
+@router.get("/summary", response_model=SearchAnalyticsSummary)
 async def get_search_analytics_summary(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -82,7 +86,7 @@ async def get_search_analytics_summary(
     return _add_response_fields(payload, {"scope": "org" if tenant_id is not None else "system"})
 
 
-@router.get("/timeseries", response_model=list[dict[str, object]])
+@router.get("/timeseries", response_model=list[SearchAnalyticsTimeBucket])
 async def get_search_analytics_timeseries(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -94,7 +98,7 @@ async def get_search_analytics_timeseries(
     return await web_search_event_dao.timeseries(start=window_start, end=window_end, tenant_id=tenant_id)
 
 
-@router.get("/orgs", response_model=list[dict[str, object]])
+@router.get("/orgs", response_model=list[SearchAnalyticsOrgRanking])
 async def get_search_analytics_orgs(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -106,7 +110,7 @@ async def get_search_analytics_orgs(
     return await web_search_event_dao.top_orgs(start=window_start, end=window_end, limit=limit)
 
 
-@router.get("/trending", response_model=list[dict[str, object]])
+@router.get("/trending", response_model=list[SearchAnalyticsTrendingQuery])
 async def get_search_analytics_trending(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -127,7 +131,7 @@ async def get_search_analytics_trending(
     )
 
 
-@router.get("/export-status", response_model=dict[str, object])
+@router.get("/export-status", response_model=SearchAnalyticsExportStatus)
 async def get_search_analytics_export_status(
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ) -> SearchAnalyticsExportStatusPassthrough:

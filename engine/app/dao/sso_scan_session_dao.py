@@ -34,10 +34,10 @@ class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE sso_scan_sessions SET status = 'authorized', user_id = %(user_id)s, "
-                + "provider_type = %(provider_type)s WHERE id = %(session_id)s "
-                + "AND status IN ('pending', 'scanned') AND expires_at > now() "
-                + "AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s) "
-                + f"RETURNING {self._select_list()}",
+                "provider_type = %(provider_type)s WHERE id = %(session_id)s "
+                "AND status IN ('pending', 'scanned') AND expires_at > now() "
+                "AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s) "
+                f"RETURNING {self._select_list()}",
                 {"session_id": session_id, "user_id": user_id, "provider_type": provider_type, "tenant_id": tenant_id},
             )
         return self.record_factory(row) if row is not None else None
@@ -46,7 +46,7 @@ class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE sso_scan_sessions SET status = 'completed' WHERE id = %(session_id)s "
-                + "AND status = 'authorized' AND expires_at > now() RETURNING user_id",
+                "AND status = 'authorized' AND expires_at > now() RETURNING user_id",
                 {"session_id": session_id},
             )
         return uuid_from_row_opt(row["user_id"]) if row is not None else None
@@ -55,8 +55,8 @@ class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE sso_scan_sessions SET status = 'expired' WHERE id = %(session_id)s "
-                + "AND status IN ('pending', 'scanned', 'authorized') AND expires_at <= now() "
-                + f"RETURNING {self._select_list()}",
+                "AND status IN ('pending', 'scanned', 'authorized') AND expires_at <= now() "
+                f"RETURNING {self._select_list()}",
                 {"session_id": session_id},
             )
         return self.record_factory(row) if row is not None else None
@@ -65,8 +65,8 @@ class SSOScanSessionDAO(BaseDAO[SSOScanSessionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE sso_scan_sessions SET status = 'scanned' WHERE id = %(session_id)s "
-                + "AND status = 'pending' AND expires_at > now() "
-                + f"RETURNING {self._select_list()}",
+                "AND status = 'pending' AND expires_at > now() "
+                f"RETURNING {self._select_list()}",
                 {"session_id": session_id},
             )
         return self.record_factory(row) if row is not None else None

@@ -7,9 +7,13 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
-from tests.test_enterprise_transaction_boundaries import _actor, _model, owned_pool as owned_pool
+from tests.test_enterprise_transaction_boundaries import _actor, _model, owned_pool
+
+__all__ = ["owned_pool"]
 
 from app.api import enterprise
+from app.core.domain.approvals import ApprovalAction, ApprovalStatus
+from app.core.domain.users import UserRole
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.user_dao import user_dao
 from app.db import session
@@ -49,7 +53,7 @@ async def test_approval_audit_is_atomic_and_remote_work_follows_commit(monkeypat
     pending = ApprovalRequestRecord(
         id=uuid.uuid4(), agent_id=agent.id, action_type="tool", details={"tool": "test"}, created_at=datetime.now(UTC)
     )
-    status = "approved" if action == "approve" else "rejected"
+    status = ApprovalStatus.APPROVED if action == "approve" else ApprovalStatus.REJECTED
     resolved = replace(pending, status=status, resolved_by=user.id)
     observed = []
     effects = []
@@ -109,7 +113,7 @@ async def test_approval_audit_is_atomic_and_remote_work_follows_commit(monkeypat
     else:
         error = asyncio.CancelledError if outcome == "cancel" else RuntimeError
         with pytest.raises(error):
-            await service.resolve_approval(pending.id, user, action)
+            await service.resolve_approval(pending.id, user, ApprovalAction(action))
         execution.assert_not_awaited()
         notification.assert_not_awaited()
         assert effects == []
@@ -120,7 +124,7 @@ async def test_approval_audit_is_atomic_and_remote_work_follows_commit(monkeypat
 
 @pytest.mark.parametrize("tenant_id", [None, ""])
 async def test_tenantless_org_admin_cannot_read_unscoped_audit_logs(monkeypatch, tenant_id):
-    user = UserRecord(id=uuid.uuid4(), role="org_admin")
+    user = UserRecord(id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
     listing = AsyncMock(return_value=[])
     monkeypatch.setattr(audit_log_dao, "list_scoped", listing)
 

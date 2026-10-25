@@ -8,12 +8,12 @@ import {
 } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { createSessionQueryScope, ownQueryClient } from '../src/hooks/session-query-client.ts'
-import { notificationSchema } from '../src/lib/notifications-api.ts'
+import { NotificationKind, notificationSchema } from '../src/lib/notifications-api.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { createFixture } from './helpers.ts'
 
 const notification = notificationSchema.parse({
-  id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: 'broadcast', title: 'Notice', body: '',
+  id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: NotificationKind.Broadcast, title: 'Notice', body: '',
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: null, archived_at: null,
 })
 

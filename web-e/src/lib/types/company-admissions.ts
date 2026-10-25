@@ -1,14 +1,15 @@
 import { z } from 'zod'
 import { transferDispositionSchema } from './company-transfers.ts'
+import { AdmissionMethodSchema, AdmissionStatusValues } from '../engine-contracts.generated.ts'
 
 const tenantSchema = z.object({ id: z.string().min(1), name: z.string() }).readonly()
-export const admissionStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn'])
+export const admissionStatusSchema = z.enum(AdmissionStatusValues)
 const summarySchema = z.object({
   id: z.string().min(1),
   status: admissionStatusSchema,
   source_tenant_id: z.string().nullable(),
   target_tenant: tenantSchema,
-  method: z.enum(['invitation', 'verified_domain', 'sso']),
+  method: AdmissionMethodSchema,
   created_at: z.string(),
   decided_at: z.string().nullable(),
   decision_reason: z.string().nullable(),

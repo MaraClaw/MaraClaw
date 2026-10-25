@@ -15,7 +15,9 @@ from app.api import discord_bot, feishu, google_chat, slack, teams, whatsapp
 from app.core.json_types import JsonObject
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.services.channels import dedup, feishu_submissions, inbound, slack_submissions
-from test_channel_shared_processors import context as context, pipeline as pipeline
+from test_channel_shared_processors import context, pipeline
+
+__all__ = ["context", "pipeline"]
 
 WEBHOOKS = [
     "slack",

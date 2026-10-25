@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { UserCard } from '@/components/users/user-card'
+import { TransferAgents } from '@/components/users/transfer-agents'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
@@ -178,6 +179,7 @@ export function TenantUsers({
               pending={pending}
               onToggle={() => onToggle(row)}
             >
+              <TransferAgents source={row} />
               {isEndUserRole(row.role) && row.tenant_id === tenantId ? (
                 <DepartmentMemberships
                   name={name}

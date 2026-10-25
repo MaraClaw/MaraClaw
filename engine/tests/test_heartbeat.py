@@ -1,4 +1,6 @@
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -165,3 +167,164 @@ async def test_daily_quota_charges_each_heartbeat_request_and_skips_when_capped(
         assert usage.await_args.args[1].total_tokens == 17 * budget
     execute.assert_not_awaited()
     notify.assert_not_awaited()
+
+
+class _TickHarness:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.dao.agent_dao import agent_dao
+        from app.dao.tenant_dao import tenant_dao
+
+        self.agent_id: uuid.UUID = uuid.uuid4()
+        self.agent: SimpleNamespace = SimpleNamespace(
+            id=self.agent_id,
+            name="Beat",
+            is_expired=False,
+            expires_at=None,
+            tenant_id=None,
+            heartbeat_active_hours=None,
+            heartbeat_interval_minutes=1,
+            last_heartbeat_at=None,
+        )
+        self.claims: int = 0
+        self.in_claim: asyncio.Event = asyncio.Event()
+        self.finish_claim: asyncio.Event = asyncio.Event()
+        self.in_audit: asyncio.Event = asyncio.Event()
+        self.finish_audit: asyncio.Event = asyncio.Event()
+        self.block_claim: bool = False
+        self.block_audit: bool = False
+        self.executed: list[uuid.UUID] = []
+        self.run_until: asyncio.Event = asyncio.Event()
+        self.cancelled: list[uuid.UUID] = []
+        self.claim_cancelled: bool = False
+
+        async def candidates() -> list[SimpleNamespace]:
+            return [self.agent]
+
+        async def claim(_agent_id: uuid.UUID, **_kwargs: object) -> bool:
+            self.claims += 1
+            if self.block_claim:
+                self.in_claim.set()
+                try:
+                    await self.finish_claim.wait()
+                except asyncio.CancelledError:
+                    self.claim_cancelled = True
+                    raise
+            return True
+
+        async def audit(action: str, *_args: object, **_kwargs: object) -> None:
+            if action == "heartbeat_fire" and self.block_audit:
+                self.in_audit.set()
+                await self.finish_audit.wait()
+
+        async def execute(agent_id: uuid.UUID) -> None:
+            try:
+                await self.run_until.wait()
+                self.executed.append(agent_id)
+            except asyncio.CancelledError:
+                self.cancelled.append(agent_id)
+                raise
+
+        async def reconcile(_now: object) -> None:
+            return None
+
+        async def no_tenants(_ids: object) -> list[object]:
+            return []
+
+        monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", candidates)
+        monkeypatch.setattr(agent_dao, "claim_heartbeat", claim)
+        monkeypatch.setattr(tenant_dao, "get_by_ids", no_tenants)
+        monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", reconcile)
+        monkeypatch.setattr("app.services.audit_logger.write_audit_log", audit)
+        monkeypatch.setattr("app.services.timezone_utils.get_agent_timezone_sync", lambda *_args: "UTC")
+        monkeypatch.setattr(heartbeat, "_is_in_active_hours", lambda *_args: True)
+        monkeypatch.setattr(heartbeat, "_execute_heartbeat", execute)
+
+
+@pytest.fixture
+async def tick(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_TickHarness]:
+    heartbeat.open_heartbeat_admission()
+    try:
+        yield _TickHarness(monkeypatch)
+    finally:
+        heartbeat.open_heartbeat_admission()
+
+
+async def test_tick_claims_nothing_once_admission_closed(tick: _TickHarness) -> None:
+    # Given a closed gate
+    heartbeat.close_heartbeat_admission()
+    # When
+    await heartbeat._heartbeat_tick()
+    # Then no heartbeat interval was consumed and no task exists
+    assert tick.claims == 0
+    assert not heartbeat._HEARTBEAT_TASKS
+
+
+@pytest.mark.parametrize("stage", ["claim", "audit"])
+async def test_claimed_heartbeat_still_starts_when_gate_closes_mid_tick(tick: _TickHarness, stage: str) -> None:
+    # Given a tick suspended after it advanced last_heartbeat_at
+    if stage == "claim":
+        tick.block_claim = True
+        suspended, resume = tick.in_claim, tick.finish_claim
+    else:
+        tick.block_audit = True
+        suspended, resume = tick.in_audit, tick.finish_audit
+    running = asyncio.create_task(heartbeat._heartbeat_tick())
+    await suspended.wait()
+    # When shutdown closes admission and drains before the awaits return
+    heartbeat.close_heartbeat_admission()
+    drain = asyncio.create_task(heartbeat.drain_heartbeat_tasks(grace_seconds=1))
+    await asyncio.sleep(0)
+    resume.set()
+    await running
+    await asyncio.sleep(0)
+    tick.run_until.set()
+    await drain
+    # Then the claimed heartbeat ran to completion inside the grace period
+    assert tick.executed == [tick.agent_id]
+    assert tick.cancelled == []
+    assert not heartbeat._HEARTBEAT_TASKS
+
+
+async def test_claim_outliving_grace_is_cancelled_before_drain_returns(tick: _TickHarness) -> None:
+    # Given a tick stuck in claim_heartbeat
+    tick.block_claim = True
+    running = asyncio.create_task(heartbeat._heartbeat_tick())
+    await tick.in_claim.wait()
+    # When the drain runs out of grace
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=0.01)
+    # Then the claim was cancelled before the drain returned and no heartbeat starts afterwards
+    assert tick.claim_cancelled
+    await running
+    tick.finish_claim.set()
+    tick.run_until.set()
+    await asyncio.sleep(0)
+    assert tick.executed == []
+    assert not heartbeat._HEARTBEAT_TASKS
+
+
+async def test_heartbeat_cancelled_after_grace_without_touching_foreign_tasks(tick: _TickHarness) -> None:
+    # Given a running heartbeat and a task owned elsewhere
+    foreign = asyncio.create_task(asyncio.Event().wait())
+    await heartbeat._heartbeat_tick()
+    await asyncio.sleep(0)
+    heartbeat.close_heartbeat_admission()
+    # When the grace period expires
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=0.01)
+    # Then only the heartbeat was cancelled
+    assert tick.cancelled == [tick.agent_id]
+    assert not heartbeat._HEARTBEAT_TASKS
+    assert not foreign.done()
+    foreign.cancel()
+    _ = await asyncio.gather(foreign, return_exceptions=True)
+
+
+async def test_reopened_gate_claims_again(tick: _TickHarness) -> None:
+    # Given a gate closed by an earlier lifespan
+    heartbeat.close_heartbeat_admission()
+    heartbeat.open_heartbeat_admission()
+    # When
+    await heartbeat._heartbeat_tick()
+    # Then
+    assert tick.claims == 1
+    tick.run_until.set()
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)

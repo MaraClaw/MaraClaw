@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.core.domain.okr import KeyResultStatus, PeriodFrequency
 from app.core.json_types import JsonObject
 
 
@@ -15,7 +16,7 @@ class OKRSettingsOut(BaseModel):
     daily_report_skip_non_workdays: bool = True
     weekly_report_enabled: bool
     weekly_report_day: int
-    period_frequency: str
+    period_frequency: PeriodFrequency
     period_length_days: int | None = None
     period_frequency_locked: bool = False
     okr_agent_id: str | None = None
@@ -28,7 +29,7 @@ class OKRSettingsUpdate(BaseModel):
     daily_report_skip_non_workdays: bool | None = None
     weekly_report_enabled: bool | None = None
     weekly_report_day: int | None = None
-    period_frequency: str | None = None
+    period_frequency: PeriodFrequency | None = None
     period_length_days: int | None = None
 
 
@@ -40,7 +41,7 @@ class KeyResultOut(BaseModel):
     current_value: float
     unit: str | None = None
     focus_ref: str | None = None
-    status: str
+    status: KeyResultStatus
     last_updated_at: str
     created_at: str
     alignments: list[JsonObject] = []
@@ -88,13 +89,13 @@ class KeyResultUpdate(BaseModel):
     target_value: float | None = None
     unit: str | None = None
     focus_ref: str | None = None
-    status: str | None = None
+    status: KeyResultStatus | None = None
 
 
 class ProgressUpdate(BaseModel):
     value: float
     note: str | None = None
-    status: str | None = None
+    status: KeyResultStatus | None = None
 
 
 class PeriodOut(BaseModel):

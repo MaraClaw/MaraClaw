@@ -9,7 +9,9 @@ import pytest
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.records.broadcast_email import BroadcastEmailRecord
 from app.services import broadcast_email_worker as worker, system_email_service as email
-from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue
+from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, enqueue
+
+__all__ = ["broadcast_db"]
 
 
 class Clock:

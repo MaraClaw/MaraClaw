@@ -40,7 +40,7 @@ automatic recovery after lost admission or process crashes.
 `agent:main:hook:maraclaw:<conversation_id>` (message ID only when no conversation
 exists). Shared web and IM humans therefore select the same explicit guest key.
 
-`Dockerfile.openclaw` pins OpenClaw `2026.10.6`. Its packaged hook resolver and
+`Dockerfile.openclaw` pins OpenClaw `2026.10.7`. Its packaged hook resolver and
 dispatcher require **both** `sessionKey` and `sessionMode: persistent` to reuse
 the selected session; supplying a key alone still selects an isolated run.
 Engine configuration permits request session keys with bounded hook prefixes.
@@ -82,7 +82,7 @@ an agent-exec shell environment.
 Those tests prove routing and queue behavior, not provider delivery or live LLM
 context retention; the latter also depends on the guest's persisted state store.
 
-Pinned package source evidence (paths inside the `2026.10.6` npm tarball):
+Historical package source evidence (paths inside the `2026.10.6` npm tarball):
 
 - `dist/hooks-BbwAVO04.mjs`: `resolveHookSessionKey` validates request key policy;
   `normalizeAgentPayload` defaults the session mode to isolated.

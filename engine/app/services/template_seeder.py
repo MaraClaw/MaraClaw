@@ -95,7 +95,7 @@ async def seed_agent_templates():
             if old.name in current_names:
                 continue
             detached = await agent_template_dao.clear_agent_references(old.id)
-            _ = await agent_template_dao.delete(id=old.id)
+            _ = await agent_template_dao.delete(record_id=old.id)
             logger.info(f"[TemplateSeeder] Retired leftover builtin {old.name} (detached {detached} agents)")
 
         for tmpl in templates:

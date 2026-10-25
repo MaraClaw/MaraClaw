@@ -55,6 +55,19 @@ class PendingAdmissionResponse(BaseModel):
     request: RequestSummary
 
 
+class ApprovedAdmissionResponse(BaseModel):
+    status: Literal["approved"] = "approved"
+    request: RequestSummary
+
+
+class InvitationPreviewRequest(BaseModel):
+    invitation_code: str = Field(min_length=1, max_length=32)
+
+
+class InvitationPreviewResponse(BaseModel):
+    tenant: AdmissionTenant
+
+
 class AdmissionDecision(BaseModel):
     decision: Literal["approved", "rejected"]
     reason: str | None = Field(default=None, max_length=2000)

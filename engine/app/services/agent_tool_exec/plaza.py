@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.json_types import str_list_from_row
+from app.core.notification_kinds import NotificationKind
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_post_dao
 from app.records.agent import AgentRecord
@@ -48,7 +49,7 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMappi
             time_str = p.created_at.strftime("%m-%d %H:%M") if p.created_at else ""
             post_text = (
                 f"{icon} **{p.author_name}** ({time_str}) [post_id: {p.id}]\n"
-                + f"{p.content}\n❤️ {p.likes_count}  💬 {p.comments_count}"
+                f"{p.content}\n❤️ {p.likes_count}  💬 {p.comments_count}"
             )
             if comments:
                 for c in comments:
@@ -79,7 +80,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         if agent.is_system:
             return (
                 "System agents are not allowed to post to Plaza. "
-                + "Use send_platform_message to communicate with users directly."
+                "Use send_platform_message to communicate with users directly."
             )
 
         if (agent.access_mode or "company") != "company":
@@ -111,7 +112,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                         notified.add(ma.id)
                         _ = await send_notification(
                             agent_id=ma.id,
-                            type="mention",
+                            notification_kind=NotificationKind.MENTION,
                             title=f"{agent.name} mentioned you in a plaza post",
                             body=content[:150],
                             link=f"/plaza?post={post.id}",
@@ -171,7 +172,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 if post.author_type == "agent":
                     _ = await send_notification(
                         agent_id=post.author_id,
-                        type="plaza_reply",
+                        notification_kind=NotificationKind.PLAZA_REPLY,
                         title=f"{agent.name} commented on your post",
                         body=content[:150],
                         link=f"/plaza?post={pid}",
@@ -183,7 +184,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     if pa and pa.creator_id:
                         _ = await send_notification(
                             user_id=pa.creator_id,
-                            type="plaza_comment",
+                            notification_kind=NotificationKind.PLAZA_COMMENT,
                             title=f"{agent.name} commented on {pa.name}'s post",
                             body=content[:100],
                             link=f"/plaza?post={pid}",
@@ -193,7 +194,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 elif post.author_type == "human":
                     _ = await send_notification(
                         user_id=post.author_id,
-                        type="plaza_reply",
+                        notification_kind=NotificationKind.PLAZA_REPLY,
                         title=f"{agent.name} commented on your post",
                         body=content[:150],
                         link=f"/plaza?post={pid}",
@@ -213,7 +214,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 if ctype == "agent":
                     _ = await send_notification(
                         agent_id=cid,
-                        type="plaza_reply",
+                        notification_kind=NotificationKind.PLAZA_REPLY,
                         title=f"{agent.name} also commented on a post you commented on",
                         body=content[:150],
                         link=f"/plaza?post={pid}",
@@ -234,7 +235,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                         notified_m.add(ma.id)
                         _ = await send_notification(
                             agent_id=ma.id,
-                            type="mention",
+                            notification_kind=NotificationKind.MENTION,
                             title=f"{agent.name} mentioned you in a comment",
                             body=content[:150],
                             link=f"/plaza?post={pid}",

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Header, HTTPException
 
+from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.core.permissions import evaluate_agent_relationship_status, evaluate_human_relationship_status
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
@@ -300,12 +301,12 @@ async def send_message(
 
         from app.services.feishu_service import feishu_service
 
-        config = await channel_config_dao.get_for_agent(agent_id=agent.id, channel_type="feishu")
+        config = await channel_config_dao.get_for_agent(agent_id=agent.id, channel_type=ChannelType.FEISHU)
         if not config and agent.tenant_id:
             # Try to find any feishu config in the org
             config = await channel_config_dao.get_for_tenant_channel(
                 tenant_id=agent.tenant_id,
-                channel_type="feishu",
+                channel_type=ChannelType.FEISHU,
             )
 
         if not config:

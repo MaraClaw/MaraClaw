@@ -38,7 +38,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenant_email_domains "
-                + "WHERE tenant_id = %(tenant_id)s ORDER BY is_default DESC, domain ASC",
+                "WHERE tenant_id = %(tenant_id)s ORDER BY is_default DESC, domain ASC",
                 {"tenant_id": tenant_id},
             )
             return [TenantEmailDomainRecord.from_row(row) for row in rows]
@@ -47,7 +47,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenant_email_domains "
-                + "WHERE tenant_id = %(tenant_id)s AND is_default IS TRUE LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND is_default IS TRUE LIMIT 1",
                 {"tenant_id": tenant_id},
             )
             return TenantEmailDomainRecord.from_row(row) if row is not None else None
@@ -56,7 +56,7 @@ class TenantEmailDomainDAO(BaseDAO[TenantEmailDomainRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE tenant_email_domains SET is_default = FALSE "
-                + "WHERE tenant_id = %(tenant_id)s AND is_default IS TRUE",
+                "WHERE tenant_id = %(tenant_id)s AND is_default IS TRUE",
                 {"tenant_id": tenant_id},
             )
 

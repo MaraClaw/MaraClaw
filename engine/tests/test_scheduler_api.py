@@ -9,6 +9,7 @@ import pytest
 from fastapi import Depends, FastAPI
 
 from app.api import schedules
+from app.core.domain.agents import AgentStatus
 from app.core.json_types import json_loads_object
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
@@ -18,9 +19,11 @@ from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
 from app.records.schedule_manual_run import ScheduleManualRunRecord
 from app.records.user import UserRecord
-from test_schedule_dao import NOW, _Pool, _schedule, pool as pool
-from test_scheduler import clock as clock
-from test_scheduler_tasks import owner as owner
+from test_schedule_dao import NOW, _Pool, _schedule, pool
+from test_scheduler import clock
+from test_scheduler_tasks import owner
+
+__all__ = ["clock", "owner", "pool"]
 
 
 @dataclass
@@ -42,7 +45,7 @@ async def api(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_HT
     row = _schedule()
     pool.rows[row.id] = row
     user = UserRecord(id=uuid4())
-    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=user.id, status="running")
+    agent = AgentRecord(id=row.agent_id, name="Agent", creator_id=user.id, status=AgentStatus.RUNNING)
     app = FastAPI()
     app.include_router(schedules.router, dependencies=[Depends(session.bind_crud_connection)])
     app.dependency_overrides[get_current_user] = lambda: user
@@ -68,7 +71,7 @@ async def test_manual_rejects_before_launch_or_count_when_ineligible(
     api: _HTTP, pool: _Pool, state: str, expected: int
 ) -> None:
     # Given an expired-and-stopped agent, a stopped agent, or a missing schedule.
-    api.agent.status = "stopped"
+    api.agent.status = AgentStatus.STOPPED
     api.agent.is_expired = state == "expired"
     if state == "missing":
         api.get_schedule.return_value = None

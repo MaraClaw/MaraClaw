@@ -224,7 +224,7 @@ def _assert_online_state(state_dir: Path) -> str:
     assert not skill.is_symlink()
     assert (state_dir / GOG_MARKER).is_file()
     assert (state_dir / CHILD_MARKER).is_file()
-    return os.readlink(current)
+    return str(current.readlink())
 
 
 def test_real_linux_arm64_officecli_restart_smoke() -> None:

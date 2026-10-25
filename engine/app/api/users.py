@@ -6,8 +6,10 @@ from hashlib import sha256
 from typing import Any, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
@@ -50,11 +52,11 @@ class UserActiveUpdate(BaseModel):
     is_active: bool
 
 
-class UserOut(BaseModel):
+class AdminUserSummary(BaseModel):
     id: uuid.UUID
     email: str | None = None
     display_name: str | None = None
-    role: str
+    role: UserRole
     is_active: bool
     is_genesis: bool = False
     tenant_id: uuid.UUID | None = None
@@ -74,7 +76,7 @@ class UserOut(BaseModel):
 
 
 class UsersPageOut(BaseModel):
-    items: list[UserOut]
+    items: list[AdminUserSummary]
     next_cursor: str | None
 
 
@@ -89,8 +91,8 @@ class _UsersPageCursor(BaseModel):
     user_id: uuid.UUID
 
 
-def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
-    return UserOut(
+def _user_out(u: UserRecord, agents_count: int = 0) -> AdminUserSummary:
+    return AdminUserSummary(
         id=u.id,
         email=u.email or "",
         display_name=u.display_name or u.email or "User",
@@ -109,10 +111,10 @@ def _user_out(u: UserRecord, agents_count: int = 0) -> UserOut:
     )
 
 
-@router.get("/", response_model=list[UserOut])
+@router.get("/", response_model=list[AdminUserSummary])
 async def list_users(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[UserOut]:
+) -> list[AdminUserSummary]:
     """List all users in the specified tenant (admin only)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -133,7 +135,7 @@ async def list_users(
 
     users = await user_dao.list_for_tenant_ordered(tenant_uuid, include_identity=True)
 
-    out: list[UserOut] = []
+    out: list[AdminUserSummary] = []
     for u in users:
         agents_count = await agent_dao.count_active_for_creator(u.id)
         out.append(_user_out(u, agents_count=agents_count))
@@ -197,10 +199,10 @@ async def list_users_page(
     )
 
 
-@router.patch("/{user_id}/quota", response_model=UserOut)
+@router.patch("/{user_id}/quota", response_model=AdminUserSummary)
 async def update_user_quota(
     user_id: uuid.UUID, data: UserQuotaUpdate, current_user: UserRecord = Depends(get_current_user)
-) -> UserOut:
+) -> AdminUserSummary:
     """Update a user's quota settings (admin only)."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -242,13 +244,14 @@ async def update_user_quota(
 class UserAgentOut(BaseModel):
     id: uuid.UUID
     name: str
-    status: str
+    status: AgentStatus
+    is_system: bool
     is_expired: bool = False
     role_description: str | None = None
     last_active_at: datetime | None = None
 
 
-class UserDetailOut(UserOut):
+class UserDetailOut(AdminUserSummary):
     agents: list[UserAgentOut] = Field(default_factory=list)
 
 
@@ -259,13 +262,13 @@ def _require_admin_user_scope(actor: UserRecord, target: UserRecord) -> None:
         raise HTTPException(status_code=403, detail="Can only view users in your own company")
 
 
-@router.patch("/{user_id}/active", response_model=UserOut)
+@router.patch("/{user_id}/active", response_model=AdminUserSummary)
 async def set_user_active(
     user_id: uuid.UUID,
     data: UserActiveUpdate,
     current_user: UserRecord = Depends(get_current_user),
     client_ip: str | None = Depends(get_client_ip),
-) -> UserOut:
+) -> AdminUserSummary:
     """Activate or deactivate an end user. Org admin: own company. Platform admin: any company."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -297,7 +300,17 @@ async def set_user_active(
 
 
 class RoleUpdate(BaseModel):
-    role: str
+    role: UserRole
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def parse_role(cls, value: object) -> UserRole:
+        try:
+            return UserRole(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid role. Allowed: platform_admin, org_admin, member"
+            ) from exc
 
 
 class OrgAdminCreateRequest(BaseModel):
@@ -321,7 +334,7 @@ class OrgAdminOut(BaseModel):
     id: uuid.UUID
     email: str | None = None
     display_name: str | None = None
-    role: str
+    role: UserRole
     is_active: bool
     is_genesis: bool = False
     tenant_id: uuid.UUID | None = None
@@ -499,6 +512,7 @@ async def get_user_detail(
             id=agent.id,
             name=agent.name,
             status=agent.status,
+            is_system=bool(agent.is_system),
             is_expired=bool(agent.is_expired),
             role_description=agent.role_description or None,
             last_active_at=agent.last_active_at,

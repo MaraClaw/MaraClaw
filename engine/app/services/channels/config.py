@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.core.domain.channels import ChannelType
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
@@ -23,7 +24,7 @@ async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID)
 
 
 async def get_channel_config(agent_id: uuid.UUID, channel_type: str) -> ChannelConfigRecord | None:
-    stored = normalize_channel_type(channel_type) or channel_type
+    stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
     return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=stored)
 
 
@@ -46,7 +47,7 @@ async def upsert_channel_config(
     is_configured: bool = True,
 ) -> ChannelConfigRecord:
     """Create or update a channel_config row for an agent."""
-    stored = normalize_channel_type(channel_type) or channel_type
+    stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=stored)
     payload: dict[str, Any] = {
         "app_id": app_id,
@@ -79,7 +80,7 @@ async def upsert_channel_config(
 async def delete_channel_config(agent_id: uuid.UUID, channel_type: str) -> None:
     config = await require_channel_config(agent_id, channel_type)
     await _drop_im_tokens_for_config(config.channel_type, config.app_id, config.app_secret)
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 async def _drop_im_tokens_for_config(

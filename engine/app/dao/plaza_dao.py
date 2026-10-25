@@ -45,10 +45,10 @@ _LIKE_COLUMNS = (
 # Hide posts/comments authored by system or non-company agents.
 _HIDDEN_AGENT_EXISTS = (
     "EXISTS ("
-    + "SELECT 1 FROM agents a "
-    + "WHERE a.id = {author_col} "
-    + "AND (a.is_system IS TRUE OR COALESCE(a.access_mode, 'company') <> 'company')"
-    + ")"
+    "SELECT 1 FROM agents a "
+    "WHERE a.id = {author_col} "
+    "AND (a.is_system IS TRUE OR COALESCE(a.access_mode, 'company') <> 'company')"
+    ")"
 )
 _PRIVATE_OR_SYSTEM_POST = (
     f"(plaza_posts.author_type = 'agent' AND {_HIDDEN_AGENT_EXISTS.format(author_col='plaza_posts.author_id')})"
@@ -101,7 +101,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM plaza_posts{where_sql} "
-                + "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+                "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
                 params,
             )
             return [PlazaPostRecord.from_row(row) for row in rows]
@@ -121,20 +121,20 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             )
             total_comments = await db.fetchval(
                 "SELECT COUNT(*) FROM plaza_comments "
-                + "JOIN plaza_posts ON plaza_comments.post_id = plaza_posts.id "
-                + f"WHERE {post_filter}",
+                "JOIN plaza_posts ON plaza_comments.post_id = plaza_posts.id "
+                f"WHERE {post_filter}",
                 params,
             )
             today_posts = await db.fetchval(
                 "SELECT COUNT(*) FROM plaza_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
-                + f"AND {post_filter}",
+                f"AND {post_filter}",
                 params,
             )
             top_rows = await db.fetchall(
                 "SELECT author_name, author_type, COUNT(*) AS post_count "
-                + f"FROM plaza_posts WHERE {post_filter} "
-                + "GROUP BY author_name, author_type "
-                + "ORDER BY post_count DESC LIMIT 5",
+                f"FROM plaza_posts WHERE {post_filter} "
+                "GROUP BY author_name, author_type "
+                "ORDER BY post_count DESC LIMIT 5",
                 params,
             )
             return {
@@ -147,8 +147,8 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 ],
             }
 
-    async def get_post(self, id: UUID) -> PlazaPostRecord | None:
-        return await self.get(id)
+    async def get_post(self, post_id: UUID) -> PlazaPostRecord | None:
+        return await self.get(post_id)
 
     async def create_post(self, obj_in: Mapping[str, Any]) -> PlazaPostRecord:
         return await self.create(obj_in=obj_in)
@@ -157,7 +157,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE plaza_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
-                + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
+                f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id},
             )
             return PlazaPostRecord.from_row(row) if row is not None else None
@@ -166,7 +166,7 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE plaza_posts SET likes_count = GREATEST(COALESCE(likes_count, 0) + %(delta)s, 0) "
-                + f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
+                f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id, "delta": delta},
             )
             return PlazaPostRecord.from_row(row) if row is not None else None
@@ -193,7 +193,7 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM plaza_comments "
-                + f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
+                f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
                 params,
             )
             return [PlazaCommentRecord.from_row(row) for row in rows]
@@ -225,7 +225,7 @@ class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM plaza_likes "
-                + "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
+                "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
                 {"post_id": post_id, "author_id": author_id},
             )
             return PlazaLikeRecord.from_row(row) if row is not None else None

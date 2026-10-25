@@ -107,10 +107,10 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         share_note = await _share_with_sender(agent_tools, tenant_token, doc_token)
         return (
             f"✅ 文档创建成功{_FW_EXCLAMATION}{share_note}\n"
-            + f"标题{_FW_COLON}{title}\n"
-            + f"Token{_FW_COLON}{doc_token}\n"
-            + f"🔗 访问链接{_FW_COLON}{doc_url}\n"
-            + f'下一步{_FW_COLON}调用 feishu_doc_append(document_token="{doc_token}", content="...") 写入正文内容。'
+            f"标题{_FW_COLON}{title}\n"
+            f"Token{_FW_COLON}{doc_token}\n"
+            f"🔗 访问链接{_FW_COLON}{doc_url}\n"
+            f'下一步{_FW_COLON}调用 feishu_doc_append(document_token="{doc_token}", content="...") 写入正文内容。'
         )
     except Exception as error:
         return f"Failed: {str(error)[:300]}"
@@ -124,6 +124,7 @@ async def _create_wiki_doc(
     parent_node_token: str,
 ) -> str:
     body: dict[str, str] = {"obj_type": "docx", "node_type": "origin", "title": title}
+    del facade
     if parent_node_token:
         body["parent_node_token"] = parent_node_token
 
@@ -144,15 +145,16 @@ async def _create_wiki_doc(
     doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, node_token, doc_type="wiki")
     return (
         f"✅ 知识库文档创建成功{_FW_EXCLAMATION}\n"
-        + f"标题{_FW_COLON}{title}\n"
-        + f"文档 Token{_FW_LEFT_PAREN}用于 feishu_doc_append{_FW_RIGHT_PAREN}{_FW_COLON}{doc_token}\n"
-        + f"Wiki Node Token{_FW_COLON}{node_token}\n"
-        + f"🔗 访问链接{_FW_COLON}{doc_url}\n"
-        + f'下一步{_FW_COLON}调用 feishu_doc_append(document_token="{doc_token}", content="...") 写入正文内容。'
+        f"标题{_FW_COLON}{title}\n"
+        f"文档 Token{_FW_LEFT_PAREN}用于 feishu_doc_append{_FW_RIGHT_PAREN}{_FW_COLON}{doc_token}\n"
+        f"Wiki Node Token{_FW_COLON}{node_token}\n"
+        f"🔗 访问链接{_FW_COLON}{doc_url}\n"
+        f'下一步{_FW_COLON}调用 feishu_doc_append(document_token="{doc_token}", content="...") 写入正文内容。'
     )
 
 
 async def _share_with_sender(facade: object, tenant_token: str, doc_token: str) -> str:
+    del facade
     try:
         sender_open_id = channel_feishu_sender_open_id.get(None)
         if sender_open_id in (None, "") or not doc_token:
@@ -226,7 +228,7 @@ async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> s
         doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, docx_token)
         return (
             f"✅ 已写入 {len(children)} 个段落到文档。\n"
-            + f"🔗 文档直链{_FW_LEFT_PAREN}原文发给用户{_FW_COMMA}勿修改{_FW_RIGHT_PAREN}{_FW_COLON}{doc_url}"
+            f"🔗 文档直链{_FW_LEFT_PAREN}原文发给用户{_FW_COMMA}勿修改{_FW_RIGHT_PAREN}{_FW_COLON}{doc_url}"
         )
     except Exception as error:
         return f"Failed: {str(error)[:300]}"

@@ -12,6 +12,7 @@ import pytest
 from psycopg.types.json import Jsonb, JsonbDumper
 from pydantic import TypeAdapter, ValidationError
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject
 from app.records.channel_config import ChannelConfigRecord
 from app.services import template_seeder, tool_config
@@ -216,7 +217,7 @@ async def test_google_chat_sends_typed_thread_body_over_http(monkeypatch: pytest
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=uuid4(),
-        channel_type="google_chat",
+        channel_type=ChannelType.GOOGLE_CHAT,
         extra_config={"service_account_json": {"type": "test"}},
     )
 

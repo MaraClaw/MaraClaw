@@ -296,7 +296,7 @@ async def _finish_grok_subscription_status(session: GrokOAuthSession, poll: Toke
         session.device_code = ""
         return public_status_payload(session)
     next_status: GrokStatus = cast(
-        GrokStatus, poll.status if poll.status in {"denied", "expired", "error"} else "error"
+        "GrokStatus", poll.status if poll.status in {"denied", "expired", "error"} else "error"
     )
     session.status = next_status
     session.detail = poll.error or "Grok subscription sign-in failed"

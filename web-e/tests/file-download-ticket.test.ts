@@ -14,7 +14,7 @@ for (const inline of [false, true]) {
     // Given
     const snapshot = authSession.getSnapshot()
     context.mock.method(authSession, 'getSnapshot', (): AuthSnapshot => ({
-      owner: snapshot.owner, status: 'loading', token: jwt, user: null,
+      owner: snapshot.owner, status: 'loading', token: jwt, user: null, mustChangePassword: false,
     }))
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       assert.equal(path, '/api/agents/agent%2Fone/files/download-ticket')

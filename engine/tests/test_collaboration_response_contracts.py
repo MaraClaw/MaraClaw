@@ -13,7 +13,10 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypeForm
 
 from app.api import advanced, agents, background_tasks, okr, relationships
+from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
+from app.core.notification_kinds import NotificationKind
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
@@ -50,7 +53,7 @@ ROUTES = tuple(
 
 @pytest.fixture
 def actor() -> UserRecord:
-    return UserRecord(uuid4(), tenant_id=uuid4(), display_name="Owner", role="org_admin")
+    return UserRecord(uuid4(), tenant_id=uuid4(), display_name="Owner", role=UserRole.ORG_ADMIN)
 
 
 @pytest.fixture
@@ -104,8 +107,8 @@ def test_agent_projection_preserves_model_dump_fields_and_nested_copy(agent: Age
 
 def test_agent_extensions_keep_one_time_and_conditional_fields_separate(agent: AgentRecord) -> None:
     base = agent_model_dump(AgentOut.model_validate(agent))
-    created = AgentCreatedResponse(**base, api_key="one-time", access_level="manage")
-    detail = AgentDetailResponse(**base, access_level="use", effective_timezone="UTC")
+    created = AgentCreatedResponse(**base, api_key="one-time", access_level=PermissionAccessLevel.MANAGE)
+    detail = AgentDetailResponse(**base, access_level=PermissionAccessLevel.USE, effective_timezone="UTC")
     updated = AgentUpdatedResponse(**base)
 
     results = (
@@ -171,8 +174,8 @@ async def test_update_keeps_direct_clamps_but_existing_http_model_filters_them(
 async def test_permission_scope_names_are_omitted_only_without_grants(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, has_grant: bool
 ) -> None:
-    agent.access_mode = "custom"
-    grants = [AgentPermissionRecord(uuid4(), agent.id, "user", actor.id)] if has_grant else []
+    agent.access_mode = AgentSharingMode.CUSTOM
+    grants = [AgentPermissionRecord(uuid4(), agent.id, PermissionGrantScope.USER, actor.id)] if has_grant else []
     monkeypatch.setattr(agents.agent_permission_dao, "list_for_agent", AsyncMock(return_value=grants))
     monkeypatch.setattr(agents, "_get_active_admin_users", AsyncMock(return_value=[]))
     monkeypatch.setattr(agents.user_dao, "get_many_with_identity", AsyncMock(return_value={actor.id: actor}))
@@ -273,7 +276,7 @@ async def test_missing_okr_members_keep_fallback_omissions_and_tracked_warnings(
     settings = OKRSettingsRecord(actor.tenant_id, enabled=True, okr_agent_id=agent.id if tracked else None)
     member = OrgMemberRecord(uuid4(), "Human", tenant_id=actor.tenant_id, user_id=actor.id)
     relation = AgentRelationshipRecord(uuid4(), agent.id, member.id, member=member, provider_name="Slack")
-    notification = NotificationRecord(uuid4(), "system_task_failed", "Outreach", body="failure", created_at=None)
+    notification = NotificationRecord(uuid4(), NotificationKind.SYSTEM, "Outreach", body="failure", created_at=None)
     monkeypatch.setattr(okr, "_get_or_create_settings", AsyncMock(return_value=settings))
     monkeypatch.setattr(okr.okr_objective_dao, "company_exists_for_period", AsyncMock(return_value=False))
     monkeypatch.setattr(okr.okr_objective_dao, "list_owner_ids_for_period", AsyncMock(return_value=set()))
@@ -383,7 +386,7 @@ async def test_daily_collection_preserves_error_statuses(
     client: AsyncClient, actor: UserRecord, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     if failure == "role":
-        actor.role = "member"
+        actor.role = UserRole.MEMBER
     call = AsyncMock(side_effect=ValueError("disabled"))
     monkeypatch.setattr(okr_daily_collection, "trigger_daily_collection_for_tenant", call)
 
@@ -476,7 +479,7 @@ async def test_collaboration_and_handover_reuse_service_shapes(
         AsyncMock(return_value={"status": "sent", "type": "consult"}),
     )
     monkeypatch.setattr(advanced.user_dao, "get", AsyncMock(return_value=target))
-    monkeypatch.setattr(advanced.agent_dao, "update", AsyncMock(return_value=agent))
+    monkeypatch.setattr(advanced, "apply_ownership_change", AsyncMock())
     monkeypatch.setattr(advanced, "write_audit_log", AsyncMock())
 
     collaborators = await client.get(f"/api/agents/{agent.id}/collaborators")
@@ -520,7 +523,7 @@ async def test_api_key_wrapper_preserves_one_time_secret_and_access_errors(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
     open_guest_write_gate(monkeypatch)
-    actor.role = "member"
+    actor.role = UserRole.MEMBER
     agent.setup_pending = state == "setup_pending"
     if state == "other_owner":
         agent.creator_id = uuid4()

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module
@@ -50,7 +51,7 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
 
 async def rewrite(guest: Guest, writer: Writer) -> None:
     if writer == "recreate":
-        await guest.manager.start_container(guest.agent)
+        await guest.manager.replace_container(guest.agent)
     else:
         guest.manager.write_guest_config(guest.agent, primary=None)
 
@@ -190,7 +191,7 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
 async def test_corrupt_guest_resource_config_is_not_overwritten(guest: Guest, writer: Writer, text: str) -> None:
     # Given
     guest.path.write_text(text, encoding="utf-8")
-    guest.agent.status = "running"
+    guest.agent.status = AgentStatus.RUNNING
     guest.agent.container_id = "old-guest"
     guest.agent.container_port = 19876
     old_guest = SimpleNamespace(

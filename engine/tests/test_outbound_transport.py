@@ -2,7 +2,7 @@ import socket
 import ssl
 import threading
 from collections.abc import Iterable
-from typing import Never, override
+from typing import Never, Unpack, override
 
 import anyio
 import httpcore
@@ -13,6 +13,7 @@ from httpcore._backends.base import SOCKET_OPTION
 from app.core import outbound_policy, outbound_transport
 from app.core.outbound_policy import OutboundPolicyError
 from app.core.outbound_transport import operator_http_client, public_http_client
+from builtin_keyword_fakes import SocketTypeKeyword
 
 
 class RecordingStream(httpcore.AsyncNetworkStream):
@@ -75,8 +76,10 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> RecordingBackend:
     backend = RecordingBackend()
     monkeypatch.setattr(outbound_transport, "AnyIOBackend", lambda: backend)
 
-    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
-        return [(socket.AF_INET, type, 6, "", ("8.8.8.8", port))]
+    def lookup(
+        host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, kwargs["type"], 6, "", ("8.8.8.8", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)
     return backend
@@ -160,8 +163,10 @@ async def test_dns_rebinding_after_standalone_validation_is_blocked(
 ) -> None:
     url = await outbound_policy.validate_public_url("https://public.example/")
 
-    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
-        return [(socket.AF_INET, type, 6, "", ("127.0.0.1", port))]
+    def lookup(
+        host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, kwargs["type"], 6, "", ("127.0.0.1", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)
     async with public_http_client(timeout=1) as client:
@@ -229,9 +234,11 @@ async def test_blocking_system_dns_obeys_connect_budget(
 ) -> None:
     released = threading.Event()
 
-    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+    def lookup(
+        host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
         released.wait()
-        return [(socket.AF_INET, type, 6, "", ("8.8.8.8", port))]
+        return [(socket.AF_INET, kwargs["type"], 6, "", ("8.8.8.8", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)
     try:
@@ -332,8 +339,10 @@ async def test_operator_client_blocks_host_and_sni_overrides(wire: RecordingBack
 async def test_public_client_still_rejects_private_hosts_after_operator_client_exists(
     wire: RecordingBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
-        return [(socket.AF_INET, type, 6, "", ("10.0.0.5", port))]
+    def lookup(
+        host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, kwargs["type"], 6, "", ("10.0.0.5", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)
     async with public_http_client(timeout=1, origin="https://10.0.0.5:8443") as client:

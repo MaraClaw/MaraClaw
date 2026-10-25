@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -42,7 +43,7 @@ def _user(
     identity: IdentityRecord | None = None,
 ) -> UserRecord:
     return UserRecord(
-        id=user_id or uuid.uuid4(), tenant_id=tenant_id, role=role, is_active=is_active, identity=identity
+        id=user_id or uuid.uuid4(), tenant_id=tenant_id, role=UserRole(role), is_active=is_active, identity=identity
     )
 
 
@@ -65,7 +66,7 @@ async def test_welcome_targets_only_the_member_membership(send: AsyncMock):
 
     kwargs = send.await_args_list[0].kwargs
     assert kwargs["user_id"] == user.id
-    assert kwargs["type"] == "organization_welcome"
+    assert kwargs["notification_kind"] == "organization_welcome"
     assert kwargs["title"] == "Welcome to Acme"
     assert kwargs["body"]
     assert kwargs["ref_id"] == tenant.id

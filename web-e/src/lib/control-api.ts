@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
-import { apiRequest } from '@/lib/http'
+import { apiRequest } from './http.ts'
+import { ControlActionResultSchema, ControlEnvironmentSchema, ControlStatusSchema } from './engine-contracts.generated.ts'
 
 export type ControlLease = {
   readonly agentId: string
@@ -13,31 +14,26 @@ const lockResult = z.discriminatedUnion('status', [
   z.object({ status: z.literal('already_locked') }),
 ])
 
-export type ControlResult = {
-  status: string
-  detail?: string
-  url?: string
-  screenshot?: string | null
-  screen_size?: { width?: number; height?: number } | null
-  locked_by?: string
-  cookies_exported?: boolean
-  cookie_count?: number
-}
+const controlResultSchema = ControlActionResultSchema.extend({
+  status: ControlStatusSchema,
+  screen_size: z.object({ width: z.number().optional(), height: z.number().optional() }).nullable().optional(),
+})
+export type ControlResult = z.infer<typeof controlResultSchema>
 
 export async function controlLock(
   agentId: string,
   sessionId: string,
   envType = 'browser',
 ): Promise<z.infer<typeof lockResult>> {
-  return lockResult.parse(await apiRequest<unknown>(`/api/agents/${agentId}/control/lock`, {
-    method: 'POST',
-    body: { session_id: sessionId, env_type: envType },
-  }))
+  return apiRequest(`/api/agents/${agentId}/control/lock`, {
+    schema: lockResult, method: 'POST',
+    body: { session_id: sessionId, env_type: ControlEnvironmentSchema.parse(envType) },
+  })
 }
 
-function ownerRequest(lease: ControlLease, endpoint: string, body: object = {}): Promise<ControlResult> {
+async function ownerRequest(lease: ControlLease, endpoint: string, body: object = {}): Promise<ControlResult> {
   return apiRequest(`/api/agents/${lease.agentId}/control/${endpoint}`, {
-    method: 'POST',
+    schema: controlResultSchema, method: 'POST',
     body: { ...body, session_id: lease.sessionId, owner_token: lease.ownerToken },
   })
 }

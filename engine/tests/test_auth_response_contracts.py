@@ -1,7 +1,8 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -10,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
+from app.core.domain.users import UserRole
 from app.core.json_types import json_object_from, json_object_from_response
 from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
@@ -194,6 +196,7 @@ async def test_reset_password_keeps_success_and_error_contracts(
     )
     monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "update", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth.identity_dao, "bump_auth_generation", AsyncMock(return_value=8))
     monkeypatch.setattr(auth, "hash_password_async", AsyncMock(return_value="new-hash"))
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -203,6 +206,58 @@ async def test_reset_password_keeps_success_and_error_contracts(
     assert json_object_from_response(response) == (
         {"ok": True} if valid_token else {"detail": "Invalid or expired reset token"}
     )
+
+
+@pytest.mark.parametrize("inactive", [None, "membership", "identity"])
+async def test_change_password_mints_inside_write_transaction_only_for_fresh_active_user(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch, inactive: str | None
+) -> None:
+    # Given a stale active dependency whose role and activation may have changed.
+    identity = IdentityRecord(id=uuid4(), password_hash="old-hash", is_active=inactive != "identity")
+    stale = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity, role=UserRole.ORG_ADMIN)
+    fresh = replace(stale, role="member", is_active=inactive != "membership")
+    app.dependency_overrides[auth.get_authenticated_user] = lambda: stale
+    monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=fresh))
+    monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth.identity_dao, "update", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth, "verify_password_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(auth, "hash_password_async", AsyncMock(return_value="new-hash"))
+    bumped = False
+
+    async def bump(identity_id: UUID) -> int:
+        nonlocal bumped
+        assert identity_id == identity.id
+        assert session.get_connection() is not None
+        bumped = True
+        return 8
+
+    async def mint(user_id: str, role: str, *, identity_id: UUID) -> str:
+        assert bumped
+        assert session.get_connection() is not None
+        assert (user_id, role, identity_id) == (str(fresh.id), "member", identity.id)
+        return "replacement-token"
+
+    mint_token = AsyncMock(side_effect=mint)
+    monkeypatch.setattr(auth.identity_dao, "bump_auth_generation", bump)
+    monkeypatch.setattr(auth, "create_access_token", mint_token)
+    try:
+        # When the authenticated caller changes their password.
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.put(
+                "/auth/me/password", json={"old_password": "old-password", "new_password": "new-password"}
+            )
+    finally:
+        app.dependency_overrides.clear()
+    # Then revocation always occurs, but inactive fresh state never receives credentials.
+    assert response.status_code == 200
+    assert bumped
+    expected: dict[str, bool | str] = {"ok": True, "must_change_password": False}
+    if inactive is None:
+        expected["access_token"] = "replacement-token"
+        mint_token.assert_awaited_once()
+    else:
+        mint_token.assert_not_awaited()
+    assert json_object_from_response(response) == expected
 
 
 @pytest.mark.parametrize("code_fields", [{}, {"code": None}, {"code": ""}])

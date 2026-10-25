@@ -7,7 +7,7 @@ import {
 } from '../src/lib/admissions-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
-import { notificationSchema } from '../src/lib/notifications-api.ts'
+import { NotificationKind, notificationSchema } from '../src/lib/notifications-api.ts'
 import { canReviewAdmissions } from '../src/lib/types/auth.ts'
 import { approvedAdmission, pendingAdmission } from './admission-fixtures.ts'
 import { adminUser } from './helpers.ts'
@@ -155,7 +155,7 @@ test('a concurrent decision conflict remains a typed HTTP error', async (t) => {
 test('only a genesis org_admin can enter the admission review workflow', () => {
   // Given
   const allowed = { ...adminUser(), is_genesis: true }
-  const denied = [null, undefined, adminUser(), { ...allowed, is_genesis: false }, { ...allowed, role: 'member' }, { ...allowed, role: 'platform_admin', is_platform_admin: true }]
+  const denied = [null, undefined, adminUser(), { ...allowed, is_genesis: false }, { ...allowed, role: 'member' }, { ...allowed, role: 'platform_admin', is_platform_admin: true }] as const
   // When
   const permissions = [canReviewAdmissions(allowed), ...denied.map(canReviewAdmissions)]
   // Then
@@ -164,7 +164,7 @@ test('only a genesis org_admin can enter the admission review workflow', () => {
 
 test('pending admission notifications link only to safe local admission review routes', () => {
   // Given
-  const notification = notificationSchema.parse({ id: '4837a9ec-b4f8-483a-9893-b398a406bc61', type: 'company_admission_pending', title: 'Review request', body: '', link: `/admission-approvals/${pendingAdmission.id}`, ref_id: pendingAdmission.id, sender_name: null, is_read: false, created_at: null, archived_at: null })
+  const notification = notificationSchema.parse({ id: '4837a9ec-b4f8-483a-9893-b398a406bc61', type: NotificationKind.CompanyAdmissionPending, title: 'Review request', body: '', link: `/admission-approvals/${pendingAdmission.id}`, ref_id: pendingAdmission.id, sender_name: null, is_read: false, created_at: null, archived_at: null })
   // When
   const links = [notification.link, '/admission-approvals', '//external.test/admission-approvals', '/admission-approvals/../users', '/admission-approvals/%2f%2fexternal.test'].map(safeNotificationLink)
   // Then

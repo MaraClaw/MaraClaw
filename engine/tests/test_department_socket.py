@@ -9,6 +9,7 @@ from starlette.websockets import WebSocket
 
 from app.api import websocket as ws_api
 from app.core import access_cache, permissions, security
+from app.core.domain.agents import AgentSharingMode
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.identity import IdentityRecord
@@ -24,7 +25,9 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     tenant = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant)
     user.identity = IdentityRecord(id=uuid4())
-    agent = AgentRecord(id=uuid4(), name="Sales", creator_id=uuid4(), tenant_id=tenant, access_mode="custom")
+    agent = AgentRecord(
+        id=uuid4(), name="Sales", creator_id=uuid4(), tenant_id=tenant, access_mode=AgentSharingMode.CUSTOM
+    )
     state = {"granted": True, "turn": 0, "connected": False}
     sent = []
 

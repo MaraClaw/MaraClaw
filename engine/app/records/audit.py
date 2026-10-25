@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
@@ -19,7 +20,7 @@ class ApprovalRequestRecord:
     agent_id: UUID
     action_type: str
     details: dict[str, Any] = field(default_factory=dict[str, Any])
-    status: str = "pending"
+    status: ApprovalStatus = ApprovalStatus.PENDING
     created_at: datetime | None = None
     resolved_at: datetime | None = None
     resolved_by: UUID | None = None
@@ -32,7 +33,7 @@ class ApprovalRequestRecord:
             agent_id=uuid_from_row(row["agent_id"]),
             action_type=str_from_row(row["action_type"]),
             details=details,
-            status=str_from_row(row.get("status"), "pending") or "pending",
+            status=ApprovalStatus(str_from_row(row.get("status"), "pending")),
             created_at=datetime_from_row(row.get("created_at")),
             resolved_at=datetime_from_row(row.get("resolved_at")),
             resolved_by=uuid_from_row_opt(row.get("resolved_by")),

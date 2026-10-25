@@ -12,6 +12,7 @@ import pytest
 from starlette.requests import Request
 
 from app.api import google_chat as google_chat_api
+from app.core.domain.channels import ChannelType
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
 from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
 from app.services.channels.google_chat import (
@@ -226,7 +227,7 @@ def test_channel_config_out_redacts_secrets():
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=uuid4(),
-        channel_type="google_chat",
+        channel_type=ChannelType.GOOGLE_CHAT,
         app_id="123",
         app_secret="bot@example.com",
         encrypt_key="SHOULD_NOT_LEAK",

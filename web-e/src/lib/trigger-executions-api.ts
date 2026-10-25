@@ -2,19 +2,15 @@ import { z } from 'zod'
 
 import { authSession, type SessionOwner } from './auth-session.ts'
 import { apiRequest } from './http.ts'
+import { TriggerExecutionHistoryItemSchema } from './engine-contracts.generated.ts'
 
-const timestamp = z.iso.datetime({ offset: true })
-const executionSchema = z.object({
-  id: z.uuid(),
-  trigger_id: z.uuid(),
-  agent_id: z.uuid(),
+const executionSchema = TriggerExecutionHistoryItemSchema.extend({
   source: z.string().min(1),
-  status: z.string().min(1),
-  scheduled_at: timestamp,
-  started_at: timestamp.nullable(),
-  finished_at: timestamp.nullable(),
-  created_at: timestamp,
-}).readonly()
+  scheduled_at: z.iso.datetime({ offset: true }),
+  started_at: z.iso.datetime({ offset: true }).nullable(),
+  finished_at: z.iso.datetime({ offset: true }).nullable(),
+  created_at: z.iso.datetime({ offset: true }),
+}).strip().readonly()
 const pageSchema = z.object({
   items: z.array(executionSchema).readonly(),
   next_cursor: z.string().min(1).nullable(),
@@ -35,14 +31,8 @@ export async function listTriggerExecutions(target: TriggerExecutionTarget, requ
   const params = new URLSearchParams({ limit: '20' })
   if (request.cursor != null) params.set('cursor', request.cursor)
   const owner = request.owner ?? authSession.capture()
-  const data = request.signal === undefined
-    ? await apiRequest<unknown>(
-      `/api/agents/${encodeURIComponent(target.agentId)}/triggers/${encodeURIComponent(target.triggerId)}/executions?${params}`,
-      { owner },
-    )
-    : await apiRequest<unknown>(
-      `/api/agents/${encodeURIComponent(target.agentId)}/triggers/${encodeURIComponent(target.triggerId)}/executions?${params}`,
-      { owner, signal: request.signal },
-    )
-  return pageSchema.parse(data)
+  return apiRequest(
+    `/api/agents/${encodeURIComponent(target.agentId)}/triggers/${encodeURIComponent(target.triggerId)}/executions?${params}`,
+    { schema: pageSchema, owner, ...(request.signal === undefined ? {} : { signal: request.signal }) },
+  )
 }

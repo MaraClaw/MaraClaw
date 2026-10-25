@@ -36,7 +36,7 @@ export function AgentTasksPage() {
     queryKey: ['tasks', agent.id],
     queryFn: () => listTasks(agent.id),
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((task) => task.status === 'pending' || task.status === 'running') ? 4000 : false,
+      (query.state.data ?? []).some((task) => task.status === 'pending' || task.status === 'doing') ? 4000 : false,
   })
   const logs = useQuery({
     queryKey: ['task-logs', agent.id, openTask],
@@ -109,6 +109,7 @@ export function AgentTasksPage() {
             void upsertFocus(agent.id, {
               key: focusTitle.toLowerCase().replace(/\s+/g, '-'),
               title: focusTitle,
+              description: focusTitle,
               status: 'in_progress',
               kind: 'normal',
             }).then(() => {

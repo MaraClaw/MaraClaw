@@ -22,7 +22,7 @@ from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.records.user import UserRecord
-from app.schemas.company_admission import PendingAdmissionResponse, RequestDetail
+from app.schemas.company_admission import RequestDetail
 
 
 @dataclass
@@ -46,11 +46,16 @@ class AdmissionScenario:
         return user
 
     async def submit(self) -> str:
-        response = await self.client.post(
-            "/api/tenants/join", json={"invitation_code": "JOIN"}, headers=self.headers(self.applicant)
-        )
-        assert response.status_code == 202, response.text
-        return str(PendingAdmissionResponse.model_validate_json(response.content).request.id)
+        """Create (or repeat) a pending invitation request; HTTP invitations now admit immediately."""
+        from app.db.session import connection_ctx
+        from app.records.company_admission import AdmissionMethod
+        from app.services.company_admissions import submit_request
+
+        async with connection_ctx():
+            request = await submit_request(
+                await self.current_applicant(), self.target_id, AdmissionMethod.INVITATION, invitation_code="JOIN"
+            )
+        return str(request.id)
 
 
 class ReviewPageResult(BaseModel):
@@ -137,7 +142,8 @@ async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
                 for user in (applicant, genesis, additional, outsider)
             }
             await db.execute(
-                "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count) VALUES (%(id)s,'JOIN',%(tid)s,1,0)",
+                "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count,invited_email) "
+                "VALUES (%(id)s,'JOIN',%(tid)s,1,0,'applicant@acme.test')",
                 {"id": uuid4(), "tid": target.id},
             )
             await db.execute(

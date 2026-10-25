@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.api import users as users_api
 from app.core import security
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.user_dao import UserPagePosition
 from app.records.identity import IdentityRecord
@@ -23,7 +24,7 @@ NOW = datetime(2026, 10, 20, tzinfo=UTC)
 
 
 def _actor(role: str = "org_admin", tenant_id: UUID | None = TENANT) -> UserRecord:
-    return UserRecord(id=UUID(int=1), role=role, tenant_id=tenant_id)
+    return UserRecord(id=UUID(int=1), role=UserRole(role), tenant_id=tenant_id)
 
 
 def _cursor(**changes: object) -> str:
@@ -39,10 +40,11 @@ def _cursor(**changes: object) -> str:
     return urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
-async def _request(actor: UserRecord, params: Mapping[str, str | int]) -> httpx.Response:
+async def _request(actor: UserRecord | None, params: Mapping[str, str | int]) -> httpx.Response:
     app = FastAPI()
     app.include_router(users_api.router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: actor
+    if actor is not None:
+        app.dependency_overrides[get_current_user] = lambda: actor
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         return await client.get("/api/users/page", params=params)
 
@@ -63,10 +65,16 @@ async def test_own_tenant_when_org_admin_supplies_foreign_filter(page_query: Asy
     page_query.assert_awaited_once_with(TENANT, search="Alice", after=None, limit=50)
 
 
-@pytest.mark.parametrize("role", ["member", "agent_admin", "guest"])
+@pytest.mark.parametrize("role", ["member", "agent_admin"])
 async def test_rejects_non_admin_when_requesting_page(page_query: AsyncMock, role: str):
     response = await _request(_actor(role), {})
     assert response.status_code == 403
+    page_query.assert_not_awaited()
+
+
+async def test_rejects_anonymous_when_requesting_page(page_query: AsyncMock) -> None:
+    response = await _request(None, {})
+    assert response.status_code == 401
     page_query.assert_not_awaited()
 
 
@@ -150,14 +158,14 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
         tenant_id=TENANT,
         identity=identity,
         display_name="Alice",
-        role="org_admin",
+        role=UserRole.ORG_ADMIN,
         created_at=NOW,
         is_genesis=True,
         quota_message_limit=70,
         quota_messages_used=4,
         quota_max_agents=8,
     )
-    second = UserRecord(id=UUID(int=11), tenant_id=TENANT, role="member", registration_source=None)
+    second = UserRecord(id=UUID(int=11), tenant_id=TENANT, role=UserRole.MEMBER, registration_source=None)
     page_query.return_value = [first, second, UserRecord(id=UUID(int=12))]
     counts = AsyncMock(return_value={first.id: 3})
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creators", counts)
@@ -254,7 +262,7 @@ async def test_password_change_gate_when_page_uses_real_auth_dependency(
     actor = UserRecord(
         id=UUID(int=1),
         tenant_id=TENANT,
-        role="org_admin",
+        role=UserRole.ORG_ADMIN,
         identity_id=UUID(int=1),
         identity=IdentityRecord(id=UUID(int=1), must_change_password=True),
     )

@@ -10,8 +10,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 
-from app.api import websocket
+from app.api import chat_sessions, websocket
+from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets as tickets
+from app.services.shared_chat import shared_session_id
 
 
 class TicketRedis:
@@ -48,6 +50,7 @@ def context(monkeypatch):
         tenant_id=binding.tenant_id,
         identity=SimpleNamespace(id=uuid.uuid4(), is_active=True, auth_generation=7),
         display_name="Member",
+        role="member",
     )
     agent = SimpleNamespace(
         id=binding.agent_id,
@@ -58,6 +61,7 @@ def context(monkeypatch):
         context_window_size=100,
         is_expired=False,
         expires_at=None,
+        creator_id=uuid.uuid4(),
     )
     monkeypatch.setattr(tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(tickets, "load_user_principal", AsyncMock(return_value=user))
@@ -120,19 +124,125 @@ async def test_fresh_policy_is_checked(context, change, code):
     assert error.value.status_code == code
 
 
-@pytest.mark.parametrize(("source", "allowed"), [("web", False), ("agent", True)])
-async def test_session_sharing_is_preserved(context, monkeypatch, source, allowed):
-    _, binding, _, _ = context
-    monkeypatch.setattr(
-        tickets.chat_session_dao,
-        "get_for_agent",
-        AsyncMock(return_value=SimpleNamespace(user_id=uuid.uuid4(), source_channel=source)),
+@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
+async def test_ticket_session_access_matrix(context, monkeypatch, source, viewer):
+    redis, binding, user, agent = context
+    if viewer == "creator":
+        agent.creator_id = user.id
+    elif viewer != "owner":
+        user.role = viewer
+    if source == "shared":
+        binding.session_id = shared_session_id(agent.id)
+    session = ChatSessionRecord(
+        id=binding.session_id,
+        agent_id=agent.id,
+        user_id=user.id if viewer == "owner" else uuid.uuid4(),
+        source_channel=source,
     )
-    if allowed:
-        await tickets.authorized_session(binding)
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
+    if viewer == "member" and source != "shared":
+        with pytest.raises(HTTPException) as error:
+            await tickets.issue(binding)
+        assert error.value.status_code == 403
+        assert not redis.values
     else:
-        with pytest.raises(HTTPException):
-            await tickets.authorized_session(binding)
+        issued = await tickets.issue(binding)
+        app = FastAPI()
+        app.include_router(websocket.router)
+        with (
+            TestClient(app) as client,
+            client.websocket_connect(
+                f"/ws/chat/{binding.agent_id}?ticket={issued.ticket}&session_id={binding.session_id}"
+            ) as ws,
+        ):
+            assert ws.receive_json() == {"type": "connected", "session_id": str(session.id)}
+            ws.send_json({"content": "invalid submission UUID"})
+            assert ws.receive_json()["reason"] == "invalid_submission_id"
+        with pytest.raises(HTTPException) as error:
+            await tickets.redeem(issued.ticket)
+        assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("source", ["web", "agent"])
+@pytest.mark.parametrize("phase", ["setup", "message"])
+@pytest.mark.parametrize("revocation", ["role", "creator", "agent_access"])
+async def test_socket_uses_fresh_session_privileges(context, monkeypatch, source, phase, revocation):
+    _, binding, user, agent = context
+    user.role = "org_admin" if revocation != "creator" else "member"
+    if revocation == "creator":
+        agent.creator_id = user.id
+    session = ChatSessionRecord(id=binding.session_id, agent_id=agent.id, user_id=uuid.uuid4(), source_channel=source)
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
+    issued = await tickets.issue(binding)
+    fresh_user = SimpleNamespace(**(vars(user) | {"role": "member"}))
+    fresh_agent = SimpleNamespace(**(vars(agent) | {"creator_id": uuid.uuid4()}))
+    load_principal = AsyncMock(return_value=fresh_user)
+    agent_access = (
+        AsyncMock(side_effect=HTTPException(403, "revoked"))
+        if revocation == "agent_access"
+        else AsyncMock(return_value=(fresh_agent, "use"))
+    )
+
+    def revoke():
+        monkeypatch.setattr(tickets, "load_user_principal", load_principal)
+        monkeypatch.setattr(tickets, "check_agent_access", agent_access)
+
+    if phase == "setup":
+        revoke()
+    app = FastAPI()
+    app.include_router(websocket.router)
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            f"/ws/chat/{binding.agent_id}?ticket={issued.ticket}&session_id={binding.session_id}"
+        ) as ws,
+    ):
+        if phase == "message":
+            assert ws.receive_json()["type"] == "connected"
+            revoke()
+            ws.send_json({"content": "must not reach submission parsing"})
+        assert ws.receive_json()["type"] == "error"
+        assert ws.receive()["code"] == 4003
+    with pytest.raises(HTTPException) as error:
+        await tickets.redeem(issued.ticket)
+    assert error.value.status_code == 400
+    load_principal.assert_awaited_with(binding.user_id, fresh=True)
+    agent_access.assert_awaited_with(fresh_user, binding.agent_id, fresh=True)
+
+
+async def test_peer_history_does_not_allow_ticket_or_socket_binding(context, monkeypatch):
+    _, binding, user, agent = context
+    user.role = "org_admin"
+    peer_session = ChatSessionRecord(
+        id=binding.session_id,
+        agent_id=uuid.uuid4(),
+        peer_agent_id=agent.id,
+        user_id=uuid.uuid4(),
+        source_channel="agent",
+    )
+    peer_lookup = AsyncMock(return_value=peer_session)
+    bound_lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(chat_sessions, "check_agent_access", AsyncMock(return_value=(agent, "use")))
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent_or_peer", peer_lookup)
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", bound_lookup)
+    monkeypatch.setattr(chat_sessions.chat_message_dao, "list_for_session", AsyncMock(return_value=[]))
+
+    assert await chat_sessions.get_session_messages(agent.id, peer_session.id, 20, None, user) == []
+    with pytest.raises(HTTPException) as error:
+        await tickets.issue(binding)
+    assert error.value.status_code == 403
+    monkeypatch.setattr(tickets, "redeem", AsyncMock(return_value=binding))
+    app = FastAPI()
+    app.include_router(websocket.router)
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/ws/chat/{binding.agent_id}?ticket=old&session_id={binding.session_id}") as ws,
+    ):
+        assert ws.receive_json()["type"] == "error"
+        assert ws.receive()["code"] == 4003
+    peer_lookup.assert_awaited_once_with(binding.session_id, binding.agent_id)
+    assert bound_lookup.await_count == 2
 
 
 async def test_socket_mismatch_consumes_ticket_without_fallback(context):
@@ -216,12 +326,12 @@ def test_socket_never_accepts_legacy_jwt(query):
 
 
 async def test_deleted_session_is_not_replaced(context, monkeypatch):
-    _, binding, _, _ = context
+    _, binding, user, agent = context
     monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=None))
     creator = AsyncMock()
     monkeypatch.setattr(tickets, "ensure_primary_platform_session", creator)
     with pytest.raises(HTTPException) as error:
-        await tickets.authorized_session(binding)
+        await tickets.authorized_session(binding, user, agent)
     assert error.value.status_code == 403
     creator.assert_not_awaited()
 

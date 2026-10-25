@@ -32,6 +32,7 @@ async def _client(agent_id: uuid.UUID, arguments: ToolArguments) -> AgentBayClie
 
 
 async def _agentbay_computer_get_cursor_position(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws  # Window handlers retain the shared workspace keyword.
     if not agent_id:
         return "AgentBay tools require agent context"
     try:
@@ -50,6 +51,7 @@ async def _agentbay_computer_get_cursor_position(agent_id: uuid.UUID | None, ws:
 
 
 async def _agentbay_computer_get_active_window(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     try:
@@ -68,6 +70,7 @@ async def _agentbay_computer_get_active_window(agent_id: uuid.UUID | None, ws: P
 
 
 async def _agentbay_computer_list_windows(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     try:
@@ -90,6 +93,7 @@ async def _agentbay_computer_list_windows(agent_id: uuid.UUID | None, ws: Path, 
 
 
 async def _agentbay_computer_activate_window(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     window_id_value = arguments.get("window_id")
@@ -111,6 +115,7 @@ async def _agentbay_computer_activate_window(agent_id: uuid.UUID | None, ws: Pat
 
 
 async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     window_id_value = arguments.get("window_id")
@@ -166,6 +171,7 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
 
 
 async def _agentbay_computer_dismiss_dialog(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     title, window_id = _string_argument(arguments, "title").strip(), arguments.get("window_id")

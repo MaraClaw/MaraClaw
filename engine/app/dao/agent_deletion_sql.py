@@ -2,6 +2,10 @@ _PARTICIPANTS = "SELECT id FROM participants WHERE type = 'agent' AND ref_id = %
 _POSTS = "SELECT id FROM plaza_posts WHERE author_type = 'agent' AND author_id = %(aid)s"
 
 AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
+    (
+        "UPDATE agent_deletion_requests SET status = 'cancelled', cancel_reason = 'agent_gone', resolved_at = now() "
+        "WHERE agent_id = %(aid)s AND status = 'pending'"
+    ),
     "DELETE FROM agent_activity_logs WHERE agent_id = %(aid)s",
     "DELETE FROM audit_logs WHERE agent_id = %(aid)s",
     "DELETE FROM approval_requests WHERE agent_id = %(aid)s",

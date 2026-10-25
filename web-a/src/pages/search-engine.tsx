@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
-import { useId, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { linkupKeyPresentation } from '@/lib/linkup-key-presentation'
 import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
 
 const sections = [
@@ -44,17 +45,6 @@ function formatWhen(value: string | null): string {
 function shortFingerprint(value: string): string {
   if (value.length <= 16) return value
   return `${value.slice(0, 8)}…${value.slice(-6)}`
-}
-
-function statusVariant(status: string): 'success' | 'secondary' | 'destructive' {
-  if (status === 'active') return 'success'
-  if (status === 'exhausted') return 'destructive'
-  return 'secondary'
-}
-
-function statusLabel(status: string): string {
-  if (!status) return status
-  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 export function SearchEnginePage() {
@@ -304,6 +294,23 @@ function KeyCard({
   onCancelRemove: () => void
   onConfirmRemove: () => void
 }) {
+  const [, refreshClock] = useState(0)
+  const presentation = linkupKeyPresentation(item, Date.now())
+  useEffect(() => {
+    if (presentation.cooldownUntil === null) return
+    const deadline = Date.parse(presentation.cooldownUntil)
+    let timeout: number
+    function schedule() {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        refreshClock((value) => value + 1)
+        return
+      }
+      timeout = window.setTimeout(schedule, Math.min(remaining, 2_147_483_647))
+    }
+    schedule()
+    return () => window.clearTimeout(timeout)
+  }, [presentation.cooldownUntil])
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -316,14 +323,14 @@ function KeyCard({
             Position {item.position + 1} · {shortFingerprint(item.fingerprint)}
           </CardDescription>
         </div>
-        <Badge variant={statusVariant(item.status)}>{statusLabel(item.status)}</Badge>
+        <Badge variant={presentation.variant}>{presentation.label}</Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <span>Last used {formatWhen(item.last_used_at)}</span>
           <span>Added {formatWhen(item.created_at)}</span>
-          {item.exhausted_until ? (
-            <span>Exhausted until {formatWhen(item.exhausted_until)}</span>
+          {presentation.cooldownUntil ? (
+            <span>Cooldown until {formatWhen(presentation.cooldownUntil)}</span>
           ) : null}
         </div>
         {pendingRemove ? (

@@ -7,10 +7,12 @@ import pytest
 from app.api import background_tasks
 from app.dao.company_transfer_dao import company_transfer_dao
 from app.db.errors import CheckViolationError
-from app.schemas.company_transfer import PaymentReviewResponse, TransferSummary
+from app.records.company_transfer import CompanyTransferRecord, TransferChoice
+from app.schemas.company_transfer import TransferSummary
 from app.schemas.transfer_policy import TransferPolicy
 from app.services import company_transfer_requests as requests, company_transfer_review as review
 from company_admission_fixtures import AdmissionScenario, admission_scenario
+from invitation_fixtures import pending_domain_transfer
 
 __all__ = ["admission_scenario"]
 
@@ -36,13 +38,9 @@ async def transfer_scenario(
 
 
 async def submit_paid(scenario: AdmissionScenario) -> UUID:
-    response = await scenario.client.post(
-        "/api/tenants/transfer",
-        headers=scenario.headers(scenario.applicant),
-        json={"password": "qa-password", "invitation_code": "JOIN", "transfer_choice": "paid"},
-    )
-    assert response.status_code == 202, response.text
-    return PaymentReviewResponse.model_validate_json(response.content).transfer_request.id
+    transfer = await pending_domain_transfer(scenario, TransferChoice.PAID)
+    assert isinstance(transfer, CompanyTransferRecord)
+    return transfer.id
 
 
 async def test_paid_review_is_separate_and_concurrent_confirmation_is_idempotent(
