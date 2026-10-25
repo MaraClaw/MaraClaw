@@ -56,7 +56,7 @@ async def test_exact_cap_reaches_normal_auth_rejection(monkeypatch, provider, ro
     # Given: a configured route and exactly its cap of syntactically valid input.
     app = FastAPI()
     app.include_router(router, prefix="" if provider == "generic" else "/api")
-    config = channel_config("microsoft_teams" if provider == "teams" else provider)
+    config = channel_config({"teams": "microsoft_teams", "generic": "slack"}.get(provider, provider))
     lookup = AsyncMock(return_value=config)
     monkeypatch.setattr(slack.channel_config_dao, "get_for_agent", lookup)
     monkeypatch.setattr(google_chat.channel_config, "get_channel_config", lookup)
