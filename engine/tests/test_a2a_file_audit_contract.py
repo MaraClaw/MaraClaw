@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from psycopg import OperationalError
 
+from app.core.domain.activity import ActivityAction
 from app.core.json_types import JsonObject
 from app.records.agent import AgentRecord
 from app.services import activity_logger, audit_logger
@@ -155,8 +156,8 @@ async def test_delivery_audits_once_per_agent_when_central_dao_succeeds_or_fails
     note_path = note_keys[0].removeprefix(f"{delivery.target.id}/")
     assert result == f"✅ File sent to Receiver.\n- Delivered to: {delivered_path}\n- Inbox note: {note_path}"
     assert [(call.args[0], call.args[1]) for call in delivery.activity.await_args_list] == [
-        (delivery.source.id, "agent_file_sent"),
-        (delivery.target.id, "agent_file_received"),
+        (delivery.source.id, ActivityAction.AGENT_MSG_SENT),
+        (delivery.target.id, ActivityAction.FILE_WRITTEN),
     ]
     delivery.chat_message.assert_awaited_once()
 
