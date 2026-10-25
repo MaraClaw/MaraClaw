@@ -449,7 +449,6 @@ class AgentManager:
             secondary=secondary,
             fallback=fallback,
             selected=selected,
-            linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
         )
         wrote = self._atomic_write_json(path, preserve_guest_resources(path, config))
         if not wrote:
@@ -470,7 +469,6 @@ class AgentManager:
         secondary: LLMModelRecord | None = None,
         fallback: LLMModelRecord | None = None,
         selected: LLMModelRecord | None = None,
-        linkup_proxy: bool = False,
     ) -> JsonObject:
         """Generate openclaw.json config for the agent container."""
         chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
@@ -509,17 +507,17 @@ class AgentManager:
             config["auth"] = {"profiles": auth_profiles, "order": auth_order}
 
         linkup_skill_env: JsonObject = {}
-        if linkup_proxy:
+        if settings.LINKUP_PROXY_ENABLED:
             from app.services.linkup.tokens import make_proxy_token
 
-            linkup_skill_env["LINKUP_API_BASE"] = settings.LINKUP_PROXY_BASE_URL
-            linkup_skill_env["LINKUP_API_KEY"] = make_proxy_token(agent.id)
-        elif settings.LINKUP_API_KEY:
-            linkup_skill_env["LINKUP_API_KEY"] = settings.LINKUP_API_KEY
+            linkup_skill_env["LINKUP_API_BASE"] = (
+                settings.LINKUP_PROXY_BASE_URL.strip().rstrip("/") or f"{guest_engine_base_url()}/api/linkup"
+            )
+            linkup_skill_env["LINKUP_PROXY_TOKEN"] = make_proxy_token(agent.id)
         config["skills"] = {
             "entries": {
                 folder_name: {
-                    "enabled": True,
+                    "enabled": settings.LINKUP_PROXY_ENABLED,
                     "env": linkup_skill_env,
                 }
                 for folder_name in linkup_default_skill_folder_names()
@@ -609,7 +607,6 @@ class AgentManager:
                 secondary=secondary,
                 fallback=fallback,
                 selected=primary,
-                linkup_proxy=bool(settings.LINKUP_PROXY_ENABLED) and bool(settings.LINKUP_PROXY_BASE_URL),
             )
             config_dir = agent_dir / ".openclaw"
             config_dir.mkdir(parents=True, exist_ok=True)

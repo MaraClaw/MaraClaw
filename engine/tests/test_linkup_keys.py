@@ -22,6 +22,7 @@ from app.services.linkup.keys import (
     list_keys,
     public_key_view,
     remove_key,
+    should_use_linkup_proxy,
 )
 
 
@@ -184,3 +185,21 @@ def test_quota_classifier_distinguishes_quota_from_transient() -> None:
     assert is_quota_error(429, "too many requests") is False
     assert is_transient_error(503) is True
     assert is_transient_error(429) is False
+
+
+@pytest.mark.parametrize(("enabled", "has_key"), [(True, True), (True, False), (False, True)])
+async def test_proxy_eligibility_uses_key_ring_when_base_is_derived(
+    key_dao: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch, enabled: bool, has_key: bool
+) -> None:
+    from app.services.linkup import keys as keys_mod
+
+    settings = keys_mod.get_settings()
+    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", enabled, raising=False)
+    monkeypatch.setattr(settings, "LINKUP_PROXY_BASE_URL", "", raising=False)
+    monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
+    if has_key:
+        await add_key(label="stored", api_key="ring-only-key")
+
+    eligible = await should_use_linkup_proxy()
+
+    assert eligible is (enabled and has_key)

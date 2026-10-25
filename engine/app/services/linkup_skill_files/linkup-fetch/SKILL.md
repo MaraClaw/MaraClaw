@@ -1,6 +1,6 @@
 ---
 name: linkup-fetch
-description: Use when you already know the exact URL and need its content as clean Markdown - a pricing page, article, docs page, or a URL found in a previous step. ALSO read this when writing code that calls the Linkup Fetch API. Uses the Linkup Fetch API via the `linkup-fetch` MCP tool or direct REST calls. Prefer this over linkup-search when the URL is known; prefer linkup-extract when you need many structured rows from one listing page.
+description: Use when you already know the exact URL and need its content as clean Markdown - a pricing page, article, docs page, or a URL found in a previous step. ALSO read this when writing code that calls the Linkup Fetch API. Uses the Linkup Fetch API through the automatically provisioned MaraClaw engine proxy. Prefer this over linkup-search when the URL is known; prefer linkup-extract when you need many structured rows from one listing page.
 ---
 
 # Linkup Fetch
@@ -9,12 +9,13 @@ When you already have the exact URL, use **Fetch** instead of search. It is fast
 
 ## How to call it
 
-- If the **`linkup-fetch` MCP tool** is available, pass it the URL.
-- Otherwise call the REST API directly. Requires `LINKUP_API_KEY`. If `LINKUP_API_BASE` is set, POST to `$LINKUP_API_BASE/v1/fetch` instead of `https://api.linkup.so/v1/fetch`.
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
+
+POST the URL to `$LINKUP_API_BASE/v1/fetch`.
 
 ```shell
-curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/fetch" \
-  -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
+curl -sS -X POST "$LINKUP_API_BASE/v1/fetch" \
+  -H "Authorization: Bearer $LINKUP_PROXY_TOKEN" -H "Content-Type: application/json" \
   -d '{"url":"https://example.com/pricing","renderJs":true}'
 ```
 

@@ -1,17 +1,13 @@
 ---
 name: linkup-extract
-description: Use to pull many structured records from ONE known listing page - team directories, product/pricing catalogs, job listings, conference speakers, paginated lists. ALSO read this when writing code that integrates the /v1/extract endpoint (schema, async polling, NDJSON results). Uses Linkup's async /v1/extract REST endpoint and returns NDJSON rows. Requires LINKUP_API_KEY. For a single page's prose use linkup-fetch; for web discovery use linkup-search.
+description: Use to pull many structured records from ONE known listing page - team directories, product/pricing catalogs, job listings, conference speakers, paginated lists. ALSO read this when writing code that integrates the /v1/extract endpoint (schema, async polling, NDJSON results). Uses Linkup's async /v1/extract REST endpoint through the automatically provisioned MaraClaw engine proxy and returns NDJSON rows. For a single page's prose use linkup-fetch; for web discovery use linkup-search.
 ---
 
 # Linkup Bulk Extract
 
 The Extract endpoint turns a known web page into a table of structured records. Give it a seed URL plus a natural-language description of the rows you want, and it returns one JSON object per line (NDJSON), handling pagination automatically. It's built for 10s–1000s of records from a single listing page.
 
-This uses the REST API, so it needs `LINKUP_API_KEY`. If `LINKUP_API_BASE` is set, POST/GET `$LINKUP_API_BASE/v1/extract` instead of `https://api.linkup.so/v1/extract`.
-
-```shell
-test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
-```
+MaraClaw automatically supplies `LINKUP_API_BASE` (the engine proxy base, including `/api/linkup`) and the agent-scoped `LINKUP_PROXY_TOKEN`. No user API-key setup is needed; provider keys stay on the server. Use only this proxy for Linkup requests.
 
 ## When to use Extract
 
@@ -27,8 +23,8 @@ test -n "$LINKUP_API_KEY" || echo "Missing LINKUP_API_KEY"
 Always provide a `schema` for production use (consistent output, clear required fields). Enable `verifyUrls` when extracted URLs will be used downstream (adds latency).
 
 ```shell
-curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/extract" \
-  -H "Authorization: Bearer $LINKUP_API_KEY" -H "Content-Type: application/json" \
+curl -sS -X POST "$LINKUP_API_BASE/v1/extract" \
+  -H "Authorization: Bearer $LINKUP_PROXY_TOKEN" -H "Content-Type: application/json" \
   -d '{
     "q": "All pricing plans with plan name, monthly price, annual price, features, and usage limits",
     "url": "https://competitor.com/pricing",
@@ -39,6 +35,10 @@ curl -sS -X POST "${LINKUP_API_BASE:-https://api.linkup.so}/v1/extract" \
 ## Async lifecycle
 
 `POST /v1/extract` returns `{id, status: "pending"}`. Poll `GET /v1/extract/{id}` about every 30s (crawls run longer than research). When `completed`, the output has a `resultUrl` (24h expiry) - download it and parse one JSON object per line.
+
+```shell
+curl -sS "$LINKUP_API_BASE/v1/extract/EXTRACT_ID" -H "Authorization: Bearer $LINKUP_PROXY_TOKEN"
+```
 
 If you don't know the URL yet, first discover it with `linkup-search` (`"Find the careers page URL for {company}"`), then extract from the result.
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,10 +13,13 @@ from uuid import uuid4
 import pytest
 
 from app.config import Settings
+from app.core.json_types import json_as_str_or, json_loads_object, json_object_from, str_list_from_row
+from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module, linkup_runtime
 from app.services.agent_manager import AgentManager
 from app.services.agent_tool_exec import registry
 from app.services.agent_tools_definitions import AGENT_TOOLS
+from app.services.linkup.tokens import parse_proxy_token
 from app.services.linkup_runtime import (
     LINKUP_EXTRACT_SKILL_FOLDER,
     LINKUP_FETCH_SKILL_FOLDER,
@@ -74,78 +80,39 @@ def importlib_agent_tools() -> None:
     importlib.import_module("app.services.agent_tools")
 
 
-def test_official_linkup_search_skill_payload_teaches_rest_search() -> None:
-    # Given: the vendored official Linkup skill package used by the seeder.
-    manifest: dict[str, Any] = load_linkup_manifest()
-    skill_md = linkup_skill_root() / LINKUP_SEARCH_SKILL_FOLDER / "SKILL.md"
-    skill_text = skill_md.read_text(encoding="utf-8")
-
-    # Then: official folder/name and REST contract are present.
-    assert LINKUP_SEARCH_SKILL_FOLDER in (manifest.get("skills") or [])
-    assert LINKUP_SEARCH_SKILL_FOLDER in (manifest.get("default_skills") or [])
-    assert LINKUP_SEARCH_SKILL_FOLDER in linkup_skill_folder_names()
-    assert LINKUP_SEARCH_SKILL_FOLDER in linkup_default_skill_folder_names()
-    assert skill_md.is_file()
-    assert "name: linkup-search" in skill_text
-    assert "https://api.linkup.so/v1/search" in skill_text
-    assert "LINKUP_API_BASE" in skill_text
-    assert '"q":' in skill_text
-    assert "depth" in skill_text
-    assert "standard" in skill_text
-    assert "deep" in skill_text
-    assert "outputType" in skill_text
-    assert "sourcedAnswer" in skill_text
+def _shell_requests(content: str) -> list[list[str]]:
+    return [
+        shlex.split(command.replace("\\\n", ""))
+        for block in re.findall(r"```shell\n(.*?)```", content, re.DOTALL)
+        for command in block.strip().split("\n\n")
+    ]
 
 
-def test_official_linkup_fetch_skill_payload_teaches_rest_fetch() -> None:
-    manifest: dict[str, Any] = load_linkup_manifest()
-    skill_md = linkup_skill_root() / LINKUP_FETCH_SKILL_FOLDER / "SKILL.md"
-    skill_text = skill_md.read_text(encoding="utf-8")
+@pytest.mark.parametrize("folder_name", DEFAULT_LINKUP_SKILLS)
+def test_official_linkup_skill_payload_calls_authenticated_proxy(folder_name: str) -> None:
+    manifest = load_linkup_manifest()
+    skill_text = (linkup_skill_root() / folder_name / "SKILL.md").read_text(encoding="utf-8")
 
-    assert LINKUP_FETCH_SKILL_FOLDER in (manifest.get("skills") or [])
-    assert LINKUP_FETCH_SKILL_FOLDER in (manifest.get("default_skills") or [])
-    assert LINKUP_FETCH_SKILL_FOLDER in linkup_skill_folder_names()
-    assert LINKUP_FETCH_SKILL_FOLDER in linkup_default_skill_folder_names()
-    assert skill_md.is_file()
-    assert "name: linkup-fetch" in skill_text
-    assert "https://api.linkup.so/v1/fetch" in skill_text
-    assert "LINKUP_API_BASE" in skill_text
-    assert "-X POST" in skill_text
-    assert '"url":' in skill_text
+    requests = _shell_requests(skill_text)
 
-
-def test_official_linkup_research_skill_payload_teaches_rest_research() -> None:
-    manifest: dict[str, Any] = load_linkup_manifest()
-    skill_md = linkup_skill_root() / LINKUP_RESEARCH_SKILL_FOLDER / "SKILL.md"
-    skill_text = skill_md.read_text(encoding="utf-8")
-
-    assert LINKUP_RESEARCH_SKILL_FOLDER in (manifest.get("skills") or [])
-    assert LINKUP_RESEARCH_SKILL_FOLDER in (manifest.get("default_skills") or [])
-    assert LINKUP_RESEARCH_SKILL_FOLDER in linkup_skill_folder_names()
-    assert LINKUP_RESEARCH_SKILL_FOLDER in linkup_default_skill_folder_names()
-    assert skill_md.is_file()
-    assert "name: linkup-research" in skill_text
-    assert "https://api.linkup.so/v1/research" in skill_text
-    assert "LINKUP_API_BASE" in skill_text
-    assert "mode" in skill_text
-    assert "reasoningDepth" in skill_text
-
-
-def test_official_linkup_extract_skill_payload_teaches_rest_extract() -> None:
-    manifest: dict[str, Any] = load_linkup_manifest()
-    skill_md = linkup_skill_root() / LINKUP_EXTRACT_SKILL_FOLDER / "SKILL.md"
-    skill_text = skill_md.read_text(encoding="utf-8")
-
-    assert LINKUP_EXTRACT_SKILL_FOLDER in (manifest.get("skills") or [])
-    assert LINKUP_EXTRACT_SKILL_FOLDER in (manifest.get("default_skills") or [])
-    assert LINKUP_EXTRACT_SKILL_FOLDER in linkup_skill_folder_names()
-    assert LINKUP_EXTRACT_SKILL_FOLDER in linkup_default_skill_folder_names()
-    assert skill_md.is_file()
-    assert "name: linkup-extract" in skill_text
-    assert "https://api.linkup.so/v1/extract" in skill_text
-    assert "LINKUP_API_BASE" in skill_text
-    assert '"url":' in skill_text
-    assert "schema" in skill_text
+    assert folder_name in str_list_from_row(manifest.get("skills"))
+    assert folder_name in str_list_from_row(manifest.get("default_skills"))
+    assert folder_name in linkup_skill_folder_names()
+    assert folder_name in linkup_default_skill_folder_names()
+    assert linkup_runtime._frontmatter_value(skill_text, "name", "") == folder_name
+    endpoint = folder_name.removeprefix("linkup-")
+    assert requests
+    for request in requests:
+        assert request[0] == "curl"
+        urls = [arg for arg in request if arg.startswith(("$LINKUP_API_BASE", "https://", "http://"))]
+        assert len(urls) == 1
+        assert urls[0] == f"$LINKUP_API_BASE/v1/{endpoint}" or urls[0].startswith(f"$LINKUP_API_BASE/v1/{endpoint}/")
+        headers = [request[index + 1] for index, arg in enumerate(request) if arg == "-H"]
+        assert "Authorization: Bearer $LINKUP_PROXY_TOKEN" in headers
+    submission = requests[0]
+    assert submission[submission.index("-X") + 1] == "POST"
+    body = json_loads_object(submission[submission.index("-d") + 1])
+    assert ("q" if endpoint in {"search", "research"} else "url") in body
 
 
 @pytest.mark.asyncio
@@ -172,85 +139,79 @@ async def test_seed_linkup_skills_upserts_official_default_package(
     assert processed == len(DEFAULT_LINKUP_SKILLS)
     assert {item["folder_name"] for item in upserts} == set(DEFAULT_LINKUP_SKILLS)
     by_folder = {item["folder_name"]: item for item in upserts}
-    expected_markers = {
-        LINKUP_SEARCH_SKILL_FOLDER: "https://api.linkup.so/v1/search",
-        LINKUP_FETCH_SKILL_FOLDER: "https://api.linkup.so/v1/fetch",
-        LINKUP_RESEARCH_SKILL_FOLDER: "https://api.linkup.so/v1/research",
-        LINKUP_EXTRACT_SKILL_FOLDER: "https://api.linkup.so/v1/extract",
-    }
-    for folder_name, marker in expected_markers.items():
+    for folder_name in DEFAULT_LINKUP_SKILLS:
         package = by_folder[folder_name]
         assert package["name"] == folder_name
         assert package["is_builtin"] is True
         assert package["is_default"] is True
         files = dict(package["files"])
-        assert marker in files["SKILL.md"]
+        assert files["SKILL.md"] == (linkup_skill_root() / folder_name / "SKILL.md").read_text(encoding="utf-8")
+        assert _shell_requests(files["SKILL.md"])
         assert any(path.startswith("references/") for path in files)
 
 
-def test_generate_openclaw_config_enables_linkup_skill_and_denies_native_web_search(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("upstream_key", ["", "lk_raw_must_not_leak"])
+@pytest.mark.parametrize(
+    ("proxy_base", "expected_base"),
+    [
+        ("", "https://deployed-engine.example/guest/api/linkup"),
+        (" \t", "https://deployed-engine.example/guest/api/linkup"),
+        (" https://dedicated-proxy.example/linkup/// ", "https://dedicated-proxy.example/linkup"),
+    ],
+)
+def test_generate_openclaw_config_enables_authenticated_linkup_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, upstream_key: str, proxy_base: str, expected_base: str
 ) -> None:
-    # Given
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "lk_test_key", raising=False)
+    monkeypatch.setattr(agent_manager_module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", upstream_key)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", True)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_BASE_URL", proxy_base)
     monkeypatch.setattr(
-        agent_manager_module.settings,
-        "LINKUP_PROXY_BASE_URL",
-        "http://maraclaw-engine:8000/api/linkup",
-        raising=False,
+        agent_manager_module.settings, "OPENCLAW_ENGINE_BASE_URL", "https://deployed-engine.example/guest/"
     )
+    monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "cfg-secret")
     manager = AgentManager.__new__(AgentManager)
-    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+    agent = AgentRecord(id=uuid4(), name="Search Agent", creator_id=uuid4())
 
-    # When: proxy off keeps today's single-key inject
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None, linkup_proxy=False)
+    config = manager._generate_openclaw_config(agent, model=None)
 
-    # Then
-    skills = config["skills"]["entries"]
+    assert "lk_raw_must_not_leak" not in json.dumps(config)
+    skills = json_object_from(json_object_from(config["skills"])["entries"])
     assert set(skills) == set(DEFAULT_LINKUP_SKILLS)
     for folder_name in DEFAULT_LINKUP_SKILLS:
-        assert skills[folder_name]["enabled"] is True
-        assert skills[folder_name]["env"]["LINKUP_API_KEY"] == "lk_test_key"
-        assert "LINKUP_API_BASE" not in skills[folder_name]["env"]
-    assert "web_search" in config["tools"]["deny"]
-    assert config["tools"]["web"]["search"]["enabled"] is False
+        entry = json_object_from(skills[folder_name])
+        assert entry["enabled"] is True
+        env = json_object_from(entry["env"])
+        assert set(env) == {"LINKUP_API_BASE", "LINKUP_PROXY_TOKEN"}
+        assert env["LINKUP_API_BASE"] == expected_base
+        assert parse_proxy_token(json_as_str_or(env["LINKUP_PROXY_TOKEN"]), secret="cfg-secret") == agent.id
+    tools = json_object_from(config["tools"])
+    assert "web_search" in str_list_from_row(tools["deny"])
+    assert json_object_from(json_object_from(tools["web"])["search"])["enabled"] is False
 
 
-def test_generate_openclaw_config_proxy_sets_base_and_hides_raw_key(
-    monkeypatch: pytest.MonkeyPatch,
+def test_generate_openclaw_config_disables_linkup_without_raw_key_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "lk_raw_must_not_leak", raising=False)
+    monkeypatch.setattr(agent_manager_module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "lk_raw_must_not_leak")
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(
         agent_manager_module.settings,
         "LINKUP_PROXY_BASE_URL",
         "http://maraclaw-engine:8000/api/linkup",
-        raising=False,
     )
-    monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "cfg-secret", raising=False)
     manager = AgentManager.__new__(AgentManager)
-    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
+    agent = AgentRecord(id=uuid4(), name="Search Agent", creator_id=uuid4())
 
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None, linkup_proxy=True)
-    skills = config["skills"]["entries"]
+    config = manager._generate_openclaw_config(agent, model=None)
+
+    assert "lk_raw_must_not_leak" not in json.dumps(config)
+    skills = json_object_from(json_object_from(config["skills"])["entries"])
+    assert set(skills) == set(DEFAULT_LINKUP_SKILLS)
     for folder_name in DEFAULT_LINKUP_SKILLS:
-        env = skills[folder_name]["env"]
-        assert env["LINKUP_API_BASE"] == "http://maraclaw-engine:8000/api/linkup"
-        assert env["LINKUP_API_KEY"] != "lk_raw_must_not_leak"
-        assert "lk_raw_must_not_leak" not in env["LINKUP_API_KEY"]
-
-
-def test_generate_openclaw_config_omits_empty_linkup_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "", raising=False)
-    manager = AgentManager.__new__(AgentManager)
-    agent: Any = SimpleNamespace(id=uuid4(), name="Search Agent", creator_id=uuid4(), primary_model_id=None)
-
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
-
-    assert set(config["skills"]["entries"]) == set(DEFAULT_LINKUP_SKILLS)
-    for folder_name in DEFAULT_LINKUP_SKILLS:
-        assert config["skills"]["entries"][folder_name]["enabled"] is True
-        assert config["skills"]["entries"][folder_name]["env"] == {}
-    assert "web_search" in config["tools"]["deny"]
+        assert skills[folder_name] == {"enabled": False, "env": {}}
+    assert "web_search" in str_list_from_row(json_object_from(config["tools"])["deny"])
 
 
 def test_heartbeat_and_template_copy_point_at_linkup_skill() -> None:
@@ -270,3 +231,4 @@ def test_heartbeat_and_template_copy_point_at_linkup_skill() -> None:
 def test_linkup_api_key_setting_exists() -> None:
     assert "LINKUP_API_KEY" in Settings.model_fields
     assert Settings.model_fields["LINKUP_API_KEY"].default == ""
+    assert Settings.model_fields["LINKUP_PROXY_BASE_URL"].default == ""

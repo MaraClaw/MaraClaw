@@ -190,7 +190,5 @@ async def should_use_linkup_proxy() -> bool:
     settings = get_settings()
     if not settings.LINKUP_PROXY_ENABLED:
         return False
-    if not settings.LINKUP_PROXY_BASE_URL.strip():
-        return False
     await ensure_env_key_seeded()
     return await has_active_keys() or bool(settings.LINKUP_API_KEY.strip())
