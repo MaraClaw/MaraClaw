@@ -214,9 +214,8 @@ async def test_enhanced_metrics_preserve_nested_rows_nulls_and_rounding(
 async def test_metric_routes_preserve_privilege_gates(
     metric_client: AsyncClient, metric_user: UserRecord, endpoint: str, role: str
 ) -> None:
-    metric_user.role = UserRole(role)
+    metric_user.role = UserRole(role) if role in {"member", "org_admin"} else UserRole.PLATFORM_ADMIN
     if role == "force_change":
-        metric_user.role = UserRole.PLATFORM_ADMIN
         metric_user.identity = IdentityRecord(id=uuid4(), must_change_password=True)
     if role == "anonymous":
         metric_client.headers.pop("Authorization")
