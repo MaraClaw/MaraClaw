@@ -1,7 +1,6 @@
 import asyncio
-import fcntl
 import multiprocessing
-from multiprocessing.connection import Connection
+from multiprocessing.connection import wait
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,25 +8,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from agent_setup_process_fixtures import late_writer
 from app.records.agent import AgentRecord
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
 from app.services import agent_deletion_cleanup, agent_stops
 from app.services.agent_setup_lock import setup_workspace_lock
-
-
-def late_writer(root: str, agent_id: str, channel: Connection) -> None:
-    directory = Path(root) / agent_id
-    locks = Path(root) / "_setup_locks"
-    locks.mkdir(exist_ok=True)
-    with (locks / f"{agent_id}.lock").open("a+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        directory.mkdir()
-        channel.send("writing")
-        assert channel.poll(10), "parent did not release the writer"
-        assert channel.recv() == "finish"
-        (directory / "late.md").write_bytes(b"late thread output")
-        fcntl.flock(lock, fcntl.LOCK_UN)
-    channel.close()
 
 
 async def test_deletion_defers_busy_cross_process_writer_and_archives_its_late_output(
@@ -73,7 +58,8 @@ async def test_deletion_defers_busy_cross_process_writer_and_archives_its_late_o
     process.start()
     child.close()
     try:
-        assert await asyncio.to_thread(parent.poll, 5)
+        ready = await asyncio.to_thread(wait, (parent, process.sentinel), 10)
+        assert parent in ready, f"writer did not signal readiness: exitcode={process.exitcode}"
         assert parent.recv() == "writing"
         # When the accelerator encounters the busy lock, it returns without consuming the job.
         await asyncio.wait_for(
