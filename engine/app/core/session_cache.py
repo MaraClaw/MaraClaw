@@ -151,7 +151,7 @@ def _from_snapshot(data: object) -> UserRecord | None:
         avatar_url=json_as_str(raw_user.get("avatar_url")),
         title=json_as_str(raw_user.get("title")),
         timezone=json_as_str(raw_user.get("timezone")),
-        role=UserRole(json_as_str_or(raw_user.get("role"), "member")),
+        role=UserRole(json_as_str_or(raw_user.get("role")) or UserRole.MEMBER),
         is_active=json_as_bool(raw_user.get("is_active"), True),
         registration_source=json_as_str(raw_user.get("registration_source")),
         created_at=_parse_dt(raw_user.get("created_at")),
