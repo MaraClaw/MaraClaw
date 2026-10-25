@@ -9309,8 +9309,7 @@
             "title": "Okr Agent Id"
           },
           "period_frequency": {
-            "title": "Period Frequency",
-            "type": "string"
+            "$ref": "#/components/schemas/PeriodFrequency"
           },
           "period_frequency_locked": {
             "default": false,
@@ -9397,13 +9396,12 @@
           "period_frequency": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/PeriodFrequency"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Period Frequency"
+            ]
           },
           "period_length_days": {
             "anyOf": [
@@ -10084,6 +10082,15 @@
         ],
         "title": "PendingAdmissionResponse",
         "type": "object"
+      },
+      "PeriodFrequency": {
+        "enum": [
+          "monthly",
+          "quarterly",
+          "custom"
+        ],
+        "title": "PeriodFrequency",
+        "type": "string"
       },
       "PeriodOut": {
         "properties": {
@@ -37853,6 +37860,7 @@
       "OrgAdminOut",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
+      "PeriodFrequency",
       "PeriodOut",
       "PermissionAccessLevel",
       "PermissionGrantScope",

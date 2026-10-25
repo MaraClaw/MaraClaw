@@ -95,6 +95,21 @@ test('OKR settings reject an unsupported period frequency', async (t) => {
   await assert.rejects(getOkrSettings(), ZodError)
 })
 
+for (const frequency of ['monthly', 'quarterly', 'custom']) {
+  test(`OKR settings preserve the supported ${frequency} period frequency`, async (t) => {
+    // Given
+    const response = {
+      enabled: true, daily_report_enabled: true, daily_report_time: '18:00',
+      weekly_report_enabled: false, weekly_report_day: 0, period_frequency: frequency, period_length_days: 45,
+    }
+    t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+    // When
+    const result = await getOkrSettings()
+    // Then
+    assert.deepEqual(result, response)
+  })
+}
+
 test('OKR objectives parse nested key-result statuses rather than trusting a DTO', async (t) => {
   // Given
   t.mock.method(globalThis, 'fetch', async () => Response.json([{

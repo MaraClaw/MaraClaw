@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
-from app.core.domain.okr import KeyResultStatus
+from app.core.domain.okr import KeyResultStatus, PeriodFrequency
 from app.core.json_types import (
     date_from_row,
     datetime_from_row,
@@ -31,7 +31,7 @@ class OKRSettingsRecord:
     daily_report_skip_non_workdays: bool = True
     weekly_report_enabled: bool = False
     weekly_report_day: int = 4
-    period_frequency: str = "quarterly"
+    period_frequency: PeriodFrequency = PeriodFrequency.QUARTERLY
     period_length_days: int | None = None
     okr_agent_id: UUID | None = None
 
@@ -46,7 +46,7 @@ class OKRSettingsRecord:
             daily_report_skip_non_workdays=bool(row.get("daily_report_skip_non_workdays", True)),
             weekly_report_enabled=bool(row.get("weekly_report_enabled", False)),
             weekly_report_day=int_from_row(row.get("weekly_report_day"), 4),
-            period_frequency=str_from_row(row.get("period_frequency"), "quarterly") or "quarterly",
+            period_frequency=PeriodFrequency(str_from_row(row.get("period_frequency"), "quarterly") or "quarterly"),
             period_length_days=(
                 None if row.get("period_length_days") is None else int_from_row(row.get("period_length_days"))
             ),
