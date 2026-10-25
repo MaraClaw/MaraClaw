@@ -37,7 +37,7 @@ async def test_teardown_isolates_container_and_archive_errors_per_agent(
         (job.workspace_path / "SOUL.md").write_text(job.name)
     pending = dict(jobs)
     attempts = dict.fromkeys(jobs, 0)
-    errors: dict[UUID, str | None] = dict.fromkeys(jobs)
+    errors = dict[UUID, str | None].fromkeys(jobs)
     calls: list[tuple[str, UUID]] = []
 
     async def begin_attempt(agent_id: UUID) -> None:

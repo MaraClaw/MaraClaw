@@ -64,10 +64,6 @@ export function useControlLease(scope: SessionQueryScope) {
     try {
       const result = await action(captured)
       if (!isCurrent(captured)) return
-      if (result.status === 'lost_lock') {
-        end(captured, true)
-        return
-      }
       return result
     } catch (error) {
       if (!isCurrent(captured)) return

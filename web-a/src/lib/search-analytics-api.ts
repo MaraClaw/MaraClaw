@@ -1,35 +1,38 @@
 import { apiRequest } from './http.ts'
 import { z } from 'zod'
 import {
-  SearchAnalyticsExportStatusSchema, SearchAnalyticsOrgRankingResponseSchema,
-  SearchAnalyticsKindCountResponseSchema, SearchAnalyticsSummaryResponseSchema, SearchAnalyticsTimeBucketResponseSchema,
-  SearchAnalyticsTrendingQueryResponseSchema,
+  SearchAnalyticsExportStatusSchema, SearchAnalyticsOrgRankingSchema,
+  SearchAnalyticsKindCountProjectionSchema, SearchAnalyticsSummarySchema, SearchAnalyticsTimeBucketSchema,
+  SearchAnalyticsTrendingQuerySchema,
 } from './engine-contracts.generated.ts'
 
-const kindCountSchema = SearchAnalyticsKindCountResponseSchema.transform((value) => ({
+const kindCountSchema = SearchAnalyticsKindCountProjectionSchema.partial().transform((value) => ({
   ...value, kind: value.kind ?? '', event_count: value.event_count ?? 0,
 }))
-const summarySchema = SearchAnalyticsSummaryResponseSchema.extend({ by_kind: kindCountSchema.array().optional() })
+const summarySchema = SearchAnalyticsSummarySchema.partial().required({ scope: true })
+  .extend({ by_kind: kindCountSchema.array().optional() })
   .transform((value) => ({
     ...value, event_count: value.event_count ?? 0, error_count: value.error_count ?? 0,
     quota_count: value.quota_count ?? 0, unique_orgs: value.unique_orgs ?? 0,
     unique_agents: value.unique_agents ?? 0, unattributed_count: value.unattributed_count ?? 0,
     avg_latency_ms: value.avg_latency_ms ?? 0, by_kind: value.by_kind ?? [],
   }))
-const pointSchema = SearchAnalyticsTimeBucketResponseSchema.transform((value) => ({
+const pointSchema = SearchAnalyticsTimeBucketSchema.partial().transform((value) => ({
   ...value, date: value.date ?? '', event_count: value.event_count ?? 0,
   error_count: value.error_count ?? 0, quota_count: value.quota_count ?? 0,
 }))
-const orgSchema = SearchAnalyticsOrgRankingResponseSchema.transform((value) => ({
+const orgSchema = SearchAnalyticsOrgRankingSchema.partial().transform((value) => ({
   ...value, tenant_id: value.tenant_id ?? null, name: value.name ?? '',
   event_count: value.event_count ?? 0, quota_count: value.quota_count ?? 0,
 }))
-const trendSchema = SearchAnalyticsTrendingQueryResponseSchema.transform((value) => ({
+const trendSchema = SearchAnalyticsTrendingQuerySchema.partial().transform((value) => ({
   ...value, query_hash: value.query_hash ?? '', query_normalized: value.query_normalized ?? '',
   kind: value.kind ?? '', hits: value.hits ?? 0, distinct_agents: value.distinct_agents ?? 0,
   distinct_orgs: value.distinct_orgs ?? 0,
 }))
-const exportStatusSchema = SearchAnalyticsExportStatusSchema.transform((value) => ({
+const exportStatusSchema = SearchAnalyticsExportStatusSchema.partial({
+  pending: true, exporting: true, exported: true, skipped: true, last_exported_at: true,
+}).transform((value) => ({
   ...value, pending: value.pending ?? 0, exporting: value.exporting ?? 0,
   exported: value.exported ?? 0, skipped: value.skipped ?? 0, last_exported_at: value.last_exported_at ?? null,
 }))
