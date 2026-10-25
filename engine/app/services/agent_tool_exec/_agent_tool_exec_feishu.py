@@ -56,7 +56,7 @@ def _feishu_helper(module: object, helper_name: str) -> FeishuHelper:
     loaded = object_attr(module, helper_name)
     if not callable(loaded):
         raise TypeError(f"Feishu helper {helper_name} is not callable")
-    return cast(FeishuHelper, loaded)
+    return cast("FeishuHelper", loaded)
 
 
 @register("send_feishu_message")

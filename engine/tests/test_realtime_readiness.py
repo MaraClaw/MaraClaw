@@ -8,7 +8,7 @@ from redis.asyncio import ConnectionPool, Redis
 from redis.asyncio.connection import Connection
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
-from redis.exceptions import ConnectionError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.services.realtime_runtime import router
 
@@ -110,7 +110,7 @@ async def test_ack_loss_transparent_retry_reack_and_repeated_start(monkeypatch: 
             delivered.clear()
             connection.reconnecting.clear()
             connection.allow_connect.clear()
-            await connection.messages.put(ConnectionError("synthetic link loss"))
+            await connection.messages.put(RedisConnectionError("synthetic link loss"))
             await asyncio.wait_for(connection.reconnecting.wait(), 1)
             assert not instance.ready
             connection.allow_connect.set()
@@ -163,7 +163,7 @@ async def test_distinct_replicas_route_presence_to_remote_channel_only(monkeypat
 
     monkeypatch.setattr(router, "get_redis", existing)
     assert first._instance_channel() != second._instance_channel()
-    assert {record["instance_id"] for record in await first._list_presence("agent")} == {"replica-a", "replica-b"}
+    assert {record.get("instance_id") for record in await first._list_presence("agent")} == {"replica-a", "replica-b"}
     await second.start(deliver)
     try:
         assert (await next_command(connection))[0] == "SUBSCRIBE"

@@ -111,10 +111,10 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
             size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f}MB"
             return (
                 "✅ Image uploaded successfully!\n\n"
-                + f"**CDN URL**: {cdn_url}\n"
-                + f"**File ID**: {file_id}\n"
-                + f"**Size**: {size_str}\n"
-                + f"**Name**: {json_as_str_or(result.get('name'), file_name)}"
+                f"**CDN URL**: {cdn_url}\n"
+                f"**File ID**: {file_id}\n"
+                f"**Size**: {size_str}\n"
+                f"**Name**: {json_as_str_or(result.get('name'), file_name)}"
             )
         error_detail = resp.text[:300]
         return f"❌ Upload failed (HTTP {resp.status_code}): {error_detail}"
@@ -174,7 +174,7 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
     if not api_key:
         return (
             "❌ Image generation API key not configured. "
-            + "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
+            "Ask your admin to configure it in Enterprise Settings → Tools → Generate Image."
         )
 
     if not save_path:
@@ -249,15 +249,15 @@ async def _generate_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArgument
 
         return (
             f"✅ Image generated and saved to: {save_path}\n"
-            + f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
-            + "Display this image to the user using this exact markdown:\n"
-            + f"![generated image]({api_image_path})"
+            f"Size: {size_kb:.1f} KB | Provider: {provider} | Model: {model or '(default)'}\n\n"
+            "Display this image to the user using this exact markdown:\n"
+            f"![generated image]({api_image_path})"
         )
     except httpx.TimeoutException:
         logger.error(f"[GenerateImage] Timeout ({provider}): took longer than 120 seconds or network unreachable.")
         return (
             f"❌ Image generation failed ({provider}): API request timed out after 120 seconds. "
-            + "This is usually caused by network issues or the model taking too long to generate."
+            "This is usually caused by network issues or the model taking too long to generate."
         )
     except Exception as e:
         err_msg = str(e) or type(e).__name__

@@ -30,7 +30,7 @@ _TYPE_LABELS: Final = {
 
 def _feishu_service() -> FeishuService:
     module = importlib.import_module("app.services.feishu_service")
-    return cast(FeishuService, object_attr(module, "feishu_service"))
+    return cast("FeishuService", object_attr(module, "feishu_service"))
 
 
 def _httpx_module():
@@ -48,7 +48,7 @@ def _response_mapping(response: Response) -> JsonObject:
 
 
 def _nested_mapping(value: object) -> Mapping[object, object]:
-    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
+    return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -155,10 +155,7 @@ async def _list_drive_members(
         if code == 1063003 and is_wiki:
             return (
                 f"文档 `{document_token}` 是知识库页面，其权限由知识库空间统一管理。\n"
-                + "知识库空间 ID：`"
-                + space_id
-                + "`\n"
-                + "请直接在飞书知识库中管理成员权限。"
+                "知识库空间 ID：`" + space_id + "`\n" + "请直接在飞书知识库中管理成员权限。"
             )
         if code in (99991672, 99991668):
             return f"❌ 权限不足（code {code}）\n需要在飞书开放平台开通：\n• drive:drive（云文档权限管理）"
@@ -292,10 +289,10 @@ async def _feishu_drive_delete(agent_id: uuid.UUID, arguments: ToolArguments) ->
         if code == 1061004:
             return (
                 f"❌ 权限不足（code {code}）\n"
-                + "需要满足以下条件之一：\n"
-                + "• 文件所有者 + 父文件夹编辑权限\n"
-                + "• 父文件夹的所有者或 full_access 权限\n"
-                + "同时需要在飞书开放平台开通：drive:drive 或 space:document:delete"
+                "需要满足以下条件之一：\n"
+                "• 文件所有者 + 父文件夹编辑权限\n"
+                "• 父文件夹的所有者或 full_access 权限\n"
+                "同时需要在飞书开放平台开通：drive:drive 或 space:document:delete"
             )
         if code == 1061007:
             return f"❌ 文件 `{file_token}` 已被删除。"

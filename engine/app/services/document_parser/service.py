@@ -24,7 +24,7 @@ AnydocFormat = Literal["doc", "docx", "odt", "pdf", "ppt", "pptx", "rtf", "epub"
 
 
 class _AnydocModule(Protocol):
-    def to_markdown_bytes(self, data: bytes, format: AnydocFormat | None = None) -> str: ...
+    def to_markdown_bytes(self, data: bytes, document_format: AnydocFormat | None = None, /) -> str: ...
 
     def format_from_bytes(self, data: bytes) -> AnydocFormat | None: ...
 
@@ -238,7 +238,7 @@ def format_parse_failure(exc: BaseException) -> str:
     if isinstance(exc, DocumentTooLargeError):
         return (
             f"Document is too large to read safely ({exc.size_bytes / 1024 / 1024:.1f} MB). "
-            + "Please split or convert it to a smaller text/Markdown excerpt first."
+            "Please split or convert it to a smaller text/Markdown excerpt first."
         )
     if isinstance(exc, EncryptedDocumentError):
         return "Document is encrypted or password-protected."
@@ -353,7 +353,7 @@ def _import_anydoc() -> _AnydocModule:
         import anydoc
     except ImportError as exc:
         raise DocumentParseUnavailableError(str(exc)) from exc
-    return cast(_AnydocModule, anydoc)
+    return cast("_AnydocModule", anydoc)
 
 
 def _format_hint(anydoc: _AnydocModule, data: bytes, filename: str) -> AnydocFormat | None:

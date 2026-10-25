@@ -4,7 +4,9 @@ import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from tests.channel_submission_fixtures import channel_db as channel_db, receipt_db as receipt_db
+from tests.channel_submission_fixtures import channel_db, receipt_db
+
+__all__ = ["channel_db", "receipt_db"]
 from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 
 from app.api import whatsapp

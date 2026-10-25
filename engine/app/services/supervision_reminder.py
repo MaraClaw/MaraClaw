@@ -12,6 +12,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import NotRequired, TypedDict
 
+from app.core.domain.activity import ActivityAction
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_loads_object
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -26,7 +28,7 @@ from app.records.task import TaskRecord
 from app.services.activity_logger import log_activity
 
 # Schedule JSON format:
-# {"freq": "daily"|"weekly", "interval": N, "time": "HH:MM", "weekdays": [0-6]}
+# Fields are freq (daily/weekly), interval (N), time (HH:MM), and weekdays (0-6).
 # weekdays: 0=Sun, 1=Mon, ..., 6=Sat
 
 
@@ -182,7 +184,7 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
             max_tokens=512,
         )
         content = (response.content or "").strip()
-        return content if content else None
+        return content or None
     except LLMError as e:
         logger.error(f"_get_agent_reply LLM error: {e}")
     except Exception as e:
@@ -282,7 +284,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
         else:
             target_member = await org_member_dao.find_related_to_agent_by_name(task.agent_id, target_name)
             if target_member:
-                config = await channel_config_dao.get_for_agent(agent_id=task.agent_id, channel_type="feishu")
+                config = await channel_config_dao.get_for_agent(agent_id=task.agent_id, channel_type=ChannelType.FEISHU)
                 if (
                     config
                     and config.app_id not in (None, "")
@@ -322,7 +324,7 @@ async def _send_supervision_reminder(task: TaskRecord, agent_name: str):
 
         await log_activity(
             task.agent_id,
-            "schedule_run",
+            ActivityAction.SCHEDULE_RUN,
             f"📋 Supervision reminder: {task.title} → {target_name}" + (f" (sent via {send_method})" if sent else ""),
             detail={"task_id": str(task.id), "target": target_name, "sent": sent},
             related_id=task.id,

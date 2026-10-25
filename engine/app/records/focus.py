@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.core.json_types import datetime_from_row, int_from_row, mapping_from_row, str_from_row, uuid_from_row
 
 
@@ -20,8 +21,8 @@ class AgentFocusItemRecord:
     key: str
     description: str = ""
     title: str | None = None
-    status: str = "in_progress"
-    kind: str = "normal"
+    status: FocusStatus = FocusStatus.IN_PROGRESS
+    kind: FocusKind = FocusKind.NORMAL
     source: str = "user"
     item_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     sort_order: int = 0
@@ -38,8 +39,8 @@ class AgentFocusItemRecord:
             key=str_from_row(row["key"]),
             description=str_from_row(row.get("description")),
             title=str_from_row(row["title"]) or None,
-            status=str_from_row(row.get("status"), "in_progress") or "in_progress",
-            kind=str_from_row(row.get("kind"), "normal") or "normal",
+            status=FocusStatus(str_from_row(row.get("status"), "in_progress")),
+            kind=FocusKind(str_from_row(row.get("kind"), "normal")),
             source=str_from_row(row.get("source"), "user") or "user",
             item_metadata=meta,
             sort_order=int_from_row(row.get("sort_order")),

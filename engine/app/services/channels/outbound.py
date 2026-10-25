@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
@@ -85,9 +86,11 @@ async def deliver_session_reply(
 async def _deliver_feishu(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.services.feishu_service import feishu_service
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="feishu")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.FEISHU)
     if config is None and agent.tenant_id:
-        config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type="feishu")
+        config = await channel_config_dao.get_for_tenant_channel(
+            tenant_id=agent.tenant_id, channel_type=ChannelType.FEISHU
+        )
     if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         if strict:
             raise ValueError("Feishu config is missing")
@@ -120,22 +123,21 @@ async def _deliver_feishu(agent: AgentRecord, external: str, content: str, *, st
 async def _deliver_slack(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.api.slack import _send_slack_messages
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="slack")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.SLACK)
     if config is None or not (config.app_secret or "").strip():
         if strict:
             raise ValueError("Slack config is missing")
         logger.warning("[Outbound] no Slack config for agent %s", agent.id)
         return
     channel_id = _split_conv(external, "slack_")
-    if channel_id.startswith("dm_"):
-        channel_id = channel_id[3:]
+    channel_id = channel_id.removeprefix("dm_")
     await _send_slack_messages(config.app_secret or "", channel_id, content, strict=strict)
 
 
 async def _deliver_teams(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.api.teams import _send_teams_message
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="microsoft_teams")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.MICROSOFT_TEAMS)
     if config is None:
         if strict:
             raise ValueError("Teams config is missing")
@@ -154,7 +156,7 @@ async def _deliver_teams(agent: AgentRecord, external: str, content: str, *, str
 async def _deliver_google_chat(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.services.channels.google_chat import parse_external_conv_id, send_google_chat_message
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="google_chat")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.GOOGLE_CHAT)
     if config is None:
         if strict:
             raise ValueError("Google Chat config is missing")
@@ -174,7 +176,7 @@ async def _deliver_google_chat(agent: AgentRecord, external: str, content: str, 
 async def _deliver_wecom(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.services.wecom_service import send_wecom_message
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="wecom")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.WECOM)
     if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         if strict:
             raise ValueError("WeCom config is missing")
@@ -207,7 +209,7 @@ async def _deliver_wecom(agent: AgentRecord, external: str, content: str, *, str
 async def _deliver_dingtalk(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.services.dingtalk_service import send_dingtalk_message
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="dingtalk")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.DINGTALK)
     if config is None or config.app_id in (None, "") or config.app_secret in (None, ""):
         if strict:
             raise ValueError("DingTalk config is missing")
@@ -236,7 +238,7 @@ async def _deliver_dingtalk(agent: AgentRecord, external: str, content: str, *, 
 async def _deliver_whatsapp(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.api.whatsapp import _send_whatsapp_messages
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="whatsapp")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.WHATSAPP)
     if config is None:
         if strict:
             raise ValueError("WhatsApp config is missing")
@@ -249,7 +251,7 @@ async def _deliver_whatsapp(agent: AgentRecord, external: str, content: str, *, 
 async def _deliver_wechat(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     from app.services.wechat_channel import WECHAT_ILINK_BASE_URL, get_wechat_context_entry, send_wechat_text_message
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="wechat")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.WECHAT)
     if config is None:
         if strict:
             raise ValueError("WeChat config is missing")
@@ -284,7 +286,7 @@ async def _deliver_wechat(agent: AgentRecord, external: str, content: str, *, st
 async def _deliver_discord(agent: AgentRecord, external: str, content: str, *, strict: bool = False) -> None:
     import httpx
 
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type="discord")
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=ChannelType.DISCORD)
     if config is None or not (config.app_secret or "").strip():
         if strict:
             raise ValueError("Discord config is missing")

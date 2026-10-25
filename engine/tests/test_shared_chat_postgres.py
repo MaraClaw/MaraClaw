@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import chat_sessions
+from app.core.domain.users import UserRole
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import transaction
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
@@ -73,7 +74,7 @@ def chat_session_agent_get(agent):
 
 async def test_shared_history_visible_to_other_human_without_global_read_marker(receipt_db):
     db = receipt_db
-    viewer = UserRecord(id=uuid4(), role="member")
+    viewer = UserRecord(id=uuid4(), role=UserRole.MEMBER)
     async with transaction(db.first):
         shared = await ensure_shared_session(db.agent.id)
         await chat_message_dao.create(
@@ -183,7 +184,9 @@ async def test_second_human_uses_persisted_shared_context_not_socket_or_archive_
                 session_id=shared.id,
                 auth_deadline=2_000_000_000,
                 auth_generation=0,
-            )
+            ),
+            other,
+            db.agent,
         )
         accepted = await chat_submissions.accept_submission(
             ChatSubmission(client_submission_id=uuid4(), content="second human"),

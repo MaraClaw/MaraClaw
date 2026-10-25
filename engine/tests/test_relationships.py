@@ -10,6 +10,7 @@ import pytest
 
 from app.api import relationships
 from app.core import permissions
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.org import OrgMemberRecord
@@ -173,7 +174,7 @@ async def test_relationship_response_keeps_ids_and_empty_department_without_sync
 ) -> None:
     # Given
     tenant_id, user_id, agent_id, member_id, relationship_id = (uuid.uuid4() for _ in range(5))
-    user = UserRecord(id=user_id, tenant_id=tenant_id, role="org_admin")
+    user = UserRecord(id=user_id, tenant_id=tenant_id, role=UserRole.ORG_ADMIN)
     agent = AgentRecord(id=agent_id, name="Agent", creator_id=user_id, tenant_id=tenant_id)
     member = OrgMemberRecord(id=member_id, name="Employee", tenant_id=tenant_id, user_id=user_id)
     relation = AgentRelationshipRecord(

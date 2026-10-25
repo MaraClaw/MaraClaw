@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 from uuid import UUID
 
+from app.core.domain.users import UserRole
 from app.core.logging import logger
 from app.dao.invitation_code_dao import invitation_code_dao
 from app.dao.org_member_dao import org_member_dao
@@ -19,6 +20,7 @@ from app.db.session import connection_ctx
 from app.records.invitation import InvitationCodeRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.invitation_codes import normalize_invite_email
 from app.services.system_org_seeder import OPENCLAW_SLUG
 
 OrgMatchSource = Literal["invite", "domain", "default"]
@@ -111,21 +113,20 @@ async def lookup_tenant_for_verified_email(user: UserRecord) -> TenantRecord | N
     return await lookup_tenant_by_email_domain(getattr(user, "email", None))
 
 
-async def require_active_invitation(code: str) -> InvitationCodeRecord:
-    inv = await invitation_code_dao.get_active_by_code(code)
+async def require_active_invitation(code: str, *, email: str | None = None) -> InvitationCodeRecord:
+    """Unexpired, unrevoked, unspent code usable by ``email`` (recipient-bound codes need the match)."""
+    inv = await invitation_code_dao.get_active_by_code(code, email=normalize_invite_email(email))
     if inv is None or inv.used_count >= inv.max_uses:
         raise InvitationError("Invalid invitation code")
     return inv
 
 
-async def consume_invitation_code(code: str | None) -> None:
-    """Increment used_count after a successful attach. Missing codes are a no-op."""
+async def consume_invitation_code(code: str | None, *, user_id: UUID | None = None, email: str | None = None) -> None:
+    """Atomically spend one use after a successful attach. Empty codes are a no-op."""
     if code in (None, ""):
         return
-    inv = await invitation_code_dao.get_active_by_code(code)
-    if inv is None:
-        return
-    _ = await invitation_code_dao.update(db_obj=inv, obj_in={"used_count": inv.used_count + 1})
+    if not await invitation_code_dao.consume(code, user_id=user_id, email=normalize_invite_email(email)):
+        raise InvitationError("Invalid invitation code")
 
 
 async def resolve_registration_org(
@@ -137,7 +138,7 @@ async def resolve_registration_org(
     fallback = await get_fallback_org()
 
     if invitation_code not in (None, ""):
-        inv = await require_active_invitation(invitation_code)
+        inv = await require_active_invitation(invitation_code, email=email)
         if inv.tenant_id is None:
             raise InvitationError("Invitation code tenant is inactive")
         invited = await tenant_dao.get(inv.tenant_id)
@@ -178,7 +179,7 @@ def _is_protected_admin(user: UserRecord) -> bool:
     return bool(getattr(user, "is_genesis", False) or getattr(user, "role", None) in {"org_admin", "platform_admin"})
 
 
-async def attach_user_to_org(user: UserRecord, tenant: TenantRecord, *, role: str = "member") -> UserRecord:
+async def attach_user_to_org(user: UserRecord, tenant: TenantRecord, *, role: UserRole = UserRole.MEMBER) -> UserRecord:
     """Set tenant_id in place. Refuses a second organization."""
     if user.tenant_id == tenant.id:
         return user
@@ -197,16 +198,16 @@ async def transfer_user_to_org(user: UserRecord, tenant: TenantRecord) -> UserRe
         return user
     if _is_protected_admin(user):
         raise AlreadyInOrgError("Admin membership cannot be transferred this way")
-    return await _set_user_org(user, tenant, role="member")
+    return await _set_user_org(user, tenant, role=UserRole.MEMBER)
 
 
-async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: str) -> UserRecord:
+async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: UserRole) -> UserRecord:
     if not tenant.is_active:
         raise DefaultOrgUnavailableError("Organization is disabled")
     previous_tenant_id = user.tenant_id
     try:
         async with connection_ctx() as connection:
-            db = cast(DbConnection | None, connection)
+            db = cast("DbConnection | None", connection)
             if db is not None:
                 from app.core.acl_locks import lock_tenants, lock_user
 
@@ -298,7 +299,7 @@ async def delete_email_domain(tenant_id: UUID, domain_id: UUID, *, successor_id:
         else:
             successor = remaining[0]
         _ = await tenant_email_domain_dao.update(db_obj=successor, obj_in={"is_default": True})
-    _ = await tenant_email_domain_dao.delete(id=domain_id)
+    _ = await tenant_email_domain_dao.delete(record_id=domain_id)
 
 
 def assert_may_deactivate_tenant(tenant: TenantRecord, *, making_active: bool) -> None:

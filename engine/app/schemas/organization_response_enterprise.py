@@ -100,6 +100,10 @@ class InvitationCodePayload(TypedDict):
     used_count: int
     is_active: bool
     created_at: str | None
+    expires_at: str | None
+    invited_email: str
+    redeemed_at: str | None
+    status: Literal["active", "expired", "used", "revoked"]
 
 
 class InvitationCodesResponse(TypedDict):

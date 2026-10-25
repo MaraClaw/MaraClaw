@@ -1,6 +1,7 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import Self
 
 import pytest
 
@@ -29,7 +30,7 @@ class _Cursor:
         self.raw: NotificationConnection = raw
         self.rows: list[Row] = []
 
-    async def __aenter__(self) -> _Cursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -63,7 +64,7 @@ class _Cursor:
         offset, limit = params.get("offset", 0), params.get("limit", len(matching))
         assert isinstance(offset, int)
         assert isinstance(limit, int)
-        self.rows = [asdict(row) for row in matching[offset : offset + limit]]
+        self.rows = [{**asdict(row), "type": row.type.value} for row in matching[offset : offset + limit]]
 
     async def fetchone(self) -> Row | None:
         return self.rows[0] if self.rows else None

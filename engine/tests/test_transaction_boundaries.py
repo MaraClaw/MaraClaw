@@ -12,6 +12,7 @@ from tests.transaction_pool_fakes import CountingPool
 
 from app import main
 from app.api import departments, enterprise, skills
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.user_dao import user_dao
 from app.db import session as session_module
@@ -153,7 +154,9 @@ async def test_crud_progresses_while_remote_io_is_blocked(
     remote_path: str, pool: CountingPool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     identity = IdentityRecord(id=uuid4())
-    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role="org_admin", identity_id=identity.id, identity=identity)
+    user = UserRecord(
+        id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN, identity_id=identity.id, identity=identity
+    )
     entered, release, finished = anyio.Event(), anyio.Event(), anyio.Event()
     remote_state: list[tuple[bool, int]] = []
     remote_responses: list[httpx.Response] = []

@@ -3,8 +3,10 @@ import json
 from uuid import UUID
 
 import pytest
-from tests.trigger_history_fixtures import AGENT_ID, CREATED_AT, SECRET, TRIGGER_ID, history_raw as history_raw
-from tests.trigger_history_http_fixtures import HistoryHTTP, history_http as history_http
+from tests.trigger_history_fixtures import AGENT_ID, CREATED_AT, SECRET, TRIGGER_ID, history_raw
+from tests.trigger_history_http_fixtures import HistoryHTTP, history_http
+
+__all__ = ["history_http", "history_raw"]
 
 from app.core.json_types import json_loads_object
 

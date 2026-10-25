@@ -53,7 +53,7 @@ def classify_error(error: Exception) -> FailoverErrorType:
     if any(kw in error_msg for kw in ["500", "502", "503", "504", "server error", "internal error"]):
         return FailoverErrorType.RETRYABLE
 
-    # Retryable: network and timeout
+    # Network failures and timeouts can be retried.
     if any(kw in error_msg for kw in ["timeout", "connection", "network", "unreachable", "refused", "reset", "dns"]):
         return FailoverErrorType.RETRYABLE
 

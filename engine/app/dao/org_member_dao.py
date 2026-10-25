@@ -47,7 +47,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE email = %(email)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
+                "WHERE email = %(email)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
                 {"email": email, "tenant_id": tenant_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -56,7 +56,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE phone = %(phone)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
+                "WHERE phone = %(phone)s AND tenant_id = %(tenant_id)s AND user_id IS NULL LIMIT 1",
                 {"phone": phone, "tenant_id": tenant_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -70,8 +70,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s "
-                + "AND provider_id = %(provider_id)s LIMIT 1",
+                "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s "
+                "AND provider_id = %(provider_id)s LIMIT 1",
                 {"user_id": user_id, "tenant_id": tenant_id, "provider_id": provider_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -85,8 +85,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE email = %(email)s AND tenant_id = %(tenant_id)s "
-                + "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
+                "WHERE email = %(email)s AND tenant_id = %(tenant_id)s "
+                "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
                 {"email": email, "tenant_id": tenant_id, "provider_id": provider_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -100,8 +100,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE phone = %(phone)s AND tenant_id = %(tenant_id)s "
-                + "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
+                "WHERE phone = %(phone)s AND tenant_id = %(tenant_id)s "
+                "AND provider_id = %(provider_id)s AND user_id IS NULL LIMIT 1",
                 {"phone": phone, "tenant_id": tenant_id, "provider_id": provider_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -115,8 +115,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s "
-                + "AND provider_id = %(provider_id)s",
+                "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s "
+                "AND provider_id = %(provider_id)s",
                 {"user_id": user_id, "tenant_id": tenant_id, "provider_id": provider_id},
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
@@ -140,8 +140,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + f"WHERE provider_id = %(provider_id)s AND status = 'active' AND {field} = %(value)s "
-                + "LIMIT 1",
+                f"WHERE provider_id = %(provider_id)s AND status = 'active' AND {field} = %(value)s "
+                "LIMIT 1",
                 {"provider_id": provider_id, "value": value},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -154,7 +154,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE user_id = %(user_id)s AND provider_id = %(provider_id)s",
+                "WHERE user_id = %(user_id)s AND provider_id = %(provider_id)s",
                 {"user_id": user_id, "provider_id": provider_id},
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
@@ -187,10 +187,10 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE provider_id = %(provider_id)s AND status = 'active' "
-                + f"AND ({' OR '.join(or_parts)}) "
-                + "ORDER BY (user_id IS NOT NULL) DESC, id ASC "
-                + "LIMIT 1",
+                "WHERE provider_id = %(provider_id)s AND status = 'active' "
+                f"AND ({' OR '.join(or_parts)}) "
+                "ORDER BY (user_id IS NOT NULL) DESC, id ASC "
+                "LIMIT 1",
                 params,
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -210,8 +210,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE user_id = %(user_id)s AND provider_id = %(provider_id)s "
-                + f"AND status = 'active'{tenant_sql} LIMIT 1",
+                "WHERE user_id = %(user_id)s AND provider_id = %(provider_id)s "
+                f"AND status = 'active'{tenant_sql} LIMIT 1",
                 params,
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -221,8 +221,8 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('m')} FROM org_members m "
-                + "JOIN agent_relationships r ON r.member_id = m.id "
-                + "WHERE r.agent_id = %(agent_id)s AND m.name = %(name)s LIMIT 1",
+                "JOIN agent_relationships r ON r.member_id = m.id "
+                "WHERE r.agent_id = %(agent_id)s AND m.name = %(name)s LIMIT 1",
                 {"agent_id": agent_id, "name": name},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -231,7 +231,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE tenant_id = %(tenant_id)s AND status = 'active' AND user_id IS NOT NULL",
+                "WHERE tenant_id = %(tenant_id)s AND status = 'active' AND user_id IS NOT NULL",
                 {"tenant_id": tenant_id},
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
@@ -275,7 +275,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM org_members "
-                + "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s AND status = 'active' LIMIT 1",
+                "WHERE user_id = %(user_id)s AND tenant_id = %(tenant_id)s AND status = 'active' LIMIT 1",
                 {"user_id": user_id, "tenant_id": tenant_id},
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
@@ -301,16 +301,16 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             params["search"] = f"%{search}%"
             clauses.append(
                 "(m.name ILIKE %(search)s OR m.name_translit_full ILIKE %(search)s "
-                + "OR m.name_translit_initial ILIKE %(search)s)"
+                "OR m.name_translit_initial ILIKE %(search)s)"
             )
         where = " AND ".join(clauses)
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('m')}, "
-                + "p.name AS provider_name, p.provider_type AS provider_type "
-                + "FROM org_members m "
-                + "LEFT JOIN identity_providers p ON p.id = m.provider_id "
-                + f"WHERE {where} ORDER BY m.name LIMIT %(limit)s",
+                "p.name AS provider_name, p.provider_type AS provider_type "
+                "FROM org_members m "
+                "LEFT JOIN identity_providers p ON p.id = m.provider_id "
+                f"WHERE {where} ORDER BY m.name LIMIT %(limit)s",
                 params,
             )
             return [
@@ -336,15 +336,15 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             params["search"] = f"%{search}%"
             search_sql = (
                 " AND ("
-                + "name ILIKE %(search)s OR email ILIKE %(search)s "
-                + "OR name_translit_full ILIKE %(search)s OR name_translit_initial ILIKE %(search)s"
-                + ")"
+                "name ILIKE %(search)s OR email ILIKE %(search)s "
+                "OR name_translit_full ILIKE %(search)s OR name_translit_initial ILIKE %(search)s"
+                ")"
             )
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM org_members "
-                + f"WHERE tenant_id = %(tenant_id)s AND status = 'active'{search_sql} "
-                + "ORDER BY name ASC LIMIT %(limit)s",
+                f"WHERE tenant_id = %(tenant_id)s AND status = 'active'{search_sql} "
+                "ORDER BY name ASC LIMIT %(limit)s",
                 params,
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
@@ -368,9 +368,9 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             params["search"] = f"%{search}%"
             search_sql = (
                 " AND ("
-                + "m.name ILIKE %(search)s OR m.name_translit_full ILIKE %(search)s "
-                + "OR m.name_translit_initial ILIKE %(search)s OR m.email ILIKE %(search)s"
-                + ")"
+                "m.name ILIKE %(search)s OR m.name_translit_full ILIKE %(search)s "
+                "OR m.name_translit_initial ILIKE %(search)s OR m.email ILIKE %(search)s"
+                ")"
             )
         allowed_sql = ""
         if allowed_user_ids is not None:
@@ -379,16 +379,16 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('m')}, "
-                + "p.name AS provider_name, p.provider_type AS provider_type, "
-                + "lu.id AS linked_user_id "
-                + "FROM org_members m "
-                + "LEFT JOIN identity_providers p ON p.id = m.provider_id "
-                + "LEFT JOIN users lu ON lu.id = m.user_id "
-                + "AND lu.tenant_id = %(tenant_id)s AND lu.is_active IS TRUE "
-                + "WHERE m.tenant_id = %(tenant_id)s AND m.status = 'active' "
-                + "AND (m.user_id IS NULL OR lu.id IS NOT NULL)"
-                + f"{search_sql}{allowed_sql} "
-                + "ORDER BY m.name LIMIT %(limit)s",
+                "p.name AS provider_name, p.provider_type AS provider_type, "
+                "lu.id AS linked_user_id "
+                "FROM org_members m "
+                "LEFT JOIN identity_providers p ON p.id = m.provider_id "
+                "LEFT JOIN users lu ON lu.id = m.user_id "
+                "AND lu.tenant_id = %(tenant_id)s AND lu.is_active IS TRUE "
+                "WHERE m.tenant_id = %(tenant_id)s AND m.status = 'active' "
+                "AND (m.user_id IS NULL OR lu.id IS NOT NULL)"
+                f"{search_sql}{allowed_sql} "
+                "ORDER BY m.name LIMIT %(limit)s",
                 params,
             )
             return [

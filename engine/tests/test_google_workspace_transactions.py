@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import google_workspace as api
+from app.core.domain.users import UserRole
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.user_dao import user_dao
@@ -33,7 +34,7 @@ class GoogleFlow:
             config={"client_id": "client", "client_secret": "secret"},
         )
     )
-    actor: UserRecord = field(default_factory=lambda: UserRecord(uuid4(), role="org_admin"))
+    actor: UserRecord = field(default_factory=lambda: UserRecord(uuid4(), role=UserRole.ORG_ADMIN))
     scan: SSOScanSessionRecord = field(
         default_factory=lambda: SSOScanSessionRecord(uuid4(), datetime.now(UTC) + timedelta(minutes=5))
     )

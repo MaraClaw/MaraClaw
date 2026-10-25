@@ -9,10 +9,12 @@ from app.core.acl_locks import lock_tenants, lock_user
 from app.dao.company_admission_dao import company_admission_dao as admissions
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.db.session import connection_ctx
-from app.records.company_admission import AdmissionMethod, CompanyAdmissionRecord
+from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice
 from app.records.user import UserRecord
-from app.services.company_admissions import fresh_user, submit_request, validate_method
+from app.services.company_admission_auto import admit_with_invitation, submit_or_admit
+from app.services.company_admissions import fresh_user, validate_method
+from app.services.company_transfer_fence import fence_owned_agents
 from app.services.company_transfer_guards import require_default_source
 from app.services.transfer_policy import get_transfer_policy
 
@@ -34,6 +36,12 @@ async def submit_transfer(
     applicant: UserRecord, destination: TransferDestination, selection: TransferSelection
 ) -> CompanyTransferRecord | CompanyAdmissionRecord:
     async with connection_ctx() as db:
+        # Invitation admission moves assets, so the agent fence precedes every tenant/user lock.
+        fenced_ids = (
+            await fence_owned_agents(applicant)
+            if destination.method == AdmissionMethod.INVITATION and selection.choice == TransferChoice.FREE
+            else None
+        )
         await lock_tenants(db, (applicant.tenant_id, destination.tenant_id))
         await lock_user(db, applicant.id, applicant.tenant_id)
         current = await fresh_user(applicant.id)
@@ -64,6 +72,15 @@ async def submit_transfer(
                 admission = await admissions.get(active.admission_request_id)
                 if admission is None:
                     raise HTTPException(409, "Transfer admission is unavailable")
+                if (
+                    admission.status == AdmissionStatus.PENDING
+                    and destination.method == AdmissionMethod.INVITATION
+                    and destination.invitation_code is not None
+                    and fenced_ids is not None
+                ):
+                    return await admit_with_invitation(
+                        current, target.id, destination.invitation_code, transfer_id=active.id, fenced_ids=fenced_ids
+                    )
                 return admission
             return active
         if await admissions.pending_for(current.id) is not None:
@@ -87,12 +104,13 @@ async def submit_transfer(
             case TransferChoice.PAID:
                 return transfer
             case TransferChoice.FREE:
-                admission = await submit_request(
+                admission = await submit_or_admit(
                     current,
                     target.id,
                     destination.method,
                     invitation_code=destination.invitation_code,
                     transfer_id=transfer.id,
+                    fenced_ids=fenced_ids,
                 )
                 await transfers.update(
                     db_obj=transfer, obj_in={"status": "admission_created", "admission_request_id": admission.id}

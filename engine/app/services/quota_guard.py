@@ -42,7 +42,7 @@ async def charge_conversation_quota(user: UserRecord) -> None:
         current = await user_dao.get(user.id) or user
         raise QuotaExceeded(
             f"Message quota exceeded ({current.quota_messages_used}/{current.quota_message_limit}). "
-            + f"Period: {current.quota_message_period}.",
+            f"Period: {current.quota_message_period}.",
             quota_type="conversation",
         )
 
@@ -69,7 +69,7 @@ async def get_agent_expiry_reply(agent_name: str) -> str:
     """Return a message for when an expired agent is contacted."""
     return (
         f"I'm sorry, but I ({agent_name}) am currently unavailable. "
-        + "My service period has ended. Please contact the platform administrator for assistance."
+        "My service period has ended. Please contact the platform administrator for assistance."
     )
 
 
@@ -87,16 +87,12 @@ async def consume_agent_llm_call(agent_id: uuid.UUID) -> None:
 # ── Agent creation quota ───────────────────────────────────────────
 
 
-async def check_agent_creation_quota(user_id: uuid.UUID) -> None:
-    """Check if user can create more agents."""
-    user = await user_dao.get(user_id)
-    if not user:
-        return
-
+async def check_agent_creation_quota(user: UserRecord) -> None:
+    """Check the freshly locked principal's agent allowance."""
     if user.role in ("platform_admin", "org_admin"):
         return
 
-    current_count = await agent_dao.count_active_for_creator(user_id)
+    current_count = await agent_dao.count_active_for_creator(user.id)
 
     if current_count >= user.quota_max_agents:
         raise QuotaExceeded(

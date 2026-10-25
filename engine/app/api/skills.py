@@ -274,6 +274,7 @@ async def _save_skill_to_db(
     tenant_id: str | None = None,
 ) -> SavedSkillResult:
     """Create a Skill + SkillFile records in the database."""
+    _ = source_url
     async with optional_connection_ctx():
         tid = _uuid.UUID(tenant_id) if tenant_id not in (None, "") else None
         existing = await skill_dao.get_by_folder_name(folder_name, tenant_id=tid, tenant_scoped=True)
@@ -584,7 +585,7 @@ async def create_skill(
                     "path": "SKILL.md",
                     "content": (
                         f"---\nname: {body.name}\ndescription: {body.description}\n---\n\n"
-                        + f"# {body.name}\n\n## Overview\n{body.description}\n"
+                        f"# {body.name}\n\n## Overview\n{body.description}\n"
                     ),
                 }
             )
@@ -674,7 +675,7 @@ async def _upsert_tenant_setting(tenant_id: _uuid.UUID, key: str, value: str) ->
         if existing is not None:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
+                "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                 {"tenant_id": tenant_id, "key": key, "value": as_jsonb(setting_value)},
             )
         else:

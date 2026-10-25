@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Literal, TypedDict
+from typing import Literal, TypedDict
 
 from app.dao.analytics_projection_contracts import (
     SearchAnalyticsExportStatusProjection,
@@ -9,7 +9,6 @@ from app.dao.analytics_projection_contracts import (
     SearchAnalyticsTimeBucketProjection,
     SearchAnalyticsTrendingQueryProjection,
 )
-from app.schemas.operator_response_contract import response_contract
 
 type SearchAnalyticsScope = Literal["org", "system"]
 
@@ -51,19 +50,11 @@ class SearchAnalyticsExportStatus(SearchAnalyticsExportConfig):
     exporting: int
     exported: int
     skipped: int
-    last_exported_at: datetime | None
+    last_exported_at: datetime | str | None
 
 
-type SearchAnalyticsSummaryPassthrough = Annotated[SearchAnalyticsSummary, response_contract(SearchAnalyticsSummary)]
-type SearchAnalyticsTimeseriesPassthrough = Annotated[
-    list[SearchAnalyticsTimeBucketProjection], response_contract(list[SearchAnalyticsTimeBucket])
-]
-type SearchAnalyticsOrgsPassthrough = Annotated[
-    list[SearchAnalyticsOrgRankingProjection], response_contract(list[SearchAnalyticsOrgRanking])
-]
-type SearchAnalyticsTrendingPassthrough = Annotated[
-    list[SearchAnalyticsTrendingQueryProjection], response_contract(list[SearchAnalyticsTrendingQuery])
-]
-type SearchAnalyticsExportStatusPassthrough = Annotated[
-    SearchAnalyticsExportStatusPayload, response_contract(SearchAnalyticsExportStatus)
-]
+type SearchAnalyticsSummaryPassthrough = SearchAnalyticsSummary
+type SearchAnalyticsTimeseriesPassthrough = list[SearchAnalyticsTimeBucket]
+type SearchAnalyticsOrgsPassthrough = list[SearchAnalyticsOrgRanking]
+type SearchAnalyticsTrendingPassthrough = list[SearchAnalyticsTrendingQuery]
+type SearchAnalyticsExportStatusPassthrough = SearchAnalyticsExportStatusPayload

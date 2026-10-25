@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.core.domain.okr import KeyResultStatus
 from app.core.json_types import JsonObject
 
 
@@ -40,7 +41,7 @@ class KeyResultOut(BaseModel):
     current_value: float
     unit: str | None = None
     focus_ref: str | None = None
-    status: str
+    status: KeyResultStatus
     last_updated_at: str
     created_at: str
     alignments: list[JsonObject] = []
@@ -88,13 +89,13 @@ class KeyResultUpdate(BaseModel):
     target_value: float | None = None
     unit: str | None = None
     focus_ref: str | None = None
-    status: str | None = None
+    status: KeyResultStatus | None = None
 
 
 class ProgressUpdate(BaseModel):
     value: float
     note: str | None = None
-    status: str | None = None
+    status: KeyResultStatus | None = None
 
 
 class PeriodOut(BaseModel):

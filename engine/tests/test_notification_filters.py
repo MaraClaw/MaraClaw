@@ -10,10 +10,13 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter
 
 from app.api import notification as notification_api
+from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.records.notification import NotificationRecord
 from app.records.user import UserRecord
-from notification_db_fakes import NotificationConnection, notification_db as notification_db
+from notification_db_fakes import NotificationConnection, notification_db
+
+__all__ = ["notification_db"]
 
 pytestmark = pytest.mark.usefixtures("notification_db")
 MEMBER = UserRecord(id=UUID(int=100), tenant_id=UUID(int=200))
@@ -33,16 +36,16 @@ FILTERS: list[tuple[str | None, list[str] | None]] = [
 @pytest.fixture
 def populated_db(notification_db: NotificationConnection) -> NotificationConnection:
     types = [
-        "autonomy_l2",
-        "approval_pending",
-        "approval_resolved",
-        "company_admission_pending",
-        "company_admission_resolved",
-        "plaza_comment",
-        "plaza_reply",
-        "mention",
-        "future_type",
-        *(["broadcast"] * 55),
+        NotificationKind.AUTONOMY_L2,
+        NotificationKind.APPROVAL_PENDING,
+        NotificationKind.APPROVAL_RESOLVED,
+        NotificationKind.COMPANY_ADMISSION_PENDING,
+        NotificationKind.COMPANY_ADMISSION_RESOLVED,
+        NotificationKind.PLAZA_COMMENT,
+        NotificationKind.PLAZA_REPLY,
+        NotificationKind.MENTION,
+        NotificationKind.SYSTEM,
+        *([NotificationKind.BROADCAST] * 55),
     ]
     notification_db.notifications = [
         NotificationRecord(id=UUID(int=index), user_id=MEMBER.id, type=kind, title=kind, created_at=STAMP)
@@ -50,8 +53,12 @@ def populated_db(notification_db: NotificationConnection) -> NotificationConnect
     ]
     notification_db.notifications.extend(
         [
-            NotificationRecord(id=UUID(int=900), user_id=MEMBER.id, type="broadcast", title="read", is_read=True),
-            NotificationRecord(id=UUID(int=901), user_id=FOREIGN_USER, type="broadcast", title="foreign"),
+            NotificationRecord(
+                id=UUID(int=900), user_id=MEMBER.id, type=NotificationKind.BROADCAST, title="read", is_read=True
+            ),
+            NotificationRecord(
+                id=UUID(int=901), user_id=FOREIGN_USER, type=NotificationKind.BROADCAST, title="foreign"
+            ),
         ]
     )
     return notification_db

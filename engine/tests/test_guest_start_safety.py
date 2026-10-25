@@ -5,16 +5,19 @@ from __future__ import annotations
 import builtins
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Unpack
 from uuid import uuid4
 
 import pytest
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager
 from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
+from builtin_keyword_fakes import IncludeAllKeyword
 
 
 class Docker:
@@ -51,8 +54,8 @@ class Docker:
             self.removed.append(reference)
             del self.guests[reference]
 
-    def list(self, *, all: bool, filters: object) -> builtins.list[SimpleNamespace]:
-        assert all
+    def list(self, *, filters: object, **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[SimpleNamespace]:
+        assert kwargs["all"]
         self.listings.append(filters)
         return [guest for guest in self.guests.values() if guest.state.status in ("running", "restarting")]
 
@@ -62,6 +65,7 @@ class Docker:
         assert isinstance(labels, dict)
         agent = AgentRecord(id=module.uuid.UUID(labels[AGENT_LABEL]), name="new", creator_id=uuid4())
         guest = self.add(agent)
+        guest.config.labels = dict(labels)
         if self.failures:
             raise DockerException(["docker", "run"], 125, stderr=self.failures.pop(0))
         return guest
@@ -73,7 +77,12 @@ def env(tmp_path, monkeypatch):
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
     agent = AgentRecord(
-        id=uuid4(), name="guest", creator_id=uuid4(), status="running", container_id="old", container_port=18888
+        id=uuid4(),
+        name="guest",
+        creator_id=uuid4(),
+        status=AgentStatus.RUNNING,
+        container_id="old",
+        container_port=18888,
     )
     directory = tmp_path / str(agent.id)
     directory.mkdir()
@@ -100,7 +109,7 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     monkeypatch.setattr(module, "write_maraclaw_sync_skill", fail)
     # When preparation fails (the HTTP boundary supplies the typed response).
     with pytest.raises(GuestStartPreflightError):
-        await manager.start_container(agent)
+        await manager.replace_container(agent)
     # Then no runtime reference or old guest was destroyed.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == []
@@ -110,7 +119,7 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     # Given an existing valid host port.
     manager, docker, agent = env
     # When replacing the guest.
-    result = await manager.start_container(agent)
+    result = await manager.replace_container(agent)
     # Then Docker gets hard limits, no extra swap, and the previous host port.
     assert result == agent.container_id
     run = docker.runs[0]
@@ -132,7 +141,7 @@ async def test_bind_conflict_cleans_created_guest_before_retry(env, failure):
     manager, docker, agent = env
     docker.failures = [failure]
     # When starting.
-    result = await manager.start_container(agent)
+    result = await manager.replace_container(agent)
     # Then the failed creation is removed and another bounded port succeeds.
     assert result is not None
     assert len(docker.runs) == 2
@@ -152,7 +161,7 @@ async def test_failed_run_cleans_leftovers_and_clears_both_runtime_records(env, 
 
     monkeypatch.setattr("app.services.enterprise_llm.ensure_agent_company_models", refresh)
     # When starting.
-    result = await manager.start_container(original)
+    result = await manager.replace_container(original)
     # Then attempts are bounded, all created guests removed, and neither record claims an old runtime.
     assert result is None
     assert len(docker.runs) == attempts
@@ -180,7 +189,7 @@ async def test_start_ownership_failure_preserves_references(env):
     docker.guests["old"].config.labels[AGENT_LABEL] = str(uuid4())
     # When replacement is requested.
     with pytest.raises(GuestOwnershipError):
-        await manager.start_container(agent)
+        await manager.replace_container(agent)
     # Then identity guard preflight permits no mutation.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.runs == []
@@ -196,7 +205,7 @@ async def test_ownership_inspection_io_failure_preserves_old_runtime(env, monkey
     monkeypatch.setattr(docker, "inspect", unavailable)
     # When replacement cannot safely begin.
     with pytest.raises(GuestStartPreflightError):
-        await manager.start_container(agent)
+        await manager.replace_container(agent)
     # Then the old runtime is not falsely cleared or persisted as a failed replacement.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == docker.runs == []
@@ -216,7 +225,7 @@ async def test_cleanup_ownership_refusal_after_replacement_clears_stale_runtime(
 
     monkeypatch.setattr(docker, "run", failed_run)
     # When cleanup refuses the foreign leftover after the old guest has been removed.
-    result = await manager.start_container(agent)
+    result = await manager.replace_container(agent)
     # Then no retry or foreign deletion occurs, and the removed old runtime is not retained.
     assert result is None
     assert (agent.status, agent.container_id, agent.container_port) == ("error", None, None)

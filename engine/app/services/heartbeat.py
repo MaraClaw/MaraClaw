@@ -11,9 +11,14 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
+from app.core.domain.activity import ActivityAction
 from app.core.logging import logger, new_trace_id
+from app.core.notification_kinds import NotificationKind
 from app.core.tool_types import ToolDefinition
+from app.records.agent import AgentRecord
+from app.runtime.tasks import AdmissionClosedError, TaskAdmission
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
@@ -21,6 +26,22 @@ from app.services.storage import agent_storage_key, get_storage_backend
 
 _HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
 _HEARTBEAT_TASKS: set[asyncio.Task[None]] = set()
+_admission = TaskAdmission("Heartbeat", _HEARTBEAT_TASKS)
+
+
+def open_heartbeat_admission() -> None:
+    """Reopen heartbeat admission for a new lifespan."""
+    _admission.open()
+
+
+def close_heartbeat_admission() -> None:
+    """Stop claiming and admitting heartbeats; an admitted claim still starts its heartbeat."""
+    _admission.close()
+
+
+async def drain_heartbeat_tasks(grace_seconds: float = 20.0) -> None:
+    """Wait for claims and heartbeats, then cancel and await the rest."""
+    await _admission.drain(grace_seconds)
 
 
 def _tool_argument_preview(arguments: str | ToolPayload, length: int) -> str:
@@ -257,7 +278,12 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         try:
             recent_activities = await agent_activity_log_dao.list_for_agent(
                 agent_id,
-                action_types=["chat_reply", "tool_call", "task_created", "task_updated"],
+                action_types=[
+                    ActivityAction.CHAT_REPLY,
+                    ActivityAction.TOOL_CALL,
+                    ActivityAction.TASK_CREATED,
+                    ActivityAction.TASK_UPDATED,
+                ],
                 limit=50,
             )
             if recent_activities:
@@ -422,14 +448,14 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     raw_args = function.get("arguments", "{}")
                     logger.info(
                         f"[Heartbeat] Raw arguments for {tool_name} (len={len(raw_args) if raw_args else 0}): "
-                        + f"{_tool_argument_preview(raw_args, 300) if raw_args else 'None'}"
+                        f"{_tool_argument_preview(raw_args, 300) if raw_args else 'None'}"
                     )
                     try:
                         args = parse_tool_arguments(raw_args)
                     except json.JSONDecodeError as je:
                         logger.warning(
                             f"[Heartbeat] JSON parse failed for {tool_name}: {je}. "
-                            + f"Raw: {_tool_argument_preview(raw_args, 200)!r}"
+                            f"Raw: {_tool_argument_preview(raw_args, 200)!r}"
                         )
                         args = {}
 
@@ -492,7 +518,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 
             await log_activity(
                 agent_id,
-                "heartbeat",
+                ActivityAction.HEARTBEAT,
                 f"Heartbeat: {reply[:80]}",
                 detail={"reply": reply[:500]},
             )
@@ -503,6 +529,28 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         logger.exception(f"Heartbeat error for agent {agent_id}: {e}")
     finally:
         _HEARTBEAT_SEMAPHORE.release()
+
+
+async def _claim_and_start_heartbeat(agent: AgentRecord, now: datetime, interval: timedelta) -> int:
+    """Claim, audit and start one heartbeat as a unit.
+
+    ``claim_heartbeat`` advances ``last_heartbeat_at``, so an admitted claim must start its task; a drain that
+    runs out of grace cancels the whole unit instead, before or after the claim.
+    """
+    from app.dao.agent_dao import agent_dao
+    from app.services.audit_logger import write_audit_log
+
+    if not await agent_dao.claim_heartbeat(agent.id, now=now, interval=interval):
+        return 0
+    logger.info(f"💓 Triggering heartbeat for {agent.name}")
+    try:
+        await write_audit_log("heartbeat_fire", {"agent_name": agent.name}, agent_id=agent.id)
+    except Exception as e:
+        logger.warning(f"Failed to write heartbeat_fire audit log for {agent.name}: {e}")
+    task = asyncio.create_task(_execute_heartbeat(agent.id))
+    _HEARTBEAT_TASKS.add(task)
+    task.add_done_callback(_observe_heartbeat_task)
+    return 1
 
 
 async def _heartbeat_tick():
@@ -547,19 +595,11 @@ async def _heartbeat_tick():
             if agent.last_heartbeat_at and (now - agent.last_heartbeat_at) < interval:
                 continue
 
-            claimed = await agent_dao.claim_heartbeat(agent.id, now=now, interval=interval)
-            if not claimed:
-                continue
-
-            logger.info(f"💓 Triggering heartbeat for {agent.name}")
             try:
-                await write_audit_log("heartbeat_fire", {"agent_name": agent.name}, agent_id=agent.id)
-            except Exception as e:
-                logger.warning(f"Failed to write heartbeat_fire audit log for {agent.name}: {e}")
-            task = asyncio.create_task(_execute_heartbeat(agent.id))
-            _HEARTBEAT_TASKS.add(task)
-            task.add_done_callback(_observe_heartbeat_task)
-            triggered += 1
+                triggered += await _admission.run(partial(_claim_and_start_heartbeat, agent, now, interval))
+            except AdmissionClosedError:
+                logger.info("Heartbeat tick stopped: shutdown drain in progress")
+                break
 
         if triggered:
             try:
@@ -595,7 +635,7 @@ async def _notify_oneshot_error(
         _ = await notification_dao.create(
             obj_in={
                 "user_id": triggered_by_user_id,
-                "type": "system",
+                "type": NotificationKind.SYSTEM.value,
                 "title": f"{agent_name} task failed",
                 "body": error_msg[:500],
                 "link": f"/agents/{agent_id}#chat",
@@ -840,7 +880,7 @@ async def run_agent_oneshot(
 
                 await log_activity(
                     agent_id,
-                    "oneshot_task",
+                    ActivityAction.TASK_UPDATED,
                     f"Oneshot task completed: {reply[:80]}",
                     detail={"reply": reply[:500], "triggered_by": str(triggered_by_user_id)},
                 )

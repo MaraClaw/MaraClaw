@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from python_on_whales.exceptions import DockerException
 
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services.agent_manager import AgentManager, guest_container_name
 from app.services.guest_identity import GuestOwnershipError
@@ -88,7 +89,7 @@ async def test_destructive_manager_operations_reject_foreign_or_unlabeled_ids(
     docker = Docker(Guest("recorded", "deployed-name", owner))
     subject = manager(monkeypatch, docker)
     record = agent("recorded")
-    record.status = "running"
+    record.status = AgentStatus.RUNNING
     operations = {"stop_container": subject.stop_container, "remove_container": subject.remove_container}
     # When stopping/removing it.
     result = await operations[operation](record)

@@ -3,7 +3,7 @@ import json
 import socket
 import ssl
 from collections.abc import Callable, Iterable
-from typing import override
+from typing import Unpack, override
 
 import httpcore
 import pytest
@@ -16,6 +16,7 @@ from app.services.sandbox.base import ExecutionResult, SandboxBackend
 from app.services.sandbox.config import SandboxConfig, SandboxType
 from app.services.sandbox.remote.aio_sandbox_backend import AioSandboxBackend
 from app.services.sandbox.remote.self_hosted_backend import SelfHostedBackend
+from builtin_keyword_fakes import SocketTypeKeyword
 
 PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 KEY = "sk-adapter-secret"
@@ -93,10 +94,12 @@ def install_wire(monkeypatch: pytest.MonkeyPatch) -> Wire:
     backend = Wire()
     monkeypatch.setattr(outbound_transport, "AnyIOBackend", lambda: backend)
 
-    def lookup(host: str, port: int, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+    def lookup(
+        host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
         answer = backend.answers[min(backend.lookups, len(backend.answers) - 1)]
         backend.lookups += 1
-        return [(socket.AF_INET, type, 6, "", (answer, port))]
+        return [(socket.AF_INET, kwargs["type"], 6, "", (answer, port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", lookup)
     for name in PROXY_ENV:

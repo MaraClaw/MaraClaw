@@ -10,8 +10,10 @@ from app.dao.org_department_dao import org_department_dao
 from app.db.session import transaction
 from app.records.user import UserRecord
 from app.services import org_departments
-from department_delete_postgres_fixtures import DepartmentStore, department_store as department_store, request
-from test_bootstrap_postgres import schema_db as schema_db
+from department_delete_postgres_fixtures import DepartmentStore, department_store, request
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["department_store", "schema_db"]
 
 
 async def test_delete_preserves_unrelated_grants_memberships_and_effective_access(

@@ -74,5 +74,5 @@ async def persist_mcp_installation(
             if generic is not None:
                 assignment = await agent_tool_dao.get_assignment(agent_id, generic.id)
                 if assignment is not None:
-                    _ = await agent_tool_dao.delete(id=assignment.id)
+                    _ = await agent_tool_dao.delete(record_id=assignment.id)
     return imported

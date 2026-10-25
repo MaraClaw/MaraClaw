@@ -1,7 +1,7 @@
 from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import assert_type
+from typing import Self, assert_type
 from uuid import UUID
 
 import pytest
@@ -30,7 +30,7 @@ class _Cursor:
         self.raw: _RawConnection = raw
         self.rows: list[Row] = []
 
-    async def __aenter__(self) -> _Cursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:

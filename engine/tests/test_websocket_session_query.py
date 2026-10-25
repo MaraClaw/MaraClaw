@@ -160,8 +160,16 @@ async def test_send_to_user_explicitly_delivers_across_sessions(monkeypatch: pyt
         (other_user_socket, str(uuid.uuid4()), str(uuid.uuid4())),
     ]
 
-    await manager.send_to_user(agent_id, user_id, {"type": "notification"})
+    message: websocket.RealtimeMessage = {
+        "type": "trigger_notification",
+        "content": "Agent update",
+        "triggers": ["web_message"],
+        "session_id": str(uuid.uuid4()),
+    }
+    await manager.send_to_user(agent_id, user_id, message)
 
-    assert first_frames == [{"type": "websocket.send", "text": '{"type":"notification"}'}]
+    assert first_frames == [
+        {"type": "websocket.send", "text": json.dumps(message, separators=(",", ":"), ensure_ascii=False)}
+    ]
     assert second_frames == first_frames
     assert other_user_frames == []

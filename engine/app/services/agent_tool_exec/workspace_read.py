@@ -90,7 +90,7 @@ async def _storage_read_file(
         total_lines = len(lines)
         start = max(0, offset)
         end = min(total_lines, start + limit)
-        if start >= total_lines and total_lines > 0:
+        if start >= total_lines > 0:
             return f"Offset {offset} exceeds file length ({total_lines} lines total)"
         selected_lines = lines[start:end]
         output = "\n".join(f"{index + 1:6}\t{line}" for index, line in enumerate(selected_lines, start=start))

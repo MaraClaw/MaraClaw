@@ -7,6 +7,7 @@ import pytest
 from starlette.requests import Request
 
 from app.api import background_tasks, wecom
+from app.core.domain.channels import ChannelType
 from app.db import session as session_module
 from app.records.channel_config import ChannelConfigRecord
 from app.services.channels import dedup
@@ -88,7 +89,7 @@ async def test_config_connector_runs_after_save_and_commit(monkeypatch, mode, ex
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=agent_id,
-        channel_type="wecom",
+        channel_type=ChannelType.WECOM,
         app_id="corp",
         app_secret="secret",
         encrypt_key="key",
@@ -152,7 +153,7 @@ async def test_connector_background_failure_is_logged(monkeypatch):
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=agent_id,
-        channel_type="wecom",
+        channel_type=ChannelType.WECOM,
         app_id="",
         app_secret="",
         encrypt_key="",

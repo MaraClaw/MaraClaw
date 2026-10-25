@@ -119,10 +119,10 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
     ):
         return (
             "❌ Email not configured for this agent.\n\n"
-            + "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
-            + "1. Select your email provider\n"
-            + "2. Enter your email address\n"
-            + "3. Enter your authorization code (not your login password)"
+            "Please go to Agent → Tools → Send Email → Config to set up your email:\n"
+            "1. Select your email provider\n"
+            "2. Enter your email address\n"
+            "3. Enter your authorization code (not your login password)"
         )
 
     try:

@@ -43,8 +43,10 @@ async def _resolve_a2a_target(
     rel_names = [r.target_agent.name for r in rels if r.target_agent]
     return (
         None,
-        f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-        + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}",
+        (
+            f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
+            f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
+        ),
     )
 
 

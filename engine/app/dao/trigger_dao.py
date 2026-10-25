@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from enum import StrEnum
 from typing import ClassVar, final, override
 from uuid import UUID
 
+from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import int_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.db.errors import LockNotAvailableError, UniqueViolationError
@@ -100,7 +102,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentTriggerRecord.from_row(row) for row in rows]
@@ -131,8 +133,8 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                + "WHERE type = 'webhook' AND is_enabled IS TRUE "
-                + "AND config->>'token' = %(token)s LIMIT 1",
+                "WHERE type = 'webhook' AND is_enabled IS TRUE "
+                "AND config->>'token' = %(token)s LIMIT 1",
                 {"token": token},
             )
             return AgentTriggerRecord.from_row(row) if row is not None else None
@@ -141,7 +143,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_triggers "
-                + "WHERE agent_id = %(agent_id)s AND name = %(name)s LIMIT 1",
+                "WHERE agent_id = %(agent_id)s AND name = %(name)s LIMIT 1",
                 {"agent_id": agent_id, "name": name},
             )
             return AgentTriggerRecord.from_row(row) if row is not None else None
@@ -158,9 +160,9 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
-                + "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
-                + "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
-                + ") RETURNING id",
+                "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
+                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                ") RETURNING id",
                 {"tenant_id": tenant_id},
             )
             return len(rows)
@@ -174,9 +176,9 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
-                + "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
-                + f"SELECT id FROM agents WHERE {agent_filter}"
-                + ") RETURNING id",
+                "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
+                f"SELECT id FROM agents WHERE {agent_filter}"
+                ") RETURNING id",
                 params,
             )
             return len(rows)
@@ -234,7 +236,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         execution_id: UUID,
         *,
         lease_token: str,
-        status: str,
+        status: TriggerExecutionStatus,
         error_text: str | None,
         now: datetime,
     ) -> bool:
@@ -255,7 +257,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
                 {
                     "id": execution_id,
                     "lease_token": lease_token,
-                    "status": status,
+                    "status": status.value,
                     "error_text": error_text,
                     "now": now,
                 },
@@ -308,7 +310,9 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         params: dict[str, object] = {}
         for col in cols:
             value: object = data[col]
-            params[col] = as_jsonb(value) if isinstance(value, dict) else value
+            params[col] = (
+                as_jsonb(value) if isinstance(value, dict) else value.value if isinstance(value, StrEnum) else value
+            )
         col_sql = ", ".join(cols)
         val_sql = ", ".join(f"%({c})s" for c in cols)
         sql = f"INSERT INTO {self.table} ({col_sql}) VALUES ({val_sql}) RETURNING {self._select_list()}"

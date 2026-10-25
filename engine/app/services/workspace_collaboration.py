@@ -114,7 +114,7 @@ async def read_text_if_exists(path: Path) -> str | None:
     except OSError:
         return None
     async with aiofiles.open(path, "rb") as f:
-        data = cast(bytes, await f.read())
+        data = cast("bytes", await f.read())
     if b"\x00" in data:
         return None
     return data.decode("utf-8", errors="replace")
@@ -257,7 +257,7 @@ async def write_workspace_file(
                 normalized,
                 (
                     f"Human is currently editing {normalized}. Do not modify it now. "
-                    + "Ask the user to finish editing, or work on another file."
+                    "Ask the user to finish editing, or work on another file."
                 ),
                 locked_by_user_id=str(lock.user_id),
             )
@@ -447,7 +447,7 @@ async def move_workspace_path(
                     locked_path,
                     (
                         f"Human is currently editing {locked_path}. Do not move it now. "
-                        + "Ask the user to finish editing, or choose another path."
+                        "Ask the user to finish editing, or choose another path."
                     ),
                     locked_by_user_id=str(lock.user_id),
                 )

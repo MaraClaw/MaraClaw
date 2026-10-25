@@ -23,8 +23,10 @@ def descendant_worker(src: str, _filename: str, _out: str, _err: str, _extra: in
         [
             sys.executable,
             "-c",
-            "import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
-            "print(os.getpid(),flush=True); time.sleep(60)",
+            (
+                "import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "print(os.getpid(),flush=True); time.sleep(60)"
+            ),
         ],
         stdout=subprocess.PIPE,
         text=True,

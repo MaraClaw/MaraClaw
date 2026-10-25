@@ -18,7 +18,9 @@ from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
-from test_bootstrap_postgres import schema_db as schema_db
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["schema_db"]
 
 
 @dataclass(frozen=True, slots=True)

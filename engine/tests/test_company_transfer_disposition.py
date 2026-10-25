@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.core.domain.agents import AgentStatus
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
@@ -43,7 +44,7 @@ async def test_final_disposition_stops_runtime_without_rewriting_history_ownersh
         tenant_id=fixture.source.id,
         api_key_hash="source-secret",
         primary_model_id=uuid4(),
-        status="running",
+        status=AgentStatus.RUNNING,
     )
     updates: list[AgentRecord] = []
     statements: list[str] = []

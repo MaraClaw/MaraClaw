@@ -4,7 +4,7 @@ import importlib
 import uuid
 from collections import deque
 from types import SimpleNamespace
-from typing import Literal
+from typing import Literal, Self
 
 import pytest
 
@@ -37,7 +37,7 @@ class _FakeAsyncClient:
         self._calls = calls
         self._timeout = timeout
 
-    async def __aenter__(self) -> _FakeAsyncClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args) -> bool:

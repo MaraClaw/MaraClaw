@@ -51,7 +51,7 @@ class CountingPool:
             self.checkouts += 1
             self.raw.begin()
             try:
-                yield cast(AsyncConnection[DictRow], self.raw)
+                yield cast("AsyncConnection[DictRow]", self.raw)
             finally:
                 if self.raw.in_transaction:
                     await self.raw.rollback()

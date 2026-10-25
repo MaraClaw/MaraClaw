@@ -7,6 +7,7 @@ Agents pull latest data based on their roles and write to local enterprise_info/
 import json
 import uuid
 
+from app.core.domain.agents import AgentStatus
 from app.core.events import publish_event
 from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
@@ -76,7 +77,7 @@ class EnterpriseSyncService:
 
     async def sync_to_all_agents(self) -> int:
         """Sync enterprise info to all running agents. Returns count."""
-        agents = await agent_dao.list_by_status("running")
+        agents = await agent_dao.list_by_status(AgentStatus.RUNNING)
 
         for agent in agents:
             await self.sync_to_agent(agent.id, agent.role_description)

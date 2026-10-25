@@ -10,6 +10,7 @@ import re
 import uuid
 from typing import Any, NotRequired, TypedDict
 
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.security import hash_password_async
 from app.dao import (
@@ -163,7 +164,7 @@ class RegistrationService:
         self,
         identity: IdentityRecord,
         display_name: str | None = None,
-        role: str = "member",
+        role: UserRole = UserRole.MEMBER,
         tenant_id: uuid.UUID | None = None,
         registration_source: str = "web",
         email_config: SystemEmailConfig | None = None,

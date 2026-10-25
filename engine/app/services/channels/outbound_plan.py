@@ -6,6 +6,7 @@ from uuid import UUID, uuid5
 
 from pydantic import TypeAdapter
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str_or, json_object_from
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
@@ -38,9 +39,10 @@ class ConfiguredOutbound:
 
 async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) -> ConfiguredOutbound:
     provider = _provider.validate_python(normalize_channel_type(session.source_channel))
-    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=provider)
+    channel_type = ChannelType(provider)
+    config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=channel_type)
     if config is None and provider == "feishu" and agent.tenant_id is not None:
-        config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=provider)
+        config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=channel_type)
     if config is None:
         raise ValueError("IM configuration is unavailable")
     extra = json_object_from(config.extra_config)

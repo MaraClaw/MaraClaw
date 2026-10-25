@@ -170,7 +170,7 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
 
     async def finish_terminal(
         self,
-        id: UUID,
+        delivery_id: UUID,
         claim_token: UUID,
         reason: TerminalReason,
         *,
@@ -181,7 +181,7 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
                 f"""UPDATE {self.table} SET terminal_reason = %(reason)s, terminal_at = %(now)s,
                     claim_token = NULL, lease_expires_at = NULL
                     WHERE {_FENCE} RETURNING id""",
-                {"id": id, "claim_token": claim_token, "reason": reason, "now": now},
+                {"id": delivery_id, "claim_token": claim_token, "reason": reason, "now": now},
             )
         return row is not None
 

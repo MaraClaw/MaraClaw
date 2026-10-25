@@ -9,9 +9,11 @@ import pytest
 from fastapi import Depends, FastAPI
 
 from app.api import agents as api
+from app.core.domain.agents import AgentStatus
 from app.db import session
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
+from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
 from app.services import agent_lifecycle as lifecycle, openclaw_update_exclusion as exclusion
 from app.services.agent_setup_lock import setup_workspace_lock
@@ -51,12 +53,27 @@ def surface(monkeypatch, tmp_path):
         id=uuid4(),
         name="guest",
         creator_id=user.id,
-        status="running",
+        status=AgentStatus.RUNNING,
         container_id="old",
         container_port=18888,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     runtime = TransactionalRuntime(agent)
+
+    async def begin(_id):
+        return AgentStartOperation(agent.id, uuid4(), "pending"), replace(runtime.committed)
+
+    async def cancel(_id):
+        return None
+
+    async def publish(_operation, record):
+        await runtime.update(db_obj=record, obj_in={})
+        await runtime.commit()
+        return True
+
+    monkeypatch.setattr(lifecycle.start_store, "begin", begin)
+    monkeypatch.setattr(lifecycle.start_store, "cancel", cancel)
+    monkeypatch.setattr(lifecycle.start_store, "publish", publish)
 
     async def authorize(_user, _id):
         return replace(runtime.committed), "manage"
@@ -126,7 +143,12 @@ async def test_explicit_outcome_is_committed_before_unlock(surface, monkeypatch,
         response = await client.post(f"/api/agents/{agent.id}/{operation}")
     # Then the runtime survives rollback of a 502, and publication preceded lock release.
     assert response.status_code == (200 if succeeds else 502)
-    assert runtime.events[:3] == ["persist", "commit_locked", "release"]
+    if operation == "start" and not succeeds:
+        assert runtime.events[0] == "release"
+        assert runtime.committed == agent
+        return
+    release_at = runtime.events.index("release")
+    assert runtime.events[release_at - 2 : release_at] == ["persist", "commit_locked"]
     expected_status = ("running" if succeeds else "error") if operation == "start" else "stopped"
     assert runtime.committed.status == expected_status
     if operation == "stop":
@@ -199,7 +221,8 @@ async def test_cancelled_request_drains_commit_before_releasing_lock(surface, mo
         with anyio.fail_after(5):
             await runtime.released.wait()
     # Then Docker finishes and its runtime is durable before the lock is released.
-    assert runtime.events[:3] == ["persist", "commit_locked", "release"]
+    release_at = runtime.events.index("release")
+    assert runtime.events[release_at - 2 : release_at] == ["persist", "commit_locked"]
     assert runtime.committed.container_id == ("new" if operation == "start" else "old")
 
 
@@ -213,4 +236,5 @@ async def test_docker_unavailable_preserves_idle_http_contract(surface, monkeypa
     # Then idle is a successful, durable result rather than a failed Docker start.
     assert response.status_code == 200
     assert response.json()["status"] == runtime.committed.status == "idle"
-    assert runtime.events[:3] == ["persist", "commit_locked", "release"]
+    release_at = runtime.events.index("release")
+    assert runtime.events[release_at - 2 : release_at] == ["persist", "commit_locked"]

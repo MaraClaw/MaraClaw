@@ -17,6 +17,7 @@ def _string_argument(arguments: ToolArguments, name: str, *, remove: bool = Fals
 
 async def _agentbay_browser_navigate(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """AgentBay browser navigation."""
+    del ws  # Browser-only handlers retain the shared workspace keyword.
     if not agent_id:
         return "❌ AgentBay tools require an agent context."
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -45,7 +46,7 @@ async def _agentbay_browser_navigate(agent_id: uuid.UUID | None, ws: Path, argum
                 img_id = store_temp_screenshot(raw_bytes)
                 parts.append(
                     f"Internal screenshot captured for analysis. [ImageID: {img_id}]\n"
-                    + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+                    "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
                 )
                 logger.info(f"[AgentBay] Browser navigate screenshot stored in memory (id={img_id})")
         return "\n\n".join(parts)
@@ -58,6 +59,7 @@ async def _agentbay_browser_navigate(agent_id: uuid.UUID | None, ws: Path, argum
 
 async def _agentbay_browser_screenshot(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Take a screenshot of the CURRENT browser page without navigating."""
+    del ws
     if not agent_id:
         return "❌ AgentBay tools require an agent context."
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -78,7 +80,7 @@ async def _agentbay_browser_screenshot(agent_id: uuid.UUID | None, ws: Path, arg
         logger.info(f"[AgentBay] Browser screenshot stored in memory (id={img_id})")
         return (
             f"Internal screenshot captured for analysis. [ImageID: {img_id}]\n"
-            + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+            "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
         )
     except RuntimeError as e:
         return f"❌ {e!s}"
@@ -113,6 +115,7 @@ async def _agentbay_browser_save_screenshot(agent_id: uuid.UUID | None, ws: Path
 
 async def _agentbay_browser_click(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Click an element in the AgentBay browser."""
+    del ws
     if not agent_id:
         return "❌ AgentBay tools require an agent context."
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -132,6 +135,7 @@ async def _agentbay_browser_click(agent_id: uuid.UUID | None, ws: Path, argument
 
 async def _agentbay_browser_type(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Enter text in the AgentBay browser."""
+    del ws
     if not agent_id:
         return "❌ AgentBay tools require an agent context."
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -152,6 +156,7 @@ async def _agentbay_browser_type(agent_id: uuid.UUID | None, ws: Path, arguments
 
 async def _agentbay_browser_extract(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Extract structured data from current browser page."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -184,6 +189,7 @@ async def _agentbay_browser_extract(agent_id: uuid.UUID | None, ws: Path, argume
 
 async def _agentbay_browser_observe(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Observe the current browser page state."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -214,6 +220,7 @@ async def _agentbay_browser_observe(agent_id: uuid.UUID | None, ws: Path, argume
 
 async def _agentbay_browser_login(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
     """Perform an automated login using AgentBay's built-in login skill."""
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent

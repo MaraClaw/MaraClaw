@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from tests.test_crud_perf import _FakeCursor, _FakePool, _FakeRawConnection
 
+from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import object_attr, object_mapping_from
 from app.db import session as session_module
 from app.records.trigger import TriggerExecutionRecord
@@ -33,7 +34,7 @@ def execution(number: int, *, created_at: datetime = CREATED_AT) -> TriggerExecu
         agent_id=AGENT_ID,
         trigger_id=TRIGGER_ID,
         source="webhook",
-        status="pending",
+        status=TriggerExecutionStatus.PENDING,
         scheduled_at=created_at,
         created_at=created_at,
         idempotency_key=SECRET,

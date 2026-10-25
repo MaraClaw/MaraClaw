@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
+from app.core.domain.okr import KeyResultStatus
 from app.core.json_types import (
     date_from_row,
     datetime_from_row,
@@ -97,7 +98,7 @@ class OKRKeyResultRecord:
     current_value: float = 0.0
     unit: str | None = None
     focus_ref: str | None = None
-    status: str = "on_track"
+    status: KeyResultStatus = KeyResultStatus.ON_TRACK
     last_updated_at: datetime | None = None
     created_at: datetime | None = None
 
@@ -111,7 +112,7 @@ class OKRKeyResultRecord:
             current_value=float_from_row(row.get("current_value"), 0.0),
             unit=str_from_row(row["unit"]) or None,
             focus_ref=str_from_row(row["focus_ref"]) or None,
-            status=str_from_row(row.get("status"), "on_track") or "on_track",
+            status=KeyResultStatus(str_from_row(row.get("status"), "on_track")),
             last_updated_at=datetime_from_row(row.get("last_updated_at")),
             created_at=datetime_from_row(row.get("created_at")),
         )

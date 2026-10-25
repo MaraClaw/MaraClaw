@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 from redis.exceptions import RedisError
 
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.records.identity import IdentityRecord
 from app.records.llm import LLMModelRecord
@@ -33,7 +34,9 @@ _REFRESHED = _jwt({"chatgpt_account_id": "acct-live", "sub": "user-1", "iat": 2}
 
 def _user(*, role: str = "org_admin", tenant_id: uuid.UUID | None = _TENANT) -> UserRecord:
     identity = IdentityRecord(id=uuid.uuid4(), email="admin@example.test")
-    return UserRecord(id=uuid.uuid4(), role=role, tenant_id=tenant_id, identity_id=identity.id, identity=identity)
+    return UserRecord(
+        id=uuid.uuid4(), role=UserRole(role), tenant_id=tenant_id, identity_id=identity.id, identity=identity
+    )
 
 
 def _model(**kwargs: Any) -> LLMModelRecord:

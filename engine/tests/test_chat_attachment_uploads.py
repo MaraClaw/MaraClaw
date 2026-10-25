@@ -11,9 +11,11 @@ from app.api.file_previews import PreviewMetadata
 from app.records.chat_attachment import ChatAttachment
 from app.services import chat_submissions
 from app.services.storage_runtime import facade
-from file_preview_fixtures import PreviewContext, preview_context as preview_context
+from file_preview_fixtures import PreviewContext, preview_context
 from openclaw_update_gate_fixtures import open_guest_write_gate
-from test_websocket_turn_transaction import TurnConnection, TurnState, drive_turn, turn as turn
+from test_websocket_turn_transaction import TurnConnection, TurnState, drive_turn, turn
+
+__all__ = ["preview_context", "turn"]
 
 
 @pytest.mark.parametrize(

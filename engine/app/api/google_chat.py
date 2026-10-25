@@ -189,7 +189,7 @@ async def _process_message_event(
         # Attachments not downloaded yet - honest failure instead of empty LLM turn.
         notice = (
             "I received an attachment, but Google Chat attachment download is not enabled yet. "
-            + "Please send the content as text, or re-send with a text caption."
+            "Please send the content as text, or re-send with a text caption."
         )
         await channel_inbound.persist_assistant_message(
             agent_id=agent_id,
@@ -377,7 +377,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         if event.has_attachment and not event.text:
             msg = (
                 "I received an attachment, but attachment handling requires a service account "
-                + "for async delivery. Please send text, or configure service_account_json."
+                "for async delivery. Please send text, or configure service_account_json."
             )
             await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return gchat.sync_text_response(msg, thread_name=event.thread_name)
@@ -406,7 +406,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         except TimeoutError:
             reply_text = (
                 "I'm still working on that, but Google Chat timed out waiting for a sync reply. "
-                + "Configure a service account for reliable async replies."
+                "Configure a service account for reliable async replies."
             )
         except Exception:
             logger.exception("[GoogleChat] Sync LLM failed for agent %s", agent_id)

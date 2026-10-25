@@ -6,6 +6,8 @@ import anyio
 import pytest
 
 from app.api import background_tasks
+from app.core.domain.users import UserRole
+from app.core.notification_kinds import NotificationKind
 from app.db import session
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
@@ -34,7 +36,7 @@ class TransferFixture:
     raw: _FakeRawConnection
     users: dict[UUID, UserRecord]
     owned_agents: bool = True
-    notices: list[tuple[UUID, str]] = field(default_factory=list)
+    notices: list[tuple[UUID, NotificationKind]] = field(default_factory=list)
     emails: list[tuple[str, int]] = field(default_factory=list)
     email_ready: anyio.Event = field(default_factory=anyio.Event)
 
@@ -45,8 +47,8 @@ async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Tra
     target = TenantRecord(id=uuid4(), name="Target", slug="target")
     identity = IdentityRecord(id=uuid4(), email="applicant@example.test", email_verified=True)
     applicant = UserRecord(id=uuid4(), tenant_id=source.id, identity_id=identity.id, identity=identity)
-    reviewer = UserRecord(id=uuid4(), role="platform_admin")
-    genesis = UserRecord(id=uuid4(), tenant_id=target.id, role="org_admin", is_genesis=True)
+    reviewer = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+    genesis = UserRecord(id=uuid4(), tenant_id=target.id, role=UserRole.ORG_ADMIN, is_genesis=True)
     admissions = AdmissionStore([source, target])
     raw = _FakeRawConnection()
     fixture = TransferFixture(
@@ -90,8 +92,8 @@ async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Tra
     async def policy() -> TransferPolicy:
         return TransferPolicy(fee_amount_minor=3700, currency="USD", instructions="Offline payment reference")
 
-    async def notice(user_id: UUID, *, type: str, **_kwargs: object) -> None:
-        fixture.notices.append((user_id, type))
+    async def notice(user_id: UUID, *, notification_kind: NotificationKind, **_kwargs: object) -> None:
+        fixture.notices.append((user_id, notification_kind))
 
     async def email(*, to: str, subject: str, body: str) -> None:
         del subject, body

@@ -43,9 +43,7 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
             if err:
                 return err
             assert local_path is not None  # noqa: S101 - successful containment resolution returns a local path
-            import os
-
-            if not os.path.exists(local_path):  # noqa: ASYNC240 - legacy synchronous workspace existence check
+            if not await asyncio.to_thread(Path(local_path).exists):
                 return f"File not found in workspace: {from_path}"
             client = await get_agentbay_client_for_agent(agent_id, to_type, session_id=session_id)
             session = client._session
@@ -68,9 +66,7 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
             if err:
                 return err
             assert local_path is not None  # noqa: S101 - successful containment resolution returns a local path
-            import os
-
-            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+            await asyncio.to_thread(Path(local_path).parent.mkdir, parents=True, exist_ok=True)
             client = await get_agentbay_client_for_agent(agent_id, from_type, session_id=session_id)
             session = client._session
             assert session is not None  # noqa: S101 - AgentBay client establishes a session before transfer
@@ -79,7 +75,6 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
                 return f"Transferred [{from_type}]{from_path} → workspace/{to_path} ({result.bytes_received} bytes). File available in workspace at: {to_path}"
             return f"Download failed: {result.error_message}"
         if from_type in env_types and to_type in env_types:
-            import os
             import uuid as _uuid
 
             tmp_path = f"/tmp/agentbay_transfer_{_uuid.uuid4().hex}"  # noqa: S108 - required legacy transfer bridge
@@ -99,8 +94,8 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
                 return f"Transferred [{from_type}]{from_path} → [{to_type}]{to_path} ({dl_result.bytes_received} bytes)"
             finally:
                 try:
-                    if os.path.exists(tmp_path):  # noqa: ASYNC240 - legacy temporary bridge cleanup
-                        os.remove(tmp_path)
+                    if await asyncio.to_thread(Path(tmp_path).exists):
+                        await asyncio.to_thread(Path(tmp_path).unlink)
                 except Exception as exc:
                     logger.debug(f"[AgentBay] Temporary transfer bridge cleanup failed: {exc}")
         return f"Unsupported transfer: {from_type} → {to_type}"

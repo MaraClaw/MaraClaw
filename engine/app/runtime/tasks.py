@@ -20,6 +20,66 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task[object]]) -> None:
             logger.warning("[shutdown] Owned task failed: {}", result)
 
 
+class AdmissionClosedError(Exception):
+    """Work was refused by a closed gate, or cancelled by a drain that ran out of grace."""
+
+
+class TaskAdmission:
+    """Admission gate and bounded drain for module-owned work.
+
+    Detached tasks live in ``tasks`` (the module's own set). Work that must not be
+    refused halfway (a claim followed by its launch, a wake the caller awaits) runs
+    through ``run``: admission is checked once, synchronously, then the work is an
+    owned child task the caller awaits. ``drain`` closes the gate, waits for that work
+    and the tasks within one grace period, then cancels and awaits what remains. Work
+    is joined before its tasks are snapshotted, so nothing can start after a drain.
+    """
+
+    def __init__(self, label: str, tasks: set[asyncio.Task[None]]) -> None:
+        self.label: str = label
+        self.tasks: set[asyncio.Task[None]] = tasks
+        self.accepting: bool = True
+        self._operations: set[asyncio.Task[object]] = set()
+
+    def open(self) -> None:
+        self.accepting = True
+
+    def close(self) -> None:
+        self.accepting = False
+
+    async def run[R](self, start: Callable[[], Coroutine[object, object, R]]) -> R:
+        """Run admitted work as an owned child; raise ``AdmissionClosedError`` if refused or drained."""
+        if not self.accepting:
+            raise AdmissionClosedError(self.label)
+        operation = asyncio.create_task(start())
+        self._operations.add(operation)
+        operation.add_done_callback(self._operations.discard)
+        try:
+            return await operation
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if operation.cancelled() and caller is not None and caller.cancelling() == 0:
+                raise AdmissionClosedError(self.label) from None
+            raise
+
+    async def drain(self, grace_seconds: float = 20.0) -> None:
+        self.close()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + grace_seconds
+        await self._join(tuple(self._operations), deadline - loop.time())
+        tasks = tuple(self.tasks)
+        await self._join(tasks, deadline - loop.time())
+        self.tasks.difference_update(tasks)
+
+    async def _join[T: object](self, owned: tuple[asyncio.Task[T], ...], grace_seconds: float) -> None:
+        if not owned:
+            return
+        _, pending = await asyncio.wait(owned, timeout=max(0.0, grace_seconds))
+        if pending:
+            logger.warning("[shutdown] {} drain timed out; cancelling {} owned tasks", self.label, len(pending))
+            await cancel_tasks(pending)
+
+
 class RequiredLoopExitedError(RuntimeError):
     """A required ongoing task returned before runtime shutdown."""
 

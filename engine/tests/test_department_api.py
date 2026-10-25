@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import departments
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.db.errors import UniqueViolationError
 from app.records.identity import IdentityRecord
@@ -28,7 +29,7 @@ async def transaction() -> AsyncGenerator[None]:
 @pytest.fixture
 def directory(monkeypatch):
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
-    actor = UserRecord(id=uuid4(), tenant_id=tenant.id, role="org_admin")
+    actor = UserRecord(id=uuid4(), tenant_id=tenant.id, role=UserRole.ORG_ADMIN)
     subject = UserRecord(id=uuid4(), tenant_id=tenant.id)
     first = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Sales", created_at=datetime.now(UTC))
     second = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Support", created_at=datetime.now(UTC))
@@ -75,7 +76,7 @@ def directory(monkeypatch):
 
     async def create(*, obj_in):
         if any(row.name.lower() == obj_in["name"].lower() for row in department_rows.values()):
-            raise UniqueViolationError()
+            raise UniqueViolationError
         row = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name=obj_in["name"], created_at=datetime.now(UTC))
         department_rows[row.id] = row
         return row
@@ -85,7 +86,7 @@ def directory(monkeypatch):
             row.id != db_obj.id and row.tenant_id == db_obj.tenant_id and row.name.lower() == obj_in["name"].lower()
             for row in department_rows.values()
         ):
-            raise UniqueViolationError()
+            raise UniqueViolationError
         row = replace(db_obj, **obj_in)
         department_rows[row.id] = row
         return row

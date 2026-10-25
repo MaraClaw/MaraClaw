@@ -1,3 +1,5 @@
+from typing import Literal
+
 from typing_extensions import TypedDict
 
 
@@ -19,6 +21,20 @@ class PersonalAssistantCreatedPayload(PersonalAssistantPayload):
     api_key: str
 
 
+class PersonalAssistantStarted(TypedDict):
+    status: Literal["started"]
+
+
+class PersonalAssistantStartFailed(TypedDict):
+    status: Literal["failed"]
+    code: str
+    message: str
+
+
+type PersonalAssistantStart = PersonalAssistantStarted | PersonalAssistantStartFailed
+
+
 class PersonalAssistantResponse(TypedDict):
     agent: PersonalAssistantPayload | PersonalAssistantCreatedPayload
     onboarding: OnboardingStatusPayload
+    start: PersonalAssistantStart

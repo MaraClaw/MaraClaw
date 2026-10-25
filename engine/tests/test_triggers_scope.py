@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import triggers as triggers_api
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, object_mapping_from
 from app.records.agent import AgentRecord
 from app.records.trigger import AgentTriggerRecord
@@ -50,9 +51,9 @@ class TriggerScope:
         self.updates.append(dict(obj_in))
         return db_obj
 
-    async def delete(self, *, id: uuid.UUID) -> None:
+    async def delete(self, *, record_id: uuid.UUID) -> None:
         self.calls.append("delete")
-        self.deleted.append(id)
+        self.deleted.append(record_id)
 
     async def invoke(self, operation: Operation, *, trigger_id: uuid.UUID | None = None) -> object:
         requested_id = trigger_id if trigger_id is not None else self.trigger.id
@@ -101,7 +102,7 @@ async def test_agent_access_failure_precedes_trigger_lookup(scope: TriggerScope,
 @pytest.mark.parametrize("operation", ["list", "patch", "delete"])
 @pytest.mark.parametrize("role", ["member", "org_admin"])
 async def test_foreign_tenant_cannot_access_triggers(scope: TriggerScope, operation: Operation, role: str):
-    scope.user.role = role
+    scope.user.role = UserRole(role)
     scope.user.tenant_id = uuid.uuid4()
 
     with pytest.raises(HTTPException) as exc:
@@ -119,7 +120,7 @@ async def test_list_redacts_only_use_level_credentials(
     scope: TriggerScope, access_level: str, role: str, full_config: bool
 ):
     scope.access_level = access_level
-    scope.user.role = role
+    scope.user.role = UserRole(role)
     original = object_mapping_from(scope.trigger.config)
 
     result = await triggers_api.list_agent_triggers(scope.agent.id, user=scope.user)
@@ -148,7 +149,7 @@ async def test_managers_and_accessible_admins_can_mutate(
     scope: TriggerScope, operation: Operation, access_level: str, role: str
 ):
     scope.access_level = access_level
-    scope.user.role = role
+    scope.user.role = UserRole(role)
 
     result = await scope.invoke(operation)
 

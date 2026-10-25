@@ -55,7 +55,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM admin_audit_logs {where} "
-                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 params,
             )
             return [AdminAuditLogRecord.from_row(row) for row in rows]
@@ -88,7 +88,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM admin_audit_logs {where} "
-                + "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
                 params,
             )
             return [AdminAuditLogRecord.from_row(row) for row in rows]

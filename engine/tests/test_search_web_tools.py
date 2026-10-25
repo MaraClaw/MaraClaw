@@ -5,11 +5,13 @@ import socket
 import sys
 from collections import deque
 from types import SimpleNamespace
+from typing import Self, Unpack
 
 import pytest
 
 from app.core.json_types import JsonObject, JsonValue
 from app.services import agent_tools
+from builtin_keyword_fakes import SocketTypeKeyword
 
 type HttpCall = tuple[str, str, JsonObject]
 
@@ -43,7 +45,7 @@ class _HttpResponse:
         self.body_read = False
         self.chunks_read = 0
 
-    async def __aenter__(self) -> _HttpResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args) -> bool:
@@ -64,7 +66,7 @@ class _QueuedAsyncClient:
         self._client_kwargs = client_kwargs
         self._previous: _HttpResponse | None = None
 
-    async def __aenter__(self) -> _QueuedAsyncClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args) -> bool:
@@ -98,8 +100,8 @@ async def test_validate_public_http_url_rejects_private_and_benchmark_destinatio
     target = _web_read_module()
     dns_calls: list[tuple[str, int]] = []
 
-    def fake_getaddrinfo(host: str, port: int, *, type: socket.SocketKind):
-        assert type == socket.SOCK_STREAM
+    def fake_getaddrinfo(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]):
+        assert kwargs["type"] == socket.SOCK_STREAM
         dns_calls.append((host, port))
         if host == "public.example":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
@@ -225,8 +227,8 @@ async def test_read_webpage_extracts_metadata_text_and_links_without_network(mon
 def redirect_dns(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
 
-    def resolve(host: str, port: int, *, type: socket.SocketKind):
-        assert type == socket.SOCK_STREAM
+    def resolve(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]):
+        assert kwargs["type"] == socket.SOCK_STREAM
         calls.append(host)
         if host == "missing.example":
             raise socket.gaierror(socket.EAI_NONAME, "dns unavailable")

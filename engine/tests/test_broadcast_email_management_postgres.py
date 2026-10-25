@@ -8,7 +8,9 @@ import pytest
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.db.session import connection_ctx
 from app.records.broadcast_email import BroadcastEmailRecord
-from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue, tenant
+from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, enqueue, tenant
+
+__all__ = ["broadcast_db"]
 
 
 async def test_status_counts_tokens_not_lease_expiry_and_hides_payload(broadcast_db: PersistenceDB) -> None:

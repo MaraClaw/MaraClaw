@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.config import get_settings
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     is_json_object,
@@ -114,7 +115,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
 
             import importlib
 
-            azure_identity = cast(_AzureIdentityAio, importlib.import_module("azure.identity.aio"))
+            azure_identity = cast("_AzureIdentityAio", importlib.import_module("azure.identity.aio"))
             credential = azure_identity.DefaultAzureCredential()
             scope = "https://api.botframework.com/.default"
             token = await credential.get_token(scope)
@@ -309,7 +310,7 @@ async def configure_teams_channel(
             status_code=422, detail="app_id is required; app_secret is required without managed identity"
         )
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
     if existing:
         extra = json_object_from(existing.extra_config)
         if tenant_id:
@@ -353,7 +354,7 @@ async def get_teams_channel(
 ) -> ChannelConfigOut:
     """Get Microsoft Teams channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
     return ChannelConfigOut.model_validate(config)
@@ -379,10 +380,10 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 # ─── Event Webhook ──────────────────────────────────────
@@ -394,7 +395,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response
     if await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE) is None:
         return Response(status_code=413)
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="microsoft_teams")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
     if not config:
         return Response(status_code=404)
     try:

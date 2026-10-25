@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.api import admin as admin_api
 from app.core import security
+from app.core.domain.users import UserRole
 from app.core.json_types import json_loads_value
 from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
@@ -25,7 +26,7 @@ from app.schemas.admin_metrics import (
 @pytest.fixture
 def metric_user() -> UserRecord:
     identity = IdentityRecord(id=uuid4())
-    return UserRecord(id=uuid4(), role="platform_admin", identity_id=identity.id, identity=identity)
+    return UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN, identity_id=identity.id, identity=identity)
 
 
 @pytest.fixture
@@ -213,9 +214,9 @@ async def test_enhanced_metrics_preserve_nested_rows_nulls_and_rounding(
 async def test_metric_routes_preserve_privilege_gates(
     metric_client: AsyncClient, metric_user: UserRecord, endpoint: str, role: str
 ) -> None:
-    metric_user.role = role
+    metric_user.role = UserRole(role)
     if role == "force_change":
-        metric_user.role = "platform_admin"
+        metric_user.role = UserRole.PLATFORM_ADMIN
         metric_user.identity = IdentityRecord(id=uuid4(), must_change_password=True)
     if role == "anonymous":
         metric_client.headers.pop("Authorization")

@@ -153,7 +153,7 @@ class AnthropicClient(LLMClient):
             anthropic_tools: list[dict[str, object]] = []
             for tool in tools:
                 function = tool.get("function")
-                if cast(Mapping[str, object], tool).get("type") == "function" and isinstance(function, dict):
+                if cast("Mapping[str, object]", tool).get("type") == "function" and isinstance(function, dict):
                     anthropic_tools.append(
                         {
                             "name": function.get("name", ""),

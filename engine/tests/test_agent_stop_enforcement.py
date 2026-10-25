@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Unpack
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -13,6 +14,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import background_tasks, gateway
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.dao.agent_dao import agent_dao
 from app.db import session
 from app.records.agent import AgentRecord
@@ -31,6 +34,7 @@ from app.services import (
     tenant_lifecycle,
 )
 from app.services.agent_manager import agent_manager
+from builtin_keyword_fakes import IncludeAllKeyword
 
 
 @pytest.fixture(autouse=True)
@@ -71,8 +75,8 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
     ]
 
     class Containers:
-        def list(self, *, all, filters):
-            assert all is True
+        def list(self, *, filters, **kwargs: Unpack[IncludeAllKeyword]):
+            assert kwargs["all"] is True
             assert filters == {"label": "maraclaw.agent_id", "network": "owned"}
             assert threading.get_ident() != loop_thread
             return listed
@@ -214,8 +218,8 @@ async def test_disable_stops_only_after_owning_crud_commit(monkeypatch, rollback
     try:
         # When: disable joins that still-open request transaction.
         if scope == "user":
-            actor = UserRecord(id=uuid4(), role="platform_admin")
-            target = UserRecord(id=agent.creator_id, tenant_id=agent.tenant_id, role="member", is_active=True)
+            actor = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+            target = UserRecord(id=agent.creator_id, tenant_id=agent.tenant_id, role=UserRole.MEMBER, is_active=True)
             await admin_provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
         else:
             tenant = TenantRecord(id=uuid4(), name="Company", slug="company", created_at=datetime.now(UTC))
@@ -321,14 +325,16 @@ async def test_expired_heartbeat_disabled_container_retries_false_stop_after_com
         if sql.startswith("SELECT tenant_id"):
             return [{"tenant_id": agent.tenant_id}]
         if sql.startswith("UPDATE agents"):
-            agent.status, agent.is_expired = "stopped", True
+            agent.status, agent.is_expired = AgentStatus.STOPPED, True
             return [{"id": agent.id}]
         return [asdict(agent)]
 
     @asynccontextmanager
     async def context():
         events.append("transaction")
-        yield SimpleNamespace(fetchall=fetchall, fetchone=AsyncMock(return_value={"id": agent.tenant_id}))
+        yield SimpleNamespace(
+            fetchall=fetchall, fetchone=AsyncMock(return_value={"id": agent.tenant_id}), execute=AsyncMock()
+        )
         events.append("commit")
 
     results = iter([False, True])

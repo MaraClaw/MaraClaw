@@ -6,6 +6,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import access_cache, permissions
+from app.core.domain.agents import AgentSharingMode
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 
@@ -13,15 +15,15 @@ from app.records.user import UserRecord
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["role", "tenant", "active"])
 async def test_access_uses_identity_read_after_observed_version(monkeypatch, mutation):
-    before = UserRecord(id=uuid4(), tenant_id=uuid4(), role="org_admin")
+    before = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
     current = replace(before)
     agent = AgentRecord(
-        id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode="company"
+        id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode=AgentSharingMode.COMPANY
     )
 
     async def version(_id):
         if mutation == "role":
-            current.role = "member"
+            current.role = UserRole.MEMBER
         elif mutation == "tenant":
             current.tenant_id = uuid4()
         else:

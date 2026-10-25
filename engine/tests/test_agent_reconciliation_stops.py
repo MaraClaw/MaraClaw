@@ -2,14 +2,17 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
 import pytest
 
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
-from app.services import agent_stops
+from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
+from app.services import agent_deletion_cleanup, agent_stops
 from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.guest_identity import GuestOwnershipError
 
@@ -21,7 +24,7 @@ def workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 def stopped_agent() -> AgentRecord:
     return AgentRecord(
-        id=uuid4(), name="A", creator_id=uuid4(), status="stopped", container_id="old", container_port=3210
+        id=uuid4(), name="A", creator_id=uuid4(), status=AgentStatus.STOPPED, container_id="old", container_port=3210
     )
 
 
@@ -145,7 +148,7 @@ async def test_foreign_stop_reference_does_not_abort_later_stops(monkeypatch: py
     assert stopped == [second.id]
 
 
-async def test_foreign_deleted_guest_still_archives_and_continues(
+async def test_foreign_deleted_guest_keeps_workspace_and_continues(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Given deleted-agent snapshots, the first of which points at a foreign guest.
@@ -157,13 +160,23 @@ async def test_foreign_deleted_guest_still_archives_and_continues(
             raise GuestOwnershipError(agent.id, "old", str(uuid4()))
         return True
 
-    async def archive(agent_id: UUID) -> Path:
-        archived.append(agent_id)
-        return tmp_path
+    async def pending(agent_id: UUID) -> AgentDeletionCleanupRecord:
+        return AgentDeletionCleanupRecord(
+            agent_id, "Agent", first.creator_id, None, "old", tmp_path / str(agent_id), tmp_path / "archive", "{}"
+        )
+
+    def archive(job: AgentDeletionCleanupRecord) -> None:
+        archived.append(job.agent_id)
 
     monkeypatch.setattr(agent_stops.agent_manager, "remove_container", remove)
-    monkeypatch.setattr(agent_stops.agent_manager, "archive_agent_files", archive)
+    monkeypatch.setattr(
+        agent_stops.agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(list=lambda **_: []))
+    )
+    monkeypatch.setattr(agent_deletion_cleanup.cleanup, "get_pending", pending)
+    monkeypatch.setattr(agent_deletion_cleanup.cleanup, "begin_attempt", AsyncMock())
+    monkeypatch.setattr(agent_deletion_cleanup.cleanup, "progress", AsyncMock())
+    monkeypatch.setattr(agent_deletion_cleanup, "publish_deletion_archive", archive)
     # When teardown refuses that foreign guest.
     await agent_stops.teardown_deleted_agents([agent_stops.AgentTeardown(agent, None) for agent in (first, second)])
-    # Then existing archive behavior and subsequent cleanup both survive the refusal.
-    assert archived == [first.id, second.id]
+    # Then the foreign writer blocks its archive but not the next agent's cleanup.
+    assert archived == [second.id]

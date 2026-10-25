@@ -35,7 +35,7 @@ class TableCursor(_FakeCursor):
         parts = re.fullmatch(
             r"UPDATE trigger_executions\s+SET (.*?)\s+WHERE (.*?)(?:\s+RETURNING id)?\s*",
             query.strip(),
-            re.S,
+            re.DOTALL,
         )
         assert parts, query
         assignments = re.split(r",\s*(?=\w+\s*=)", parts[1])

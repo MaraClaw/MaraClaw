@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.core.permissions import evaluate_human_relationship_status
 from app.dao.agent_dao import agent_dao
@@ -70,7 +71,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
         return "❌ Please provide member_name or user_id"
 
     try:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="feishu")
+        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
         if not config:
             return "❌ This agent has no Feishu channel configured"
         app_id = config.app_id
@@ -88,7 +89,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
             if status_info["access_status"] != "active":
                 return (
                     "❌ Relationship to recipient is not active "
-                    + f"({status_info['access_status_reason'] or 'restricted'})"
+                    f"({status_info['access_status_reason'] or 'restricted'})"
                 )
             try:
                 response = await feishu_service_module.feishu_service.send_message(
@@ -135,7 +136,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: ToolArguments) -> str:
 
         logger.info(
             f"target_member={target_member.external_id}, {target_member.open_id}, "
-            + f"{target_member.email}, {target_member.phone}"
+            f"{target_member.email}, {target_member.phone}"
         )
         if target_member.external_id in (None, ""):
             logger.error(f"❌ {member_name} has no linked Feishu user_id")

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import secrets
-import string
 import uuid
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from starlette.background import BackgroundTask
 
 from app.config import get_settings
+from app.core.domain.agents import AgentStatus
+from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import (
     JsonObject,
     int_from_row,
@@ -57,7 +58,7 @@ from app.schemas.organization_response_enterprise import (
     UsersInvitedResponse,
 )
 from app.schemas.schemas import (
-    ApprovalAction,
+    ApprovalDecisionRequest,
     ApprovalRequestOut,
     AuditLogOut,
     EnterpriseInfoOut,
@@ -101,6 +102,13 @@ from app.services.grok_subscription import (
     grok_subscription_status,
     refresh_grok_subscription_for_admin,
     start_grok_subscription_handoff,
+)
+from app.services.invitation_codes import (
+    INVITATION_TTL_MAX_HOURS,
+    invitation_expiry,
+    invitation_status,
+    new_invitation_code,
+    normalize_invite_email,
 )
 from app.services.llm import (
     LLMMessage,
@@ -626,7 +634,7 @@ async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: User
     metadata = _llm_audit_metadata(model)
     if agent_names:
         await agent_dao.nullify_model_references(model_id)
-    _ = await llm_model_dao.delete(id=model_id)
+    _ = await llm_model_dao.delete(record_id=model_id)
     await write_admin_audit(
         actor=current_user,
         action="llm_model_delete",
@@ -767,14 +775,16 @@ async def update_enterprise_info(
 
 @router.get("/approvals", response_model=list[ApprovalRequestOut])
 async def list_approvals(
-    tenant_id: str | None = None, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
+    tenant_id: str | None = None,
+    status_filter: ApprovalStatus | None = None,
+    current_user: UserRecord = Depends(get_current_user),
 ) -> list[ApprovalRequestOut]:
     async with optional_connection_ctx():
         return await _list_approvals(tenant_id, status_filter, current_user)
 
 
 async def _list_approvals(
-    tenant_id: str | None, status_filter: str | None, current_user: UserRecord
+    tenant_id: str | None, status_filter: ApprovalStatus | None, current_user: UserRecord
 ) -> list[ApprovalRequestOut]:
     """List approval requests scoped to a tenant."""
     tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
@@ -798,7 +808,7 @@ async def _list_approvals(
 
 @router.post("/approvals/{approval_id}/resolve", response_model=ApprovalRequestOut)
 async def resolve_approval(
-    approval_id: uuid.UUID, data: ApprovalAction, current_user: UserRecord = Depends(get_current_user)
+    approval_id: uuid.UUID, data: ApprovalDecisionRequest, current_user: UserRecord = Depends(get_current_user)
 ) -> ApprovalRequestOut:
     """Approve or reject a pending approval request."""
     try:
@@ -868,7 +878,7 @@ async def _get_enterprise_stats(tenant_id: str | None, current_user: UserRecord)
 
     if tid:
         total_agents = await agent_dao.count_for_tenant(tid)
-        running_agents = await agent_dao.count_for_tenant(tid, status="running")
+        running_agents = await agent_dao.count_for_tenant(tid, status=AgentStatus.RUNNING)
         total_users = await user_dao.count_active(tenant_id=tid)
         pending_approvals = await approval_request_dao.count_pending(tenant_id=tid)
     else:
@@ -961,48 +971,6 @@ async def _update_tenant_quotas(data: TenantQuotaUpdate, current_user: UserRecor
     }
 
 
-# ── System Email: Test & Templates ──────────────────────
-
-
-class TestEmailRequest(BaseModel):
-    email: str
-
-
-@router.post("/system-email/test", response_model=None)
-async def send_test_email_endpoint(
-    data: TestEmailRequest, current_user: UserRecord = Depends(get_current_admin)
-) -> EmailSuccessResponse:
-    """Send a test email to verify SMTP configuration (admin only)."""
-    import smtplib
-    import ssl
-
-    from app.services.system_email_service import send_test_email
-
-    _ = current_user
-    try:
-        await send_test_email(data.email)
-        return {"success": True, "message": f"Test email sent to {data.email}"}
-    except smtplib.SMTPAuthenticationError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "SMTP authentication failed. Please check that the SMTP username is the full email address "
-                + "and that the password/app password is valid for this mailbox."
-            ),
-        ) from e
-    except (TimeoutError, ssl.SSLError) as e:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"SMTP TLS/connect timed out: {e}. Please verify the SMTP host, port, and SSL/TLS mode. "
-                + "For Zoho, the SMTP host depends on the account data center, for example smtp.zoho.com "
-                + "or smtp.zoho.com.cn."
-            ),
-        ) from e
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
 @router.get("/email-templates", response_model=None)
 async def get_email_templates_endpoint(current_user: UserRecord = Depends(get_current_admin)) -> EmailTemplatesResponse:
     """Get email templates (current values + available variables per scenario)."""
@@ -1075,6 +1043,8 @@ async def get_notification_bar_public() -> NotificationBarResponse:
 @router.get("/system-settings/{key}", response_model=None)
 async def get_system_setting(key: str, current_user: UserRecord = Depends(get_current_user)) -> SystemSettingResponse:
     """Get a system setting by key."""
+    if key == "system_email_platform":
+        raise HTTPException(404, "Setting not found")
     _ = current_user
     setting = await system_setting_dao.get_by_key(key)
     if not setting:
@@ -1088,14 +1058,19 @@ async def get_system_setting(key: str, current_user: UserRecord = Depends(get_cu
 
 @router.put("/system-settings/{key}", response_model=None)
 async def update_system_setting(
-    key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_admin)
+    key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_user)
 ) -> SystemSettingResponse:
+    if key == "system_email_platform":
+        raise HTTPException(404, "Setting not found")
+    await get_current_admin(current_user)
     async with optional_connection_ctx():
         return await _update_system_setting(key, data, current_user)
 
 
 async def _update_system_setting(key: str, data: SettingUpdate, current_user: UserRecord) -> SystemSettingResponse:
     """Create or update a system setting."""
+    if key == "system_email_platform":
+        raise HTTPException(404, "Setting not found")
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
     if key == "platform" and "public_base_url" in data.value:
@@ -1582,8 +1557,10 @@ async def _delete_identity_provider(provider_id: uuid.UUID, current_user: UserRe
 
 
 class InvitationCodeCreate(BaseModel):
+    email: EmailStr
     count: int = 1
-    max_uses: int = 1
+    max_uses: int = Field(default=1, ge=1, le=1)
+    ttl_hours: int = Field(default=INVITATION_TTL_MAX_HOURS, ge=1, le=INVITATION_TTL_MAX_HOURS)
 
 
 def _require_tenant_admin(current_user: UserRecord) -> uuid.UUID:
@@ -1595,13 +1572,13 @@ def _require_tenant_admin(current_user: UserRecord) -> uuid.UUID:
     return current_user.tenant_id
 
 
-async def _ensure_invitation_email_enabled() -> None:
+async def _ensure_invitation_email_enabled(tenant_id: uuid.UUID) -> None:
     """Require enabled system email before accepting email invitations."""
     from app.services.system_email_service import resolve_email_config_async
 
-    if await resolve_email_config_async():
+    if await resolve_email_config_async(tenant_id):
         return
-    if await resolve_email_config_async(include_disabled=True):
+    if await resolve_email_config_async(tenant_id, include_disabled=True):
         raise HTTPException(
             status_code=400,
             detail="System email SMTP is configured but disabled. Enable system email before sending invitations.",
@@ -1613,7 +1590,7 @@ async def _ensure_invitation_email_enabled() -> None:
 
 
 def _new_invitation_code() -> str:
-    return "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+    return new_invitation_code()
 
 
 @router.post("/invitation-codes", response_model=None)
@@ -1630,14 +1607,17 @@ async def _create_invitation_codes(
     """Batch-create invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
     codes_created = []
+    expires_at = invitation_expiry(data.ttl_hours)
     for _ in range(min(data.count, 100)):
         code_str = _new_invitation_code()
         _ = await invitation_code_dao.create(
             obj_in={
                 "code": code_str,
                 "tenant_id": tenant_id,
-                "max_uses": data.max_uses,
+                "max_uses": 1,
                 "created_by": current_user.id,
+                "expires_at": expires_at,
+                "invited_email": normalize_invite_email(data.email),
             }
         )
         codes_created.append(code_str)
@@ -1670,14 +1650,15 @@ async def _invite_users(
     if not tenant:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    await _ensure_invitation_email_enabled()
+    await _ensure_invitation_email_enabled(tenant_id)
 
     base_url = await platform_service.get_public_base_url(request=request)
 
     invited_count = 0
-    for email in data.emails:
-        email = email.lower().strip()
-        if not email:
+    expires_at = invitation_expiry(data.ttl_hours)
+    for raw_email in data.emails:
+        email = normalize_invite_email(raw_email)
+        if email is None:
             continue
 
         code_str = _new_invitation_code()
@@ -1687,10 +1668,12 @@ async def _invite_users(
                 "tenant_id": tenant_id,
                 "max_uses": 1,
                 "created_by": current_user.id,
+                "expires_at": expires_at,
+                "invited_email": email,
             }
         )
 
-        invite_url = f"{base_url}/login?code={code_str}&email={email}"
+        invite_url = f"{base_url}/transfer#code={code_str}"
         inviter_name = current_user.display_name or current_user.email or "Admin"
 
         email_task = BackgroundTask(
@@ -1699,6 +1682,9 @@ async def _invite_users(
             inviter_name=inviter_name,
             company_name=tenant.name,
             invite_url=invite_url,
+            tenant_id=tenant_id,
+            invite_code=code_str,
+            expires_at=expires_at,
         )
         run_after_commit(partial(background_tasks.tasks.append, email_task))
         invited_count += 1
@@ -1729,6 +1715,7 @@ async def _list_invitation_codes(
         offset=offset,
         limit=page_size,
     )
+    now = datetime.now(UTC)
     return {
         "items": [
             {
@@ -1738,6 +1725,10 @@ async def _list_invitation_codes(
                 "used_count": c.used_count,
                 "is_active": c.is_active,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
+                "expires_at": c.expires_at.isoformat() if c.expires_at else None,
+                "invited_email": c.invited_email,
+                "redeemed_at": c.redeemed_at.isoformat() if c.redeemed_at else None,
+                "status": invitation_status(c, now),
             }
             for c in codes
         ],

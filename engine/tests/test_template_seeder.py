@@ -54,8 +54,8 @@ async def test_seeder_unlinks_then_deletes_retired_builtins(monkeypatch) -> None
             cleared.append(template_id)
             return 2
 
-        async def delete(self, *, id):
-            deleted.append(id)
+        async def delete(self, *, record_id: uuid.UUID):
+            deleted.append(record_id)
             return existing_retired
 
         async def get_builtin_by_name(self, name):

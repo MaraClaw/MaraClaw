@@ -5,10 +5,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api import schedules
-from test_schedule_dao import pool as pool
-from test_scheduler import clock as clock
-from test_scheduler_api import _HTTP, api as api
-from test_scheduler_tasks import owner as owner
+from test_schedule_dao import pool
+from test_scheduler import clock
+from test_scheduler_api import _HTTP, api
+from test_scheduler_tasks import owner
+
+__all__ = ["api", "clock", "owner", "pool"]
 
 
 @pytest.mark.parametrize("zone", [None, "Asia/Ho_Chi_Minh"])

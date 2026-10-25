@@ -10,6 +10,8 @@ from typing import ClassVar, Protocol, TypedDict
 from fastapi import HTTPException, status
 
 from app.core import access_cache
+from app.core.domain.agents import AgentSharingMode, AgentStatus, CompanyAccessLevel, PermissionAccessLevel
+from app.core.domain.users import UserRole
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
 from app.dao.org_department_dao import org_department_dao
 from app.records.agent import AgentPermissionRecord, AgentRecord
@@ -32,7 +34,7 @@ class RelationshipStatus(TypedDict):
 
 class _UserLike(Protocol):
     id: uuid.UUID
-    role: str
+    role: UserRole
     tenant_id: uuid.UUID | None
 
 
@@ -40,9 +42,9 @@ class _AgentLike(Protocol):
     id: uuid.UUID
     creator_id: uuid.UUID
     tenant_id: uuid.UUID | None
-    access_mode: str
-    company_access_level: str
-    status: str
+    access_mode: AgentSharingMode
+    company_access_level: CompanyAccessLevel
+    status: AgentStatus
     is_expired: bool
     expires_at: datetime | None
 
@@ -82,7 +84,7 @@ def decide_agent_access(
     user: _UserLike,
     agent: _AgentLike,
     permissions: Sequence[AgentPermissionRecord] | None = None,
-) -> str | None:
+) -> PermissionAccessLevel | None:
     """Return 'manage', 'use', or None. Does not load rows.
 
     When ``permissions`` is omitted and the decision needs permission rows,
@@ -94,14 +96,14 @@ def decide_agent_access(
     return early
 
 
-def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | _NeedPerms | None:
+def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> PermissionAccessLevel | _NeedPerms | None:
     if agent.tenant_id != user.tenant_id:
         return None
     if agent.creator_id == user.id:
-        return "manage"
+        return PermissionAccessLevel.MANAGE
     access_mode = agent.access_mode or "company"
     if _is_admin(user) and access_mode != "private":
-        return "manage"
+        return PermissionAccessLevel.MANAGE
     company_level = agent.company_access_level
     if access_mode == "company" and company_level:
         return company_level
@@ -110,22 +112,21 @@ def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> str | _Ne
 
 def _access_from_permissions(
     user: _UserLike, agent: _AgentLike, permissions: Sequence[AgentPermissionRecord]
-) -> str | None:
+) -> PermissionAccessLevel | None:
     access_mode = agent.access_mode or "company"
     if access_mode == "company":
-        company_level = agent.company_access_level or next(
+        return agent.company_access_level or next(
             (perm.access_level for perm in permissions if perm.scope_type == "company"),
-            "use",
+            PermissionAccessLevel.USE,
         )
-        return company_level or "use"
     if access_mode == "custom":
         for perm in permissions:
             if perm.scope_type == "user" and perm.scope_id == user.id:
-                return perm.access_level or "use"
+                return perm.access_level
     return None
 
 
-async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> str | None:
+async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> PermissionAccessLevel | None:
     early = _access_without_permissions(user, agent)
     if isinstance(early, _NeedPerms):
         permissions = await agent_permission_dao.list_for_agent(agent.id)
@@ -133,7 +134,7 @@ async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> str 
         if direct is not None:
             return direct
         if agent.access_mode == "custom" and await org_department_dao.has_agent_access(user.id, agent.id):
-            return "use"
+            return PermissionAccessLevel.USE
         return None
     return early
 
@@ -141,7 +142,7 @@ async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> str 
 async def get_agent_access_level_for_user_id(
     user_id: uuid.UUID | None,
     agent: _AgentLike,
-) -> str | None:
+) -> PermissionAccessLevel | None:
     """Return 'manage', 'use', or None for a platform user and an agent."""
     if not user_id:
         return None
@@ -162,7 +163,7 @@ async def get_agent_access_level_for_user_id(
     if current_agent is None:
         return None
     level = await compute_agent_access_level(user, current_agent)
-    if level in {"manage", "use"}:
+    if level is not None:
         await access_cache.set_cached_level(user, agent.id, level, observed_ver=observed_ver)
     return level
 
@@ -337,7 +338,9 @@ async def evaluate_human_relationship_status(
     }
 
 
-async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, *, fresh: bool = False) -> tuple[AgentRecord, str]:
+async def check_agent_access(
+    user: _UserLike, agent_id: uuid.UUID, *, fresh: bool = False
+) -> tuple[AgentRecord, PermissionAccessLevel]:
     """Check if a user has access to a specific agent.
 
     Returns (agent, access_level) where access_level is 'manage' or 'use'.
@@ -377,7 +380,7 @@ async def check_agent_access(user: _UserLike, agent_id: uuid.UUID, *, fresh: boo
         return agent, cached
 
     level = await compute_agent_access_level(user, agent)
-    if level not in {"manage", "use"}:
+    if level is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
     _reject_expired_use(agent, level)
 
@@ -399,7 +402,7 @@ def is_agent_expired(agent: _AgentLike) -> bool:
     return bool(is_expired or (expires_at and datetime.now(UTC) > expires_at))
 
 
-def _reject_expired_use(agent: _AgentLike, level: str) -> None:
+def _reject_expired_use(agent: _AgentLike, level: PermissionAccessLevel) -> None:
     """Block use-level access to expired agents; manage can still extend them."""
     if level == "use" and is_agent_expired(agent):
         raise HTTPException(

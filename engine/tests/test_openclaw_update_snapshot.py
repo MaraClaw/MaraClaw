@@ -1,6 +1,5 @@
 """Snapshot commit and idempotent restore on a real filesystem."""
 
-import os
 import uuid
 
 from app.services.openclaw_update_snapshot import commit_snapshot, drop_snapshot, restore_snapshot, snapshot_path
@@ -11,7 +10,7 @@ def _agent_dir(tmp_path):
     (agent_dir / "workspace").mkdir(parents=True)
     (agent_dir / ".openclaw").mkdir()
     (agent_dir / "workspace" / "notes.md").write_text("original", encoding="utf-8")
-    os.symlink(agent_dir / "workspace", agent_dir / ".openclaw" / "workspace")
+    (agent_dir / ".openclaw" / "workspace").symlink_to(agent_dir / "workspace")
     return agent_dir
 
 

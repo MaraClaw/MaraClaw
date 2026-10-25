@@ -22,8 +22,8 @@ async def authorize_chat_delivery(websocket: WebSocket, agent_id: str, session_i
     if str(binding.agent_id) != agent_id or str(binding.session_id) != session_id:
         return False
     try:
-        await chat_tickets.authorize(binding)
-        await chat_tickets.authorized_session(binding)
+        user, agent, _ = await chat_tickets.authorize(binding)
+        await chat_tickets.authorized_session(binding, user, agent)
     except HTTPException:
         return False
     return True

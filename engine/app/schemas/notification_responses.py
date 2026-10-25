@@ -2,10 +2,12 @@ from uuid import UUID
 
 from typing_extensions import TypedDict
 
+from app.core.notification_kinds import NotificationKind
+
 
 class NotificationResponse(TypedDict):
     id: str
-    type: str
+    type: NotificationKind
     title: str
     body: str
     link: str | None

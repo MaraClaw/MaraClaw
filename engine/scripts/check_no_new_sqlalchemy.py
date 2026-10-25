@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail if any app module imports SQLAlchemy.
 
 Greenfield deploys use pure psycopg + scripts/schema_baseline.sql.

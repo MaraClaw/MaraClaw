@@ -49,6 +49,7 @@ async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> Non
 async def claim_ready_trigger_invocations(
     now: datetime,
 ) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    del now
     fired_by_agent: dict[uuid.UUID, list[AgentTriggerRecord]] = {}
     force_invoke_agents: set[uuid.UUID] = set()
 

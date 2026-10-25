@@ -16,9 +16,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.config import get_settings
+from app.core.domain.control import ControlEnvironment, ControlStatus
 from app.core.json_types import json_loads_value
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
@@ -66,8 +67,8 @@ class _ControlActionResult(TypedDict):
     stderr: NotRequired[str]
 
 
-class _ControlEndpointResult(TypedDict, total=False):
-    status: str
+class ControlActionResult(TypedDict, total=False):
+    status: ControlStatus
     detail: str
     url: str
     screenshot: str | None
@@ -151,7 +152,14 @@ class LockRequest(ControlRequest):
 
     session_id: str
     platform_hint: str | None = None  # current page domain (for cookie export)
-    env_type: str | None = "browser"  # which env the user is controlling: browser | computer | code
+    env_type: ControlEnvironment = ControlEnvironment.BROWSER
+
+    @field_validator("env_type", mode="before")
+    @classmethod
+    def parse_environment(cls, value: object) -> object:
+        if value is None or value == "":
+            return ControlEnvironment.BROWSER
+        return value.lower() if isinstance(value, str) else value
 
 
 class UnlockRequest(ControlRequest):
@@ -219,7 +227,7 @@ async def _cdp_exec(client: AgentBayClient, script: str, timeout_ms: int = 15000
 
     logger.info(
         f"[TakeControl] CDP exec: cmd_success={cmd_success}, tc_ok={tc_success}, "
-        + f"stdout={stdout[:200]}, stderr={stderr[:200]}, exit_code={result.get('exit_code', 'N/A')}"
+        f"stdout={stdout[:200]}, stderr={stderr[:200]}, exit_code={result.get('exit_code', 'N/A')}"
     )
     return {"success": tc_success, "output": stdout[:500], "stderr": stderr[:200]}
 
@@ -545,7 +553,7 @@ class CurrentUrlRequest(ControlRequest):
 @router.post("/current-url")
 async def control_current_url(
     agent_id: uuid.UUID, data: CurrentUrlRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Get the current page URL from the active browser session via CDP.
 
     Called by the Take Control panel on mount to auto-populate the cookie
@@ -580,17 +588,17 @@ let browser;
         output = res.get("output", "")
         if "URL_OK:" in output:
             url = output.split("URL_OK:", 1)[1].strip()
-            return {"status": "ok", "url": url}
-        return {"status": "ok", "url": ""}
+            return {"status": ControlStatus.OK, "url": url}
+        return {"status": ControlStatus.OK, "url": ""}
     except Exception as e:
         logger.warning(f"[TakeControl] current-url failed: {e}")
-        return {"status": "ok", "url": ""}  # Non-fatal - return empty URL
+        return {"status": ControlStatus.OK, "url": ""}  # Non-fatal - return empty URL
 
 
 @router.post("/click")
 async def control_click(
     agent_id: uuid.UUID, data: ClickRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Forward a mouse click to the AgentBay session.
 
     Requires the session to be in Take Control mode (locked).
@@ -602,18 +610,18 @@ async def control_click(
         try:
             result = await _perform_click(client, data.x, data.y, data.button)
             if result.get("success"):
-                return {"status": "ok", "detail": f"Clicked at ({data.x}, {data.y})"}
+                return {"status": ControlStatus.OK, "detail": f"Clicked at ({data.x}, {data.y})"}
             detail: str = str(result.get("stderr") or result.get("output") or "Click operation failed")
-            return {"status": "error", "detail": detail[:500]}
+            return {"status": ControlStatus.ERROR, "detail": detail[:500]}
         except Exception as e:
             logger.error(f"[TakeControl] Click exception: {e}")
-            return {"status": "error", "detail": str(e)[:500]}
+            return {"status": ControlStatus.ERROR, "detail": str(e)[:500]}
 
 
 @router.post("/type")
 async def control_type(
     agent_id: uuid.UUID, data: TypeRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Forward text input to the AgentBay session."""
     _agent, _access = await check_agent_access(current_user, agent_id)
     async with _get_interaction_lock(agent_id, data.session_id):
@@ -621,18 +629,18 @@ async def control_type(
         try:
             result = await _perform_type(client, data.text)
             if result.get("success"):
-                return {"status": "ok", "detail": "Text sent"}
+                return {"status": ControlStatus.OK, "detail": "Text sent"}
             detail: str = str(result.get("stderr") or result.get("output") or "Type operation failed")
-            return {"status": "error", "detail": detail[:500]}
+            return {"status": ControlStatus.ERROR, "detail": detail[:500]}
         except Exception as e:
             logger.error(f"[TakeControl] Type exception: {e}")
-            return {"status": "error", "detail": str(e)[:500]}
+            return {"status": ControlStatus.ERROR, "detail": str(e)[:500]}
 
 
 @router.post("/press_keys")
 async def control_press_keys(
     agent_id: uuid.UUID, data: PressKeysRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Forward keyboard key presses to the AgentBay session."""
     _agent, _access = await check_agent_access(current_user, agent_id)
     async with _get_interaction_lock(agent_id, data.session_id):
@@ -640,18 +648,18 @@ async def control_press_keys(
         try:
             result = await _perform_press_keys(client, data.keys)
             if result.get("success"):
-                return {"status": "ok", "detail": f"Pressed: {'+'.join(data.keys)}"}
+                return {"status": ControlStatus.OK, "detail": f"Pressed: {'+'.join(data.keys)}"}
             detail: str = str(result.get("stderr") or result.get("output") or "Key press failed")
-            return {"status": "error", "detail": detail[:500]}
+            return {"status": ControlStatus.ERROR, "detail": detail[:500]}
         except Exception as e:
             logger.error(f"[TakeControl] Press keys exception: {e}")
-            return {"status": "error", "detail": str(e)[:500]}
+            return {"status": ControlStatus.ERROR, "detail": str(e)[:500]}
 
 
 @router.post("/drag")
 async def control_drag(
     agent_id: uuid.UUID, data: DragRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Simulate a human-like mouse drag in the AgentBay session.
 
     Used for slider CAPTCHAs and drag-and-drop interactions.
@@ -671,17 +679,17 @@ async def control_drag(
                 data.duration_ms,
             )
             if result.get("success"):
-                return {"status": "ok", "detail": result.get("output", "Drag complete")}
-            return {"status": "error", "detail": result.get("output", "Drag failed")[:500]}
+                return {"status": ControlStatus.OK, "detail": result.get("output", "Drag complete")}
+            return {"status": ControlStatus.ERROR, "detail": result.get("output", "Drag failed")[:500]}
         except Exception as e:
             logger.error(f"[TakeControl] Drag exception: {e}")
-            return {"status": "error", "detail": str(e)[:500]}
+            return {"status": ControlStatus.ERROR, "detail": str(e)[:500]}
 
 
 @router.post("/screenshot")
 async def control_screenshot(
     agent_id: uuid.UUID, data: ScreenshotRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Get an immediate screenshot from the AgentBay session.
 
     Automatically detects the session type (browser/desktop) and uses
@@ -715,19 +723,19 @@ async def control_screenshot(
             logger.warning(f"[TakeControl] Screen size lookup failed: {e}")
 
         return {
-            "status": "ok",
+            "status": ControlStatus.OK,
             "screenshot": screenshot_b64,
             "screen_size": screen_size,
         }
     except Exception as e:
         logger.warning(f"[TakeControl] Screenshot failed: {e}")
-        return {"status": "error", "detail": str(e)[:500]}
+        return {"status": ControlStatus.ERROR, "detail": str(e)[:500]}
 
 
 @router.post("/lock")
 async def control_lock(
     agent_id: uuid.UUID, data: LockRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Enter Take Control mode - locks the session against automatic tool execution.
 
     While locked, the agent's execute_tool will return a "waiting for human"
@@ -737,17 +745,14 @@ async def control_lock(
     # Allow any user with access (manage or use) - Take Control is part of
     # the normal interaction flow, not an admin-only operation.
 
-    # Sanitize env_type - default to 'browser' if empty or unknown
-    env_type = (data.env_type or "browser").lower()
-    if env_type not in ("browser", "computer", "code"):
-        env_type = "browser"
+    env_type = data.env_type
 
     key = control_state.SessionKey(str(agent_id), data.session_id, env_type)
     lease, acquired = await control_state.acquire(key, str(current_user.id), data.owner_token)
     if not acquired:
-        return {"status": "already_locked", "locked_by": lease.user_id}
+        return {"status": ControlStatus.ALREADY_LOCKED, "locked_by": lease.user_id}
     return {
-        "status": "locked",
+        "status": ControlStatus.LOCKED,
         "locked_by": lease.user_id,
         "owner_token": lease.owner_token,
         "lease_ttl_seconds": control_state.LEASE_TTL_SECONDS,
@@ -757,7 +762,7 @@ async def control_lock(
 @router.post("/unlock")
 async def control_unlock(
     agent_id: uuid.UUID, data: UnlockRequest, current_user: UserRecord = Depends(get_current_user)
-) -> _ControlEndpointResult:
+) -> ControlActionResult:
     """Exit Take Control mode - unlock session and optionally export cookies.
 
     If export_cookies is True and platform_hint is provided, the current
@@ -781,7 +786,7 @@ async def control_unlock(
                 exported = True
                 logger.info(
                     f"[TakeControl] Cookies exported: agent={agent_id}, "
-                    + f"platform={data.platform_hint}, count={export_count}"
+                    f"platform={data.platform_hint}, count={export_count}"
                 )
             except control_state.TakeControlLostError, control_state.TakeControlUnavailableError:
                 raise
@@ -791,7 +796,7 @@ async def control_unlock(
         await control_state.release(key, str(current_user.id), data.owner_token)
 
     return {
-        "status": "unlocked",
+        "status": ControlStatus.UNLOCKED,
         "cookies_exported": exported,
         "cookie_count": export_count,
     }

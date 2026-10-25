@@ -11,6 +11,7 @@ from uuid import UUID
 from anyascii import anyascii
 from pypinyin import lazy_pinyin
 
+from app.core.domain.users import UserRole
 from app.core.security import hash_password_async
 from app.dao.agent_dao import agent_dao
 from app.dao.identity_dao import identity_dao
@@ -129,7 +130,7 @@ async def create_tenant_with_org_admin(
                     "identity_id": identity.id,
                     "tenant_id": tenant.id,
                     "display_name": display_name,
-                    "role": "org_admin",
+                    "role": UserRole.ORG_ADMIN,
                     "registration_source": "platform_admin",
                     "is_active": True,
                     "is_genesis": True,
@@ -174,7 +175,7 @@ async def attach_genesis_org_admin(
         raise ValueError("tenant not found")
     existing = await user_dao.genesis_org_admin_for_tenant(tenant.id)
     if existing is not None:
-        raise GenesisOrgAdminExistsError()
+        raise GenesisOrgAdminExistsError
 
     email = admin_email.strip().lower()
     if await identity_dao.get_by_email(email):
@@ -198,7 +199,7 @@ async def attach_genesis_org_admin(
                     "identity_id": identity.id,
                     "tenant_id": tenant.id,
                     "display_name": display_name,
-                    "role": "org_admin",
+                    "role": UserRole.ORG_ADMIN,
                     "registration_source": "platform_admin",
                     "is_active": True,
                     "is_genesis": True,

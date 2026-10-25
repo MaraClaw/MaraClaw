@@ -63,8 +63,8 @@ class LinkupApiKeyDAO(BaseDAO[LinkupApiKeyRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM linkup_api_keys "
-                + "WHERE status = 'active' AND (exhausted_until IS NULL OR exhausted_until <= %(now)s) "
-                + "ORDER BY position ASC, created_at ASC",
+                "WHERE status = 'active' AND (exhausted_until IS NULL OR exhausted_until <= %(now)s) "
+                "ORDER BY position ASC, created_at ASC",
                 {"now": now},
             )
             return [LinkupApiKeyRecord.from_row(row) for row in rows]
@@ -78,8 +78,8 @@ class LinkupApiKeyDAO(BaseDAO[LinkupApiKeyRecord]):
         async with self.session() as db:
             _ = await db.execute(
                 "INSERT INTO linkup_key_ring_state (id, current_key_id, updated_at) "
-                + "VALUES (1, %(key_id)s, NOW()) "
-                + "ON CONFLICT (id) DO UPDATE SET current_key_id = EXCLUDED.current_key_id, updated_at = NOW()",
+                "VALUES (1, %(key_id)s, NOW()) "
+                "ON CONFLICT (id) DO UPDATE SET current_key_id = EXCLUDED.current_key_id, updated_at = NOW()",
                 {"key_id": key_id},
             )
 

@@ -11,6 +11,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import admin as admin_api, tenants as tenants_api, users as users_api
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.services import admin_provisioning as provisioning
 from app.services.tenant_provisioning import AdminEmailTakenError
@@ -131,7 +133,7 @@ async def test_update_role_blocks_non_genesis_from_minting_org_admin():
         await provisioning.apply_user_role_change(
             actor=_user(role="org_admin", tenant_id=tenant_id),
             target=target,
-            new_role="org_admin",
+            new_role=UserRole.ORG_ADMIN,
         )
     assert exc.value.status_code == 403
 
@@ -144,7 +146,7 @@ async def test_update_role_blocks_platform_admin_from_minting_org_admin():
         await provisioning.apply_user_role_change(
             actor=_user(role="platform_admin", is_genesis=True),
             target=target,
-            new_role="org_admin",
+            new_role=UserRole.ORG_ADMIN,
         )
     assert exc.value.status_code == 403
 
@@ -162,7 +164,7 @@ async def test_update_role_genesis_org_admin_can_promote(monkeypatch):
         result = await provisioning.apply_user_role_change(
             actor=_user(role="org_admin", tenant_id=tenant_id, is_genesis=True),
             target=target,
-            new_role="org_admin",
+            new_role=UserRole.ORG_ADMIN,
         )
     assert result.role == "org_admin"
 
@@ -317,7 +319,7 @@ async def test_apply_user_role_change_refuses_genesis_demotion():
         await provisioning.apply_user_role_change(
             actor=_user(role="platform_admin", is_genesis=True),
             target=genesis,
-            new_role="member",
+            new_role=UserRole.MEMBER,
         )
     assert exc.value.status_code == 403
 
@@ -330,7 +332,7 @@ async def test_apply_user_role_change_refuses_last_active_demotion(monkeypatch):
         await provisioning.apply_user_role_change(
             actor=_user(role="platform_admin", is_genesis=True),
             target=target,
-            new_role="member",
+            new_role=UserRole.MEMBER,
         )
     assert exc.value.status_code == 400
 
@@ -344,7 +346,7 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
             actor=_user(role="platform_admin", is_genesis=True),
             target=genesis,
             tenant_id=tenant_id,
-            role="member",
+            role=UserRole.MEMBER,
         )
     assert exc.value.status_code == 403
 
@@ -369,7 +371,7 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
             actor=_user(role="platform_admin", is_genesis=True),
             target=peer,
             tenant_id=tenant_id,
-            role="member",
+            role=UserRole.MEMBER,
         )
     assert updated.role == "member"
     update_identity.assert_awaited_once()
@@ -422,7 +424,7 @@ async def test_apply_user_assignment_blocks_last_active_org_admin(monkeypatch):
             actor=_user(role="platform_admin"),
             target=target,
             tenant_id=uuid.uuid4(),
-            role="member",
+            role=UserRole.MEMBER,
         )
     assert exc.value.status_code == 400
 
@@ -457,7 +459,7 @@ async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
         name="Daisy",
         creator_id=target.id,
         tenant_id=tenant_id,
-        status="stopped",
+        status=AgentStatus.STOPPED,
     )
     monkeypatch.setattr(
         provisioning.user_dao,

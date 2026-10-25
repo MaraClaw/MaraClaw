@@ -15,6 +15,8 @@ from fastapi import FastAPI
 
 from app.api.openclaw_updates import router
 from app.core import access_cache
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateNoticeRecord, OpenClawUpdateRunRecord, RunState
@@ -61,14 +63,19 @@ class AgentFields(TypedDict, total=False):
 
 def agent(**fields: Unpack[AgentFields]) -> AgentRecord:
     base = AgentRecord(
-        id=uuid.uuid4(), name="Ada", creator_id=uuid.uuid4(), tenant_id=TENANT, status="running", container_id="c1"
+        id=uuid.uuid4(),
+        name="Ada",
+        creator_id=uuid.uuid4(),
+        tenant_id=TENANT,
+        status=AgentStatus.RUNNING,
+        container_id="c1",
     )
     return replace(base, **fields)
 
 
 @pytest.fixture
 def actor() -> dict[str, UserRecord]:
-    return {"user": UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role="member", display_name="Mo")}
+    return {"user": UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role=UserRole.MEMBER, display_name="Mo")}
 
 
 @pytest.fixture
@@ -96,7 +103,7 @@ async def test_only_platform_admins_publish(client, actor, monkeypatch, role):
 
 
 async def test_publish_returns_201_then_200_replay_with_the_frozen_shape(client, actor, monkeypatch):
-    actor["user"] = UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role="platform_admin", display_name="Root")
+    actor["user"] = UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role=UserRole.PLATFORM_ADMIN, display_name="Root")
     stored = notice(mandatory=True, recipients=7)
     publish = AsyncMock(side_effect=[(stored, True), (stored, False)])
     monkeypatch.setattr(service.openclaw_update_notice_dao, "publish", publish)
@@ -125,7 +132,7 @@ async def test_publish_returns_201_then_200_replay_with_the_frozen_shape(client,
     [{"title": "x" * 201}, {"body": "x" * 1001}, {"title": ""}, {"request_id": "not-a-uuid"}, {"mandatory": "maybe"}],
 )
 async def test_publish_validates_the_frozen_limits(client, actor, bad):
-    actor["user"] = UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role="platform_admin")
+    actor["user"] = UserRecord(id=uuid.uuid4(), tenant_id=TENANT, role=UserRole.PLATFORM_ADMIN)
     response = await client.post("/api/admin/openclaw-updates", json=publish_body(**bad))
     assert response.status_code == 422
 

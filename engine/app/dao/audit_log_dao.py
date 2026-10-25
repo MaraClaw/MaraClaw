@@ -66,7 +66,7 @@ class AuditLogDAO(BaseDAO[AuditLogRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM audit_logs {where} "
-                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 params,
             )
             return [AuditLogRecord.from_row(row) for row in rows]

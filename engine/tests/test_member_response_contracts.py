@@ -11,6 +11,8 @@ from fastapi.exceptions import ResponseValidationError
 from pydantic import TypeAdapter
 
 from app.api import activity as activity_api, notification as notification_api
+from app.core.domain.activity import ActivityAction
+from app.core.notification_kinds import NotificationKind
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.records.activity_log import AgentActivityLogRecord
@@ -62,7 +64,7 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> Callable[[object, str, object], Asy
 async def test_notification_list_preserves_nullable_and_populated_fields(client, member, stub, populated):
     notification = NotificationRecord(
         id=uuid4(),
-        type="future_type",
+        type=NotificationKind.SYSTEM,
         title="Title",
         body="Body",
         user_id=member.id,
@@ -78,7 +80,7 @@ async def test_notification_list_preserves_nullable_and_populated_fields(client,
     assert response.json() == [
         {
             "id": str(notification.id),
-            "type": "future_type",
+            "type": "system",
             "title": "Title",
             "body": "Body",
             "link": "/app" if populated else None,
@@ -92,7 +94,12 @@ async def test_notification_list_preserves_nullable_and_populated_fields(client,
     listing.assert_awaited_once_with(
         member.id,
         unread_only=True,
-        types=["plaza_comment", "plaza_reply", "mention", "broadcast"],
+        types=[
+            NotificationKind.PLAZA_COMMENT,
+            NotificationKind.PLAZA_REPLY,
+            NotificationKind.MENTION,
+            NotificationKind.BROADCAST,
+        ],
         limit=2,
         offset=3,
         view="active",
@@ -105,7 +112,7 @@ async def test_unread_count_is_scoped_to_member_and_category(client, member, stu
     response = await client.get(f"/api/notifications/unread-count?category={category}")
     assert response.status_code == 200
     assert response.json() == {"unread_count": 7}
-    counter.assert_awaited_once_with(member.id, types=["autonomy_l2"] if category == "tool" else None)
+    counter.assert_awaited_once_with(member.id, types=[NotificationKind.AUTONOMY_L2] if category == "tool" else None)
 
 
 @pytest.mark.parametrize(("all_read", "kwargs"), [(False, {}), (True, {"types": None})])
@@ -126,7 +133,7 @@ async def test_activity_detail_keeps_dynamic_values_and_nullable_fields(client, 
     log = AgentActivityLogRecord(
         id=uuid4(),
         agent_id=AGENT_ID,
-        action_type="future_action",
+        action_type=ActivityAction.TOOL_CALL,
         summary="Summary",
         detail_json={"nested": [None, {"timestamp": STAMP, "id": related_id}]},
         related_id=related_id if populated else None,
@@ -138,7 +145,7 @@ async def test_activity_detail_keeps_dynamic_values_and_nullable_fields(client, 
     assert response.json() == [
         {
             "id": str(log.id),
-            "action_type": "future_action",
+            "action_type": "tool_call",
             "summary": "Summary",
             "detail": {"nested": [None, {"timestamp": "2026-10-20T12:00:00+00:00", "id": str(related_id)}]},
             "related_id": str(related_id) if populated else None,

@@ -12,8 +12,10 @@ from app.services import chat_tickets
 from app.services.incident_report import IncidentReport
 from app.services.openclaw_routing import GuestConfigWriteError
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
-from test_websocket_failure_lifecycle import Lifecycle, lifecycle as lifecycle, peer_socket
-from test_websocket_turn_transaction import TurnConnection, TurnState, drive_turn, turn as turn
+from test_websocket_failure_lifecycle import Lifecycle, lifecycle, peer_socket
+from test_websocket_turn_transaction import TurnConnection, TurnState, drive_turn, turn
+
+__all__ = ["lifecycle", "turn"]
 
 
 @pytest.mark.parametrize("site", ["connect", "disconnect", "history"])

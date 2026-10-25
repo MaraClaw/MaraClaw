@@ -15,6 +15,16 @@ _state = TypeAdapter(SetupState)
 
 
 @final
+class AgentSetupStatus(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    setup_pending: bool
+    state: SetupState | None
+    failure_code: Literal["setup_failed"] | None
+    retryable: bool
+
+
+@final
 class AgentSetupInputs(BaseModel):
     model_config = ConfigDict(frozen=True)
 

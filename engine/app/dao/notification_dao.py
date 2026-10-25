@@ -7,6 +7,7 @@ from typing import ClassVar, Literal, assert_never, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
+from app.core.notification_kinds import NotificationKind
 from app.dao.base import BaseDAO
 from app.dao.company_transfer_disposition_sql import VISIBLE_NOTIFICATION_SQL
 from app.records.notification import NotificationRecord
@@ -39,8 +40,8 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM notifications "
-                + "WHERE agent_id = %(agent_id)s AND is_read IS FALSE "
-                + "ORDER BY created_at ASC LIMIT %(limit)s",
+                "WHERE agent_id = %(agent_id)s AND is_read IS FALSE "
+                "ORDER BY created_at ASC LIMIT %(limit)s",
                 {"agent_id": agent_id, "limit": limit},
             )
             return [NotificationRecord.from_row(row) for row in rows]
@@ -51,7 +52,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         *,
         view: Literal["active", "archived"] = "active",
         unread_only: bool = False,
-        types: Sequence[str] | None = None,
+        types: Sequence[NotificationKind] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> Sequence[NotificationRecord]:
@@ -68,13 +69,13 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
             clauses.append("is_read IS FALSE")
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
-            params["types"] = list(types)
+            params["types"] = [kind.value for kind in types]
         where = " AND ".join(clauses)
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM notifications "
-                + f"WHERE {where} ORDER BY created_at DESC, id DESC "
-                + "OFFSET %(offset)s LIMIT %(limit)s",
+                f"WHERE {where} ORDER BY created_at DESC, id DESC "
+                "OFFSET %(offset)s LIMIT %(limit)s",
                 params,
             )
             return [NotificationRecord.from_row(row) for row in rows]
@@ -83,13 +84,13 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         self,
         user_id: UUID,
         *,
-        types: Sequence[str] | None = None,
+        types: Sequence[NotificationKind] | None = None,
     ) -> int:
         params: dict[str, object] = {"user_id": user_id}
         clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL", VISIBLE_NOTIFICATION_SQL]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
-            params["types"] = list(types)
+            params["types"] = [kind.value for kind in types]
         where = " AND ".join(clauses)
         async with self.session() as db:
             value = await db.fetchval(
@@ -115,12 +116,12 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 {"id": notification_id, "user_id": user_id},
             )
 
-    async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[str] | None = None) -> None:
+    async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[NotificationKind] | None = None) -> None:
         params: dict[str, object] = {"user_id": user_id}
         clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL", VISIBLE_NOTIFICATION_SQL]
         if types is not None:
             clauses.append("type = ANY(%(types)s)")
-            params["types"] = list(types)
+            params["types"] = [kind.value for kind in types]
         where = " AND ".join(clauses)
         async with self.session() as db:
             await db.execute(
@@ -157,22 +158,29 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         async with self.session() as db:
             await db.execute(
                 "DELETE FROM notifications "
-                + "WHERE user_id = %(user_id)s AND ref_id = %(agent_id)s "
-                + "AND type = 'system' AND title LIKE %(title_pat)s",
-                {"user_id": user_id, "agent_id": agent_id, "title_pat": "%task failed%"},
+                "WHERE user_id = %(user_id)s AND ref_id = %(agent_id)s "
+                "AND type = %(notification_kind)s AND title LIKE %(title_pat)s",
+                {
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "notification_kind": NotificationKind.SYSTEM.value,
+                    "title_pat": "%task failed%",
+                },
             )
 
     async def latest_system_task_failed(self, *, user_id: UUID, ref_id: UUID) -> NotificationRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM notifications "
-                + "WHERE user_id = %(user_id)s AND ref_id = %(ref_id)s "
-                + "AND type = 'system' AND title LIKE %(title_pat)s "
-                + "AND "
-                + VISIBLE_NOTIFICATION_SQL
-                + " "
-                + "ORDER BY created_at DESC LIMIT 1",
-                {"user_id": user_id, "ref_id": ref_id, "title_pat": "%task failed%"},
+                "WHERE user_id = %(user_id)s AND ref_id = %(ref_id)s "
+                "AND type = %(notification_kind)s AND title LIKE %(title_pat)s "
+                "AND " + VISIBLE_NOTIFICATION_SQL + " " + "ORDER BY created_at DESC LIMIT 1",
+                {
+                    "user_id": user_id,
+                    "ref_id": ref_id,
+                    "notification_kind": NotificationKind.SYSTEM.value,
+                    "title_pat": "%task failed%",
+                },
             )
             return NotificationRecord.from_row(row) if row is not None else None
 

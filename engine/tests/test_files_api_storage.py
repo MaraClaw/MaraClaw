@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import files
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
@@ -112,7 +113,9 @@ async def unused_db_session() -> AsyncIterator[_FakeDb]:
 
 
 def make_user() -> UserRecord:
-    return UserRecord(id=uuid.uuid4(), display_name="Storage User", role="member", tenant_id=None, is_active=True)
+    return UserRecord(
+        id=uuid.uuid4(), display_name="Storage User", role=UserRole.MEMBER, tenant_id=None, is_active=True
+    )
 
 
 def make_agent(agent_id: uuid.UUID, creator_id: uuid.UUID) -> AgentRecord:

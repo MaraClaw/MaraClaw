@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.org import OrgMemberRecord
@@ -20,7 +21,7 @@ async def _send_dingtalk_message(
     from app.services.dingtalk_service import send_dingtalk_message
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="dingtalk")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.DINGTALK)
         if not config:
             return "❌ This agent has no DingTalk channel configured"
 
@@ -76,7 +77,7 @@ async def _send_wecom_message(
     from app.services.wecom_service import send_wecom_message
 
     try:
-        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="wecom")
+        config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.WECOM)
         if not config:
             return "❌ This agent has no WeCom channel configured"
 

@@ -5,6 +5,9 @@ from datetime import datetime
 from typing import Literal, NotRequired, TypedDict
 from uuid import UUID
 
+from app.core.domain.agents import AgentSharingMode, AgentStatus, CompanyAccessLevel, PermissionAccessLevel
+from app.core.domain.approvals import ApprovalStatus
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.schemas.schemas import AgentOut
 
@@ -32,7 +35,7 @@ class AgentModelDump(TypedDict):
     role_description: str
     bio: str | None
     welcome_message: str | None
-    status: str
+    status: AgentStatus
     creator_id: UUID
     creator_username: str | None
     primary_model_id: UUID | None
@@ -63,8 +66,8 @@ class AgentModelDump(TypedDict):
     expires_at: datetime | None
     is_expired: bool
     is_system: bool
-    access_mode: str
-    company_access_level: str
+    access_mode: AgentSharingMode
+    company_access_level: CompanyAccessLevel
     llm_calls_today: int
     max_llm_calls_per_day: int
     agent_type: str
@@ -135,11 +138,11 @@ def agent_model_dump(model: AgentOut) -> AgentModelDump:
 
 class AgentCreatedResponse(AgentModelDump):
     api_key: str
-    access_level: Literal["manage"]
+    access_level: PermissionAccessLevel
 
 
 class AgentDetailResponse(AgentModelDump):
-    access_level: str
+    access_level: PermissionAccessLevel
     effective_timezone: str
 
 
@@ -171,19 +174,19 @@ class PermissionDepartmentFields(TypedDict):
 class PermissionUserAccess(PermissionScopeName):
     username: str
     email: str | None
-    role: str
-    access_level: str
+    role: UserRole
+    access_level: PermissionAccessLevel
     is_required: bool
     required_reason: Literal["creator", "company_admin"] | None
 
 
 class AgentPermissionsResponse(PermissionDepartmentFields):
-    scope_type: str
+    scope_type: AgentSharingMode
     scope_ids: list[str]
     scope_names: NotRequired[list[PermissionScopeName]]
     user_access: list[PermissionUserAccess]
-    access_level: str
-    effective_access_level: str
+    access_level: PermissionAccessLevel
+    effective_access_level: PermissionAccessLevel
     can_manage: bool
     is_owner: bool
     creator_id: str | None
@@ -214,7 +217,7 @@ class AgentApprovalResponse(TypedDict):
     agent_id: str
     action_type: str
     details: JsonObject
-    status: str
+    status: ApprovalStatus
     created_at: str | None
     resolved_at: str | None
     resolved_by: str | None
@@ -222,7 +225,7 @@ class AgentApprovalResponse(TypedDict):
 
 class AgentApprovalResolvedResponse(TypedDict):
     id: str
-    status: str
+    status: ApprovalStatus
     resolved_at: str | None
 
 

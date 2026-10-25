@@ -8,10 +8,10 @@ from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.domain.tasks import TaskStatus
 from app.core.json_types import JsonObject, int_from_row
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_admin, get_current_user
-from app.dao.agent_dao import agent_dao
 from app.dao.task_dao import task_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.user_dao import user_dao
@@ -19,6 +19,7 @@ from app.db.session import connection_ctx
 from app.records.template import AgentTemplateRecord
 from app.records.user import UserRecord
 from app.schemas.collaboration_response_metrics import AgentHandoverResponse, AgentMetricsResponse
+from app.services.agent_ownership_transfer import OwnershipChange, apply_ownership_change
 from app.services.audit_logger import write_audit_log
 from app.services.collaboration import (
     CollaboratorSummary,
@@ -176,7 +177,7 @@ async def delete_template(template_id: uuid.UUID, current_user: UserRecord = Dep
         creator = await user_dao.get(template.created_by)
         if creator is None or current_user.tenant_id is None or creator.tenant_id != current_user.tenant_id:
             raise HTTPException(status_code=404, detail="Template not found")
-    _ = await agent_template_dao.delete(id=template.id)
+    _ = await agent_template_dao.delete(record_id=template.id)
 
 
 # ─── Agent Handover ─────────────────────────────────────
@@ -202,7 +203,10 @@ async def handover_agent(
         raise HTTPException(status_code=404, detail="Target user not found")
 
     old_creator_id = agent.creator_id
-    _ = await agent_dao.update(db_obj=agent, obj_in={"creator_id": data.new_creator_id})
+    if data.new_creator_id != old_creator_id:
+        _ = await apply_ownership_change(
+            OwnershipChange(current_user, old_creator_id, data.new_creator_id, (agent_id,), org_admin_only=False)
+        )
 
     await write_audit_log(
         "agent:handover",
@@ -233,8 +237,8 @@ async def get_agent_metrics(
 
     # Task stats
     _total_tasks = await task_dao.count_for_agent(agent_id)
-    _done_tasks = await task_dao.count_for_agent(agent_id, status="done")
-    _pending_tasks = await task_dao.count_for_agent(agent_id, status="pending")
+    _done_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.DONE)
+    _pending_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.PENDING)
 
     # Approval + audit stats via raw SQL (no dedicated DAO yet)
     async with connection_ctx() as conn:

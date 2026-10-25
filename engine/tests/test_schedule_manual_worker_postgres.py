@@ -16,10 +16,12 @@ from app.services.llm.background_guard import BackgroundCallGuard, BackgroundCal
 from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
-    live_schedule as live_schedule,
-    manual_schedule as manual_schedule,
+    live_schedule,
+    manual_schedule,
 )
-from test_scheduler_tasks import owner as owner
+from test_scheduler_tasks import owner
+
+__all__ = ["live_schedule", "manual_schedule", "owner"]
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +135,7 @@ async def test_live_worker_stops_after_ownership_revoked_during_inference(
                         {"token": uuid4(), "id": claim.id},
                     )
             case "delete":
-                await agent_schedule_dao.delete(id=manual_schedule.id)
+                await agent_schedule_dao.delete(record_id=manual_schedule.id)
             case _:
                 raise AssertionError(revoke)
         await guard.confirm()

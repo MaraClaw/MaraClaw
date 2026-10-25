@@ -11,6 +11,7 @@ from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     http_header,
     json_as_str,
@@ -159,7 +160,7 @@ async def slack_event_webhook(
     if body_bytes is None:
         return Response(status_code=413)
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="slack")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.SLACK)
     if not config:
         return Response(status_code=404)
 
@@ -354,7 +355,7 @@ async def slack_event_webhook(
         _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in slack_files)
         _ack = (
             f"I received the file(s) {_file_names}, but I cannot download their content yet. "
-            + "Please verify that the Slack app has the files:read permission."
+            "Please verify that the Slack app has the files:read permission."
         )
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
@@ -417,7 +418,7 @@ async def slack_event_webhook(
             _upload_url = _ud["upload_url"]
             _file_id = _ud["file_id"]
             if not isinstance(_upload_url, str) or not isinstance(_file_id, str):
-                raise RuntimeError(f"Slack upload URL error: {_ud}")
+                raise TypeError(f"Slack upload URL error: {_ud}")
             _ = await _hc.post(_upload_url, content=_file_bytes, headers={"Content-Type": "application/octet-stream"})
             _complete = await _hc.post(
                 "https://slack.com/api/files.completeUploadExternal",

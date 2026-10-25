@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from psycopg.rows import DictRow, dict_row
 
 from app.api import users as users_api
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import user_dao
@@ -87,7 +88,9 @@ async def _insert(connection: DbConnection, user: UserRecord) -> None:
 async def client(database: DbConnection) -> AsyncGenerator[httpx.AsyncClient]:
     app = FastAPI()
     app.include_router(users_api.router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=UUID(int=1), tenant_id=TENANT, role="org_admin")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(
+        id=UUID(int=1), tenant_id=TENANT, role=UserRole.ORG_ADMIN
+    )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
@@ -95,17 +98,17 @@ async def client(database: DbConnection) -> AsyncGenerator[httpx.AsyncClient]:
 @pytest.fixture
 async def directory(database: DbConnection) -> None:
     rows = [
-        UserRecord(id=UUID(int=10), tenant_id=TENANT, role="org_admin", created_at=NOW + timedelta(days=2)),
-        UserRecord(id=UUID(int=11), tenant_id=TENANT, role="platform_admin", created_at=NOW + timedelta(days=2)),
-        UserRecord(id=UUID(int=12), tenant_id=TENANT, role="custom_role", created_at=None),
-        UserRecord(id=UUID(int=20), tenant_id=TENANT, role="member", created_at=NOW),
-        UserRecord(id=UUID(int=21), tenant_id=TENANT, role="agent_admin", created_at=NOW),
-        UserRecord(id=UUID(int=22), tenant_id=TENANT, role="member", created_at=NOW + timedelta(days=1)),
-        UserRecord(id=UUID(int=23), tenant_id=TENANT, role="member", created_at=None),
-        UserRecord(id=UUID(int=24), tenant_id=TENANT, role="agent_admin", created_at=None),
-        UserRecord(id=UUID(int=30), tenant_id=FOREIGN, role="org_admin", created_at=NOW),
-        UserRecord(id=UUID(int=31), tenant_id=FOREIGN, role="member", created_at=None),
-        UserRecord(id=UUID(int=40), tenant_id=None, role="platform_admin", created_at=None),
+        UserRecord(id=UUID(int=10), tenant_id=TENANT, role=UserRole.ORG_ADMIN, created_at=NOW + timedelta(days=2)),
+        UserRecord(id=UUID(int=11), tenant_id=TENANT, role=UserRole.PLATFORM_ADMIN, created_at=NOW + timedelta(days=2)),
+        UserRecord(id=UUID(int=12), tenant_id=TENANT, role=UserRole.ORG_ADMIN, created_at=None),
+        UserRecord(id=UUID(int=20), tenant_id=TENANT, role=UserRole.MEMBER, created_at=NOW),
+        UserRecord(id=UUID(int=21), tenant_id=TENANT, role=UserRole.AGENT_ADMIN, created_at=NOW),
+        UserRecord(id=UUID(int=22), tenant_id=TENANT, role=UserRole.MEMBER, created_at=NOW + timedelta(days=1)),
+        UserRecord(id=UUID(int=23), tenant_id=TENANT, role=UserRole.MEMBER, created_at=None),
+        UserRecord(id=UUID(int=24), tenant_id=TENANT, role=UserRole.AGENT_ADMIN, created_at=None),
+        UserRecord(id=UUID(int=30), tenant_id=FOREIGN, role=UserRole.ORG_ADMIN, created_at=NOW),
+        UserRecord(id=UUID(int=31), tenant_id=FOREIGN, role=UserRole.MEMBER, created_at=None),
+        UserRecord(id=UUID(int=40), tenant_id=None, role=UserRole.PLATFORM_ADMIN, created_at=None),
     ]
     for row in reversed(rows):
         await _insert(database, row)
@@ -143,7 +146,7 @@ async def test_literal_identity_search_when_wildcards_and_foreign_matches_exist(
             UserRecord(
                 id=UUID(int=identifier),
                 tenant_id=tenant,
-                role="member",
+                role=UserRole.MEMBER,
                 display_name="Name%_\\MiXeD",
                 identity=IdentityRecord(id=UUID(int=identifier), email="Mail%_\\@example.com"),
             ),
@@ -153,12 +156,12 @@ async def test_literal_identity_search_when_wildcards_and_foreign_matches_exist(
         UserRecord(
             id=UUID(int=11),
             tenant_id=TENANT,
-            role="member",
+            role=UserRole.MEMBER,
             display_name="NameXYZmixed",
             identity=IdentityRecord(id=UUID(int=11), email="MailXYZ@example.com"),
         ),
     )
-    await _insert(database, UserRecord(id=UUID(int=13), tenant_id=TENANT, role="member"))
+    await _insert(database, UserRecord(id=UUID(int=13), tenant_id=TENANT, role=UserRole.MEMBER))
     await database.execute("UPDATE users SET display_name = NULL WHERE id = %(id)s", {"id": UUID(int=13)})
     response = await client.get("/api/users/page", params={"search": search})
     assert response.status_code == 200
@@ -173,9 +176,9 @@ async def test_preserves_remaining_rows_when_new_users_are_inserted_before_and_a
     first = users_api.UsersPageOut.model_validate_json(first_response.content)
     assert [item.id.int for item in first.items] == [10, 11, 12, 20, 21]
     assert first.next_cursor is not None
-    await _insert(database, UserRecord(id=UUID(int=9), tenant_id=TENANT, role="org_admin", created_at=NOW))
-    await _insert(database, UserRecord(id=UUID(int=19), tenant_id=TENANT, role="member", created_at=NOW))
-    await _insert(database, UserRecord(id=UUID(int=25), tenant_id=TENANT, role="member", created_at=NOW))
+    await _insert(database, UserRecord(id=UUID(int=9), tenant_id=TENANT, role=UserRole.ORG_ADMIN, created_at=NOW))
+    await _insert(database, UserRecord(id=UUID(int=19), tenant_id=TENANT, role=UserRole.MEMBER, created_at=NOW))
+    await _insert(database, UserRecord(id=UUID(int=25), tenant_id=TENANT, role=UserRole.MEMBER, created_at=NOW))
     response = await client.get("/api/users/page", params={"limit": 100, "cursor": first.next_cursor})
     assert response.status_code == 200
     page = users_api.UsersPageOut.model_validate_json(response.content)
@@ -211,7 +214,7 @@ async def test_joins_identity_when_search_match_lies_beyond_first_page(
         UserRecord(
             id=UUID(int=50),
             tenant_id=TENANT,
-            role="member",
+            role=UserRole.MEMBER,
             created_at=None,
             identity=IdentityRecord(id=UUID(int=50), email="Target@example.com", must_change_password=True),
         ),

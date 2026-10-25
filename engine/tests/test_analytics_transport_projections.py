@@ -5,20 +5,22 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import TypeAdapter
+from tests.analytics_response_fixtures import export_status_projection
 
 from app.api import admin_search_analytics, plaza
 from app.api.auth import get_current_user
 from app.core.json_types import JsonObject
+from app.dao.analytics_projection_contracts import SearchAnalyticsExportStatusProjection
 from app.records.user import UserRecord
 
 
 @pytest.mark.parametrize("exported_at", [None, datetime(2026, 10, 20, tzinfo=UTC), "raw-sql-time"])
-async def test_export_status_keeps_partial_projection_identity_and_raw_timestamp(
+async def test_export_status_keeps_complete_projection_identity_and_raw_timestamp(
     monkeypatch: pytest.MonkeyPatch, exported_at: object
 ) -> None:
-    payload: dict[str, object] = {"pending": 1, "last_exported_at": exported_at, "extension": None}
+    payload = export_status_projection(exported_at)
 
-    async def status() -> dict[str, object]:
+    async def status() -> SearchAnalyticsExportStatusProjection:
         return payload
 
     monkeypatch.setattr(admin_search_analytics.web_search_event_dao, "export_status", status)
@@ -29,8 +31,7 @@ async def test_export_status_keeps_partial_projection_identity_and_raw_timestamp
 
     assert result is payload
     assert result["last_exported_at"] is exported_at
-    assert payload["extension"] is None
-    assert "exported" not in payload
+    assert result["exported"] == 2
     assert result["bucket"] is None
     assert result["prefix"] == "web-search"
 

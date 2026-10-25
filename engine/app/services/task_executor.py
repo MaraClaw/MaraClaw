@@ -7,6 +7,8 @@ as the chat dialog. Supports tool-calling loop for autonomous execution.
 import uuid
 from datetime import UTC, datetime
 
+from app.core.domain.activity import ActivityAction
+from app.core.domain.tasks import TaskStatus
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.task_dao import task_dao, task_log_dao
@@ -30,7 +32,7 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
         logger.warning(f"[TaskExec] Task {task_id} not found")
         return
 
-    _ = await task_dao.update(db_obj=task, obj_in={"status": "doing"})
+    _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.DOING})
     _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": "🤖 Starting task execution..."})
 
     task_title = task.title
@@ -113,14 +115,14 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
     if task:
         if task_type == "supervision":
             # Supervision tasks stay active; just log the result
-            _ = await task_dao.update(db_obj=task, obj_in={"status": "pending"})
+            _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.PENDING})
             _ = await task_log_dao.create(
                 obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"}
             )
         else:
             _ = await task_dao.update(
                 db_obj=task,
-                obj_in={"status": "done", "completed_at": datetime.now(UTC)},
+                obj_in={"status": TaskStatus.DONE, "completed_at": datetime.now(UTC)},
             )
             _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Task completed\n\n{reply}"})
         logger.info(f"[TaskExec] Task {task_id} {'logged' if task_type == 'supervision' else 'completed'}!")
@@ -130,7 +132,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
 
     await log_activity(
         agent_id,
-        "task_updated",
+        ActivityAction.TASK_UPDATED,
         f"{'Supervision' if task_type == 'supervision' else 'Task'} execution: {task_title[:60]}",
         detail={"task_id": str(task_id), "task_type": task_type, "title": task_title, "reply": reply[:500]},
         related_id=task_id,
@@ -147,4 +149,4 @@ async def _restore_supervision_status(task_id: uuid.UUID) -> None:
     """Restore supervision task status back to pending after a failed execution."""
     task = await task_dao.get(task_id)
     if task and task.status == "doing":
-        _ = await task_dao.update(db_obj=task, obj_in={"status": "pending"})
+        _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.PENDING})

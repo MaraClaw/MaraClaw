@@ -267,9 +267,11 @@ def parse_complexity_label(text: str | None) -> Complexity | None:
 
 
 def _as_complexity(value: str) -> Complexity | None:
-    if value == "complex" or value == "manageable":
-        return value
-    return None
+    match value:
+        case "complex" | "manageable":
+            return value
+        case _:
+            return None
 
 
 def heuristic_complexity(

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row
 
 
@@ -17,7 +18,7 @@ class ChannelConfigRecord:
 
     id: UUID
     agent_id: UUID
-    channel_type: str = "feishu"
+    channel_type: ChannelType = ChannelType.FEISHU
     app_id: str | None = None
     app_secret: str | None = None
     encrypt_key: str | None = None
@@ -35,7 +36,7 @@ class ChannelConfigRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
-            channel_type=str_from_row(row.get("channel_type"), "feishu") or "feishu",
+            channel_type=ChannelType(str_from_row(row.get("channel_type"), "feishu")),
             app_id=str_from_row(row["app_id"]) or None,
             app_secret=str_from_row(row["app_secret"]) or None,
             encrypt_key=str_from_row(row["encrypt_key"]) or None,

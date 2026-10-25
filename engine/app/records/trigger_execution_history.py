@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, TypeAdapter
 
+from app.core.domain.triggers import TriggerExecutionStatus
+
 
 @dataclass(frozen=True, slots=True)
 class TriggerExecutionHistoryRecord:
@@ -13,7 +15,7 @@ class TriggerExecutionHistoryRecord:
     trigger_id: UUID
     agent_id: UUID
     source: str
-    status: str
+    status: TriggerExecutionStatus
     scheduled_at: AwareDatetime
     started_at: AwareDatetime | None
     finished_at: AwareDatetime | None

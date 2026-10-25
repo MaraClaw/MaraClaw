@@ -17,7 +17,9 @@ from app.db.connection import DbConnection
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
 from app.services import org_departments
-from test_bootstrap_postgres import schema_db as schema_db
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["schema_db"]
 
 
 @dataclass(frozen=True, slots=True)

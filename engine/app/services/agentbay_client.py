@@ -157,6 +157,7 @@ class AgentBayClient:
         SDK thread may continue briefly in the background but its result is
         discarded - the browser will eventually settle on its own.
         """
+        del wait_for
         if not self._session or self._image_type not in ("browser", "browser_latest"):
             _ = await self.create_session("browser_latest")
 
@@ -175,9 +176,9 @@ class AgentBayClient:
             logger.warning(f"[AgentBay] navigate to {url!r} timed out after 40 s")
             raise RuntimeError(
                 f"Navigation to '{url}' timed out (>40 s). "
-                + "The browser may be busy or the page is unreachable. "
-                + "Try calling agentbay_browser_screenshot to check the current "
-                + "state, or retry the navigation."
+                "The browser may be busy or the page is unreachable. "
+                "Try calling agentbay_browser_screenshot to check the current "
+                "state, or retry the navigation."
             ) from None
 
         result: AgentBayResponse = {"url": url, "success": True, "title": url}
@@ -227,19 +228,19 @@ class AgentBayClient:
         if is_otp:
             action_msg = (
                 f"The text '{text}' appears to be a verification/OTP code. "
-                + f"Find the verification code input area near '{selector}'. "
-                + f"Click on the first input box, then paste or type the full code '{text}'. "
-                + "If the input is split into individual digit boxes, click the first box "
-                + f"and type each digit one at a time: {', '.join(text)}. "
-                + "Each box should auto-advance to the next after entering a digit."
+                f"Find the verification code input area near '{selector}'. "
+                f"Click on the first input box, then paste or type the full code '{text}'. "
+                "If the input is split into individual digit boxes, click the first box "
+                f"and type each digit one at a time: {', '.join(text)}. "
+                "Each box should auto-advance to the next after entering a digit."
             )
         else:
             # Standard input: click to focus, then type character by character
             # to correctly trigger React/Vue input events.
             action_msg = (
                 f"Click on the element matching '{selector}' to focus it, "
-                + f"then use the keyboard to type the text '{text}' character by character. "
-                + "This ensures modern web frameworks like React register the input."
+                f"then use the keyboard to type the text '{text}' character by character. "
+                "This ensures modern web frameworks like React register the input."
             )
 
         _ = await asyncio.to_thread(session.browser.operator.act, ActOptions(action=action_msg))
@@ -278,6 +279,7 @@ class AgentBayClient:
 
     async def code_execute(self, language: str, code: str, execution_timeout: int = 30) -> AgentBayResponse:
         """Execute code in code space using SDK."""
+        del execution_timeout
         lang_map = {
             "python": "python",
             "bash": "bash",

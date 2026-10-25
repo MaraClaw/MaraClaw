@@ -33,7 +33,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM agent_agent_relationships "
-                + "WHERE agent_id = %(agent_id)s AND target_agent_id = %(target_agent_id)s LIMIT 1",
+                "WHERE agent_id = %(agent_id)s AND target_agent_id = %(target_agent_id)s LIMIT 1",
                 {"agent_id": agent_id, "target_agent_id": target_agent_id},
             )
             return value is not None
@@ -75,8 +75,8 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {agent_cols} FROM agents a "
-                + "JOIN agent_agent_relationships r ON r.target_agent_id = a.id "
-                + f"WHERE {' AND '.join(clauses)}",
+                "JOIN agent_agent_relationships r ON r.target_agent_id = a.id "
+                f"WHERE {' AND '.join(clauses)}",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -97,9 +97,9 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('r')}, {agent_cols} "
-                + "FROM agent_agent_relationships r "
-                + "LEFT JOIN agents a ON a.id = r.target_agent_id "
-                + "WHERE r.agent_id = %(agent_id)s",
+                "FROM agent_agent_relationships r "
+                "LEFT JOIN agents a ON a.id = r.target_agent_id "
+                "WHERE r.agent_id = %(agent_id)s",
                 {"agent_id": agent_id},
             )
             return [_relationship_with_target(row, agent_dao.columns) for row in rows]
@@ -116,7 +116,7 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_agent_relationships "
-                + "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
+                "WHERE id = %(rel_id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"rel_id": rel_id, "agent_id": agent_id},
             )
             return AgentAgentRelationshipRecord.from_row(row) if row is not None else None

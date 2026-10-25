@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 
 
@@ -19,9 +20,9 @@ class TaskRecord:
     title: str
     created_by: UUID
     description: str | None = None
-    type: str = "todo"
-    status: str = "pending"
-    priority: str = "medium"
+    type: TaskType = TaskType.TODO
+    status: TaskStatus = TaskStatus.PENDING
+    priority: TaskPriority = TaskPriority.MEDIUM
     assignee: str = "self"
     due_date: datetime | None = None
     supervision_target_user_id: UUID | None = None
@@ -40,9 +41,9 @@ class TaskRecord:
             title=str_from_row(row["title"]),
             created_by=uuid_from_row(row["created_by"]),
             description=str_from_row(row["description"]) or None,
-            type=str_from_row(row.get("type"), "todo") or "todo",
-            status=str_from_row(row.get("status"), "pending") or "pending",
-            priority=str_from_row(row.get("priority"), "medium") or "medium",
+            type=TaskType(str_from_row(row.get("type"), "todo")),
+            status=TaskStatus(str_from_row(row.get("status"), "pending")),
+            priority=TaskPriority(str_from_row(row.get("priority"), "medium")),
             assignee=str_from_row(row.get("assignee"), "self") or "self",
             due_date=datetime_from_row(row.get("due_date")),
             supervision_target_user_id=uuid_from_row_opt(row.get("supervision_target_user_id")),

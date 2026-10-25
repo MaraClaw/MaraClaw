@@ -7,7 +7,10 @@ from app.core import incident_reporting as capture
 from app.runtime import lifecycle
 from app.services import audit_logger
 from app.services.incident_report import IncidentReport
-from incident_alert_fakes import AlertHarness, harness as harness
+from incident_alert_fakes import AlertHarness, harness
+from producer_admission_fixtures import producer_admission
+
+__all__ = ["harness", "producer_admission"]
 from test_runtime_lifecycle import fake_resources
 
 

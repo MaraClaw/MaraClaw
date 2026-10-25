@@ -10,9 +10,11 @@ from app.db.connection import DbConnection
 from app.records.schedule import AgentScheduleRecord
 from app.services import scheduler, scheduler_tasks
 from app.services.schedule_time import ScheduleTimezoneError
-from test_schedule_dao import NOW, _Pool, _schedule, pool as pool
-from test_scheduler import clock as clock
-from test_scheduler_tasks import owner as owner
+from test_schedule_dao import NOW, _Pool, _schedule, pool
+from test_scheduler import clock
+from test_scheduler_tasks import owner
+
+__all__ = ["clock", "owner", "pool"]
 
 
 @pytest.mark.parametrize("zone", [None, "Asia/Ho_Chi_Minh"])

@@ -5,6 +5,7 @@ import anyio
 import pytest
 from fastapi import HTTPException
 
+from app.core.domain.users import UserRole
 from app.db.session import connection_ctx
 from app.records.company_admission import AdmissionMethod
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice, TransferStatus
@@ -21,7 +22,7 @@ __all__ = ["transfer_fixture"]
 async def paid(fixture: TransferFixture) -> CompanyTransferRecord:
     result = await submit_transfer(
         fixture.applicant,
-        TransferDestination(fixture.target.id, AdmissionMethod.INVITATION, "JOIN"),
+        TransferDestination(fixture.target.id, AdmissionMethod.VERIFIED_DOMAIN),
         TransferSelection(TransferChoice.PAID),
     )
     assert isinstance(result, CompanyTransferRecord)
@@ -157,7 +158,7 @@ async def test_arbitrary_default_org_member_cannot_review_payment(
 ) -> None:
     # Given a default-org user without the genesis org-admin combination.
     fixture = transfer_fixture
-    reviewer = UserRecord(id=uuid4(), tenant_id=fixture.source.id, role=role, is_genesis=genesis)
+    reviewer = UserRecord(id=uuid4(), tenant_id=fixture.source.id, role=UserRole(role), is_genesis=genesis)
     fixture.users[reviewer.id] = reviewer
     # When payment-review authority is requested.
     with pytest.raises(HTTPException) as error:

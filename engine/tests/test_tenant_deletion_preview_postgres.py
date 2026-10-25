@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.api import tenants
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.tenant_dao import tenant_dao
 from app.db.session import bind_crud_connection, connection_ctx
@@ -85,7 +86,7 @@ async def test_preview_counts_unique_ownership_union_without_writes_when_authori
         id=deletion_pg.actor.id,
         identity_id=deletion_pg.actor.identity_id,
         tenant_id=deletion_pg.tenant_id if own_tenant else deletion_pg.other_tenant_id,
-        role="platform_admin",
+        role=UserRole.PLATFORM_ADMIN,
     )
     app = preview_app(actor)
     # When
@@ -116,7 +117,7 @@ async def test_preview_returns_zero_counts_for_empty_company(deletion_pg: Deleti
     empty_tenant = uuid4()
     async with connection_ctx() as db:
         await db.execute("INSERT INTO tenants (id, name, slug) VALUES (%s, 'Empty', 'empty')", (empty_tenant,))
-    actor = UserRecord(id=uuid4(), identity_id=uuid4(), role="platform_admin")
+    actor = UserRecord(id=uuid4(), identity_id=uuid4(), role=UserRole.PLATFORM_ADMIN)
     app = preview_app(actor)
     # When
     try:
@@ -153,9 +154,9 @@ async def test_preview_http_rejects_ineligible_company(deletion_pg: DeletionPost
         id=deletion_pg.actor.id,
         identity_id=deletion_pg.actor.identity_id,
         tenant_id=deletion_pg.other_tenant_id if condition == "foreign" else deletion_pg.tenant_id,
-        role="org_admin"
+        role=UserRole.ORG_ADMIN
         if condition in ("own", "genesis", "foreign")
-        else ("member" if condition == "member" else "platform_admin"),
+        else (UserRole.MEMBER if condition == "member" else UserRole.PLATFORM_ADMIN),
         is_genesis=condition == "genesis",
     )
     if condition in ("system", "default"):

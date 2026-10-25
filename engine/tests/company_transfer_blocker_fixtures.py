@@ -3,7 +3,8 @@ from uuid import UUID
 
 import pytest
 
-from app.schemas.company_admission import PendingAdmissionResponse
+from app.records.company_admission import CompanyAdmissionRecord
+from app.records.company_transfer import TransferChoice
 from app.services import (
     company_transfer_cleanup,
     company_transfer_fence,
@@ -11,6 +12,7 @@ from app.services import (
     company_transfer_requests as requests,
 )
 from company_admission_fixtures import AdmissionScenario, admission_scenario
+from invitation_fixtures import pending_domain_transfer
 from test_company_transfer_postgres import transfer_scenario
 from test_company_transfer_retention_postgres import seed_retained_data
 
@@ -28,18 +30,9 @@ def isolated_transfer_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 async def submit_free(scenario: AdmissionScenario) -> UUID:
-    response = await scenario.client.post(
-        "/api/tenants/transfer",
-        headers=scenario.headers(scenario.applicant),
-        json={
-            "password": "qa-password",
-            "invitation_code": "JOIN",
-            "transfer_choice": "free",
-            "free_destructive_consent": True,
-        },
-    )
-    assert response.status_code == 202, response.text
-    return PendingAdmissionResponse.model_validate_json(response.content).request.id
+    admission = await pending_domain_transfer(scenario, TransferChoice.FREE)
+    assert isinstance(admission, CompanyAdmissionRecord)
+    return admission.id
 
 
 @pytest.fixture

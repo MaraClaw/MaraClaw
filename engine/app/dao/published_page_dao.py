@@ -40,7 +40,7 @@ class PublishedPageDAO(BaseDAO[PublishedPageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM published_pages "
-                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [PublishedPageRecord.from_row(row) for row in rows]

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.services.storage import get_storage_backend, normalize_storage_key
 
@@ -310,7 +311,9 @@ When installing or importing an MCP server via `discover_resources` / `import_mc
     try:
         from app.dao.channel_config_dao import channel_config_dao
 
-        _has_feishu = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="feishu") is not None
+        _has_feishu = (
+            await channel_config_dao.get_configured_for_agent(agent_id, channel_type=ChannelType.FEISHU) is not None
+        )
     except Exception as exc:
         logger.debug("Could not load Feishu context for agent {}: {}", agent_id, type(exc).__name__)
 
@@ -374,7 +377,9 @@ When user asks to create a Feishu document (summarize PDF, write an article, etc
     try:
         from app.dao.channel_config_dao import channel_config_dao
 
-        atlassian_config = await channel_config_dao.get_configured_for_agent(agent_id, channel_type="atlassian")
+        atlassian_config = await channel_config_dao.get_configured_for_agent(
+            agent_id, channel_type=ChannelType.ATLASSIAN
+        )
         if atlassian_config:
             static_parts.append("""
 ## ⚡ Atlassian Rovo Tools (Jira / Confluence / Compass)
@@ -624,13 +629,6 @@ If no search or webpage-reading tool is available, say that web lookup is not en
     # --- Focus (working memory) --- DISABLED: injecting completed focus items
     # into the system prompt was reinforcing stale workflow patterns over updated
     # soul.md instructions.  Agents can still query focus via list_focus_items.
-    # try:
-    #     from app.services.focus_service import render_focus_context
-    #     focus = await render_focus_context(agent_id)
-    #     if focus.strip():
-    #         dynamic_parts.append(f"\n## Focus\n{focus}")
-    # except Exception:
-    #     pass
 
     # --- Active Triggers ---
     try:

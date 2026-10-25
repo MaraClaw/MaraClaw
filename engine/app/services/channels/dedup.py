@@ -28,6 +28,7 @@ def _redis_key(namespace: str, key: str) -> str:
 
 def already_processed(namespace: str, key: str, *, cap: int = _DEFAULT_CAP) -> bool:
     """Return True if ``key`` was previously marked in ``namespace``."""
+    del cap
     if not key:
         return False
     with _lock:

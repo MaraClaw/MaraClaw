@@ -6,6 +6,7 @@ from typing import assert_never
 from anyio import CapacityLimiter, create_task_group
 
 from app.core.logging import logger
+from app.core.notification_kinds import NotificationKind
 from app.dao import user_dao
 from app.records.user import UserRecord
 from app.services.incident_report import IncidentReport
@@ -37,7 +38,7 @@ async def deliver_incident(report: IncidentReport) -> bool:
             try:
                 await send_notification(
                     user.id,
-                    type="system_alert",
+                    notification_kind=NotificationKind.SYSTEM_ALERT,
                     title=report.title,
                     body=report.body,
                     sender_name="System",

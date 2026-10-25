@@ -6,7 +6,9 @@ import pytest
 
 from app.api import background_tasks
 from app.services.shared_chat import shared_session_id
-from channel_shared_postgres_fixtures import live_channel as live_channel, post_slack, schema_db as schema_db
+from channel_shared_postgres_fixtures import live_channel, post_slack, schema_db
+
+__all__ = ["live_channel", "schema_db"]
 
 
 async def test_signed_direct_humans_share_transcript_with_distinct_reply_intents(live_channel):

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Unpack
 from uuid import UUID, uuid4
 
 import anyio
@@ -14,6 +15,7 @@ from python_on_whales.exceptions import NoSuchContainer
 from app.records.agent import AgentRecord
 from app.services import agent_orphans, openclaw_update_gate
 from app.services.agent_setup_lock import setup_workspace_lock
+from builtin_keyword_fakes import IncludeAllKeyword
 
 NOW = datetime(2026, 10, 22, tzinfo=UTC)
 NETWORK = "reconciliation-test"
@@ -47,7 +49,7 @@ class Containers:
         self.inspected: dict[str, Guest] = {item.id: item for item in guests}
         self.calls: builtins.list[tuple[str, str]] = []
 
-    def list(self, *, all: bool, filters: dict[str, str]) -> builtins.list[Guest]:
+    def list(self, *, filters: dict[str, str], **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[Guest]:
         return self.listed
 
     def inspect(self, reference: str) -> Guest:

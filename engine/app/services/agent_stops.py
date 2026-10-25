@@ -1,9 +1,7 @@
-import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 
-from anyio import Path as AsyncPath
 from python_on_whales import ClientNotFoundError
 from python_on_whales.exceptions import DockerException
 
@@ -11,8 +9,10 @@ from app.api.background_tasks import schedule_background_task
 from app.core.logging import logger
 from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
+from app.dao.agent_deletion_cleanup_dao import agent_deletion_cleanup_dao
 from app.records.agent import AgentRecord
-from app.services.agent_deletion_history import snapshot_task_history
+from app.services.agent_deletion_archive import deletion_archive_path
+from app.services.agent_deletion_cleanup import complete_deletion_cleanup, reconcile_deletion_cleanup
 from app.services.agent_manager import agent_manager
 from app.services.agent_orphans import sweep_orphan_containers
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
@@ -26,26 +26,18 @@ class AgentTeardown:
 
 
 async def snapshot_agent_teardown(agents: Sequence[AgentRecord]) -> tuple[AgentTeardown, ...]:
-    return tuple([AgentTeardown(replace(agent), await snapshot_task_history(agent.id)) for agent in agents])
+    snapshots: list[AgentTeardown] = []
+    for agent in agents:
+        job = await agent_deletion_cleanup_dao.enqueue(
+            agent.id, agent_manager._agent_dir(agent.id).absolute(), deletion_archive_path(agent.id)
+        )
+        snapshots.append(AgentTeardown(job.runtime_agent(), job.task_history))
+    return tuple(snapshots)
 
 
 async def _teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
     for snapshot in snapshots:
-        agent = snapshot.agent
-        try:
-            async with setup_workspace_lock(agent_manager._agent_dir(agent.id)):
-                # Under the lock an in-flight OpenClaw cutover has already published or rolled back.
-                try:
-                    _ = await agent_manager.remove_container(agent)
-                except (ClientNotFoundError, DockerException, GuestOwnershipError, OSError) as exc:
-                    logger.warning("Deleted agent container cleanup failed agent_id=%s: %s", agent.id, exc)
-                archive_dir = await agent_manager.archive_agent_files(agent.id)
-                if snapshot.task_history is not None:
-                    _ = await AsyncPath(archive_dir / "task_history.json").write_text(
-                        snapshot.task_history, encoding="utf-8"
-                    )
-        except (OSError, shutil.Error) as exc:
-            logger.warning("Deleted agent archive failed agent_id=%s: %s", agent.id, exc)
+        await complete_deletion_cleanup(snapshot.agent.id)
 
 
 async def teardown_deleted_agents(snapshots: Sequence[AgentTeardown]) -> None:
@@ -87,6 +79,7 @@ async def reconcile_stopped_containers(now: datetime) -> None:
     from app.services.company_transfer_cleanup import reconcile_transfer_cleanup
 
     await reconcile_transfer_cleanup()
+    await reconcile_deletion_cleanup()
     agents = await agent_dao.prepare_container_stops(now)
     await stop_containers(agents)
     await sweep_orphan_containers(now)

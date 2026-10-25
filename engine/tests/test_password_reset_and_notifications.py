@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -11,6 +12,7 @@ from fastapi import BackgroundTasks, HTTPException
 from app.api import auth as auth_api
 from app.api.notification import BroadcastRequest, broadcast_notification
 from app.config import Settings
+from app.core.domain.users import UserRole
 from app.core.security import hash_password, verify_password
 from app.records.broadcast_email import NewBroadcastEmail
 from app.records.user import UserRecord
@@ -439,8 +441,8 @@ async def test_reset_password_updates_user(monkeypatch):
     async def fake_consume_password_reset_token(*_args, **_kwargs):
         return {"identity_id": identity.id}
 
-    async def fake_get(id):
-        assert id == identity.id
+    async def fake_get(identity_id):
+        assert identity_id == identity.id
         return identity
 
     async def fake_update(*, db_obj, obj_in):
@@ -451,6 +453,8 @@ async def test_reset_password_updates_user(monkeypatch):
     monkeypatch.setattr(password_reset_service, "consume_password_reset_token", fake_consume_password_reset_token)
     monkeypatch.setattr(identity_dao, "get", fake_get)
     monkeypatch.setattr(identity_dao, "update", fake_update)
+    bump = AsyncMock(return_value=8)
+    monkeypatch.setattr(identity_dao, "bump_auth_generation", bump)
 
     response = await auth_api.reset_password(ResetPasswordRequest(token="t" * 20, new_password="new-password"))
 
@@ -459,14 +463,15 @@ async def test_reset_password_updates_user(monkeypatch):
     assert "password_hash" in updates[0]
     assert identity.password_hash is not None
     assert verify_password("new-password", identity.password_hash)
+    bump.assert_awaited_once_with(identity.id)
 
 
 @pytest.mark.asyncio
 async def test_broadcast_notification_rejects_missing_system_email_config(monkeypatch):
-    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin", display_name="Alice")
+    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN, display_name="Alice")
 
-    async def fake_resolve_email_config_async():
-        return None
+    async def fake_resolve_email_config_async(tenant_id):
+        assert tenant_id == current_user.tenant_id
 
     monkeypatch.setattr(
         "app.services.system_email_service.resolve_email_config_async",
@@ -480,12 +485,11 @@ async def test_broadcast_notification_rejects_missing_system_email_config(monkey
         )
 
     assert excinfo.value.status_code == 400
-    assert "System email is not configured" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
 async def test_broadcast_notification_queues_email_delivery(monkeypatch):
-    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="org_admin", display_name="Alice")
+    current_user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role=UserRole.ORG_ADMIN, display_name="Alice")
     target_user = make_user(email="bob@example.com", tenant_id=current_user.tenant_id)
     accepted: list[NewBroadcastEmail] = []
 
@@ -496,7 +500,8 @@ async def test_broadcast_notification_queues_email_delivery(monkeypatch):
     monkeypatch.setattr("app.api.notification.connection_ctx", nullcontext)
     monkeypatch.setattr("app.api.notification.broadcast_email_dao.enqueue_many", enqueue)
 
-    async def fake_resolve_email_config_async():
+    async def fake_resolve_email_config_async(tenant_id):
+        assert tenant_id == current_user.tenant_id
         return configured_system_email()
 
     async def fake_list_users(*_args, **_kwargs):

@@ -6,12 +6,16 @@ from fastapi import HTTPException
 
 from app.api.background_tasks import schedule_background_task
 from app.core.acl_locks import lock_tenants, lock_user
+from app.core.notification_kinds import NotificationKind
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.db.session import connection_ctx
+from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice, TransferStatus
 from app.records.user import UserRecord
 from app.schemas.company_transfer import PaymentDecision
-from app.services.company_admissions import fresh_user, submit_request
+from app.services.company_admission_auto import submit_or_admit
+from app.services.company_admissions import fresh_user
+from app.services.company_transfer_fence import fence_owned_agents
 from app.services.company_transfer_guards import require_default_source
 from app.services.notification_service import send_notification
 from app.services.org_membership import get_fallback_org
@@ -37,6 +41,15 @@ async def admission_created_email(email: str, admission_id: UUID) -> None:
     )
 
 
+async def admission_approved_email(email: str, admission_id: UUID) -> None:
+    await send_system_email(
+        to=email,
+        subject="Your company admission has been approved",
+        body=f"Your payment has been confirmed and your invitation was accepted. Admission {admission_id} is "
+        "approved and your account has moved to the new company.",
+    )
+
+
 async def decide_payment(request_id: UUID, reviewer_id: UUID, decision: PaymentDecision) -> CompanyTransferRecord:
     async with connection_ctx() as db:
         snapshot = await transfers.get(request_id)
@@ -44,6 +57,14 @@ async def decide_payment(request_id: UUID, reviewer_id: UUID, decision: PaymentD
             raise HTTPException(404, "Transfer request not found")
         applicant = await fresh_user(snapshot.applicant_user_id)
         reviewer = await require_payment_reviewer(reviewer_id)
+        # An approved invitation admits immediately, so the agent fence precedes the tenant/user locks.
+        fenced_ids = (
+            await fence_owned_agents(applicant)
+            if decision.decision == "approved"
+            and snapshot.status == TransferStatus.PAYMENT_REVIEW
+            and snapshot.method == AdmissionMethod.INVITATION
+            else None
+        )
         await lock_tenants(
             db, (snapshot.source_tenant_id, snapshot.target_tenant_id, applicant.tenant_id, reviewer.tenant_id)
         )
@@ -84,27 +105,35 @@ async def decide_payment(request_id: UUID, reviewer_id: UUID, decision: PaymentD
                 return await transfers.update(db_obj=reviewed, obj_in={"status": "rejected"})
             case "approved":
                 confirmed = await transfers.update(db_obj=reviewed, obj_in={"payment_confirmed_at": now})
-                admission = await submit_request(
+                admission = await submit_or_admit(
                     applicant,
                     request.target_tenant_id,
                     request.method,
                     invitation_code=request.invitation_code,
                     transfer_id=request.id,
+                    fenced_ids=fenced_ids,
                 )
+                admitted = admission.status == AdmissionStatus.APPROVED
                 result = await transfers.update(
                     db_obj=confirmed, obj_in={"status": "admission_created", "admission_request_id": admission.id}
                 )
                 await send_notification(
                     applicant.id,
-                    type="company_admission_created",
-                    title="Company admission request created",
-                    body="Payment confirmed. Your request is awaiting the target company's approval.",
-                    link="/app/admissions",
+                    notification_kind=NotificationKind.COMPANY_ADMISSION_RESOLVED
+                    if admitted
+                    else NotificationKind.COMPANY_ADMISSION_CREATED,
+                    title="Company admission approved" if admitted else "Company admission request created",
+                    body="Payment confirmed. You have joined the company."
+                    if admitted
+                    else "Payment confirmed. Your request is awaiting the target company's approval.",
+                    link=f"/app/admissions/{admission.id}" if admitted else "/app/admissions",
                     ref_id=admission.id,
                 )
                 if applicant.email is not None and applicant.email != "":
                     schedule_background_task(
-                        admission_created_email(applicant.email, admission.id),
+                        (admission_approved_email if admitted else admission_created_email)(
+                            applicant.email, admission.id
+                        ),
                         description=f"transfer admission created {admission.id}",
                     )
                 return result

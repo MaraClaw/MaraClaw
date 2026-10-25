@@ -7,7 +7,9 @@ import pytest
 
 from app.records.identity import IdentityRecord
 from app.services import org_departments
-from test_department_api import directory as directory
+from test_department_api import directory
+
+__all__ = ["directory"]
 
 
 def test_plural_replacement_normalizes_duplicates_and_retains_row_directory(directory):

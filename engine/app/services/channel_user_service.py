@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping
 from typing import ClassVar
 
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
@@ -152,7 +153,7 @@ class ChannelUserService:
                         _ = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
                     logger.info(
                         f"[{channel_type}] Reusing org-synced OrgMember {existing_member.id} "
-                        + f"for user {user.id} instead of creating a duplicate shell"
+                        f"for user {user.id} instead of creating a duplicate shell"
                     )
                 else:
                     _ = await self._create_org_member_shell(
@@ -165,7 +166,7 @@ class ChannelUserService:
         if channel_type == "feishu" and not org_member and unionid in (None, "") and external_id in (None, ""):
             raise ChannelUserResolutionError(
                 "Feishu sender could not be resolved to a stable user_id/union_id; "
-                + "refusing to lazily create a duplicate user from open_id only."
+                "refusing to lazily create a duplicate user from open_id only."
             )
 
         user = await self._create_channel_user(channel_type, external_user_id, extra_info, tenant_id)
@@ -299,6 +300,7 @@ class ChannelUserService:
         tenant_id: uuid.UUID | None,
     ) -> UserRecord:
         """Create a new Identity + User for channel identity (lazy registration)."""
+        del external_user_id
         await _require_company_membership(None, tenant_id)
         info = json_object_from(extra_info)
         email = _extra_text(info, "email")
@@ -328,7 +330,7 @@ class ChannelUserService:
                 "identity_id": identity.id,
                 "display_name": name,
                 "avatar_url": _extra_text(info, "avatar_url"),
-                "role": "member",
+                "role": UserRole.MEMBER,
                 "registration_source": channel_type,
                 "tenant_id": tenant_id,
                 "is_active": True,
@@ -390,7 +392,7 @@ async def get_platform_user_by_org_member(
             "identity_id": identity.id,
             "display_name": name,
             "avatar_url": org_member.avatar_url,
-            "role": "member",
+            "role": UserRole.MEMBER,
             "registration_source": channel_type,
             "tenant_id": agent_tenant_id,
             "is_active": True,

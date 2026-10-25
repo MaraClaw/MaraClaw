@@ -15,7 +15,7 @@ __all__ = ["admission_scenario"]
 
 @pytest.mark.parametrize("source", ["company", "openclaw", "unassigned"])
 @pytest.mark.parametrize("method", ["invitation", "domain"])
-async def test_company_join_requires_transfer_from_company_source(
+async def test_company_join_is_for_unassigned_newcomers_only(
     admission_scenario: AdmissionScenario, source: str, method: str
 ):
     scenario = admission_scenario
@@ -30,10 +30,17 @@ async def test_company_join_requires_transfer_from_company_source(
 
     response = await scenario.client.post(path, json=body, headers=scenario.headers(scenario.applicant))
 
-    assert response.status_code == (409 if source == "company" else 202), response.text
-    assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == (source != "company")
-    assert (await scenario.current_applicant()).tenant_id == (None if source == "unassigned" else scenario.source_id)
-    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
+    # Members, whatever their organization, must transfer with a password; a newcomer's invitation admits at once
+    # while a verified domain still waits for the genesis administrator.
+    newcomer = source == "unassigned"
+    admitted = newcomer and method == "invitation"
+    expected = (200 if admitted else 202) if newcomer else (409 if method == "invitation" else 403)
+    assert response.status_code == expected, response.text
+    assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == int(newcomer)
+    assert (await scenario.current_applicant()).tenant_id == (
+        scenario.target_id if admitted else None if newcomer else scenario.source_id
+    )
+    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == int(admitted)
 
 
 @pytest.mark.parametrize("method", ["domain", "invitation"])
@@ -58,20 +65,17 @@ async def test_company_transfer_requires_password_before_admission(
     assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='JOIN'") == 0
 
 
-@pytest.mark.parametrize("method", ["domain_join", "domain_transfer", "invitation_transfer"])
-async def test_company_entrypoints_create_pending_without_moving(admission_scenario: AdmissionScenario, method: str):
+@pytest.mark.parametrize("path", ["/api/tenants/join-suggested", "/api/tenants/transfer"])
+async def test_default_member_cannot_reach_a_company_through_a_verified_domain(
+    admission_scenario: AdmissionScenario, path: str
+):
     scenario = admission_scenario
-    body = {"tenant_id": str(scenario.target_id)}
-    path = "/api/tenants/join-suggested"
-    if method != "domain_join":
-        path = "/api/tenants/transfer"
-        body["password"] = "qa-password"
-    if method == "invitation_transfer":
-        body = {"password": "qa-password", "invitation_code": "JOIN"}
+    body = {"tenant_id": str(scenario.target_id), "password": "qa-password"}
+
     response = await scenario.client.post(path, json=body, headers=scenario.headers(scenario.applicant))
-    assert response.status_code == 202, response.text
-    expected_method = "invitation" if method == "invitation_transfer" else "verified_domain"
-    assert response.json()["request"]["method"] == expected_method
+
+    assert response.status_code == 403, response.text
+    assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == 0
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
 
 
@@ -150,14 +154,18 @@ async def test_other_pending_target_conflicts(admission_scenario: AdmissionScena
     await scenario.submit()
     other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
     await scenario.db.execute(
-        "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count) VALUES (%(id)s,'OTHER',%(target)s,1,0)",
+        "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count,invited_email) "
+        "VALUES (%(id)s,'OTHER',%(target)s,1,0,'applicant@acme.test')",
         {"id": uuid4(), "target": other.id},
     )
     response = await scenario.client.post(
-        "/api/tenants/join", json={"invitation_code": "OTHER"}, headers=scenario.headers(scenario.applicant)
+        "/api/tenants/transfer",
+        json={"invitation_code": "OTHER", "password": "qa-password"},
+        headers=scenario.headers(scenario.applicant),
     )
     assert response.status_code == 409
     assert await scenario.db.fetchval("SELECT count(*) FROM company_admission_requests") == 1
+    assert await scenario.db.fetchval("SELECT used_count FROM invitation_codes WHERE code='OTHER'") == 0
 
 
 async def test_admin_assignment_cannot_move_company(admission_scenario: AdmissionScenario):

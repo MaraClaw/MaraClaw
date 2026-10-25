@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Self, cast
 from uuid import uuid4
 
 import pytest
 
+from app.core.domain.tasks import TaskStatus
 from app.dao.base import BaseDAO
 from app.db import session as session_module
 from app.db.connection import DbConnection
@@ -22,7 +23,7 @@ class _Item:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> _Item:
-        return cls(id=row["id"], name=cast(str, row["name"]))
+        return cls(id=row["id"], name=cast("str", row["name"]))
 
 
 class _FakeCursor:
@@ -30,7 +31,7 @@ class _FakeCursor:
         self._parent = parent
         self._rows: list[dict[str, Any]] = []
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -136,7 +137,7 @@ async def test_delete_returns_deleted_row(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
     dao = ItemDAO()
 
-    deleted = await dao.delete(id=item_id)
+    deleted = await dao.delete(record_id=item_id)
 
     assert deleted is not None
     assert deleted.id == item_id
@@ -161,3 +162,22 @@ async def test_get_many_uses_any_and_skips_empty(monkeypatch: pytest.MonkeyPatch
     query, params = raw.executed[0]
     assert "ANY(%(ids)s)" in query
     assert params["ids"] == [item_id]
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_enum_parameters_are_bound_as_plain_strings(monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
+    # Given an enum-valued update at the shared psycopg boundary.
+    raw = _FakeRawConnection()
+    item = _Item(id=uuid4(), name="pending")
+    raw.next_rows = [{"id": item.id, "name": "done"}]
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    dao = ItemDAO()
+    # When either shared write path binds the value.
+    if operation == "create":
+        await dao.create(obj_in={"id": item.id, "name": TaskStatus.DONE})
+    else:
+        await dao.update(db_obj=item, obj_in={"name": TaskStatus.DONE})
+    # Then psycopg receives the existing SQL enum label, not a Python enum instance.
+    params = raw.executed[0][1]
+    assert params["name"] == "done"
+    assert type(params["name"]) is str

@@ -60,7 +60,7 @@ def _json_objects(value: object) -> list[JsonObject]:
 
 
 def _json_float(value: object, default: float) -> float:
-    raw: object = value if value else default
+    raw: object = value or default
     if isinstance(raw, bool):
         return float(raw)
     if isinstance(raw, int | float):
@@ -393,13 +393,13 @@ roots = [body];
                     clip_h = root_h
                     hide_expr = (
                         "(() => {"
-                        + "const id='maraclaw-bg-capture-style';"
-                        + "document.getElementById(id)?.remove();"
-                        + "const style=document.createElement('style');"
-                        + "style.id=id;"
-                        + f"style.textContent='[data-maraclaw-slide-root=\"{idx}\"] > * {{ visibility: hidden !important; }}';"
-                        + "document.head.appendChild(style);"
-                        + "})()"
+                        "const id='maraclaw-bg-capture-style';"
+                        "document.getElementById(id)?.remove();"
+                        "const style=document.createElement('style');"
+                        "style.id=id;"
+                        f"style.textContent='[data-maraclaw-slide-root=\"{idx}\"] > * {{ visibility: hidden !important; }}';"
+                        "document.head.appendChild(style);"
+                        "})()"
                     )
                     restore_expr = "document.getElementById('maraclaw-bg-capture-style')?.remove()"
                     _ = await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
@@ -450,18 +450,18 @@ roots = [body];
                         clip_h = max(1.0, _json_float(item.get("h"), 1.0))
                         hide_expr = (
                             "(() => {"
-                            + "const id='maraclaw-item-bg-capture-style';"
-                            + "document.getElementById(id)?.remove();"
-                            + "const style=document.createElement('style');"
-                            + "style.id=id;"
-                            + "style.textContent="
-                            + f'\'[data-maraclaw-slide-root="{slide_idx}"] * {{ visibility: hidden !important; }} '
-                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] {{ visibility: visible !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
-                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::before, '
-                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::after {{ color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
-                            + f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] * {{ visibility: hidden !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }}\';'
-                            + "document.head.appendChild(style);"
-                            + "})()"
+                            "const id='maraclaw-item-bg-capture-style';"
+                            "document.getElementById(id)?.remove();"
+                            "const style=document.createElement('style');"
+                            "style.id=id;"
+                            "style.textContent="
+                            f'\'[data-maraclaw-slide-root="{slide_idx}"] * {{ visibility: hidden !important; }} '
+                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] {{ visibility: visible !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
+                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::before, '
+                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"]::after {{ color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }} '
+                            f'[data-maraclaw-slide-root="{slide_idx}"] [data-maraclaw-item-id="{item_id}"] * {{ visibility: hidden !important; color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }}\';'
+                            "document.head.appendChild(style);"
+                            "})()"
                         )
                         restore_expr = "document.getElementById('maraclaw-item-bg-capture-style')?.remove()"
                         _ = await send("Runtime.evaluate", {"expression": hide_expr, "awaitPromise": True})
@@ -496,7 +496,7 @@ roots = [body];
                         shape_screenshots[item_id] = str(image_file)
                 layout["backgroundScreenshots"] = background_screenshots
                 layout["shapeScreenshots"] = shape_screenshots
-            return layout if layout else None
+            return layout or None
     except Exception as layout_exc:
         logger.warning(f"Browser layout extraction failed, falling back to DOM flow conversion: {layout_exc}")
         return None

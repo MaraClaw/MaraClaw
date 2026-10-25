@@ -1,9 +1,11 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 from anyio import current_time
 from fastapi import HTTPException
 
 from app.dao.agent_dao import agent_dao
+from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
@@ -11,7 +13,10 @@ from app.services.openclaw_update_gate import assert_no_active_run
 
 
 async def fence_owned_agents(user: UserRecord) -> frozenset[UUID]:
-    agents = await agent_dao.list_for_creator(user.id, tenant_id=user.tenant_id)
+    return await fence_agents(await agent_dao.list_for_creator(user.id, tenant_id=user.tenant_id))
+
+
+async def fence_agents(agents: Sequence[AgentRecord]) -> frozenset[UUID]:
     deadline = current_time() + 5
     for agent in sorted(agents, key=lambda item: item.id):
         await assert_no_active_run(agent.id)

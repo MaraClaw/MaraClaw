@@ -164,7 +164,7 @@ def resolve_config(config: EmailConfig) -> ResolvedEmailConfig:
 
 
 def _message_header(msg: Message, key: str, default: str = "") -> str:
-    value = cast(object, msg.get(key, default))
+    value = cast("object", msg.get(key, default))
     return value if isinstance(value, str) else default
 
 
@@ -384,11 +384,11 @@ async def read_emails(
 
                     results.append(
                         "---\n"
-                        + f"**From:** {from_addr}\n"
-                        + f"**Subject:** {subject}\n"
-                        + f"**Date:** {date_str}\n"
-                        + f"**Message-ID:** {message_id}\n"
-                        + f"**Body:**\n{body}"
+                        f"**From:** {from_addr}\n"
+                        f"**Subject:** {subject}\n"
+                        f"**Date:** {date_str}\n"
+                        f"**Message-ID:** {message_id}\n"
+                        f"**Body:**\n{body}"
                     )
 
                 header = f"📬 {len(results)} email(s) from {folder}:\n\n"

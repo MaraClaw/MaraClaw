@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import files, skills
+from app.core.domain.users import UserRole
 from app.core.security import get_current_admin, get_current_user
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
@@ -35,7 +36,7 @@ def boundary(monkeypatch, tmp_path):
     identity = IdentityRecord(id=uuid.uuid4())
     tenant_id = uuid.uuid4()
     actor = UserRecord(
-        id=uuid.uuid4(), identity_id=identity.id, identity=identity, tenant_id=tenant_id, role="org_admin"
+        id=uuid.uuid4(), identity_id=identity.id, identity=identity, tenant_id=tenant_id, role=UserRole.ORG_ADMIN
     )
     state = SimpleNamespace(
         pool=pool,

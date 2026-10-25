@@ -209,3 +209,33 @@ The three transfer tables are additive greenfield baseline DDL only. No existing
 installation upgrade patch is supplied. Opt-in PostgreSQL tests require an
 explicitly isolated `BOOTSTRAP_TEST_DATABASE_URL`; ordinary local QA uses fakes
 and does not connect to a database, Docker daemon or real email service.
+
+## Invitation-driven automatic admission
+
+Every invitation code is bound to one normalized (trimmed, lower-cased) recipient
+email, single-use, and expires at a server-computed time at most 336 hours
+(`ttl_hours` 1-336, default 336) after issue. `invited_email`, `expires_at`,
+`redeemed_at` and `redeemed_by` are NOT NULL / defaulted in the fresh baseline schema; there is no
+unbound or non-expiring code and no legacy fallback. Preview, validation, row locking and the atomic
+consume (`UPDATE ... WHERE is_active AND unexpired AND used_count < max_uses AND
+invited_email = <account email>`) all apply the same predicate, so a missing or
+different address matches nothing.
+
+`POST /api/tenants/invitations/preview {invitation_code}` (authenticated eligible
+unassigned or default-org member) returns `{tenant: {id, name}}` for an active
+ordinary company, otherwise one generic **400**. It never consumes or moves anything.
+
+A valid code admits atomically: lock tenants, then the user, then the code row;
+revalidate principal, admin guard, default source, transfer disposition and the
+code; create an `approved` admission (no reviewer, `decided_by_user_id` NULL); apply
+the shared `apply_approved_admission` (also used by genesis approval); spend the
+code; send the welcome. Any failure rolls the whole transaction back.
+
+| Entry | Behavior |
+|---|---|
+| `POST /api/tenants/join` | Unassigned users only; **200** `{status:"approved", request}`. Members get **409** and must use `/transfer`. |
+| `POST /api/tenants/transfer` | Password-confirmed; company targets require the code (**403** without); **200** approved. Free needs consent (**422**), owners of agents need a choice (**409**); paid returns **202** until payment is approved, then admits and revalidates the code (**409** and no change if it expired). |
+| Registration / SSO | Unchanged: they still create pending requests (a registration code is checked for expiry and recipient). |
+
+Genesis approval of a legacy pending request rechecks expiry and recipient before
+moving the member. Opt-in PostgreSQL coverage: `test_invitation_*_postgres.py`.

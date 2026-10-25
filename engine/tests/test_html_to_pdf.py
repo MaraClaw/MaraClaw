@@ -21,7 +21,7 @@ async def test_convert_html_to_pdf_falls_back_when_chrome_is_unavailable(
     monkeypatch.setattr("app.services.document_conversion.html_to_pdf.chrome_executable", lambda: None)
     monkeypatch.setitem(sys.modules, "weasyprint", SimpleNamespace(HTML=html))
 
-    # When: conversion is requested
+    # When the conversion runs.
     result = await convert_html_to_pdf(source, target, "tgt.pdf", {})
 
     # Then: the fallback renders without attempting a subprocess launch

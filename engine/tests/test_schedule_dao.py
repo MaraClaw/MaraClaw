@@ -14,7 +14,9 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.db import session as session_module
 from app.db.pool import reset_pool_for_tests
 from app.records.schedule import AgentScheduleRecord
-from schedule_occurrence_persistence_fakes import NEXT as NEXT, NOW as NOW, _Pool as _Pool, _Raw as _Raw
+from schedule_occurrence_persistence_fakes import NEXT, NOW, _Pool, _Raw
+
+__all__ = ["NEXT", "NOW", "_Pool", "_Raw"]
 
 
 @pytest.fixture

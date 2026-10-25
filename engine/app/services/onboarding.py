@@ -214,10 +214,10 @@ def _locale_directive(user_locale: str) -> str:
 
     return (
         f"[Interface language: {lang_name}. Reply entirely in {lang_name} for "
-        + "this onboarding turn. The onboarding instructions below are written "
-        + "in English for you, not for the user; translate the actual user-facing "
-        + f"message naturally into {lang_name}. Keep product names and conventional "
-        + "technical terms in English when appropriate.]\n\n"
+        "this onboarding turn. The onboarding instructions below are written "
+        "in English for you, not for the user; translate the actual user-facing "
+        f"message naturally into {lang_name}. Keep product names and conventional "
+        "technical terms in English when appropriate.]\n\n"
     )
 
 
@@ -248,7 +248,7 @@ async def resolve_onboarding_prompt(
         user_turns = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM chat_messages "
-                + "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
+                "WHERE agent_id = %(agent_id)s AND user_id = %(user_id)s AND role = 'user'",
                 {"agent_id": agent.id, "user_id": user_id},
             )
         )

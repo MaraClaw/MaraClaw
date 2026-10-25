@@ -4,10 +4,12 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import PlainSerializer
 from typing_extensions import TypedDict
 
+from app.core.domain.activity import ActivityAction
+
 
 class AgentActivityResponse(TypedDict):
     id: str
-    action_type: str
+    action_type: ActivityAction
     summary: str
     detail: Annotated[
         dict[str, object], PlainSerializer(jsonable_encoder, return_type=dict[str, object], when_used="json")

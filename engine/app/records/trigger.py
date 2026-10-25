@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import (
     datetime_from_row,
     int_from_row,
@@ -69,7 +70,7 @@ class TriggerExecutionRecord:
     trigger_id: UUID
     agent_id: UUID
     source: str = "webhook"
-    status: str = "pending"
+    status: TriggerExecutionStatus = TriggerExecutionStatus.PENDING
     idempotency_key: str = ""
     payload: dict[str, Any] = field(default_factory=dict[str, Any])
     payload_text: str = ""
@@ -89,7 +90,7 @@ class TriggerExecutionRecord:
             trigger_id=uuid_from_row(row["trigger_id"]),
             agent_id=uuid_from_row(row["agent_id"]),
             source=str_from_row(row.get("source"), "webhook") or "webhook",
-            status=str_from_row(row.get("status"), "pending") or "pending",
+            status=TriggerExecutionStatus(str_from_row(row.get("status"), "pending")),
             idempotency_key=str_from_row(row.get("idempotency_key")),
             payload=payload,
             payload_text=str_from_row(row.get("payload_text")),

@@ -81,7 +81,7 @@ class LocalStorageBackend(StorageBackend):
     async def read_bytes(self, key: str) -> bytes:
         path = self._full_path(key)
         async with aiofiles.open(path, "rb") as f:
-            return cast(bytes, await f.read())
+            return cast("bytes", await f.read())
 
     @override
     async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:

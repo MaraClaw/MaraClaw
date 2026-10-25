@@ -44,22 +44,20 @@ def test_parse_inline_markdown_preserves_styles_and_backticks_are_plain_text() -
 
 def test_markdown_to_feishu_blocks_characterizes_supported_block_shapes() -> None:
     target = _markdown_module()
-    markdown = "\n".join(
-        [
-            "# Heading 1",
-            "#### Heading 4",
-            "- Bullet **bold**",
-            "1. Ordered *item*",
-            "> Quote ~~gone~~",
-            "```python",
-            "print('hello')",
-            "```",
-            "---",
-            "| Name | Value |",
-            "| --- | --- |",
-            "| Alice | 42 |",
-            "plain `code`",
-        ]
+    markdown = (
+        "# Heading 1\n"
+        "#### Heading 4\n"
+        "- Bullet **bold**\n"
+        "1. Ordered *item*\n"
+        "> Quote ~~gone~~\n"
+        "```python\n"
+        "print('hello')\n"
+        "```\n"
+        "---\n"
+        "| Name | Value |\n"
+        "| --- | --- |\n"
+        "| Alice | 42 |\n"
+        "plain `code`"
     )
 
     blocks = target._markdown_to_feishu_blocks(markdown)

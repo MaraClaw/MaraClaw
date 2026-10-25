@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import assert_never
 
+from app.core.domain.approvals import ApprovalAction, ApprovalStatus
 from app.core.json_types import JsonObject, is_str_dict, json_as_str_or, mapping_from_row, object_from_literal
 from app.core.logging import logger
+from app.core.notification_kinds import NotificationKind
 from app.dao.agent_dao import agent_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
@@ -101,11 +104,19 @@ class AutonomyService:
         self,
         approval_id: uuid.UUID | None = None,
         user: UserRecord | None = None,
-        action: str = "",
+        action: ApprovalAction = ApprovalAction.REJECT,
     ) -> ApprovalRequestRecord:
         """Approve or reject a pending approval request."""
         if approval_id is None or user is None:
             raise ValueError("Approval not found")
+
+        match action:
+            case ApprovalAction.APPROVE:
+                status = ApprovalStatus.APPROVED
+            case ApprovalAction.REJECT:
+                status = ApprovalStatus.REJECTED
+            case unreachable:
+                assert_never(unreachable)
 
         async with optional_connection_ctx():
             approval = await approval_request_dao.get(approval_id)
@@ -119,7 +130,6 @@ class AutonomyService:
             if agent and agent.creator_id != user.id and user.role != "platform_admin":
                 raise ValueError("Only the agent creator or platform admin can resolve approvals")
 
-            status = "approved" if action == "approve" else "rejected"
             approval = await approval_request_dao.resolve(
                 approval,
                 status=status,
@@ -151,7 +161,7 @@ class AutonomyService:
                 body_text = f"Result: {execution_result}"
             _ = await send_notification(
                 user_id=agent.creator_id,
-                type="approval_resolved",
+                notification_kind=NotificationKind.APPROVAL_RESOLVED,
                 title=f"[{agent.name}] {approval.action_type} - {status_label}",
                 body=body_text,
                 link=f"/agents/{agent.id}#approvals",
@@ -165,7 +175,7 @@ class AutonomyService:
                     if requester_id != agent.creator_id:
                         _ = await send_notification(
                             user_id=requester_id,
-                            type="approval_resolved",
+                            notification_kind=NotificationKind.APPROVAL_RESOLVED,
                             title=f"[{agent.name}] {approval.action_type} - {status_label}",
                             body=body_text,
                             link=f"/agents/{agent.id}#activityLog",
@@ -213,7 +223,7 @@ class AutonomyService:
 
         _ = await send_notification(
             user_id=agent.creator_id,
-            type="autonomy_l2",
+            notification_kind=NotificationKind.AUTONOMY_L2,
             title=f"[{agent.name}] executed: {action_type}",
             body=json.dumps(details, ensure_ascii=False)[:200],
             link=f"/agents/{agent.id}#activityLog",
@@ -261,7 +271,7 @@ class AutonomyService:
 
         _ = await send_notification(
             user_id=agent.creator_id,
-            type="approval_pending",
+            notification_kind=NotificationKind.APPROVAL_PENDING,
             title=f"[{agent.name}] requests approval: {approval.action_type}",
             body=json.dumps(approval.details, ensure_ascii=False)[:200],
             link=f"/agents/{agent.id}#approvals",

@@ -40,7 +40,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_templates "
-                + "WHERE is_builtin IS TRUE ORDER BY created_at ASC NULLS LAST"
+                "WHERE is_builtin IS TRUE ORDER BY created_at ASC NULLS LAST"
             )
             return [AgentTemplateRecord.from_row(row) for row in rows]
 
@@ -48,7 +48,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agent_templates "
-                + "WHERE name = %(name)s AND is_builtin IS TRUE LIMIT 1",
+                "WHERE name = %(name)s AND is_builtin IS TRUE LIMIT 1",
                 {"name": name},
             )
             return AgentTemplateRecord.from_row(row) if row is not None else None

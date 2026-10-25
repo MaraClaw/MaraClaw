@@ -53,8 +53,8 @@ class TextFormatter:
             color = _LEVEL_COLOR.get(record.levelno, "")
             line = (
                 f"{_GREEN}{stamp}{_RESET} | {color}{record.levelname}{_RESET} | "
-                + f"{_CYAN}{trace}{_RESET} | {_CYAN}{location}{_RESET} - "
-                + f"{color}{record.message}{_RESET}"
+                f"{_CYAN}{trace}{_RESET} | {_CYAN}{location}{_RESET} - "
+                f"{color}{record.message}{_RESET}"
             )
         else:
             line = f"{stamp} | {record.levelname} | {trace} | {location} - {record.message}"

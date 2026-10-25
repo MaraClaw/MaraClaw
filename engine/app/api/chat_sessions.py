@@ -14,19 +14,14 @@ from app.dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.db.session import connection_ctx
-from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
 from app.services.chat_history import ChatMessagePage, get_history_page, parse_cursor
 from app.services.chat_message_projection import ChatMessageEntry, project_messages
+from app.services.chat_session_access import can_access_chat_session, can_view_all_agent_chat_sessions
 from app.services.shared_chat import ensure_shared_session, is_shared_session
 
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
-
-
-def _can_view_all_agent_chat_sessions(user: UserRecord, agent: AgentRecord) -> bool:
-    """Admins and the agent creator may list/view/delete other users' chat sessions."""
-    return user.role in ("platform_admin", "org_admin", "agent_admin") or str(agent.creator_id) == str(user.id)
 
 
 class SessionOut(BaseModel):
@@ -73,7 +68,7 @@ async def list_sessions(
     _ = await check_agent_access(current_user, agent_id)
 
     if scope == "all":
-        if not _can_view_all_agent_chat_sessions(current_user, agent):
+        if not can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
 
         shared = await ensure_shared_session(agent_id)
@@ -95,8 +90,8 @@ async def list_sessions(
             async with connection_ctx() as conn:
                 rows = await conn.fetchall(
                     "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display "
-                    + "FROM users u JOIN identities i ON u.identity_id = i.id "
-                    + "WHERE u.id = ANY(%(ids)s)",
+                    "FROM users u JOIN identities i ON u.identity_id = i.id "
+                    "WHERE u.id = ANY(%(ids)s)",
                     {"ids": user_ids},
                 )
             for row in rows:
@@ -161,7 +156,7 @@ async def list_sessions(
             )
         return out
 
-    # scope == "mine"
+    # List only the current user's sessions for the remaining scope.
     shared = await ensure_shared_session(agent_id)
     legacy = await chat_session_dao.list_for_user(agent_id=agent_id, user_id=current_user.id)
     sessions = [shared, *(s for s in legacy if s.id != shared.id)]
@@ -201,6 +196,7 @@ async def create_session(
     agent_id: uuid.UUID, body: CreateSessionIn = CreateSessionIn(), current_user: UserRecord = Depends(get_current_user)
 ):
     """Resume the canonical shared human conversation."""
+    _ = body
     _ = await check_agent_access(current_user, agent_id)
     session = await ensure_shared_session(agent_id)
     counts = await chat_session_dao.message_counts([str(session.id)], agent_id=agent_id)
@@ -233,7 +229,7 @@ async def rename_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
+    if str(session.user_id) != str(current_user.id) and not can_view_all_agent_chat_sessions(current_user, agent):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     session = await chat_session_dao.update(db_obj=session, obj_in={"title": body.title})
@@ -254,15 +250,14 @@ async def delete_session(
         if is_shared_session(session):
             raise HTTPException(409, {"reason": "shared_session_required", "session_id": str(session.id)})
 
-        if str(session.user_id) != str(current_user.id) and not _can_view_all_agent_chat_sessions(current_user, agent):
+        if str(session.user_id) != str(current_user.id) and not can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized")
 
         if await gateway_report_delivery_dao.has_outstanding_session(session_id):
             raise HTTPException(409, {"reason": "session_delivery_pending", "session_id": str(session_id)})
 
         await chat_message_dao.delete_for_conversation(str(session_id))
-        _ = await chat_session_dao.delete(id=session_id)
-    return
+        _ = await chat_session_dao.delete(record_id=session_id)
 
 
 @router.get("/{agent_id}/sessions/{session_id}/messages")
@@ -279,7 +274,7 @@ async def get_session_messages(
     before_dt = None
     if before not in (None, ""):
         try:
-            before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            before_dt = datetime.fromisoformat(before)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid `before` timestamp format. Use ISO 8601.") from None
 
@@ -309,11 +304,7 @@ async def _authorize_history(agent_id: uuid.UUID, session_id: uuid.UUID, current
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if (
-        not is_shared_session(session)
-        and str(session.user_id) != str(current_user.id)
-        and not _can_view_all_agent_chat_sessions(current_user, agent)
-    ):
+    if not can_access_chat_session(current_user, agent, session):
         raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
     return session

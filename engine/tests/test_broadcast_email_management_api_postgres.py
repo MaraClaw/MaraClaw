@@ -10,11 +10,14 @@ from psycopg.errors import ForeignKeyViolation
 from starlette.types import Message, Scope
 
 from app.api import notification as api
+from app.core.domain.users import UserRole
 from app.core.security import create_access_token, get_current_user
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.db.session import bind_crud_connection
 from app.records.user import UserRecord
-from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db as broadcast_db, enqueue, member, tenant
+from broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, enqueue, member, tenant
+
+__all__ = ["broadcast_db"]
 
 
 def application(sender: UserRecord | None = None) -> FastAPI:
@@ -32,7 +35,7 @@ async def test_admin_status_and_cancellation_work_after_email_is_disabled(
     # Given: retained deliveries and disabled SMTP configuration.
     [scope] = await enqueue(broadcast_db)
     sender = await member(broadcast_db, scope.tenant_id)
-    sender.role = role
+    sender.role = UserRole(role)
     resolve = AsyncMock(return_value=None)
     monkeypatch.setattr("app.services.system_email_service.resolve_email_config_async", resolve)
     app = application(sender)
@@ -66,7 +69,7 @@ async def test_unavailable_broadcasts_have_the_same_wire_shape(
     # Given: no delivery evidence is available in the caller's current tenant.
     tenant_id = await tenant(broadcast_db)
     sender = await member(broadcast_db, tenant_id)
-    sender.role = "platform_admin"
+    sender.role = UserRole.PLATFORM_ADMIN
     broadcast_id = uuid4()
     monkeypatch.setattr(
         "app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=object())
@@ -154,7 +157,7 @@ async def test_cancellation_commits_before_response_and_keeps_in_app_notificatio
     # Given: a production-bound request and an independent observer before response teardown.
     tenant_id = await tenant(broadcast_db)
     sender = await member(broadcast_db, tenant_id)
-    sender.role = "org_admin"
+    sender.role = UserRole.ORG_ADMIN
     _ = await member(broadcast_db, tenant_id)
     monkeypatch.setattr(
         "app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=object())

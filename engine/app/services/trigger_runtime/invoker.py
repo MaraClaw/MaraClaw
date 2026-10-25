@@ -17,6 +17,7 @@ from app.dao.participant_dao import participant_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.trigger import AgentTriggerRecord
+from app.schemas.chat_wire import ChatEventType
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
@@ -151,20 +152,20 @@ async def _run_trigger_invocation(
             if t.name == "daily_okr_collection":
                 part += (
                     "\nExecution requirements: First call get_okr_settings to confirm whether daily report collection is enabled. "
-                    + "If enabled, contact only members and digital employees in your relationship network to collect today's final daily reports, "
-                    + "then organize them into a formal report of no more than 2,000 words. "
-                    + "If it is disabled, state that no action is needed and stop."
+                    "If enabled, contact only members and digital employees in your relationship network to collect today's final daily reports, "
+                    "then organize them into a formal report of no more than 2,000 words. "
+                    "If it is disabled, state that no action is needed and stop."
                 )
             elif t.name in ("daily_okr_report", "weekly_okr_report", "monthly_okr_report"):
                 part += (
                     "\nExecution requirements: The system automatically generates this company-wide report. "
-                    + "If you are awakened, provide only necessary clarification and do not collect reports from members again."
+                    "If you are awakened, provide only necessary clarification and do not collect reports from members again."
                 )
             elif t.name == "biweekly_okr_checkin":
                 part += (
                     "\nExecution requirements: First call get_okr_settings to confirm whether OKRs are enabled. "
-                    + "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
-                    + "If they are disabled, state that no action is needed and stop."
+                    "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
+                    "If they are disabled, state that no action is needed and stop."
                 )
             if t.focus_ref not in (None, ""):
                 part += f"\nRelated Focus: {t.focus_ref}"
@@ -175,12 +176,12 @@ async def _run_trigger_invocation(
             if t.type == "on_message" and cfg.get("okr_member_id") and cfg.get("okr_report_date"):
                 part += (
                     "\nExecution requirements: This event stores a daily-report reply."
-                    + "\n1. Organize the response into a final daily report of no more than 2,000 words."
-                    + f'\n2. Immediately call upsert_member_daily_report(report_date="{cfg["okr_report_date"]}", '
-                    + f'member_type="{cfg.get("okr_member_type", "user")}", '
-                    + f'member_id="{cfg["okr_member_id"]}", content="<organized daily report>").'
-                    + "\n3. After the tool call succeeds, send a brief confirmation that clearly says the response was received and recorded."
-                    + "\n4. Do not only acknowledge receipt without calling the tool, and do not store the raw long conversation unchanged as the daily report."
+                    "\n1. Organize the response into a final daily report of no more than 2,000 words."
+                    f'\n2. Immediately call upsert_member_daily_report(report_date="{cfg["okr_report_date"]}", '
+                    f'member_type="{cfg.get("okr_member_type", "user")}", '
+                    f'member_id="{cfg["okr_member_id"]}", content="<organized daily report>").'
+                    "\n3. After the tool call succeeds, send a brief confirmation that clearly says the response was received and recorded."
+                    "\n4. Do not only acknowledge receipt without calling the tool, and do not store the raw long conversation unchanged as the daily report."
                 )
             webhook_payload = json_as_str(cfg.get("_webhook_payload"))
             if t.type == "webhook" and webhook_payload not in (None, ""):
@@ -193,7 +194,7 @@ async def _run_trigger_invocation(
 
         trigger_context = (
             "===== Current Wake Context =====\n"
-            + f"Wake source: trigger ({'multiple triggers fired simultaneously' if len(triggers) > 1 else 'trigger fired'})\n\n"
+            f"Wake source: trigger ({'multiple triggers fired simultaneously' if len(triggers) > 1 else 'trigger fired'})\n\n"
             + "\n---\n".join(context_parts)
             + "\n==========================="
         )
@@ -412,7 +413,7 @@ async def _run_trigger_invocation(
                     str(agent_id),
                     notify_owner_user_id,
                     {
-                        "type": "trigger_notification",
+                        "type": ChatEventType.TRIGGER_NOTIFICATION,
                         "content": notification,
                         "triggers": [t.name for t in triggers],
                         "session_id": notify_session_id,

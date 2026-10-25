@@ -108,7 +108,7 @@ async def test_winning_poll_preserves_login_response(monkeypatch: pytest.MonkeyP
     assert claims is not None
     assert claims["sub"] == str(user.id)
     assert "user" in response
-    assert response["user"] == sso.UserOut.model_validate(user).model_dump()
+    assert response["user"] == sso.AuthUser.model_validate(user).model_dump()
     assert dao.row is not None
     assert dao.row.status == "completed"
     assert dao.row.access_token is None

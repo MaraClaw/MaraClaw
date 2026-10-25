@@ -5,6 +5,7 @@ import json
 import uuid
 from typing import Final, Protocol, TypeIs, cast
 
+from app.core.domain.activity import ActivityAction
 from app.core.json_types import json_as_bool, json_as_str, json_as_str_or
 from app.core.logging import logger
 from app.services import agent_tools
@@ -103,7 +104,7 @@ async def execute_tool(
 ) -> str:
     """Execute a tool call and return the result as a string."""
     # Provider JSON can carry a non-string name despite the declared type; coerce before sanitizing.
-    tool_name_arg = cast(object, tool_name)
+    tool_name_arg = cast("object", tool_name)
     tool_name = tool_name_arg if isinstance(tool_name_arg, str) else str(tool_name_arg or "")
     tool_name = (
         tool_name.replace("`", "")
@@ -140,7 +141,7 @@ async def execute_tool(
                         approval_id = json_as_str(result_check.get("approval_id")) or "N/A"
                         return (
                             "⏳ This action requires approval. An approval request has been sent. "
-                            + f"Please wait for approval before retrying. (Approval ID: {approval_id})"
+                            f"Please wait for approval before retrying. (Approval ID: {approval_id})"
                         )
                     return f"❌ Action denied: {json_as_str_or(result_check.get('message'), 'unknown reason')}"
         except Exception as error:
@@ -158,8 +159,8 @@ async def execute_tool(
         if locked:
             return (
                 "⏸️ A human operator is currently controlling this browser session "
-                + "(Take Control mode). Please wait for them to finish before retrying "
-                + "browser/computer operations."
+                "(Take Control mode). Please wait for them to finish before retrying "
+                "browser/computer operations."
             )
 
     try:
@@ -182,7 +183,7 @@ async def execute_tool(
 
             await log_activity(
                 agent_id,
-                "tool_call",
+                ActivityAction.TOOL_CALL,
                 f"Called tool {tool_name}: {result[:80]}",
                 detail={
                     "tool": tool_name,
@@ -205,9 +206,9 @@ async def execute_tool(
                     role="assistant",
                     content=(
                         "⚠️ [System notice] Digital employee tool call failed.\n"
-                        + f"Tool: `{tool_name}`\n"
-                        + f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
-                        + f"Error: {result}"
+                        f"Tool: `{tool_name}`\n"
+                        f"Arguments: `{json.dumps(arguments, ensure_ascii=False)}`\n"
+                        f"Error: {result}"
                     ),
                     conversation_id=session_id,
                 )

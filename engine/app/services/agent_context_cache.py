@@ -105,7 +105,7 @@ async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None)
             timeout=_wait(),
         )
         for item in kinds:
-            _ = await asyncio.wait_for(cast(Awaitable[int], client.incr(_ver_key(agent_id, item))), timeout=_wait())
+            _ = await asyncio.wait_for(cast("Awaitable[int]", client.incr(_ver_key(agent_id, item))), timeout=_wait())
     except Exception as exc:
         logger.debug("agent_context_cache invalidate skipped: {}", type(exc).__name__)
 

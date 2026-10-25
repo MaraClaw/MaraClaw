@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -33,7 +33,7 @@ class _FakeCursor:
     def __init__(self, parent: _FakeRawConnection) -> None:
         self._parent = parent
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -246,11 +246,9 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     async def no_agent_feishu(*, agent_id: uuid.UUID, channel_type: str):
         agent_lookup_calls.append(agent_id)
         assert channel_type == "feishu"
-        return
 
     async def no_tenant_feishu(*, tenant_id: uuid.UUID, channel_type: str):
         tenant_lookup_calls.append((tenant_id, channel_type))
-        return
 
     async def touch_last_seen(*, db_obj, obj_in):
         return db_obj

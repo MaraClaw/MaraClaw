@@ -64,9 +64,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             return None
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM identities "
-                + "WHERE lower(email) = lower(%(identifier)s) "
-                + "LIMIT 1",
+                f"SELECT {self._select_list()} FROM identities WHERE lower(email) = lower(%(identifier)s) LIMIT 1",
                 {"identifier": value},
             )
             return IdentityRecord.from_row(row) if row is not None else None
@@ -100,11 +98,11 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE identities SET email = NULL, phone = NULL, "
-                + "password_hash = NULL, is_active = FALSE, is_platform_admin = FALSE, "
-                + "updated_at = now() "
-                + "WHERE id = ANY(%(ids)s) AND NOT EXISTS ("
-                + "SELECT 1 FROM users WHERE identity_id = identities.id"
-                + ") RETURNING id",
+                "password_hash = NULL, is_active = FALSE, is_platform_admin = FALSE, "
+                "updated_at = now() "
+                "WHERE id = ANY(%(ids)s) AND NOT EXISTS ("
+                "SELECT 1 FROM users WHERE identity_id = identities.id"
+                ") RETURNING id",
                 {"ids": list(identity_ids)},
             )
             for row in rows:
@@ -146,7 +144,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM users u JOIN identities i ON i.id = u.identity_id "
-                + f"WHERE i.email = %(email)s AND u.tenant_id = %(tenant_id)s{exclude_sql} LIMIT 1",
+                f"WHERE i.email = %(email)s AND u.tenant_id = %(tenant_id)s{exclude_sql} LIMIT 1",
                 params,
             )
             return value is not None
@@ -162,7 +160,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM users u JOIN identities i ON i.id = u.identity_id "
-                + f"WHERE i.phone = %(phone)s AND u.tenant_id = %(tenant_id)s{exclude_sql} LIMIT 1",
+                f"WHERE i.phone = %(phone)s AND u.tenant_id = %(tenant_id)s{exclude_sql} LIMIT 1",
                 params,
             )
             return value is not None

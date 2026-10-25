@@ -8,13 +8,22 @@ from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
+from app.core.domain.agents import AgentStatus
 from app.core.json_types import int_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_list_from_rows
 from app.core.row_memo import memo_drop, memo_get, memo_set
-from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL as AGENT_DELETE_CLEANUP_SQL
+from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL
 from app.dao.base import BaseDAO
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.projection_contracts import AgentNameAvatarProjection
 from app.records.agent import AgentPermissionRecord, AgentRecord
+
+__all__ = [
+    "AGENT_DELETE_CLEANUP_SQL",
+    "AgentDAO",
+    "AgentPermissionDAO",
+    "agent_dao",
+    "agent_permission_dao",
+]
 
 _AGENT_POLICY_COLUMNS = frozenset({"access_mode", "company_access_level", "creator_id", "tenant_id"})
 _GATEWAY_ACTIVE_SQL = (
@@ -129,11 +138,11 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return await super().create(obj_in=obj_in)
 
     @override
-    async def get(self, id: UUID) -> AgentRecord | None:
-        cached = memo_get("agent", id)
+    async def get(self, record_id: UUID) -> AgentRecord | None:
+        cached = memo_get("agent", record_id)
         if isinstance(cached, AgentRecord):
             return cached
-        agent = await super().get(id)
+        agent = await super().get(record_id)
         if agent is not None:
             memo_set("agent", agent.id, agent)
         return agent
@@ -156,16 +165,26 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 await lock_agent(db, db_obj.id, db_obj.tenant_id)
             updated = await super().update(db_obj=db_obj, obj_in=obj_in)
             memo_set("agent", updated.id, updated)
+            if db is not None and (
+                obj_in.get("status") == "stopped"
+                or obj_in.get("is_expired") is True
+                or "expires_at" in obj_in
+                or "tenant_id" in obj_in
+                or "creator_id" in obj_in
+            ):
+                from app.dao.agent_start_dao import agent_start_dao
+
+                await agent_start_dao.cancel(db, updated.id)
             if _AGENT_POLICY_COLUMNS.intersection(obj_in):
                 await bump_agent_acl_version(updated.id)
             return updated
 
     @override
-    async def delete(self, *, id: UUID) -> AgentRecord | None:
+    async def delete(self, *, record_id: UUID) -> AgentRecord | None:
         from app.core.acl_locks import agent_acl_mutation
 
-        async with agent_acl_mutation(id):
-            deleted = await super().delete(id=id)
+        async with agent_acl_mutation(record_id):
+            deleted = await super().delete(record_id=record_id)
             if deleted is not None:
                 memo_drop("agent", deleted.id)
                 await drop_agent_acl_version(deleted.id)
@@ -183,7 +202,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE tenant_id = %(tenant_id)s AND is_system IS TRUE AND name = %(name)s LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND is_system IS TRUE AND name = %(name)s LIMIT 1",
                 {"tenant_id": tenant_id, "name": name},
             )
             return AgentRecord.from_row(row) if row is not None else None
@@ -192,7 +211,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM agents "
-                + "WHERE is_system IS TRUE AND name = %(name)s AND status <> 'stopped' LIMIT 1",
+                "WHERE is_system IS TRUE AND name = %(name)s AND status <> 'stopped' LIMIT 1",
                 {"name": name},
             )
             return AgentRecord.from_row(row) if row is not None else None
@@ -203,8 +222,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                + f"WHERE is_system IS TRUE AND name = %(name)s{status_sql} "
-                + "ORDER BY created_at DESC NULLS LAST",
+                f"WHERE is_system IS TRUE AND name = %(name)s{status_sql} "
+                "ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -215,7 +234,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                + f"WHERE name = %(name)s{status_sql} ORDER BY created_at DESC NULLS LAST",
+                f"WHERE name = %(name)s{status_sql} ORDER BY created_at DESC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
@@ -254,26 +273,26 @@ class AgentDAO(BaseDAO[AgentRecord]):
         del role  # Authorization uses the current SQL membership, not the caller's snapshot.
         sql = (
             f"SELECT {self._select_list('a')} FROM agents a "
-            + "WHERE a.tenant_id = %(tenant_id)s AND EXISTS ("
-            + " SELECT 1 FROM users cu WHERE cu.id = %(user_id)s"
-            + " AND cu.is_active IS TRUE AND (cu.tenant_id = a.tenant_id OR cu.role = 'platform_admin')) AND ("
-            + " a.creator_id = %(user_id)s"
-            + " OR (a.access_mode <> 'private' AND EXISTS (SELECT 1 FROM users cu"
-            + " WHERE cu.id = %(user_id)s AND cu.role IN ('platform_admin', 'org_admin')))"
-            + " OR a.access_mode = 'company'"
-            + " OR a.id IN ("
-            + "   SELECT ap.agent_id FROM agent_permissions ap"
-            + "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
-            + "   AND a.access_mode = 'custom'"
-            + " ) OR (a.access_mode = 'custom' AND EXISTS ("
-            + "   SELECT 1 FROM users u JOIN local_department_memberships m"
-            + "   ON m.user_id = u.id AND m.tenant_id = u.tenant_id"
-            + "   JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id"
-            + "   JOIN agent_permissions ap ON ap.scope_type = 'department' AND ap.scope_id = d.id"
-            + "   WHERE u.id = %(user_id)s AND u.is_active IS TRUE"
-            + "   AND u.tenant_id = a.tenant_id AND ap.agent_id = a.id AND ap.access_level = 'use'"
-            + " ))"
-            + f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
+            "WHERE a.tenant_id = %(tenant_id)s AND EXISTS ("
+            " SELECT 1 FROM users cu WHERE cu.id = %(user_id)s"
+            " AND cu.is_active IS TRUE AND (cu.tenant_id = a.tenant_id OR cu.role = 'platform_admin')) AND ("
+            " a.creator_id = %(user_id)s"
+            " OR (a.access_mode <> 'private' AND EXISTS (SELECT 1 FROM users cu"
+            " WHERE cu.id = %(user_id)s AND cu.role IN ('platform_admin', 'org_admin')))"
+            " OR a.access_mode = 'company'"
+            " OR a.id IN ("
+            "   SELECT ap.agent_id FROM agent_permissions ap"
+            "   WHERE ap.scope_type = 'user' AND ap.scope_id = %(user_id)s"
+            "   AND a.access_mode = 'custom'"
+            " ) OR (a.access_mode = 'custom' AND EXISTS ("
+            "   SELECT 1 FROM users u JOIN local_department_memberships m"
+            "   ON m.user_id = u.id AND m.tenant_id = u.tenant_id"
+            "   JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id"
+            "   JOIN agent_permissions ap ON ap.scope_type = 'department' AND ap.scope_id = d.id"
+            "   WHERE u.id = %(user_id)s AND u.is_active IS TRUE"
+            "   AND u.tenant_id = a.tenant_id AND ap.agent_id = a.id AND ap.access_level = 'use'"
+            " ))"
+            f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
         )
 
         async with self.session() as db:
@@ -313,7 +332,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
             await lock_tenants(db, (agent.tenant_id,))
             await lock_agent(db, agent.id, agent.tenant_id)
             row = await db.fetchone(
-                "UPDATE agents SET status = 'running', openclaw_last_seen = "
+                "UPDATE agents SET status = CASE WHEN EXISTS (SELECT 1 FROM agent_start_operations o "
+                "WHERE o.agent_id=agents.id AND o.state='pending') THEN status ELSE 'running' END, openclaw_last_seen = "
                 + ("CURRENT_TIMESTAMP" if touch_last_seen else "openclaw_last_seen")
                 + " WHERE id = %(id)s AND "
                 + _GATEWAY_ACTIVE_SQL
@@ -343,6 +363,11 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             for row in expired:
                 memo_drop("agent", uuid_from_row(row["id"]))
+            await db.execute(
+                "UPDATE agent_start_operations o SET state='cancelled',updated_at=now() FROM agents a "
+                "WHERE o.agent_id=a.id AND o.state='pending' AND (a.is_expired OR a.expires_at <= %(now)s)",
+                {"now": now},
+            )
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents WHERE status = 'stopped' AND container_id IS NOT NULL"
             )
@@ -438,15 +463,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             if daily_ids:
                 await db.execute(
                     "UPDATE agents SET tokens_used_today = 0, cache_read_tokens_today = 0, "
-                    + "cache_creation_tokens_today = 0, last_daily_reset = %(now)s "
-                    + "WHERE id = ANY(%(ids)s) AND (last_daily_reset IS NULL OR last_daily_reset::date < %(today)s)",
+                    "cache_creation_tokens_today = 0, last_daily_reset = %(now)s "
+                    "WHERE id = ANY(%(ids)s) AND (last_daily_reset IS NULL OR last_daily_reset::date < %(today)s)",
                     {"now": now, "ids": daily_ids, "today": now.date()},
                 )
             if monthly_ids:
                 await db.execute(
                     "UPDATE agents SET tokens_used_month = 0, cache_read_tokens_month = 0, "
-                    + "cache_creation_tokens_month = 0, last_monthly_reset = %(now)s "
-                    + "WHERE id = ANY(%(ids)s) AND (last_monthly_reset IS NULL OR last_monthly_reset < %(month_start)s)",
+                    "cache_creation_tokens_month = 0, last_monthly_reset = %(now)s "
+                    "WHERE id = ANY(%(ids)s) AND (last_monthly_reset IS NULL OR last_monthly_reset < %(month_start)s)",
                     {"now": now, "ids": monthly_ids, "month_start": month_start},
                 )
         daily_set = set(daily_ids)
@@ -484,10 +509,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agents SET last_heartbeat_at = %(now)s "
-                + "WHERE id = %(id)s "
-                + "AND heartbeat_enabled IS TRUE "
-                + "AND status = ANY(%(statuses)s) "
-                + "AND "
+                "WHERE id = %(id)s "
+                "AND heartbeat_enabled IS TRUE "
+                "AND status = ANY(%(statuses)s) "
+                "AND "
                 + _GATEWAY_ACTIVE_SQL
                 + " "
                 + "AND (last_heartbeat_at IS NULL OR last_heartbeat_at <= %(cutoff)s) "
@@ -504,7 +529,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def mark_expired_stopped(self, agent: AgentRecord) -> AgentRecord | None:
         return await self.update(
             db_obj=agent,
-            obj_in={"is_expired": True, "heartbeat_enabled": False, "status": "stopped"},
+            obj_in={"is_expired": True, "heartbeat_enabled": False, "status": AgentStatus.STOPPED},
         )
 
     async def count_active_for_creator(self, creator_id: UUID) -> int:
@@ -534,7 +559,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM agents WHERE id = %(id)s "
-                + "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company') LIMIT 1",
+                "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company') LIMIT 1",
                 {"id": agent_id},
             )
             return value is not None
@@ -545,7 +570,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id FROM agents WHERE id = ANY(%(ids)s) "
-                + "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company')",
+                "AND (is_system IS TRUE OR COALESCE(access_mode, 'company') <> 'company')",
                 {"ids": list(agent_ids)},
             )
             return {uuid_from_row(row["id"]) for row in rows}
@@ -590,8 +615,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id, name, avatar_url FROM agents "
-                + "WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
-                + "AND NOT (status = ANY(%(exclude_statuses)s))",
+                "WHERE tenant_id = %(tenant_id)s AND is_system IS FALSE "
+                "AND NOT (status = ANY(%(exclude_statuses)s))",
                 {"tenant_id": tenant_id, "exclude_statuses": ["stopped", "error"]},
             )
             return [
@@ -624,23 +649,23 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
-                + f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC NULLS LAST",
+                f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC NULLS LAST",
                 params,
             )
             return [AgentRecord.from_row(row) for row in rows]
 
-    async def list_by_status(self, status: str) -> Sequence[AgentRecord]:
+    async def list_by_status(self, status: AgentStatus) -> Sequence[AgentRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents WHERE status = %(status)s",
-                {"status": status},
+                {"status": status.value},
             )
             return [AgentRecord.from_row(row) for row in rows]
 
     async def list_by_statuses(
-        self, statuses: Sequence[str], *, exclude_id: UUID | None = None
+        self, statuses: Sequence[AgentStatus], *, exclude_id: UUID | None = None
     ) -> Sequence[AgentRecord]:
-        params: dict[str, Any] = {"statuses": list(statuses)}
+        params: dict[str, Any] = {"statuses": [status.value for status in statuses]}
         exclude_sql = ""
         if exclude_id is not None:
             exclude_sql = " AND id <> %(exclude_id)s"
@@ -657,8 +682,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET heartbeat_interval_minutes = %(floor)s, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND heartbeat_interval_minutes < %(floor)s "
-                + "RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND heartbeat_interval_minutes < %(floor)s "
+                "RETURNING id",
                 {"tenant_id": tenant_id, "floor": floor},
             )
             return len(rows)
@@ -672,11 +697,11 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agents SET "
-                + f"llm_calls_today = ({daily_count}) + 1, "
-                + f"llm_calls_reset_at = CASE WHEN {reset_due} THEN NOW() ELSE llm_calls_reset_at END, "
-                + "updated_at = NOW() "
-                + f"WHERE id = %(id)s AND (max_llm_calls_per_day = 0 OR ({daily_count}) < max_llm_calls_per_day) "
-                + f"RETURNING {self._select_list()}",
+                f"llm_calls_today = ({daily_count}) + 1, "
+                f"llm_calls_reset_at = CASE WHEN {reset_due} THEN NOW() ELSE llm_calls_reset_at END, "
+                "updated_at = NOW() "
+                f"WHERE id = %(id)s AND (max_llm_calls_per_day = 0 OR ({daily_count}) < max_llm_calls_per_day) "
+                f"RETURNING {self._select_list()}",
                 {"id": agent_id},
             )
             agent = AgentRecord.from_row(row) if row is not None else None
@@ -696,17 +721,17 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agents SET "
-                + "tokens_used_today = COALESCE(tokens_used_today, 0) + %(total)s, "
-                + "tokens_used_month = COALESCE(tokens_used_month, 0) + %(total)s, "
-                + "tokens_used_total = COALESCE(tokens_used_total, 0) + %(total)s, "
-                + "cache_read_tokens_today = COALESCE(cache_read_tokens_today, 0) + %(cache_read)s, "
-                + "cache_read_tokens_month = COALESCE(cache_read_tokens_month, 0) + %(cache_read)s, "
-                + "cache_read_tokens_total = COALESCE(cache_read_tokens_total, 0) + %(cache_read)s, "
-                + "cache_creation_tokens_today = COALESCE(cache_creation_tokens_today, 0) + %(cache_creation)s, "
-                + "cache_creation_tokens_month = COALESCE(cache_creation_tokens_month, 0) + %(cache_creation)s, "
-                + "cache_creation_tokens_total = COALESCE(cache_creation_tokens_total, 0) + %(cache_creation)s, "
-                + "updated_at = NOW() "
-                + f"WHERE id = %(id)s RETURNING {self._select_list()}",
+                "tokens_used_today = COALESCE(tokens_used_today, 0) + %(total)s, "
+                "tokens_used_month = COALESCE(tokens_used_month, 0) + %(total)s, "
+                "tokens_used_total = COALESCE(tokens_used_total, 0) + %(total)s, "
+                "cache_read_tokens_today = COALESCE(cache_read_tokens_today, 0) + %(cache_read)s, "
+                "cache_read_tokens_month = COALESCE(cache_read_tokens_month, 0) + %(cache_read)s, "
+                "cache_read_tokens_total = COALESCE(cache_read_tokens_total, 0) + %(cache_read)s, "
+                "cache_creation_tokens_today = COALESCE(cache_creation_tokens_today, 0) + %(cache_creation)s, "
+                "cache_creation_tokens_month = COALESCE(cache_creation_tokens_month, 0) + %(cache_creation)s, "
+                "cache_creation_tokens_total = COALESCE(cache_creation_tokens_total, 0) + %(cache_creation)s, "
+                "updated_at = NOW() "
+                f"WHERE id = %(id)s RETURNING {self._select_list()}",
                 {
                     "id": agent_id,
                     "total": total_tokens,
@@ -719,12 +744,12 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 memo_set("agent", agent.id, agent)
             return agent
 
-    async def count_for_tenant(self, tenant_id: UUID, *, status: str | None = None) -> int:
+    async def count_for_tenant(self, tenant_id: UUID, *, status: AgentStatus | None = None) -> int:
         params: dict[str, Any] = {"tenant_id": tenant_id}
         status_sql = ""
         if status is not None:
             status_sql = " AND status = %(status)s"
-            params["status"] = status
+            params["status"] = status.value
         async with self.session() as db:
             value = await db.fetchval(
                 f"SELECT COUNT(*) FROM agents WHERE tenant_id = %(tenant_id)s{status_sql}",
@@ -736,8 +761,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COALESCE(SUM(tokens_used_total), 0) AS total, "
-                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
-                + "FROM agents WHERE tenant_id = %(tenant_id)s",
+                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
+                "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             if row is None:
@@ -748,7 +773,12 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND status = 'running' RETURNING id",
+                {"tenant_id": tenant_id},
+            )
+            await db.execute(
+                "UPDATE agent_start_operations o SET state='cancelled',updated_at=now() FROM agents a "
+                "WHERE o.agent_id=a.id AND a.tenant_id=%(tenant_id)s AND o.state='pending'",
                 {"tenant_id": tenant_id},
             )
         for row in rows:
@@ -760,7 +790,12 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s RETURNING id",
+                {"tenant_id": tenant_id},
+            )
+            await db.execute(
+                "UPDATE agent_start_operations o SET state='cancelled',updated_at=now() FROM agents a "
+                "WHERE o.agent_id=a.id AND a.tenant_id=%(tenant_id)s AND o.state='pending'",
                 {"tenant_id": tenant_id},
             )
         for row in rows:
@@ -777,9 +812,12 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
-                + "WHERE "
-                + " AND ".join(clauses)
-                + f" RETURNING {self._select_list()}",
+                "WHERE " + " AND ".join(clauses) + f" RETURNING {self._select_list()}",
+                params,
+            )
+            await db.execute(
+                "UPDATE agent_start_operations SET state='cancelled',updated_at=now() WHERE state='pending' "
+                "AND agent_id IN (SELECT id FROM agents WHERE " + " AND ".join(clauses) + ")",
                 params,
             )
         agents = [AgentRecord.from_row(row) for row in rows]
@@ -791,16 +829,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT "
-                + "COALESCE(SUM(tokens_used_today), 0) AS tokens_today, "
-                + "COALESCE(SUM(tokens_used_month), 0) AS tokens_month, "
-                + "COALESCE(SUM(tokens_used_total), 0) AS tokens_total, "
-                + "COALESCE(SUM(cache_read_tokens_today), 0) AS cache_today, "
-                + "COALESCE(SUM(cache_read_tokens_month), 0) AS cache_month, "
-                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_total, "
-                + "COALESCE(SUM(cache_creation_tokens_today), 0) AS cache_creation_today, "
-                + "COALESCE(SUM(cache_creation_tokens_month), 0) AS cache_creation_month, "
-                + "COALESCE(SUM(cache_creation_tokens_total), 0) AS cache_creation_total "
-                + "FROM agents WHERE tenant_id = %(tenant_id)s",
+                "COALESCE(SUM(tokens_used_today), 0) AS tokens_today, "
+                "COALESCE(SUM(tokens_used_month), 0) AS tokens_month, "
+                "COALESCE(SUM(tokens_used_total), 0) AS tokens_total, "
+                "COALESCE(SUM(cache_read_tokens_today), 0) AS cache_today, "
+                "COALESCE(SUM(cache_read_tokens_month), 0) AS cache_month, "
+                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_total, "
+                "COALESCE(SUM(cache_creation_tokens_today), 0) AS cache_creation_today, "
+                "COALESCE(SUM(cache_creation_tokens_month), 0) AS cache_creation_month, "
+                "COALESCE(SUM(cache_creation_tokens_total), 0) AS cache_creation_total "
+                "FROM agents WHERE tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             if row is None:
@@ -821,8 +859,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "SELECT COALESCE(SUM(tokens_used_total), 0) AS total, "
-                + "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
-                + "FROM agents WHERE created_at < %(before)s",
+                "COALESCE(SUM(cache_read_tokens_total), 0) AS cache_read "
+                "FROM agents WHERE created_at < %(before)s",
                 {"before": before},
             )
             if row is None:
@@ -833,12 +871,12 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT t.name, "
-                + "COALESCE(SUM(a.tokens_used_total), 0) AS total, "
-                + "COALESCE(SUM(a.cache_read_tokens_total), 0) AS cache_read "
-                + "FROM tenants t JOIN agents a ON a.tenant_id = t.id "
-                + "GROUP BY t.id, t.name "
-                + "ORDER BY SUM(a.tokens_used_total) DESC NULLS LAST "
-                + "LIMIT %(limit)s",
+                "COALESCE(SUM(a.tokens_used_total), 0) AS total, "
+                "COALESCE(SUM(a.cache_read_tokens_total), 0) AS cache_read "
+                "FROM tenants t JOIN agents a ON a.tenant_id = t.id "
+                "GROUP BY t.id, t.name "
+                "ORDER BY SUM(a.tokens_used_total) DESC NULLS LAST "
+                "LIMIT %(limit)s",
                 {"limit": limit},
             )
             return [
@@ -854,8 +892,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT a.name, t.name AS tenant_name, a.tokens_used_total, a.cache_read_tokens_total "
-                + "FROM agents a JOIN tenants t ON t.id = a.tenant_id "
-                + "ORDER BY a.tokens_used_total DESC NULLS LAST LIMIT %(limit)s",
+                "FROM agents a JOIN tenants t ON t.id = a.tenant_id "
+                "ORDER BY a.tokens_used_total DESC NULLS LAST LIMIT %(limit)s",
                 {"limit": limit},
             )
             return [
@@ -881,9 +919,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT name FROM agents "
-                + "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
-                + "OR secondary_model_id = %(model_id)s "
-                + "ORDER BY name",
+                "WHERE primary_model_id = %(model_id)s OR fallback_model_id = %(model_id)s "
+                "OR secondary_model_id = %(model_id)s "
+                "ORDER BY name",
                 {"model_id": model_id},
             )
             return [str_from_row(row.get("name")) for row in rows if row.get("name")]
@@ -915,19 +953,19 @@ class AgentDAO(BaseDAO[AgentRecord]):
             if keep != "primary":
                 await db.execute(
                     "UPDATE agents SET primary_model_id = NULL "
-                    + "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(model_id)s",
+                    "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(model_id)s",
                     {"tenant_id": tenant_id, "model_id": model_id},
                 )
             if keep != "secondary":
                 await db.execute(
                     "UPDATE agents SET secondary_model_id = NULL "
-                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(model_id)s",
+                    "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(model_id)s",
                     {"tenant_id": tenant_id, "model_id": model_id},
                 )
             if keep != "fallback":
                 await db.execute(
                     "UPDATE agents SET fallback_model_id = NULL "
-                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(model_id)s",
+                    "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(model_id)s",
                     {"tenant_id": tenant_id, "model_id": model_id},
                 )
 
@@ -940,21 +978,19 @@ class AgentDAO(BaseDAO[AgentRecord]):
     ) -> int:
         distinct = (
             "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
-            + "AND fallback_model_id IS DISTINCT FROM %(new_model_id)s"
+            "AND fallback_model_id IS DISTINCT FROM %(new_model_id)s"
         )
         async with self.session() as db:
             if old_model_id is None:
                 rows = await db.fetchall(
                     "UPDATE agents SET secondary_model_id = %(new_model_id)s "
-                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id IS NULL "
-                    + distinct
-                    + " RETURNING id",
+                    "WHERE tenant_id = %(tenant_id)s AND secondary_model_id IS NULL " + distinct + " RETURNING id",
                     {"tenant_id": tenant_id, "new_model_id": new_model_id},
                 )
             else:
                 rows = await db.fetchall(
                     "UPDATE agents SET secondary_model_id = %(new_model_id)s "
-                    + "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(old_model_id)s "
+                    "WHERE tenant_id = %(tenant_id)s AND secondary_model_id = %(old_model_id)s "
                     + distinct
                     + " RETURNING id",
                     {
@@ -974,21 +1010,19 @@ class AgentDAO(BaseDAO[AgentRecord]):
     ) -> int:
         distinct = (
             "AND primary_model_id IS DISTINCT FROM %(new_model_id)s "
-            + "AND secondary_model_id IS DISTINCT FROM %(new_model_id)s"
+            "AND secondary_model_id IS DISTINCT FROM %(new_model_id)s"
         )
         async with self.session() as db:
             if old_model_id is None:
                 rows = await db.fetchall(
                     "UPDATE agents SET fallback_model_id = %(new_model_id)s "
-                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id IS NULL "
-                    + distinct
-                    + " RETURNING id",
+                    "WHERE tenant_id = %(tenant_id)s AND fallback_model_id IS NULL " + distinct + " RETURNING id",
                     {"tenant_id": tenant_id, "new_model_id": new_model_id},
                 )
             else:
                 rows = await db.fetchall(
                     "UPDATE agents SET fallback_model_id = %(new_model_id)s "
-                    + "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(old_model_id)s "
+                    "WHERE tenant_id = %(tenant_id)s AND fallback_model_id = %(old_model_id)s "
                     + distinct
                     + " RETURNING id",
                     {
@@ -1004,8 +1038,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET primary_model_id = %(model_id)s "
-                + "WHERE tenant_id = %(tenant_id)s AND primary_model_id IS NULL "
-                + "RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND primary_model_id IS NULL "
+                "RETURNING id",
                 {"tenant_id": tenant_id, "model_id": model_id},
             )
             return len(rows)
@@ -1020,8 +1054,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE agents SET primary_model_id = %(new_model_id)s "
-                + "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(old_model_id)s "
-                + "RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND primary_model_id = %(old_model_id)s "
+                "RETURNING id",
                 {
                     "tenant_id": tenant_id,
                     "old_model_id": old_model_id,
@@ -1068,16 +1102,16 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
             return updated
 
     @override
-    async def delete(self, *, id: UUID) -> AgentPermissionRecord | None:
+    async def delete(self, *, record_id: UUID) -> AgentPermissionRecord | None:
         from app.core.acl_locks import agent_acl_mutation
         from app.db.session import optional_connection_ctx
 
         async with optional_connection_ctx():
-            permission = await self.get(id)
+            permission = await self.get(record_id)
             if permission is None:
                 return None
             async with agent_acl_mutation(permission.agent_id):
-                deleted = await super().delete(id=id)
+                deleted = await super().delete(record_id=record_id)
                 if deleted is not None:
                     await bump_agent_acl_version(deleted.agent_id)
                 return deleted
@@ -1094,7 +1128,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT scope_id FROM agent_permissions "
-                + "WHERE agent_id = %(agent_id)s AND scope_type = 'user' AND scope_id IS NOT NULL",
+                "WHERE agent_id = %(agent_id)s AND scope_type = 'user' AND scope_id IS NOT NULL",
                 {"agent_id": agent_id},
             )
             return [uuid_from_row(row["scope_id"]) for row in rows if row.get("scope_id") is not None]

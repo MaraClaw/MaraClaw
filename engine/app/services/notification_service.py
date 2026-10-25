@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from app.core.logging import logger
+from app.core.notification_kinds import NotificationKind
 from app.dao.notification_dao import notification_dao
 from app.records.notification import NotificationRecord
 
@@ -13,7 +14,7 @@ async def send_notification(
     user_id: uuid.UUID | None = None,
     *,
     agent_id: uuid.UUID | None = None,
-    type: str,
+    notification_kind: NotificationKind,
     title: str,
     body: str = "",
     link: str | None = None,
@@ -28,7 +29,7 @@ async def send_notification(
         obj_in={
             "user_id": user_id,
             "agent_id": agent_id,
-            "type": type,
+            "type": notification_kind.value,
             "title": title,
             "body": body,
             "link": link,
@@ -38,5 +39,5 @@ async def send_notification(
         }
     )
     recipient = f"user {user_id}" if user_id else f"agent {agent_id}"
-    logger.info(f"Notification [{type}] sent to {recipient}: {title}")
+    logger.info(f"Notification [{notification_kind}] sent to {recipient}: {title}")
     return notif

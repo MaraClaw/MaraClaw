@@ -12,6 +12,7 @@ from contextlib import suppress
 from typing import TypeIs, cast
 from unittest.mock import patch
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.runtime.tasks import EventTasks
@@ -57,7 +58,7 @@ def _disable_wecom_sdk_proxy() -> None:
 
     def without_proxy[**P, R](original: Callable[P, R]) -> Callable[P, R]:
         def connect_no_proxy(*args: P.args, **kwargs: P.kwargs) -> R:
-            _ = cast(dict[str, object], kwargs).setdefault("proxy", None)
+            _ = cast("dict[str, object]", kwargs).setdefault("proxy", None)
             return original(*args, **kwargs)
 
         return connect_no_proxy
@@ -72,7 +73,7 @@ async def _await_maybe(value: object) -> object:
     from collections.abc import Awaitable
     from typing import cast
 
-    return await cast(Awaitable[object], value)
+    return await cast("Awaitable[object]", value)
 
 
 async def _reply_stream(client: object, frame: object, stream_id: str, content: str) -> None:
@@ -225,7 +226,7 @@ class WeComStreamManager:
                     if not sender_id:
                         logger.warning(
                             f"[WeCom Stream] Missing sender id in text payload for agent {agent_id}: "
-                            + f"body_keys={list(body.keys())}"
+                            f"body_keys={list(body.keys())}"
                         )
                         stream_id = generate_req_id("stream")
                         await _reply_stream(
@@ -243,8 +244,8 @@ class WeComStreamManager:
                     # Debug: log full body to understand the data structure
                     logger.info(
                         f"[WeCom Stream] Text from {sender_id}, "
-                        + f"chat_type={chat_type}, is_group={is_group_msg}, chat_id={chat_id or 'N/A'}, "
-                        + f"body_keys={list(body.keys())}: {user_text[:80]}"
+                        f"chat_type={chat_type}, is_group={is_group_msg}, chat_id={chat_id or 'N/A'}, "
+                        f"body_keys={list(body.keys())}: {user_text[:80]}"
                     )
 
                     # Process message and get reply
@@ -396,7 +397,7 @@ class WeComStreamManager:
         logger.info("[WeCom Stream] Initializing all active WeCom AI Bot channels...")
         from app.dao.channel_config_dao import channel_config_dao
 
-        configs = await channel_config_dao.list_configured("wecom")
+        configs = await channel_config_dao.list_configured(ChannelType.WECOM)
 
         started = 0
         for config in configs:
@@ -447,7 +448,7 @@ async def _process_wecom_stream_message(
 
     if not message_id:
         raise ValueError("WeCom message ID is required")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="wecom")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
     if config is None:
         raise RuntimeError("WeCom channel configuration unavailable")
     await accept_channel_event(

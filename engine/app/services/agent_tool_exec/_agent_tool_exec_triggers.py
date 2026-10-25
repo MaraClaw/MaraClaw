@@ -86,7 +86,7 @@ async def _handle_set_trigger(
             if existing.is_enabled:
                 return (
                     f"❌ Trigger '{name}' already exists and is active. "
-                    + "Use update_trigger to modify it, or cancel_trigger first."
+                    "Use update_trigger to modify it, or cancel_trigger first."
                 )
             if ttype == "webhook":
                 old_token = (existing.config or {}).get("token")
@@ -104,7 +104,7 @@ async def _handle_set_trigger(
             existing = await agent_trigger_dao.update(db_obj=existing, obj_in=updates) or existing
             return (
                 f"✅ Trigger '{name}' re-enabled with new configuration "
-                + f"({ttype}, fired {existing.fire_count} times so far)"
+                f"({ttype}, fired {existing.fire_count} times so far)"
             )
 
         obj_in: dict[str, object] = {
@@ -129,12 +129,12 @@ async def _handle_set_trigger(
             webhook_url = f"{public_base}/api/webhooks/t/{config['token']}"
             return (
                 f"✅ Webhook trigger '{name}' created.\n\nWebhook URL: {webhook_url}\n\n"
-                + "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
-                + "When the service sends a POST to this URL, you will be woken up with the payload as context."
+                "Tell the user to configure this URL in their external service (e.g. GitHub, Grafana). "
+                "When the service sends a POST to this URL, you will be woken up with the payload as context."
             )
         return (
             f"✅ Trigger '{name}' created ({ttype}). "
-            + "It will fire according to your config and wake you up with the reason as context."
+            "It will fire according to your config and wake you up with the reason as context."
         )
     except Exception as error:
         return f"❌ Failed to create trigger: {error}"

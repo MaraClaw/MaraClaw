@@ -15,6 +15,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
+from app.api.tenant_invitations import router as invitation_preview_router
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, int_from_row, json_as_bool, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.agent_dao import agent_dao
@@ -25,7 +27,7 @@ from app.db.session import optional_connection_ctx
 from app.records.company_transfer import TransferChoice
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
-from app.schemas.company_admission import PendingAdmissionResponse
+from app.schemas.company_admission import ApprovedAdmissionResponse, PendingAdmissionResponse
 from app.schemas.company_transfer import PaymentReviewResponse
 from app.schemas.organization_response_tenant import (
     TenantAssignmentResponse,
@@ -54,6 +56,7 @@ from app.services.tenant_provisioning import (
 )
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
+router.include_router(invitation_preview_router)
 
 
 async def get_client_ip(request: Request) -> str | None:
@@ -267,6 +270,10 @@ class TransferRequest(BaseModel):
     free_destructive_consent: bool = False
 
 
+_TRANSFER_REQUIRED = "Existing members must transfer with password confirmation"
+_COMPANY_NEEDS_INVITATION = "Transferring to a company requires an invitation"
+
+
 def _require_join_allowed(current_user: UserRecord) -> None:
     try:
         assert_join_may_rewrite_membership(current_user)
@@ -283,7 +290,11 @@ async def _require_admission_join_source(current_user: UserRecord) -> None:
         raise HTTPException(status_code=409, detail="Only default-organization members may transfer to a company")
 
 
-@router.post("/join", response_model=JoinResponse, responses={202: {"model": PendingAdmissionResponse}})
+@router.post(
+    "/join",
+    response_model=JoinResponse | ApprovedAdmissionResponse,
+    responses={202: {"model": PendingAdmissionResponse}},
+)
 async def join_company(
     data: JoinRequest, current_user: UserRecord = Depends(get_current_user)
 ) -> JoinResponse | JSONResponse:
@@ -299,11 +310,12 @@ async def join_company(
         require_active_invitation,
     )
 
-    if current_user.tenant_id is None:
-        _require_join_allowed(current_user)
+    if current_user.tenant_id is not None:
+        raise HTTPException(status_code=409, detail=_TRANSFER_REQUIRED)
+    _require_join_allowed(current_user)
 
     try:
-        code_obj = await require_active_invitation(data.invitation_code)
+        code_obj = await require_active_invitation(data.invitation_code, email=current_user.email)
     except InvitationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -321,23 +333,24 @@ async def join_company(
 
     if not tenant.is_default_end_user_org and not tenant.is_system:
         from app.records.company_admission import AdmissionMethod
-        from app.schemas.company_admission import PendingAdmissionResponse
-        from app.services.company_admissions import submit_request, summarize
+        from app.services.company_admission_auto import submit_or_admit
+        from app.services.company_transfer_entrypoint import admission_response
 
         await _require_admission_join_source(current_user)
-        request = await submit_request(
+        request = await submit_or_admit(
             current_user, tenant.id, AdmissionMethod.INVITATION, invitation_code=data.invitation_code
         )
-        return JSONResponse(
-            status_code=202, content=PendingAdmissionResponse(request=await summarize(request)).model_dump(mode="json")
-        )
+        return await admission_response(request)
 
     try:
         attached = await attach_user_to_org(current_user, tenant)
     except AlreadyInOrgError as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "You already belong to an organization") from exc
 
-    await consume_invitation_code(data.invitation_code)
+    try:
+        await consume_invitation_code(data.invitation_code, user_id=current_user.id, email=current_user.email)
+    except InvitationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JoinResponse(
         tenant=TenantOut.model_validate(tenant),
@@ -399,6 +412,8 @@ async def join_suggested_org(
         from app.schemas.company_admission import PendingAdmissionResponse
         from app.services.company_admissions import submit_request, summarize
 
+        if current_user.tenant_id is not None:
+            raise HTTPException(status_code=403, detail=_COMPANY_NEEDS_INVITATION)
         await _require_admission_join_source(current_user)
         request = await submit_request(current_user, suggested.id, AdmissionMethod.VERIFIED_DOMAIN)
         return JSONResponse(
@@ -445,7 +460,7 @@ async def join_default_org(current_user: UserRecord = Depends(get_current_user))
 
 @router.post(
     "/transfer",
-    response_model=JoinOrgResponse,
+    response_model=JoinOrgResponse | ApprovedAdmissionResponse,
     responses={202: {"model": PendingAdmissionResponse | PaymentReviewResponse}},
 )
 async def transfer_organization(
@@ -480,7 +495,7 @@ async def transfer_organization(
     target = None
     if data.invitation_code not in (None, ""):
         try:
-            code_obj = await require_active_invitation(data.invitation_code)
+            code_obj = await require_active_invitation(data.invitation_code, email=current_user.email)
         except InvitationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if data.tenant_id and str(code_obj.tenant_id) != str(data.tenant_id):
@@ -518,10 +533,11 @@ async def transfer_organization(
         from app.services.company_transfer_entrypoint import transfer_response
         from app.services.company_transfer_requests import TransferDestination, TransferSelection
 
-        method = AdmissionMethod.INVITATION if bool(data.invitation_code) else AdmissionMethod.VERIFIED_DOMAIN
+        if data.invitation_code in (None, ""):
+            raise HTTPException(status_code=403, detail=_COMPANY_NEEDS_INVITATION)
         return await transfer_response(
             current_user,
-            TransferDestination(target.id, method, data.invitation_code),
+            TransferDestination(target.id, AdmissionMethod.INVITATION, data.invitation_code),
             TransferSelection(data.transfer_choice, data.free_destructive_consent)
             if data.transfer_choice is not None
             else None,
@@ -535,7 +551,10 @@ async def transfer_organization(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if data.invitation_code not in (None, ""):
-        await consume_invitation_code(data.invitation_code)
+        try:
+            await consume_invitation_code(data.invitation_code, user_id=current_user.id, email=current_user.email)
+        except InvitationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JoinOrgResponse(
         tenant=TenantOut.model_validate(target),
@@ -604,6 +623,7 @@ async def resolve_tenant_by_domain(domain: str) -> TenantResolvedResponse:
 @router.get("/", response_model=list[TenantOut])
 async def list_tenants(current_user: UserRecord = Depends(require_role("platform_admin"))) -> list[TenantOut]:
     """List all tenants (platform_admin only)."""
+    _ = current_user
     tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
     return [TenantOut.model_validate(t) for t in tenants]
 
@@ -755,7 +775,6 @@ async def remove_email_domain(
         details={"domain_id": str(domain_id)},
         ip_address=client_ip,
     )
-    return
 
 
 @router.put("/{tenant_id}", response_model=TenantOut)
@@ -907,7 +926,7 @@ async def assign_user_to_tenant(
             actor=current_user,
             target=user,
             tenant_id=tenant_id,
-            role=role,
+            role=UserRole(role),
             ip_address=client_ip,
         )
     except AdminGuardError as exc:

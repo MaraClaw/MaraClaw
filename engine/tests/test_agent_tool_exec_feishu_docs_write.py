@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import uuid
 from collections import deque
-from typing import NotRequired, TypedDict, TypeGuard, Unpack
+from typing import NotRequired, Self, TypedDict, TypeGuard, Unpack
 
 from app.core.json_types import JsonObject
 from app.services import agent_tools
@@ -58,7 +58,7 @@ class _FakeAsyncClient:
         self._calls = calls
         self._timeout = timeout
 
-    async def __aenter__(self) -> _FakeAsyncClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args) -> bool:

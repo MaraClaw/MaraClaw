@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, ClassVar, final, override
 from uuid import UUID
 
+from app.core.domain.users import UserRole
 from app.core.json_types import (
     int_from_row,
     str_from_row,
@@ -115,13 +116,13 @@ class UserDAO(BaseDAO[UserRecord]):
             if tenant_id is not None:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM users "
-                    + "WHERE identity_id = %(identity_id)s AND tenant_id = %(tenant_id)s LIMIT 1",
+                    "WHERE identity_id = %(identity_id)s AND tenant_id = %(tenant_id)s LIMIT 1",
                     {"identity_id": identity_id, "tenant_id": tenant_id},
                 )
             else:
                 row = await db.fetchone(
                     f"SELECT {self._select_list()} FROM users "
-                    + "WHERE identity_id = %(identity_id)s AND tenant_id IS NULL LIMIT 1",
+                    "WHERE identity_id = %(identity_id)s AND tenant_id IS NULL LIMIT 1",
                     {"identity_id": identity_id},
                 )
             return UserRecord.from_row(row) if row is not None else None
@@ -131,8 +132,8 @@ class UserDAO(BaseDAO[UserRecord]):
             if include_identity:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                    + "WHERE u.identity_id = %(identity_id)s",
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.identity_id = %(identity_id)s",
                     {"identity_id": identity_id},
                 )
                 return [_user_from_joined_row(row) for row in rows]
@@ -153,9 +154,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')} FROM users u "
-                + "JOIN identities i ON i.id = u.identity_id "
-                + "WHERE i.email = %(email)s AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s"
-                + f"{exclude_sql} LIMIT 1",
+                "JOIN identities i ON i.id = u.identity_id "
+                "WHERE i.email = %(email)s AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s"
+                f"{exclude_sql} LIMIT 1",
                 params,
             )
             return UserRecord.from_row(row) if row is not None else None
@@ -171,9 +172,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')} FROM users u "
-                + "JOIN identities i ON i.id = u.identity_id "
-                + "WHERE i.phone = %(phone)s AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s"
-                + f"{exclude_sql} LIMIT 1",
+                "JOIN identities i ON i.id = u.identity_id "
+                "WHERE i.phone = %(phone)s AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s"
+                f"{exclude_sql} LIMIT 1",
                 params,
             )
             return UserRecord.from_row(row) if row is not None else None
@@ -192,8 +193,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.id = %(user_id)s LIMIT 1",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.id = %(user_id)s LIMIT 1",
                 {"user_id": user_id},
             )
             user = _user_from_joined_row(row) if row is not None else None
@@ -262,19 +263,19 @@ class UserDAO(BaseDAO[UserRecord]):
             return updated
 
     @override
-    async def delete(self, *, id: UUID) -> UserRecord | None:
+    async def delete(self, *, record_id: UUID) -> UserRecord | None:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants, lock_user
         from app.db.session import optional_connection_ctx
 
         async with optional_connection_ctx() as db:
-            user = await self.get(id)
+            user = await self.get(record_id)
             if user is None:
                 return None
             if db is not None:
                 await lock_tenants(db, (user.tenant_id,))
-                await lock_user(db, id, user.tenant_id)
+                await lock_user(db, record_id, user.tenant_id)
                 await invalidate_tenant_agents(db, user.tenant_id)
-            deleted = await super().delete(id=id)
+            deleted = await super().delete(record_id=record_id)
             if deleted is not None:
                 await bump_user_session(deleted.id)
             return deleted
@@ -283,8 +284,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM users "
-                + "WHERE identity_id = %(identity_id)s "
-                + "ORDER BY created_at DESC NULLS LAST LIMIT 1",
+                "WHERE identity_id = %(identity_id)s "
+                "ORDER BY created_at DESC NULLS LAST LIMIT 1",
                 {"identity_id": identity_id},
             )
             return UserRecord.from_row(row) if row is not None else None
@@ -305,8 +306,8 @@ class UserDAO(BaseDAO[UserRecord]):
             await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
                 "UPDATE users SET is_active = FALSE, updated_at = now() "
-                + "WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
-                + "AND role <> %(platform_admin)s RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
+                "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
             await invalidate_tenant_agents(db, tenant_id)
@@ -321,8 +322,8 @@ class UserDAO(BaseDAO[UserRecord]):
             await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
                 "UPDATE users SET is_active = TRUE, updated_at = now() "
-                + "WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
-                + "AND role <> %(platform_admin)s RETURNING id",
+                "WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
+                "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
             await invalidate_tenant_agents(db, tenant_id)
@@ -347,14 +348,14 @@ class UserDAO(BaseDAO[UserRecord]):
             if include_identity:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                    + f"WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE{exclude_sql}{order_sql}",
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    f"WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE{exclude_sql}{order_sql}",
                     params,
                 )
                 return [_user_from_joined_row(row) for row in rows]
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')} FROM users u "
-                + f"WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE{exclude_sql}{order_sql}",
+                f"WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE{exclude_sql}{order_sql}",
                 params,
             )
             return [UserRecord.from_row(row) for row in rows]
@@ -373,7 +374,7 @@ class UserDAO(BaseDAO[UserRecord]):
             name = str_from_row_opt(
                 await db.fetchval(
                     "SELECT COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = %(id)s",
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = %(id)s",
                     {"id": user_id},
                 )
             )
@@ -382,12 +383,12 @@ class UserDAO(BaseDAO[UserRecord]):
         set_cached_display_name(user_id, store)
         return name
 
-    async def first_by_role(self, role: str) -> UserRecord | None:
+    async def first_by_role(self, role: UserRole) -> UserRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM users WHERE role = %(role)s "
-                + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
-                {"role": role},
+                "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                {"role": role.value},
             )
             return UserRecord.from_row(row) if row is not None else None
 
@@ -395,34 +396,33 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM users "
-                + "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
-                + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
+                "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                 {"tenant_id": tenant_id},
             )
             return UserRecord.from_row(row) if row is not None else None
 
-    async def count_by_role(self, role: str) -> int:
+    async def count_by_role(self, role: UserRole) -> int:
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT COUNT(*) FROM users WHERE role = %(role)s",
-                {"role": role},
+                {"role": role.value},
             )
             return int_from_row(value)
 
-    async def list_by_role(self, role: str, *, include_identity: bool = True) -> Sequence[UserRecord]:
+    async def list_by_role(self, role: UserRole, *, include_identity: bool = True) -> Sequence[UserRecord]:
         async with self.session() as db:
             if include_identity:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                    + "WHERE u.role = %(role)s ORDER BY u.created_at ASC NULLS LAST",
-                    {"role": role},
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.role = %(role)s ORDER BY u.created_at ASC NULLS LAST",
+                    {"role": role.value},
                 )
                 return [_user_from_joined_row(row) for row in rows]
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM users WHERE role = %(role)s "
-                + "ORDER BY created_at ASC NULLS LAST",
-                {"role": role},
+                f"SELECT {self._select_list()} FROM users WHERE role = %(role)s ORDER BY created_at ASC NULLS LAST",
+                {"role": role.value},
             )
             return [UserRecord.from_row(row) for row in rows]
 
@@ -430,9 +430,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                + "FROM users u JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.role = %(role)s AND u.is_active IS TRUE AND i.is_active IS TRUE "
-                + "ORDER BY u.created_at ASC NULLS LAST, u.id ASC",
+                "FROM users u JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.role = %(role)s AND u.is_active IS TRUE AND i.is_active IS TRUE "
+                "ORDER BY u.created_at ASC NULLS LAST, u.id ASC",
                 {"role": "platform_admin"},
             )
             return [_user_from_joined_row(row) for row in rows]
@@ -444,22 +444,22 @@ class UserDAO(BaseDAO[UserRecord]):
             if include_identity:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                    + "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
-                    + "ORDER BY u.created_at ASC NULLS LAST",
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
+                    "ORDER BY u.created_at ASC NULLS LAST",
                     {"tenant_id": tenant_id},
                 )
                 return [_user_from_joined_row(row) for row in rows]
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM users "
-                + "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
-                + "ORDER BY created_at ASC NULLS LAST",
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' "
+                "ORDER BY created_at ASC NULLS LAST",
                 {"tenant_id": tenant_id},
             )
             return [UserRecord.from_row(row) for row in rows]
 
-    async def count_active_by_role(self, role: str, *, tenant_id: UUID | None = None) -> int:
-        params: dict[str, Any] = {"role": role}
+    async def count_active_by_role(self, role: UserRole, *, tenant_id: UUID | None = None) -> int:
+        params: dict[str, Any] = {"role": role.value}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
@@ -472,10 +472,10 @@ class UserDAO(BaseDAO[UserRecord]):
             return int_from_row(value)
 
     async def deactivate_unless_last_active(
-        self, user_id: UUID, *, role: str, tenant_id: UUID | None = None
+        self, user_id: UUID, *, role: UserRole, tenant_id: UUID | None = None
     ) -> UserRecord | None:
         """Deactivate ``user_id`` only when another active peer of ``role`` exists."""
-        params: dict[str, Any] = {"user_id": user_id, "role": role}
+        params: dict[str, Any] = {"user_id": user_id, "role": role.value}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
@@ -490,9 +490,9 @@ class UserDAO(BaseDAO[UserRecord]):
             await lock_user(db, user_id, subject.tenant_id)
             row = await db.fetchone(
                 "UPDATE users SET is_active = FALSE, updated_at = now() "
-                + "WHERE id = %(user_id)s AND is_active IS TRUE AND ("
-                + f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
-                + f") > 1 RETURNING {self._select_list()}",
+                "WHERE id = %(user_id)s AND is_active IS TRUE AND ("
+                f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
+                f") > 1 RETURNING {self._select_list()}",
                 params,
             )
             user = UserRecord.from_row(row) if row is not None else None
@@ -504,8 +504,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def list_identity_ids_for_tenant(self, tenant_id: UUID) -> list[Any]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT DISTINCT identity_id FROM users "
-                + "WHERE tenant_id = %(tenant_id)s AND identity_id IS NOT NULL",
+                "SELECT DISTINCT identity_id FROM users WHERE tenant_id = %(tenant_id)s AND identity_id IS NOT NULL",
                 {"tenant_id": tenant_id},
             )
             return [row["identity_id"] for row in rows]
@@ -513,8 +512,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def genesis_platform_admin(self) -> UserRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM users "
-                + "WHERE role = 'platform_admin' AND is_genesis IS TRUE LIMIT 1",
+                f"SELECT {self._select_list()} FROM users WHERE role = 'platform_admin' AND is_genesis IS TRUE LIMIT 1",
             )
             return UserRecord.from_row(row) if row is not None else None
 
@@ -522,7 +520,7 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM users "
-                + "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' AND is_genesis IS TRUE LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND role = 'org_admin' AND is_genesis IS TRUE LIMIT 1",
                 {"tenant_id": tenant_id},
             )
             return UserRecord.from_row(row) if row is not None else None
@@ -533,7 +531,7 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = ANY(%(ids)s)",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
             return {uuid_from_row(row["id"]): str_from_row(row.get("display_name")) for row in rows}
@@ -542,8 +540,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS display_name, "
-                + "u.avatar_url FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.tenant_id = %(tenant_id)s",
+                "u.avatar_url FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.tenant_id = %(tenant_id)s",
                 {"tenant_id": tenant_id},
             )
             return [
@@ -566,8 +564,8 @@ class UserDAO(BaseDAO[UserRecord]):
             if include_identity:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                    + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                    + "WHERE u.tenant_id = %(tenant_id)s ORDER BY u.created_at ASC",
+                    "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                    "WHERE u.tenant_id = %(tenant_id)s ORDER BY u.created_at ASC",
                     params,
                 )
                 return [_user_from_joined_row(row) for row in rows]
@@ -633,9 +631,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE (lower(i.email) = lower(%(name)s) OR u.display_name = %(name)s) "
-                + "AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 2",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE (lower(i.email) = lower(%(name)s) OR u.display_name = %(name)s) "
+                "AND u.tenant_id IS NOT DISTINCT FROM %(tenant_id)s LIMIT 2",
                 params,
             )
             if len(rows) != 1:
@@ -647,9 +645,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT u.display_name, i.email FROM users u "
-                + "LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE "
-                + "ORDER BY u.display_name NULLS LAST LIMIT %(limit)s",
+                "LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE "
+                "ORDER BY u.display_name NULLS LAST LIMIT %(limit)s",
                 {"tenant_id": tenant_id, "limit": limit},
             )
             return [str_from_row(row.get("display_name")) or str_from_row(row.get("email")) or "User" for row in rows]
@@ -661,8 +659,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.email, ''), 'User') AS label "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.id = ANY(%(ids)s)",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
             return {uuid_from_row(row["id"]): str_from_row_opt(row.get("label")) for row in rows}
@@ -671,7 +669,7 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id FROM users WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
-                + "AND role IN ('platform_admin', 'org_admin')",
+                "AND role IN ('platform_admin', 'org_admin')",
                 {"tenant_id": tenant_id},
             )
             return uuid_list_from_rows(rows)
@@ -681,9 +679,9 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE "
-                + "AND u.role IN ('platform_admin', 'org_admin')",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.tenant_id = %(tenant_id)s AND u.is_active IS TRUE "
+                "AND u.role IN ('platform_admin', 'org_admin')",
                 {"tenant_id": tenant_id},
             )
             return [_user_from_joined_row(row) for row in rows]
@@ -694,8 +692,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
-                + "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
-                + "WHERE u.id = ANY(%(ids)s)",
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.id = ANY(%(ids)s)",
                 {"ids": list(user_ids)},
             )
             return {uuid_from_row(row["id"]): _user_from_joined_row(row) for row in rows}
@@ -731,8 +729,8 @@ class UserDAO(BaseDAO[UserRecord]):
             return str_from_row_opt(
                 await db.fetchval(
                     "SELECT i.email FROM users u JOIN identities i ON i.id = u.identity_id "
-                    + "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
-                    + "ORDER BY u.created_at ASC NULLS LAST LIMIT 1",
+                    "WHERE u.tenant_id = %(tenant_id)s AND u.role = 'org_admin' "
+                    "ORDER BY u.created_at ASC NULLS LAST LIMIT 1",
                     {"tenant_id": tenant_id},
                 )
             )
@@ -749,7 +747,7 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM users "
-                + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
             counts: dict[str, int] = {}
@@ -761,8 +759,8 @@ class UserDAO(BaseDAO[UserRecord]):
         async with self.session() as db:
             value: object = await db.fetchval(
                 "SELECT tenant_id FROM users "
-                + "WHERE identity_id = %(identity_id)s AND tenant_id IS DISTINCT FROM %(exclude)s "
-                + "LIMIT 1",
+                "WHERE identity_id = %(identity_id)s AND tenant_id IS DISTINCT FROM %(exclude)s "
+                "LIMIT 1",
                 {"identity_id": identity_id, "exclude": exclude_tenant_id},
             )
         return uuid_from_row_opt(value)

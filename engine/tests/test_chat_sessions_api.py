@@ -5,12 +5,58 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.api import chat_sessions as chat_sessions_api
+from app.core.domain.users import UserRole
+from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
+from app.records.user import UserRecord
 from app.services.shared_chat import shared_session_id
+
+
+@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
+async def test_history_access_matrix(monkeypatch, source, viewer):
+    user = UserRecord(id=uuid.uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
+    agent = AgentRecord(id=uuid.uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid.uuid4())
+    session = ChatSessionRecord(
+        id=shared_session_id(agent.id) if source == "shared" else uuid.uuid4(),
+        agent_id=agent.id,
+        user_id=user.id if viewer == "owner" else uuid.uuid4(),
+        source_channel=source,
+    )
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "use")))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=session))
+
+    if viewer == "member" and source != "shared":
+        with pytest.raises(HTTPException) as error:
+            await chat_sessions_api._authorize_history(agent.id, session.id, user)
+        assert error.value.status_code == 403
+    else:
+        assert await chat_sessions_api._authorize_history(agent.id, session.id, user) == session
+
+
+@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+async def test_history_session_policy_cannot_bypass_agent_access(monkeypatch, source):
+    user = UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN)
+    agent_id = uuid.uuid4()
+    session = ChatSessionRecord(
+        id=shared_session_id(agent_id) if source == "shared" else uuid.uuid4(),
+        agent_id=agent_id,
+        user_id=user.id,
+        source_channel=source,
+    )
+    lookup = AsyncMock(return_value=session)
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(side_effect=HTTPException(403, "revoked")))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", lookup)
+
+    with pytest.raises(HTTPException) as error:
+        await chat_sessions_api._authorize_history(agent_id, session.id, user)
+
+    assert error.value.status_code == 403
+    lookup.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -211,7 +257,7 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
         agent_id=agent_id,
         session_id=session_id,
         limit=20,
-        before=cast(Any, None),
+        before=cast("Any", None),
         current_user=current_user,
     )
 
@@ -273,7 +319,7 @@ async def test_creator_can_view_other_users_session_messages(monkeypatch):
         agent_id=agent_id,
         session_id=session_id,
         limit=20,
-        before=cast(Any, None),
+        before=cast("Any", None),
         current_user=current_user,
     )
 

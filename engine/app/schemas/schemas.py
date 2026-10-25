@@ -6,6 +6,17 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.domain.agents import (
+    AgentPermissionScope,
+    AgentSharingMode,
+    AgentStatus,
+    CompanyAccessLevel,
+    PermissionAccessLevel,
+)
+from app.core.domain.approvals import ApprovalAction as ApprovalDecision, ApprovalStatus
+from app.core.domain.channels import ChannelType
+from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.schemas.company_admission import RequestSummary
 from app.services.schedule_time import validate_timezone
@@ -38,7 +49,7 @@ class RegisterInitResponse(BaseModel):
     email: str
     access_token: str
     message: str = "Registration initiated. Please verify your email."
-    user: UserOut  # Include full user info
+    user: AuthUser  # Include full user info
     target_tenant_id: uuid.UUID | None = None
     needs_org_confirm: bool = False
     suggested_org: SuggestedOrg | None = None
@@ -84,7 +95,7 @@ class NeedsVerificationResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"  # noqa: S105 - OAuth 2.0 token-type discriminator, not a credential
-    user: UserOut | None = None
+    user: AuthUser | None = None
     identity: IdentityOut | None = None
     tenant_name: str | None = None
     must_change_password: bool = False
@@ -139,13 +150,13 @@ class IdentityOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
-class UserOut(BaseModel):
+class AuthUser(BaseModel):
     id: uuid.UUID
     identity_id: uuid.UUID | None = None
     email: str | None = None
     display_name: str
     avatar_url: str | None = None
-    role: str
+    role: UserRole
     is_platform_admin: bool = False
     tenant_id: uuid.UUID | None = None
     title: str | None = None
@@ -231,9 +242,9 @@ class AgentCreate(BaseModel):
     secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     # Permissions
-    permission_scope_type: str = "company"  # company | user | custom
+    permission_scope_type: AgentPermissionScope = AgentPermissionScope.COMPANY
     permission_scope_ids: list[uuid.UUID] = []
-    permission_access_level: str = "use"  # use | manage
+    permission_access_level: PermissionAccessLevel = PermissionAccessLevel.USE
     department_ids: list[uuid.UUID] = Field(default_factory=list)
     # Target tenant (admin-only override; otherwise ignored)
     tenant_id: uuid.UUID | None = None
@@ -255,7 +266,7 @@ class AgentOut(BaseModel):
     role_description: str
     bio: str | None = None
     welcome_message: str | None = None
-    status: str
+    status: AgentStatus
     creator_id: uuid.UUID
     creator_username: str | None = None  # Populated by API layer; not in ORM model directly
     primary_model_id: uuid.UUID | None = None
@@ -286,8 +297,8 @@ class AgentOut(BaseModel):
     expires_at: datetime | None = None
     is_expired: bool = False
     is_system: bool = False
-    access_mode: str = "company"
-    company_access_level: str = "use"
+    access_mode: AgentSharingMode = AgentSharingMode.COMPANY
+    company_access_level: CompanyAccessLevel = PermissionAccessLevel.USE
     llm_calls_today: int = 0
     max_llm_calls_per_day: int = 1000
     agent_type: str = "openclaw"
@@ -338,7 +349,7 @@ class AgentStatusOut(BaseModel):
 
     agent_id: uuid.UUID
     name: str
-    status: str
+    status: AgentStatus
     current_task: str | None = None
     last_active: datetime | None = None
     channel_status: JsonObject = {}
@@ -351,8 +362,8 @@ class AgentStatusOut(BaseModel):
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     description: str | None = None
-    type: str = "todo"  # todo | supervision
-    priority: str = "medium"
+    type: TaskType = TaskType.TODO
+    priority: TaskPriority = TaskPriority.MEDIUM
     due_date: datetime | None = None
     # Supervision fields
     supervision_target_name: str | None = None
@@ -365,9 +376,9 @@ class TaskOut(BaseModel):
     agent_id: uuid.UUID
     title: str
     description: str | None = None
-    type: str
-    status: str
-    priority: str
+    type: TaskType
+    status: TaskStatus
+    priority: TaskPriority
     assignee: str
     created_by: uuid.UUID
     creator_username: str | None = None
@@ -385,8 +396,8 @@ class TaskOut(BaseModel):
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
-    status: str | None = None
-    priority: str | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
     due_date: datetime | None = None
     supervision_target_name: str | None = None
     remind_schedule: str | None = None
@@ -466,7 +477,7 @@ class LLMModelOut(BaseModel):
 
 
 class ChannelConfigCreate(BaseModel):
-    channel_type: str = "feishu"
+    channel_type: ChannelType = ChannelType.FEISHU
     app_id: str
     app_secret: str
     encrypt_key: str | None = None
@@ -477,7 +488,7 @@ class ChannelConfigCreate(BaseModel):
 class ChannelConfigOut(BaseModel):
     id: uuid.UUID
     agent_id: uuid.UUID
-    channel_type: str
+    channel_type: ChannelType
     app_id: str | None = None
     # Secret fields are redacted by channels.redact.channel_config_out when returned from APIs.
     app_secret: str | None = None
@@ -501,7 +512,7 @@ class ApprovalRequestOut(BaseModel):
     agent_name: str | None = None
     action_type: str
     details: JsonObject
-    status: str
+    status: ApprovalStatus
     created_at: datetime
     resolved_at: datetime | None = None
     resolved_by: uuid.UUID | None = None
@@ -509,8 +520,8 @@ class ApprovalRequestOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
-class ApprovalAction(BaseModel):
-    action: str  # "approve" | "reject"
+class ApprovalDecisionRequest(BaseModel):
+    action: ApprovalDecision
 
 
 # ─── Enterprise Info ────────────────────────────────────
@@ -518,6 +529,7 @@ class ApprovalAction(BaseModel):
 
 class UserInviteRequest(BaseModel):
     emails: list[EmailStr] = Field(..., description="List of emails to invite")
+    ttl_hours: int = Field(default=336, ge=1, le=336, description="Hours until the invitations expire")
 
 
 class EnterpriseInfoUpdate(BaseModel):

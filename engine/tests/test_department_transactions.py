@@ -15,10 +15,12 @@ from app.schemas.department import AssignmentsOut, DepartmentCreate
 from app.services import org_departments
 from department_delete_postgres_fixtures import (
     DepartmentStore,
-    department_store as department_store,
-    schema_db as schema_db,
+    department_store,
+    schema_db,
 )
-from test_department_api import directory as directory
+from test_department_api import directory
+
+__all__ = ["department_store", "directory", "schema_db"]
 
 
 @pytest.mark.asyncio

@@ -689,10 +689,10 @@ AGENTBAY_TOOLS: list[BuiltinToolDefinition] = [
         "display_name": "AgentBay: File Transfer",
         "description": (
             "Transfer a file between any two endpoints: the agent workspace, "
-            + "the AgentBay browser environment, the cloud desktop, or the code sandbox. "
-            + "Workspace -> env: upload a workspace file into a cloud environment. "
-            + "Env -> workspace: download a file from a cloud environment into the workspace. "
-            + "Env -> env: transfer between environments transparently (no workspace involvement)."
+            "the AgentBay browser environment, the cloud desktop, or the code sandbox. "
+            "Workspace -> env: upload a workspace file into a cloud environment. "
+            "Env -> workspace: download a file from a cloud environment into the workspace. "
+            "Env -> env: transfer between environments transparently (no workspace involvement)."
         ),
         "category": "agentbay",
         "icon": "🔄",

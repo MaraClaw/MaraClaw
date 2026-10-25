@@ -40,7 +40,7 @@ def _to_unix(value: str | None, default: datetime) -> str:
         return value.strip()
     try:
         try:
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.strip())
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=UTC)
             return str(int(parsed.timestamp()))

@@ -8,6 +8,13 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.agents import (
+    AgentSharingMode,
+    AgentStatus,
+    CompanyAccessLevel,
+    PermissionAccessLevel,
+    PermissionGrantScope,
+)
 from app.core.json_types import (
     datetime_from_row,
     int_from_row,
@@ -24,18 +31,18 @@ class AgentPermissionRecord:
 
     id: UUID
     agent_id: UUID
-    scope_type: str
+    scope_type: PermissionGrantScope
     scope_id: UUID | None = None
-    access_level: str = "use"
+    access_level: PermissionAccessLevel = PermissionAccessLevel.USE
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentPermissionRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
-            scope_type=str_from_row(row["scope_type"]),
+            scope_type=PermissionGrantScope(str_from_row(row["scope_type"])),
             scope_id=uuid_from_row_opt(row.get("scope_id")),
-            access_level=str_from_row(row.get("access_level"), "use") or "use",
+            access_level=PermissionAccessLevel(str_from_row(row.get("access_level"), "use")),
         )
 
 
@@ -55,7 +62,7 @@ class AgentRecord:
     gogcli_enabled: bool = False
     api_key_hash: str | None = None
     openclaw_last_seen: datetime | None = None
-    status: str = "creating"
+    status: AgentStatus = AgentStatus.CREATING
     setup_pending: bool = False
     container_id: str | None = None
     container_port: int | None = None
@@ -85,8 +92,8 @@ class AgentRecord:
     expires_at: datetime | None = None
     is_expired: bool = False
     is_system: bool = False
-    access_mode: str = "company"
-    company_access_level: str = "use"
+    access_mode: AgentSharingMode = AgentSharingMode.COMPANY
+    company_access_level: CompanyAccessLevel = PermissionAccessLevel.USE
     llm_calls_today: int = 0
     max_llm_calls_per_day: int = 1000
     llm_calls_reset_at: datetime | None = None
@@ -116,7 +123,7 @@ class AgentRecord:
             gogcli_enabled=bool(row.get("gogcli_enabled", False)),
             api_key_hash=str_from_row(row.get("api_key_hash")) or None,
             openclaw_last_seen=datetime_from_row(row.get("openclaw_last_seen")),
-            status=str_from_row(row.get("status"), "creating") or "creating",
+            status=AgentStatus(str_from_row(row.get("status"), "creating")),
             setup_pending=bool(row.get("setup_pending", False)),
             container_id=str_from_row(row.get("container_id")) or None,
             container_port=int_from_row(row["container_port"]) if row.get("container_port") is not None else None,
@@ -150,8 +157,10 @@ class AgentRecord:
             expires_at=datetime_from_row(row.get("expires_at")),
             is_expired=bool(row.get("is_expired", False)),
             is_system=bool(row.get("is_system", False)),
-            access_mode=str_from_row(row.get("access_mode"), "company") or "company",
-            company_access_level=str_from_row(row.get("company_access_level"), "use") or "use",
+            access_mode=AgentSharingMode(str_from_row(row.get("access_mode"), "company")),
+            company_access_level=""
+            if row.get("company_access_level") == ""
+            else PermissionAccessLevel(str_from_row(row.get("company_access_level"), "use")),
             llm_calls_today=int_from_row(row.get("llm_calls_today")),
             max_llm_calls_per_day=int_from_row(row.get("max_llm_calls_per_day"), 1000),
             llm_calls_reset_at=datetime_from_row(row.get("llm_calls_reset_at")),

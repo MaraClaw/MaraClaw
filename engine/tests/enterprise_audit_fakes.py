@@ -12,6 +12,7 @@ from tests.test_enterprise_llm import _model
 from tests.transaction_pool_fakes import CountingPool, CountingRawConnection
 
 from app.api import enterprise
+from app.core.domain.users import UserRole
 from app.core.json_types import object_attr
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
@@ -26,7 +27,7 @@ class AuditDatabase(CountingRawConnection):
         self.model = _model(base_url="https://url-user:url-password@provider.invalid/v1?token=url-token#url-fragment")
         assert self.model.tenant_id is not None
         self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company")
-        self.actor = UserRecord(id=uuid4(), tenant_id=self.tenant.id, role="org_admin")
+        self.actor = UserRecord(id=uuid4(), tenant_id=self.tenant.id, role=UserRole.ORG_ADMIN)
         self.rows: dict[str, dict[UUID, Row]] = {
             "llm_models": {self.model.id: asdict(self.model)},
             "tenants": {self.tenant.id: asdict(self.tenant)},

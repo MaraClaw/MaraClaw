@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from app.core.json_types import json_loads_value, mapping_from_row
@@ -16,6 +17,7 @@ from app.core.logging import logger, new_trace_id
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.records.trigger import AgentTriggerRecord
+from app.runtime.tasks import AdmissionClosedError, TaskAdmission
 from app.services.trigger_runtime import (
     claim_ready_trigger_invocations,
     enqueue_due_trigger,
@@ -45,6 +47,22 @@ _A2A_WAKE_CHAIN: dict[str, int] = {}
 _A2A_WAKE_CHAIN_TTL = 300
 _A2A_MAX_WAKE_DEPTH = 3
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+_admission = TaskAdmission("Trigger invocation", _BACKGROUND_TASKS)
+
+
+def open_trigger_admission() -> None:
+    """Reopen invocation admission for a new lifespan."""
+    _admission.open()
+
+
+def close_trigger_admission() -> None:
+    """Stop claiming and admitting invocations; admitted claims and wakes still run to completion."""
+    _admission.close()
+
+
+async def drain_trigger_tasks(grace_seconds: float = 20.0) -> None:
+    """Wait for claims, wakes and invocations, then cancel and await the rest; cancelled leases recover by expiry."""
+    await _admission.drain(grace_seconds)
 
 
 def _observe_background_task(task: asyncio.Task[None]) -> None:
@@ -58,6 +76,7 @@ def _observe_background_task(task: asyncio.Task[None]) -> None:
 
 
 def _start_invocation(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
+    # Only called from work admitted by `_admission.run`, which a drain joins before it snapshots invocations.
     # Callers may hold a connection_ctx or tool execution context.
     task = asyncio.create_task(_invoke_agent_for_triggers(agent_id, triggers), context=contextvars.Context())
     _BACKGROUND_TASKS.add(task)
@@ -143,8 +162,8 @@ async def _tick():
                         if len(recent) >= _ON_MSG_RATE_LIMIT:
                             logger.warning(
                                 f"[A2A Safety] Agent {trigger.agent_id} hit "
-                                + f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
-                                + f"Auto-disabling trigger '{trigger.name}'."
+                                f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
+                                f"Auto-disabling trigger '{trigger.name}'."
                             )
                             t_obj = await agent_trigger_dao.get(trigger.id)
                             if t_obj:
@@ -156,6 +175,19 @@ async def _tick():
         except Exception as e:
             logger.warning(f"Error evaluating trigger {trigger.name}: {e}")
 
+    await _claim_and_invoke(now)
+
+
+async def _claim_and_invoke(now: datetime) -> None:
+    # The claim and the launch of what it leased are one admitted unit: a drain that begins mid-claim waits for the
+    # launch instead of refusing leased executions, and one that runs out of grace cancels the unit (lease recovery).
+    try:
+        await _admission.run(partial(_launch_claimed, now))
+    except AdmissionClosedError:
+        logger.info("Trigger claim skipped: shutdown drain in progress")
+
+
+async def _launch_claimed(now: datetime) -> None:
     # Claim queued executions with a DB lease so only one worker handles each event.
     try:
         fired_by_agent, force_invoke_agents = await claim_ready_trigger_invocations(now)
@@ -228,65 +260,73 @@ async def wake_agent_with_context(
         a2a_session_id: Optional A2A chat session ID to mirror the reply into.
     """
 
-    now = datetime.now(UTC)
+    async def admitted() -> None:
+        now = datetime.now(UTC)
 
-    if from_agent_id:
-        chain_key = f"{from_agent_id}->{agent_id}"
-        current_depth = _A2A_WAKE_CHAIN.get(chain_key, 0)
-        if current_depth >= _A2A_MAX_WAKE_DEPTH:
-            logger.warning(
-                f"[A2A] Wake chain depth {current_depth} reached for {chain_key}, stopping to prevent wake storm"
-            )
-            return
+        if from_agent_id:
+            chain_key = f"{from_agent_id}->{agent_id}"
+            current_depth = _A2A_WAKE_CHAIN.get(chain_key, 0)
+            if current_depth >= _A2A_MAX_WAKE_DEPTH:
+                logger.warning(
+                    f"[A2A] Wake chain depth {current_depth} reached for {chain_key}, stopping to prevent wake storm"
+                )
+                return
 
-        _A2A_WAKE_CHAIN[chain_key] = current_depth + 1
+            _A2A_WAKE_CHAIN[chain_key] = current_depth + 1
 
-        def _decay_chain():
-            _ = _A2A_WAKE_CHAIN.pop(chain_key, None)
+            def _decay_chain():
+                _ = _A2A_WAKE_CHAIN.pop(chain_key, None)
 
-        _ = asyncio.get_running_loop().call_later(_A2A_WAKE_CHAIN_TTL, _decay_chain)
+            _ = asyncio.get_running_loop().call_later(_A2A_WAKE_CHAIN_TTL, _decay_chain)
 
-    if not skip_dedup and agent_id in _last_invoke:
-        elapsed = (now - _last_invoke[agent_id]).total_seconds()
-        if elapsed < DEDUP_WINDOW:
-            logger.info(
-                f"[A2A] Skipping wake for agent {agent_id} - invoked {elapsed:.0f}s ago (dedup window {DEDUP_WINDOW}s)"
-            )
-            return
+        if not skip_dedup and agent_id in _last_invoke:
+            elapsed = (now - _last_invoke[agent_id]).total_seconds()
+            if elapsed < DEDUP_WINDOW:
+                logger.info(
+                    f"[A2A] Skipping wake for agent {agent_id} - invoked {elapsed:.0f}s ago (dedup window {DEDUP_WINDOW}s)"
+                )
+                return
 
-    _last_invoke[agent_id] = now
+        _last_invoke[agent_id] = now
 
-    from_agent_name = ""
-    if from_agent_id:
-        try:
-            sender = await agent_dao.get(from_agent_id)
-            from_agent_name = (sender.name if sender else "") or ""
-        except Exception as e:
-            logger.warning(f"Failed to lookup sender agent name: {e}")
+        from_agent_name = ""
+        if from_agent_id:
+            try:
+                sender = await agent_dao.get(from_agent_id)
+                from_agent_name = (sender.name if sender else "") or ""
+            except Exception as e:
+                logger.warning(f"Failed to lookup sender agent name: {e}")
 
-    dummy_trigger = AgentTriggerRecord(
-        id=uuid.uuid4(),
-        agent_id=agent_id,
-        name="a2a_wake",
-        type="on_message",
-        config={
-            "from_agent_name": from_agent_name,
-            "_matched_message": message_context[:2000],
-            "_matched_from": "agent",
-            "_a2a_session_id": a2a_session_id,
-        },
-        reason=(
-            "You received a notification from another agent. "
-            + "Read the message content above, update your focus and memory if needed, "
-            + "and take any action you deem necessary. "
-            + "Do NOT reply back to the sender unless you have a genuine question - "
-            + "this was a notification, not a request for response."
-        ),
-        is_enabled=True,
-        last_fired_at=now,
-        fire_count=0,
-    )
-    _start_invocation(agent_id, [dummy_trigger])
+        dummy_trigger = AgentTriggerRecord(
+            id=uuid.uuid4(),
+            agent_id=agent_id,
+            name="a2a_wake",
+            type="on_message",
+            config={
+                "from_agent_name": from_agent_name,
+                "_matched_message": message_context[:2000],
+                "_matched_from": "agent",
+                "_a2a_session_id": a2a_session_id,
+            },
+            reason=(
+                "You received a notification from another agent. "
+                "Read the message content above, update your focus and memory if needed, "
+                "and take any action you deem necessary. "
+                "Do NOT reply back to the sender unless you have a genuine question - "
+                "this was a notification, not a request for response."
+            ),
+            is_enabled=True,
+            last_fired_at=now,
+            fire_count=0,
+        )
+        _start_invocation(agent_id, [dummy_trigger])
+
+    # Admission is checked before the chain or dedup guards are consumed, so a refused wake leaves both untouched.
+    # The sender lookup runs inside the admitted unit, so a drain cannot refuse a wake that already consumed them.
+    try:
+        await _admission.run(admitted)
+    except AdmissionClosedError:
+        logger.info("[A2A] Wake for agent {} skipped: shutdown drain in progress", agent_id)
 
 
 async def start_trigger_daemon():

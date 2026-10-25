@@ -6,6 +6,7 @@ import hashlib
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import JsonObject
 from app.dao.trigger_dao import trigger_execution_dao
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
@@ -28,7 +29,7 @@ async def enqueue_trigger_execution(
             "trigger_id": trigger.id,
             "agent_id": trigger.agent_id,
             "source": source,
-            "status": "pending",
+            "status": TriggerExecutionStatus.PENDING,
             "idempotency_key": idempotency_key[:255],
             "payload": payload_obj if isinstance(payload_obj, dict) else {},
             "payload_text": payload_text[:8000],

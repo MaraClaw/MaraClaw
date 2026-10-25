@@ -2,10 +2,10 @@
 
 import asyncio
 import os
-import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,11 +16,15 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.api import background_tasks
 from app.core import access_cache, redis_cache, row_memo, session_cache, tenant_cache
+from app.core.domain.users import UserRole
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
 from app.records.agent import AgentRecord
+from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+from app.services import agent_deletion_cleanup, agent_stops
+from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_manager import agent_manager
 
 BASELINE_SQL = (Path(__file__).resolve().parents[1] / "scripts" / "schema_baseline.sql").read_bytes()
@@ -63,11 +67,15 @@ class DeletionPostgres:
             "tasks",
             "task_logs",
             "web_search_events",
+            "agent_deletion_cleanup",
         )
         result: dict[str, list[Row]] = {}
         async with self.pool.connection() as raw:
             for table in tables:
-                cursor = await raw.execute(sql.SQL("SELECT * FROM {} ORDER BY id").format(sql.Identifier(table)))
+                key = "agent_id" if table == "agent_deletion_cleanup" else "id"
+                cursor = await raw.execute(
+                    sql.SQL("SELECT * FROM {} ORDER BY {}").format(sql.Identifier(table), sql.Identifier(key))
+                )
                 result[table] = await cursor.fetchall()
         return result
 
@@ -107,7 +115,7 @@ async def deletion_pg(
                         id=user_id,
                         identity_id=identity_id,
                         tenant_id=tenant_id,
-                        role="org_admin",
+                        role=UserRole.ORG_ADMIN,
                         identity=IdentityRecord(id=identity_id, email="owner@example.test"),
                     ),
                     other_user_id,
@@ -122,19 +130,19 @@ async def deletion_pg(
                     fixture.runtime_calls.append(("remove", agent.id))
                     return True
 
-                async def archive_files(agent_id: UUID) -> Path:
-                    fixture.runtime_calls.append(("archive", agent_id))
-                    destination = tmp_path / "archive" / str(agent_id)
-                    destination.parent.mkdir(exist_ok=True)
-                    source = tmp_path / str(agent_id)
-                    if source.exists():
-                        shutil.move(source, destination)
-                    else:
-                        destination.mkdir()
-                    return destination
+                def archive_files(job: AgentDeletionCleanupRecord) -> None:
+                    fixture.runtime_calls.append(("archive", job.agent_id))
+                    publish_deletion_archive(job)
 
                 monkeypatch.setattr(agent_manager, "remove_container", remove_container)
-                monkeypatch.setattr(agent_manager, "archive_agent_files", archive_files)
+                monkeypatch.setattr(
+                    agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(list=lambda **_: []))
+                )
+                monkeypatch.setattr(agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+                monkeypatch.setattr(
+                    agent_stops, "deletion_archive_path", lambda agent_id: tmp_path / "archive" / str(agent_id)
+                )
+                monkeypatch.setattr(agent_deletion_cleanup, "publish_deletion_archive", archive_files)
 
                 async def version_now(key: str, *, ttl: int | None = None) -> None:
                     remaining = await fixture.rows("SELECT id FROM tenants WHERE id = %s", (tenant_id,))

@@ -1,5 +1,6 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from tests.test_sso_session_status import install_session
 
 from app.api import agent_credentials, enterprise, onboarding, sso, tenants
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.agent_credential import AgentCredentialRecord
 from app.records.identity import IdentityProviderRecord
@@ -22,6 +24,7 @@ from app.schemas import (
     organization_response_sso as sso_contracts,
     organization_response_tenant as tenant_contracts,
 )
+from app.services.agent_provisioning import AgentProvisioning
 from app.services.llm.registry import ProviderManifest
 
 
@@ -47,7 +50,7 @@ async def test_unmodeled_wrappers_preserve_missing_null_extra_and_uncoerced_valu
 
 
 async def test_credential_http_preserves_datetime_encoding_and_hides_cookies(monkeypatch):
-    user = UserRecord(id=uuid4(), role="org_admin")
+    user = UserRecord(id=uuid4(), role=UserRole.ORG_ADMIN)
     agent_id = uuid4()
     cred = AgentCredentialRecord(
         id=uuid4(),
@@ -75,22 +78,35 @@ async def test_credential_http_preserves_datetime_encoding_and_hides_cookies(mon
 
 @pytest.mark.parametrize("existing", [False, True])
 async def test_assistant_http_returns_key_only_on_creation(monkeypatch, existing):
+    # Given an isolated provisioning/start boundary for response serialization.
     tenant_id = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant_id)
     agent = AgentRecord(id=uuid4(), name="Assistant", creator_id=user.id)
     row = UserTenantOnboardingRecord(
         id=uuid4(), user_id=user.id, tenant_id=tenant_id, personal_assistant_agent_id=agent.id if existing else None
     )
+    monkeypatch.setattr(
+        onboarding, "agent_provisioning", Mock(return_value=nullcontext(AgentProvisioning(user, tenant_id, None)))
+    )
     monkeypatch.setattr(onboarding, "_ensure_row", AsyncMock(return_value=row))
     monkeypatch.setattr(onboarding.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(onboarding, "_create_personal_assistant", AsyncMock(return_value=(agent, "one-time-key")))
     monkeypatch.setattr(onboarding.user_tenant_onboarding_dao, "update", AsyncMock(return_value=row))
+    monkeypatch.setattr(onboarding, "flush_request_transaction", AsyncMock())
+    monkeypatch.setattr(
+        onboarding,
+        "_start_personal_assistant",
+        AsyncMock(return_value=onboarding_contracts.PersonalAssistantStarted(status="started")),
+    )
     app = FastAPI()
     app.include_router(onboarding.router)
     app.dependency_overrides[onboarding.get_current_user] = lambda: user
+    # When the assistant is created or resumed through its HTTP route.
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/onboarding/personal-assistant", json={"name": "Assistant"})
-    assert response.status_code == 201
+    # Then the typed start outcome preserves creation-only key disclosure.
+    assert response.status_code == 200
+    assert response.json()["start"] == {"status": "started"}
     assert response.json()["agent"] == (
         {"id": str(agent.id), "name": "Assistant"}
         if existing

@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api import tenants
 from app.core import security
+from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -26,9 +27,9 @@ async def test_tenant_deletion_http_role_matrix(
         id=uuid4(),
         identity_id=identity_id,
         tenant_id=uuid4() if actor_kind in ("platform", "foreign_org_admin") else tenant_id,
-        role="platform_admin"
+        role=UserRole.PLATFORM_ADMIN
         if actor_kind in ("platform", "own_platform")
-        else ("member" if actor_kind == "member" else "org_admin"),
+        else (UserRole.MEMBER if actor_kind == "member" else UserRole.ORG_ADMIN),
         is_genesis=actor_kind == "genesis_org_admin",
         identity=IdentityRecord(id=identity_id),
     )
@@ -88,7 +89,7 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
     actor = UserRecord(
         id=uuid4(),
         identity_id=identity_id,
-        role="platform_admin",
+        role=UserRole.PLATFORM_ADMIN,
         identity=IdentityRecord(id=identity_id, must_change_password=condition == "password"),
     )
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))

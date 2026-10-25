@@ -12,8 +12,10 @@ from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.deletion_cleanup import execute_cleanup
-from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL as TENANT_DELETE_CLEANUP_SQL
+from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL
 from app.records.tenant import TenantRecord
+
+__all__ = ["TENANT_DELETE_CLEANUP_SQL", "TenantDAO", "TenantDeletionPreview", "tenant_dao", "tenant_name_tsquery"]
 
 _SEARCH_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _MAX_SEARCH_TOKENS = 8
@@ -73,12 +75,12 @@ class TenantDAO(BaseDAO[TenantRecord]):
     record_factory = staticmethod(TenantRecord.from_row)
 
     @override
-    async def get(self, id: UUID) -> TenantRecord | None:
-        cached = memo_get("tenant", id)
+    async def get(self, record_id: UUID) -> TenantRecord | None:
+        cached = memo_get("tenant", record_id)
         if isinstance(cached, TenantRecord):
             return cached
         try:
-            tenant_id = as_uuid(id)
+            tenant_id = as_uuid(record_id)
         except TypeError, ValueError:
             tenant_id = None
         observed_ver = "0"
@@ -88,7 +90,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 memo_set("tenant", redis_hit.id, redis_hit)
                 return redis_hit
             observed_ver = await peek_tenant_version(tenant_id)
-        tenant = await super().get(id)
+        tenant = await super().get(record_id)
         if tenant is not None:
             memo_set("tenant", tenant.id, tenant)
             await set_cached_tenant(tenant, observed_ver=observed_ver)
@@ -110,15 +112,15 @@ class TenantDAO(BaseDAO[TenantRecord]):
             return updated
 
     @override
-    async def delete(self, *, id: UUID) -> TenantRecord | None:
+    async def delete(self, *, record_id: UUID) -> TenantRecord | None:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
         from app.db.session import optional_connection_ctx
 
         async with optional_connection_ctx() as db:
             if db is not None:
-                await lock_tenants(db, (id,))
-                await invalidate_tenant_agents(db, id)
-            deleted = await super().delete(id=id)
+                await lock_tenants(db, (record_id,))
+                await invalidate_tenant_agents(db, record_id)
+            deleted = await super().delete(record_id=record_id)
             if deleted is not None:
                 memo_drop("tenant", deleted.id)
                 await bump_tenant_cache(deleted.id)
@@ -128,7 +130,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenants "
-                + "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
+                "WHERE is_default_end_user_org IS TRUE AND is_active IS TRUE LIMIT 1",
             )
             return TenantRecord.from_row(row) if row is not None else None
 
@@ -162,7 +164,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM tenants "
-                + "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
+                "WHERE sso_domain = %(domain)s AND is_active IS TRUE LIMIT 1",
                 {"domain": domain.lower()},
             )
             return TenantRecord.from_row(row) if row is not None else None
@@ -198,10 +200,10 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants "
-                + "WHERE name_tsv @@ to_tsquery('simple', %(query)s) "
-                + "ORDER BY ts_rank_cd(name_tsv, to_tsquery('simple', %(query)s)) DESC, "
-                + "created_at DESC NULLS LAST "
-                + "LIMIT %(limit)s",
+                "WHERE name_tsv @@ to_tsquery('simple', %(query)s) "
+                "ORDER BY ts_rank_cd(name_tsv, to_tsquery('simple', %(query)s)) DESC, "
+                "created_at DESC NULLS LAST "
+                "LIMIT %(limit)s",
                 {"query": query, "limit": limit},
             )
             return [TenantRecord.from_row(row) for row in rows]
@@ -234,7 +236,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM tenants "
-                + "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
+                "WHERE created_at >= %(start)s AND created_at <= %(end)s GROUP BY d",
                 {"start": start, "end": end},
             )
             counts: dict[str, int] = {}
@@ -247,8 +249,8 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE tenants SET sso_domain = NULL, sso_enabled = FALSE "
-                + "WHERE id IS DISTINCT FROM %(keep_tenant_id)s AND "
-                + "(sso_domain IS NOT NULL OR sso_enabled IS TRUE) RETURNING id",
+                "WHERE id IS DISTINCT FROM %(keep_tenant_id)s AND "
+                "(sso_domain IS NOT NULL OR sso_enabled IS TRUE) RETURNING id",
                 {"keep_tenant_id": keep_tenant_id},
             )
         for row in rows:
@@ -261,7 +263,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tenants "
-                + "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
+                "ORDER BY sso_enabled DESC NULLS LAST, created_at ASC NULLS LAST"
             )
             return [TenantRecord.from_row(row) for row in rows]
 

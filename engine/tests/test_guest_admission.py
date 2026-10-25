@@ -13,7 +13,9 @@ from pydantic import ValidationError
 from python_on_whales import DockerClient
 from python_on_whales.components.container import cli_wrapper as container_cli
 from python_on_whales.exceptions import DockerException
-from tests.test_guest_start_safety import Docker, env as env
+from tests.test_guest_start_safety import Docker, env
+
+__all__ = ["env"]
 
 from app.config import Settings
 from app.records.agent import AgentRecord
@@ -56,7 +58,7 @@ async def test_capacity_refusal_preserves_old_runtime(env, monkeypatch, memory, 
     docker.add(other, memory=memory, status=status)
     # When start admission is refused.
     with pytest.raises(GuestAdmissionError) as error:
-        await manager.start_container(agent)
+        await manager.replace_container(agent)
     # Then no old runtime is changed, and inventory is explicitly deployment-network scoped.
     assert error.value.code == ("guest_memory_unbounded" if memory == 0 else "guest_memory_capacity_exceeded")
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
@@ -79,7 +81,7 @@ async def test_replacement_excludes_same_agent_and_counts_actual_limits(env, mon
     docker.add(replace(agent, id=uuid4(), container_id="stopped"), memory=0, status="exited")
     docker.add(replace(agent, id=uuid4(), container_id="other"), memory=20)
     # When replacing at exactly the aggregate limit.
-    result = await manager.start_container(agent)
+    result = await manager.replace_container(agent)
     # Then only the other running guest's actual hard limit consumes capacity.
     assert result == "created-1"
     assert "other" in docker.guests
@@ -114,7 +116,7 @@ async def test_admission_preflight_errors_preserve_old_runtime(env, monkeypatch,
         monkeypatch.setattr(docker, "list", fail_inventory)
     # When admission cannot establish a safe capacity decision.
     with pytest.raises(GuestStartPreflightError):
-        await manager.start_container(agent)
+        await manager.replace_container(agent)
     # Then the HTTP boundary can report failure without false runtime publication.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == docker.runs == []

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.api.background_tasks import schedule_background_task
 from app.config import Settings
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_as_str, object_mapping_from
 from app.core.logging import logger
 from app.core.security import (
@@ -29,6 +30,7 @@ from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.auth_responses import (
     AuthProviderResponse,
+    ChangePasswordResponse,
     CheckDuplicateResponse,
     EmailConflict,
     ForgotPasswordResponse,
@@ -37,6 +39,7 @@ from app.schemas.auth_responses import (
     ResetPasswordResponse,
 )
 from app.schemas.schemas import (
+    AuthUser,
     ForgotPasswordRequest,
     IdentityBindRequest,
     IdentityOut,
@@ -54,12 +57,13 @@ from app.schemas.schemas import (
     TenantSwitchResponse,
     TokenResponse,
     UserLogin,
-    UserOut,
     UserUpdate,
     VerifyEmailRequest,
 )
 from app.services import chat_tickets
+from app.services.auth_audience import AuthAudience, require_member_identity, require_member_user
 from app.services.auth_provider import BaseAuthProvider
+from app.services.auth_results import AuthRegistration, AuthSession
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -145,6 +149,8 @@ async def _send_verification_email_task(
     request: Request | None = None,
 ) -> None:
     """Helper to create verification token and add email task to background tasks."""
+    # Keep caller compatibility; delivery uses the commit-aware task scheduler.
+    _ = background_tasks, settings
     from app.services.email_verification_service import email_verification_service
     from app.services.system_email_service import resolve_email_config_async
 
@@ -278,7 +284,27 @@ async def register_init(
     data: RegisterInitRequest,
     background_tasks: BackgroundTasks,
     request: Request,
-):
+) -> RegisterInitResponse:
+    result = await register_init_flow(data, background_tasks, request, AuthAudience.SHARED)
+    return RegisterInitResponse(
+        user_id=result.user.id,
+        email=result.email,
+        access_token=result.access_token,
+        user=AuthUser.model_validate(result.user),
+        message=result.message,
+        needs_org_confirm=result.needs_org_confirm,
+        suggested_org=result.suggested_org,
+        target_tenant_id=result.target_tenant_id,
+        admission_request=result.admission_request,
+    )
+
+
+async def register_init_flow(
+    data: RegisterInitRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    audience: AuthAudience,
+) -> AuthRegistration:
     """Step 1: Initialize registration with account credentials.
 
     Creates/finds a global Identity and a tenant-scoped User.
@@ -325,6 +351,10 @@ async def register_init(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Email already registered. Incorrect password."
             )
+        if audience is AuthAudience.MEMBER:
+            require_member_identity(identity)
+            for existing in await user_dao.get_by_identity_id(identity.id):
+                require_member_user(existing)
 
     async with connection_ctx():
         identity = await registration_service.find_or_create_identity(
@@ -334,6 +364,11 @@ async def register_init(
             email_config=email_config,
             password_hash=password_hash,
         )
+        existing_users = await user_dao.get_by_identity_id(identity.id)
+        if audience is AuthAudience.MEMBER:
+            require_member_identity(identity)
+            for existing in existing_users:
+                require_member_user(existing)
 
         from app.services.org_membership import (
             DefaultOrgUnavailableError,
@@ -349,7 +384,6 @@ async def register_init(
         except DefaultOrgUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        existing_users = await user_dao.get_by_identity_id(identity.id)
         user = existing_users[0] if existing_users else None
         admission_request = None
 
@@ -357,7 +391,7 @@ async def register_init(
             user = await registration_service.create_user_with_identity(
                 identity=identity,
                 display_name=data.display_name or data.email.split("@", 1)[0],
-                role="member",
+                role=UserRole.MEMBER,
                 tenant_id=placement.tenant_id,
             )
         elif user.tenant_id is None and placement.tenant_id is not None:
@@ -367,12 +401,14 @@ async def register_init(
             if placed is not None:
                 user = await attach_user_to_org(user, placed)
         user.identity = identity
+        if audience is AuthAudience.MEMBER:
+            require_member_user(user)
         if bool(invite_code):
             from app.records.company_admission import AdmissionMethod
             from app.services.company_admissions import submit_request, summarize
             from app.services.org_membership import require_active_invitation
 
-            invitation = await require_active_invitation(invite_code)
+            invitation = await require_active_invitation(invite_code, email=data.email)
             if data.target_tenant_id is not None and data.target_tenant_id != invitation.tenant_id:
                 raise HTTPException(403, "Invitation does not match the target company")
             if invitation.tenant_id is None:
@@ -386,17 +422,23 @@ async def register_init(
                     newly_registered=not existing_users,
                 )
             )
+        elif not existing_users:
+            from app.services.company_admissions import summarize
+            from app.services.domain_admission_auto import stage_verified_domain_admission
+
+            domain_request = await stage_verified_domain_admission(user)
+            if domain_request is not None:
+                admission_request = await summarize(domain_request)
         if not identity.email_verified:
             await _send_verification_email_task(user, background_tasks, settings, request)
 
     # 5. Generate token outside transaction
     token = await create_access_token(str(user.id), user.role)
 
-    return RegisterInitResponse(
-        user_id=user.id,
+    return AuthRegistration(
         email=data.email,
         access_token=token,
-        user=UserOut.model_validate(user),
+        user=user,
         message="Registration initiated. Please verify your email."
         if not identity.email_verified
         else "Registration successful.",
@@ -411,6 +453,24 @@ async def register_init(
 async def login(
     data: UserLogin, background_tasks: BackgroundTasks, request: Request
 ) -> TokenResponse | MultiTenantResponse:
+    result = await login_flow(data, background_tasks, request, AuthAudience.SHARED)
+    if isinstance(result, MultiTenantResponse):
+        return result
+    user_out = AuthUser.model_validate(result.user)
+    user_out.must_change_password = result.must_change_password
+    return TokenResponse(
+        access_token=result.access_token,
+        user=user_out,
+        identity=IdentityOut.model_validate(result.identity),
+        must_change_password=result.must_change_password,
+        needs_org_confirm=result.needs_org_confirm,
+        suggested_org=result.suggested_org,
+    )
+
+
+async def login_flow(
+    data: UserLogin, background_tasks: BackgroundTasks, request: Request, audience: AuthAudience
+) -> AuthSession | MultiTenantResponse:
     """Login with email and password. Supports multi-tenant selection."""
     # 1. Query Identity
     identity = await identity_dao.get_by_login_identifier(data.login_identifier)
@@ -424,6 +484,11 @@ async def login(
             f"[LOGIN] Invalid credentials for {data.login_identifier} identity_id={identity.id if identity else 'None'}"
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    if audience is AuthAudience.MEMBER:
+        require_member_identity(identity)
+        for existing in await user_dao.get_by_identity_id(identity.id):
+            require_member_user(existing)
 
     # 2. Check Global Activity & Verification
     if not identity.is_active:
@@ -468,6 +533,10 @@ async def login(
 
     # 3. Find all User records (tenants)
     all_users = await user_dao.get_by_identity_id(identity.id, include_identity=True)
+    if audience is AuthAudience.MEMBER:
+        require_member_identity(identity)
+        for existing in all_users:
+            require_member_user(existing)
 
     if not all_users:
         raise HTTPException(
@@ -537,13 +606,11 @@ async def login(
     # general API access is blocked by get_current_user until the password is changed).
     token = await create_access_token(str(user.id), user.role)
     must_change = bool(getattr(identity, "must_change_password", False))
-    user_out = UserOut.model_validate(user)
-    user_out.must_change_password = must_change
     needs_confirm, suggested = await _pending_org_fields(user, getattr(identity, "email", None))
-    return TokenResponse(
+    return AuthSession(
         access_token=token,
-        user=user_out,
-        identity=IdentityOut.model_validate(identity),
+        user=user,
+        identity=identity,
         must_change_password=must_change,
         needs_org_confirm=needs_confirm,
         suggested_org=suggested,
@@ -557,6 +624,7 @@ async def forgot_password(
     request: Request,
 ) -> ForgotPasswordResponse:
     """Request a password reset link for a global Identity."""
+    _ = background_tasks
     from app.services.system_email_service import resolve_email_config_async
 
     email_config = await resolve_email_config_async()
@@ -618,24 +686,29 @@ async def reset_password(data: ResetPasswordRequest) -> ResetPasswordResponse:
             db_obj=identity,
             obj_in={"password_hash": new_hash, "must_change_password": False},
         )
+        _ = await identity_dao.bump_auth_generation(identity.id)
 
     return {"ok": True}
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=AuthUser)
 async def get_me(current_user: UserRecord = Depends(get_authenticated_user)):
     """Get current user profile."""
-    data = UserOut.model_validate(current_user)
+    data = AuthUser.model_validate(current_user)
     data.is_platform_admin = bool(getattr(getattr(current_user, "identity", None), "is_platform_admin", False))
     data.must_change_password = bool(getattr(current_user, "must_change_password", False))
     return data
 
 
-@router.patch("/me", response_model=UserOut)
+@router.patch("/me", response_model=AuthUser)
 async def update_me(
     data: UserUpdate,
     current_user: UserRecord = Depends(get_current_user),
 ):
+    return AuthUser.model_validate(await update_me_flow(data, current_user, AuthAudience.SHARED))
+
+
+async def update_me_flow(data: UserUpdate, current_user: UserRecord, audience: AuthAudience) -> UserRecord:
     """Update current user profile."""
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
@@ -643,6 +716,8 @@ async def update_me(
         user = await user_dao.get_with_identity(current_user.id, fresh=True)
         if not user or not user.identity:
             raise HTTPException(status_code=404, detail="User not found")
+        if audience is AuthAudience.MEMBER:
+            require_member_user(user)
 
         email = json_as_str(update_data.get("email"))
         if email is not None and email != user.identity.email:
@@ -694,7 +769,7 @@ async def update_me(
                 sync_phone="primary_mobile" in update_data,
             )
 
-    return UserOut.model_validate(user)
+    return user
 
 
 @router.get("/my-tenants", response_model=list[TenantChoice])
@@ -778,7 +853,7 @@ async def switch_tenant(
 async def change_password(
     data: ChangePasswordRequest,
     current_user: UserRecord = Depends(get_authenticated_user),
-):
+) -> ChangePasswordResponse:
     """Change current user's password. Updates the global identity password."""
     old_password = data.old_password
     new_password = data.new_password
@@ -826,8 +901,14 @@ async def change_password(
             db_obj=tx_identity,
             obj_in={"password_hash": new_hash, "must_change_password": False},
         )
+        _ = await identity_dao.bump_auth_generation(tx_identity.id)
+        result: ChangePasswordResponse = {"ok": True, "must_change_password": False}
+        if fresh_user.is_active and tx_identity.is_active:
+            result["access_token"] = await create_access_token(
+                str(fresh_user.id), fresh_user.role, identity_id=tx_identity.id
+            )
 
-    return {"ok": True, "must_change_password": False}
+    return result
 
 
 # ─── SSO/OAuth Endpoints ─────────────────────────────────────────────
@@ -916,6 +997,19 @@ async def oauth_callback(
     provider: str,
     data: OAuthCallbackRequest,
 ) -> TokenResponse | MultiTenantResponse:
+    result = await oauth_callback_flow(provider, data, AuthAudience.SHARED)
+    if isinstance(result, MultiTenantResponse):
+        return result
+    return TokenResponse(
+        access_token=result.access_token,
+        user=AuthUser.model_validate(result.user),
+        needs_org_confirm=result.needs_org_confirm,
+    )
+
+
+async def oauth_callback_flow(
+    provider: str, data: OAuthCallbackRequest, audience: AuthAudience
+) -> AuthSession | MultiTenantResponse:
     """Handle OAuth callback - supports a two-step flow for multi-tenant selection.
 
     Step 1 (code provided): exchange code with provider, detect multiple tenants,
@@ -964,15 +1058,23 @@ async def oauth_callback(
             raise HTTPException(status_code=403, detail="Tenant is not available for this sign-in")
         async with connection_ctx():
             await _check_oauth_provider(auth_provider, pending.provider_type)
-            user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=chosen_tenant)
+            if audience is AuthAudience.MEMBER:
+                user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=chosen_tenant, audience=audience)
+            else:
+                user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=chosen_tenant)
             if not user:
                 raise HTTPException(status_code=500, detail="Failed to create user")
             user = await _check_oauth_user(user)
+            if audience is AuthAudience.MEMBER:
+                require_member_user(user)
+                if user.identity_id:
+                    for existing in await user_dao.get_by_identity_id(user.identity_id):
+                        require_member_user(existing)
 
         jwt_token = await create_access_token(str(user.id), user.role)
-        return TokenResponse(
+        return AuthSession(
             access_token=jwt_token,
-            user=UserOut.model_validate(user),
+            user=user,
             needs_org_confirm=user.tenant_id is None,
         )
 
@@ -1005,12 +1107,20 @@ async def oauth_callback(
 
     async with connection_ctx():
         await _check_oauth_provider(auth_provider, provider)
-        user, _ = await auth_provider.find_or_create_user(user_info)
+        if audience is AuthAudience.MEMBER:
+            user, _ = await auth_provider.find_or_create_user(user_info, audience=audience)
+        else:
+            user, _ = await auth_provider.find_or_create_user(user_info)
         if not user:
             raise HTTPException(status_code=500, detail="Failed to create user")
         user = await _check_oauth_user(user)
+        if audience is AuthAudience.MEMBER:
+            require_member_user(user)
         if user.identity_id:
             all_users = await user_dao.get_by_identity_id(user.identity_id)
+            if audience is AuthAudience.MEMBER:
+                for existing in all_users:
+                    require_member_user(existing)
             tenant_users = [u for u in all_users if u.tenant_id is not None and u.is_active]
 
             if len(tenant_users) > 1:
@@ -1057,19 +1167,25 @@ async def oauth_callback(
 
     # Single tenant (or new user with no tenant yet) - issue token directly
     jwt_token = await create_access_token(str(user.id), user.role)
-    return TokenResponse(
+    return AuthSession(
         access_token=jwt_token,
-        user=UserOut.model_validate(user),
+        user=user,
         needs_org_confirm=user.tenant_id is None,
     )
 
 
-@router.post("/{provider}/bind", response_model=UserOut)
+@router.post("/{provider}/bind", response_model=AuthUser)
 async def bind_identity(
     provider: str,
     data: IdentityBindRequest,
     current_user: UserRecord = Depends(get_current_user),
 ):
+    return AuthUser.model_validate(await bind_identity_flow(provider, data, current_user, AuthAudience.SHARED))
+
+
+async def bind_identity_flow(
+    provider: str, data: IdentityBindRequest, current_user: UserRecord, audience: AuthAudience
+) -> UserRecord:
     """Bind an external identity to the current user."""
     from app.services.auth_registry import auth_provider_registry
     from app.services.sso_service import sso_service
@@ -1095,6 +1211,8 @@ async def bind_identity(
             raise HTTPException(status_code=400, detail="Provider user identity is missing")
         async with connection_ctx():
             user = await _fresh_actor(current_user)
+            if audience is AuthAudience.MEMBER:
+                require_member_user(user)
             await _check_oauth_provider(auth_provider, provider)
             existing_user = await sso_service.check_duplicate_identity(
                 provider,
@@ -1113,6 +1231,8 @@ async def bind_identity(
                 user_info.raw_data,
             )
             user = await user_dao.get_with_identity(user.id, fresh=True)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
 
     except HTTPException:
         raise
@@ -1120,25 +1240,36 @@ async def bind_identity(
         logger.error(f"Identity bind failed for {provider}: {e}")
         raise HTTPException(status_code=500, detail="Failed to bind identity") from e
 
-    return UserOut.model_validate(user)
+    return user
 
 
-@router.post("/{provider}/unbind", response_model=UserOut)
+@router.post("/{provider}/unbind", response_model=AuthUser)
 async def unbind_identity(
     provider: str,
     data: IdentityUnbindRequest,
     current_user: UserRecord = Depends(get_current_user),
 ):
+    return AuthUser.model_validate(await unbind_identity_flow(provider, data, current_user, AuthAudience.SHARED))
+
+
+async def unbind_identity_flow(
+    provider: str, data: IdentityUnbindRequest, current_user: UserRecord, audience: AuthAudience
+) -> UserRecord:
     """Unlink an external identity from the current user."""
+    _ = data
     from app.services.sso_service import sso_service
 
     async with connection_ctx():
         user = await _fresh_actor(current_user)
+        if audience is AuthAudience.MEMBER:
+            require_member_user(user)
         success = await sso_service.unlink_identity(str(user.id), provider)
         if not success:
             raise HTTPException(status_code=404, detail=f"No linked identity found for provider '{provider}'")
         user = await user_dao.get_with_identity(user.id, fresh=True)
-    return UserOut.model_validate(user)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 # ─── Email Verification Endpoints ──────────────────────────────────────
@@ -1146,6 +1277,16 @@ async def unbind_identity(
 
 @router.post("/verify-email")
 async def verify_email(data: VerifyEmailRequest):
+    result = await verify_email_flow(data, AuthAudience.SHARED)
+    return TokenResponse(
+        access_token=result.access_token,
+        user=AuthUser.model_validate(result.user) if result.user else None,
+        identity=IdentityOut.model_validate(result.identity),
+        needs_org_confirm=result.needs_org_confirm,
+    )
+
+
+async def verify_email_flow(data: VerifyEmailRequest, audience: AuthAudience) -> AuthSession:
     """Verify email address using a token from the verification email.
 
     On success, returns user info and access token to allow immediate login.
@@ -1166,6 +1307,11 @@ async def verify_email(data: VerifyEmailRequest):
         if not identity:
             raise HTTPException(status_code=400, detail="Identity not found")
 
+        if audience is AuthAudience.MEMBER:
+            require_member_identity(identity)
+            for existing in await user_dao.get_by_identity_id(identity.id):
+                require_member_user(existing)
+
         identity = await identity_dao.update(
             db_obj=identity,
             obj_in={"email_verified": True, "is_active": True},
@@ -1174,16 +1320,24 @@ async def verify_email(data: VerifyEmailRequest):
         for u in users:
             _ = await user_dao.update(db_obj=u, obj_in={"is_active": True})
         user = await user_dao.get_representative_user_for_identity(identity.id)
+        if audience is AuthAudience.MEMBER and user is not None:
+            require_member_user(user)
+
+    await flush_request_transaction()
+    if user is not None:
+        from app.services.domain_admission_auto import stage_verified_domain_admission
+
+        await stage_verified_domain_admission(user)
 
     # 4. Generate token and return full response outside transaction
     effective_id = str(user.id) if user else str(identity.id)
     effective_role = user.role if user else "user"
     token = await create_access_token(effective_id, effective_role, identity_id=None if user else identity.id)
 
-    return TokenResponse(
+    return AuthSession(
         access_token=token,
-        user=UserOut.model_validate(user) if user else None,
-        identity=IdentityOut.model_validate(identity),
+        user=user,
+        identity=identity,
         needs_org_confirm=user.tenant_id is None if user else True,
     )
 

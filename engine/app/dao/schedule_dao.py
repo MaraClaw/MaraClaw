@@ -56,7 +56,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                + "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
+                "WHERE agent_id = %(agent_id)s ORDER BY created_at DESC",
                 {"agent_id": agent_id},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
@@ -73,7 +73,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                + "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s",
+                "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s",
                 {"now": now},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
@@ -86,9 +86,9 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                + "WHERE is_enabled IS TRUE AND ("
-                + "(pending_due_at IS NULL AND next_run_at <= %(now)s) OR "
-                + "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)) FOR UPDATE SKIP LOCKED",
+                "WHERE is_enabled IS TRUE AND ("
+                "(pending_due_at IS NULL AND next_run_at <= %(now)s) OR "
+                "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)) FOR UPDATE SKIP LOCKED",
                 {"now": now},
             )
             for row in rows:
@@ -104,7 +104,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
                     if next_run is None:
                         await db.execute(
                             f"UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL, {_CLEAR_SLOT} "
-                            + "WHERE id = %(id)s",
+                            "WHERE id = %(id)s",
                             {"id": schedule.id},
                         )
                         logger.bind(schedule_id=str(schedule.id)).warning(
@@ -128,7 +128,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agent_schedules SET lease_expires_at = %(lease_expires_at)s "
-                + f"WHERE {_OWNER_PREDICATE} RETURNING id",
+                f"WHERE {_OWNER_PREDICATE} RETURNING id",
                 {"id": schedule_id, "token": token, "now": now, "lease_expires_at": now + _LEASE_DURATION},
             )
             return row is not None
@@ -138,10 +138,10 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE agent_schedules SET "
-                + "run_count = CASE WHEN pending_started_at IS NULL THEN COALESCE(run_count, 0) + 1 ELSE run_count END, "
-                + "last_run_at = CASE WHEN pending_started_at IS NULL THEN %(now)s ELSE last_run_at END, "
-                + "pending_started_at = COALESCE(pending_started_at, %(now)s) "
-                + f"WHERE {_OWNER_PREDICATE} RETURNING id",
+                "run_count = CASE WHEN pending_started_at IS NULL THEN COALESCE(run_count, 0) + 1 ELSE run_count END, "
+                "last_run_at = CASE WHEN pending_started_at IS NULL THEN %(now)s ELSE last_run_at END, "
+                "pending_started_at = COALESCE(pending_started_at, %(now)s) "
+                f"WHERE {_OWNER_PREDICATE} RETURNING id",
                 {"id": schedule_id, "token": token, "now": now},
             )
             return row is not None
@@ -159,7 +159,7 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE agent_schedules SET run_count = COALESCE(run_count, 0) + 1, last_run_at = %(now)s "
-                + "WHERE id = %(id)s",
+                "WHERE id = %(id)s",
                 {"id": schedule_id, "now": now},
             )
 
@@ -174,9 +174,9 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL, {_CLEAR_SLOT} "
-                + "WHERE is_enabled IS TRUE AND agent_id IN ("
-                + "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
-                + ") RETURNING id",
+                "WHERE is_enabled IS TRUE AND agent_id IN ("
+                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                ") RETURNING id",
                 {"tenant_id": tenant_id},
             )
             return len(rows)
@@ -190,9 +190,9 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL, {_CLEAR_SLOT} "
-                + "WHERE is_enabled IS TRUE AND agent_id IN ("
-                + f"SELECT id FROM agents WHERE {agent_filter}"
-                + ") RETURNING id",
+                "WHERE is_enabled IS TRUE AND agent_id IN ("
+                f"SELECT id FROM agents WHERE {agent_filter}"
+                ") RETURNING id",
                 params,
             )
             return len(rows)

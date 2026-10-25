@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.api.background_tasks import schedule_background_task
+from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.logging import logger
 from app.dao.task_dao import task_dao
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
@@ -50,16 +51,20 @@ async def _manage_tasks(
         return "Missing required argument 'title'"
 
     if action == "create":
-        task_type = args.get("task_type", "todo")
+        try:
+            task_type = TaskType(args.get("task_type", "todo"))
+            priority = TaskPriority(args.get("priority", "medium"))
+        except ValueError:
+            return "Invalid task type or priority"
         task = await task_dao.create(
             obj_in={
                 "agent_id": agent_id,
                 "title": title,
                 "description": args.get("description"),
                 "type": task_type,
-                "priority": args.get("priority", "medium"),
+                "priority": priority,
                 "created_by": user_id,
-                "status": "pending",
+                "status": TaskStatus.PENDING,
                 "supervision_target_name": args.get("supervision_target_name"),
                 "supervision_channel": args.get("supervision_channel", "feishu"),
                 "remind_schedule": args.get("remind_schedule"),
@@ -79,11 +84,15 @@ async def _manage_tasks(
         return f"✅ Supervision task created: '{title}' - will remind {target} on schedule ({schedule})"
 
     if action == "update_status":
+        try:
+            task_status = TaskStatus(args["status"])
+        except ValueError:
+            return "Invalid task status"
         task = await task_dao.find_first_by_title_ilike(agent_id, title)
         if not task:
             return f"No task found matching '{title}'"
         old = task.status
-        updates: dict[str, object] = {"status": args["status"]}
+        updates: dict[str, object] = {"status": task_status}
         if args["status"] == "done":
             updates["completed_at"] = datetime.now(UTC)
         _ = await task_dao.update(db_obj=task, obj_in=updates)

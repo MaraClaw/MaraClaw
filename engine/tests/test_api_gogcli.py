@@ -7,12 +7,13 @@ from pydantic import SecretStr
 
 from app.api import gogcli as gogcli_api
 from app.api.gogcli import GogcliKeyringSecretRequest, set_gogcli_keyring_secret
+from app.core.domain.users import UserRole
 from app.records.user import UserRecord
 from app.services import gogcli_runtime
 
 
 def _user(role: str = "member") -> UserRecord:
-    return UserRecord(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4(), display_name="Test User")
+    return UserRecord(id=uuid.uuid4(), role=UserRole(role), tenant_id=uuid.uuid4(), display_name="Test User")
 
 
 def _agent(*, enabled: bool = True) -> SimpleNamespace:

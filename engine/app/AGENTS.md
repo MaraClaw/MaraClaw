@@ -22,7 +22,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 - Inbound office parse: `services/document_parser/` (anydoc). Outbound HTML/MD/CSV: `services/document_conversion/`.
 - Org departments: `services/org_departments.py` + `api/departments.py`, not `templates/`. Provider organization sync is retired; shared member profiles and relationships remain.
 - Background work: `app.core.logging.new_trace_id()` before related logs.
-- Multi-write paths: `async with connection_ctx():` so DAOs share one commit. CRUD HTTP routers already bind `bind_crud_connection`.
+- Multi-write paths: `async with connection_ctx():` so DAOs share one commit. Short CRUD HTTP routers bind `bind_crud_connection`; the self-prefixed agent setup router stays unbound because its service owns explicit transactions and flock-before-row-lock ordering.
 - Connector managers: lifespan `start_all` after the pool. Do not call `start_all` from routes.
 
 ## Avoid

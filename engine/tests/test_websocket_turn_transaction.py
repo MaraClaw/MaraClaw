@@ -12,6 +12,7 @@ import pytest
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.api import background_tasks, websocket as ws_api
+from app.core.domain.users import UserRole
 from app.dao.user_dao import user_dao
 from app.db import session
 from app.records.agent import AgentRecord
@@ -214,7 +215,7 @@ async def drive_turn(
     denied: bool = False,
 ):
     user, agent = state.user, state.agent
-    user.role = role
+    user.role = UserRole(role)
     received = 0
 
     async def receive():
@@ -226,7 +227,7 @@ async def drive_turn(
             data = payload if payload is not None else {"content": "hello", "client_submission_id": state.submission_id}
             text = '{"kind":"onboarding_trigger"}' if onboarding else json.dumps(data)
             return {"type": "websocket.receive", "text": text}
-        raise WebSocketDisconnect()
+        raise WebSocketDisconnect
 
     async def send(message):
         if message["type"] == "websocket.send":
@@ -248,7 +249,7 @@ async def drive_turn(
     await socket.accept()
     state.frames.clear()
     handler = ws_api.WebSocketChatHandler(socket, agent.id, "ticket")
-    handler.user = UserRecord(id=user.id, role="member")
+    handler.user = UserRecord(id=user.id, role=UserRole.MEMBER)
     handler.conv_id = state.session_id
     assert user.tenant_id is not None
     handler.binding = chat_tickets.ChatTicketBinding(

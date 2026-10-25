@@ -37,7 +37,7 @@ def _repository(reference: str) -> str:
 def _readiness_script(port: int) -> str:
     return (
         f"fetch('http://127.0.0.1:{port}/readyz',{{signal:AbortSignal.timeout(5000)}})"
-        + ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+        ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
     )
 
 

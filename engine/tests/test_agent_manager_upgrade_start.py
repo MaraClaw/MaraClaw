@@ -13,6 +13,9 @@ from app.services.agent_manager import AgentManager
 
 
 class _Containers:
+    def execute(self, _reference: str, _command: list[str]) -> str:
+        return ""
+
     def inspect(self, reference: str) -> None:
         raise NoSuchContainer(["docker", "inspect", reference], 1)
 

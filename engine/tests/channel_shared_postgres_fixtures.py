@@ -19,7 +19,9 @@ from app.records.agent import AgentRecord
 from app.scripts import bootstrap_db
 from app.services import openclaw_routing
 from app.services.channels import binding, llm_bridge
-from test_bootstrap_postgres import schema_db as schema_db
+from test_bootstrap_postgres import schema_db
+
+__all__ = ["schema_db"]
 
 
 @dataclass(frozen=True, slots=True)

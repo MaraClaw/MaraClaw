@@ -249,8 +249,8 @@ async def test_facades_preserve_workspace_and_arguments_identity(
 
 
 def test_owner_uses_agent_tools_tenant_lookup() -> None:
-    import app.services.agent_tool_exec.clawhub as clawhub
-    import app.services.agent_tools as agent_tools
+    from app.services import agent_tools
+    from app.services.agent_tool_exec import clawhub
 
     assert clawhub.agent_tools is agent_tools
 

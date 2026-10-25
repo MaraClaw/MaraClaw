@@ -6,14 +6,17 @@ from fastapi import HTTPException
 
 from app.core.acl_locks import lock_tenants, lock_user
 from app.core.json_types import uuid_from_row
+from app.core.notification_kinds import NotificationKind
 from app.dao.company_admission_dao import company_admission_dao as admissions
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
+from app.dao.invitation_code_dao import invitation_code_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.company_admission import AdmissionMethod, AdmissionStatus, CompanyAdmissionRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import AdmissionApplicant, AdmissionTenant, RequestDetail, RequestSummary
 from app.schemas.company_transfer import TransferDisposition
+from app.services.invitation_codes import normalize_invite_email
 from app.services.notification_service import send_notification
 
 
@@ -174,7 +177,7 @@ async def submit_request(
         )
         await send_notification(
             reviewer_id,
-            type="company_admission_pending",
+            notification_kind=NotificationKind.COMPANY_ADMISSION_PENDING,
             title="Company admission requested",
             body=current.display_name,
             link=f"/admission-approvals/{request.id}",
@@ -186,14 +189,9 @@ async def submit_request(
 async def validate_method(user: UserRecord, target_id: UUID, method: AdmissionMethod, code: str | None) -> None:
     match method:
         case AdmissionMethod.INVITATION:
-            async with connection_ctx() as db:
-                invitation = await db.fetchone(
-                    "SELECT tenant_id FROM invitation_codes WHERE code=%(code)s AND is_active "
-                    "AND used_count < max_uses FOR UPDATE",
-                    {"code": code},
-                )
-                if invitation is None or invitation["tenant_id"] != target_id:
-                    raise HTTPException(409, "Invitation is no longer valid")
+            invitation = await invitation_code_dao.lock_redeemable(code or "", email=normalize_invite_email(user.email))
+            if invitation is None or invitation.tenant_id != target_id:
+                raise HTTPException(409, "Invitation is no longer valid")
         case AdmissionMethod.VERIFIED_DOMAIN:
             from app.services.org_membership import lookup_tenant_for_verified_email
 

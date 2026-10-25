@@ -3,7 +3,9 @@ from uuid import uuid4
 
 import anyio
 import pytest
-from tests.channel_submission_fixtures import channel_db as channel_db, receipt_db as receipt_db
+from tests.channel_submission_fixtures import channel_db, receipt_db
+
+__all__ = ["channel_db", "receipt_db"]
 from tests.test_channel_event_receipts_postgres import counts
 
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao

@@ -43,6 +43,7 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
     source_name = Path(rel_path).name
 
     try:
+        from app.core.domain.activity import ActivityAction
         from app.services.activity_logger import log_activity
 
         source_agent = await agent_dao.get(from_agent_id)
@@ -61,13 +62,13 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
             rel_names = [r.target_agent.name for r in rels if r.target_agent]
             return (
                 f"❌ No agent found matching '{agent_name}'. Your connected colleagues: "
-                + f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
+                f"{', '.join(rel_names) if rel_names else 'none - ask your administrator to set up relationships'}"
             )
 
         if target_agent.is_expired or (target_agent.expires_at and datetime.now(UTC) >= target_agent.expires_at):
             return (
                 f"⚠️ {target_agent.name} is currently unavailable - their service period has ended. "
-                + "Please contact the platform administrator."
+                "Please contact the platform administrator."
             )
 
         rels = await agent_agent_relationship_dao.list_for_agent(from_agent_id)
@@ -75,14 +76,14 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
         if not rel:
             return (
                 f"❌ You do not have a relationship with {target_agent.name}. Only agents in your relationship list "
-                + "can receive files. Ask your administrator to add a relationship if needed."
+                "can receive files. Ask your administrator to add a relationship if needed."
             )
         status_info = await evaluate_agent_relationship_status(rel)
         if status_info["access_status"] != "active":
             return (
                 f"❌ Relationship to {target_agent.name} is not active "
-                + f"({status_info['access_status_reason'] or 'restricted'}). "
-                + "Ask a manager of both agents to review Relationships."
+                f"({status_info['access_status_reason'] or 'restricted'}). "
+                "Ask a manager of both agents to review Relationships."
             )
 
         target_name = target_agent.name
@@ -143,13 +144,13 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
 
         await log_activity(
             from_agent_id,
-            "agent_file_sent",
+            ActivityAction.AGENT_MSG_SENT,
             f"Sent file to {target_name}",
             detail={"target_agent": target_name, "source_file": rel_path, "delivered_file": target_rel_path},
         )
         await log_activity(
             target_id,
-            "agent_file_received",
+            ActivityAction.FILE_WRITTEN,
             f"Received file from {source_agent_name}",
             detail={"source_agent": source_agent_name, "source_file": rel_path, "delivered_file": target_rel_path},
         )
@@ -182,9 +183,9 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
 
             file_msg_content = (
                 f"[File delivery from {source_agent_name}]\n"
-                + f"{source_agent_name} sent you a file: {delivered_name}\n"
-                + f"File path: {target_rel_path}\n"
-                + f'Use read_file(path="{target_rel_path}") to inspect it.'
+                f"{source_agent_name} sent you a file: {delivered_name}\n"
+                f"File path: {target_rel_path}\n"
+                f'Use read_file(path="{target_rel_path}") to inspect it.'
             )
             if delivery_note:
                 file_msg_content += f"\nNote: {delivery_note}"

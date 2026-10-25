@@ -7,6 +7,7 @@ from typing import Any
 from python_on_whales.exceptions import NoSuchContainer
 
 from app.config import Settings
+from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import (
@@ -365,7 +366,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     )
 
     # When
-    container_id = await manager.start_container(agent=agent)
+    container_id = await manager.replace_container(agent=agent)
 
     # Then
     assert container_id == "container-1234567890"
@@ -439,7 +440,7 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     )
 
     # When
-    container_id = await manager.start_container(agent=agent)
+    container_id = await manager.replace_container(agent=agent)
 
     # Then
     assert container_id == "container-1234567890"
@@ -479,7 +480,7 @@ async def test_start_container_returns_none_when_python_on_whales_client_is_miss
     )
 
     # When
-    container_id = await manager.start_container(agent=agent)
+    container_id = await manager.replace_container(agent=agent)
 
     # Then
     assert container_id is None
@@ -508,7 +509,7 @@ async def test_stop_container_clears_status_and_container_id_when_container_miss
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
     agent: Any = SimpleNamespace(id=agent_id, name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
-    agent.status = "running"
+    agent.status = AgentStatus.RUNNING
 
     # When
     stopped = await manager.stop_container(agent)
@@ -541,7 +542,7 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
     agent: Any = SimpleNamespace(id=agent_id, name="Missing Agent", creator_id=uuid.uuid4(), primary_model_id=None)
     agent.container_id = "missing-container"
     agent.container_port = 19876
-    agent.status = "running"
+    agent.status = AgentStatus.RUNNING
 
     # When
     removed = await manager.remove_container(agent)
@@ -568,7 +569,7 @@ async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
     agent.container_id = "running-container"
     agent.container_port = 19876
-    agent.status = "running"
+    agent.status = AgentStatus.RUNNING
 
     # When
     stopped = await manager.stop_container(agent)

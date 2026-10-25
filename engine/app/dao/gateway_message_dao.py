@@ -42,8 +42,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                + "WHERE agent_id = %(agent_id)s AND status = 'pending' "
-                + "ORDER BY created_at ASC",
+                "WHERE agent_id = %(agent_id)s AND status = 'pending' "
+                "ORDER BY created_at ASC",
                 {"agent_id": agent_id},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
@@ -79,8 +79,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "WITH claimed AS ("
-                + "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
-                + "WHERE agent_id = %(agent_id)s AND status = 'pending' "
+                "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
+                "WHERE agent_id = %(agent_id)s AND status = 'pending' "
                 + exclusion
                 + f"RETURNING {self._select_list()}"
                 + f") SELECT {self._select_list()} FROM claimed ORDER BY created_at ASC",
@@ -93,8 +93,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
-                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' "
-                + f"RETURNING {self._select_list()}",
+                "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' "
+                f"RETURNING {self._select_list()}",
                 {"id": message_id, "agent_id": agent_id, "now": datetime.now(UTC)},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
@@ -104,9 +104,9 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages SET status = 'pending', delivered_at = NULL "
-                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'delivered' "
-                + "AND delivered_at = %(delivered_at)s "
-                + f"RETURNING {self._select_list()}",
+                "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'delivered' "
+                "AND delivered_at = %(delivered_at)s "
+                f"RETURNING {self._select_list()}",
                 {"id": claimed.id, "agent_id": claimed.agent_id, "delivered_at": claimed.delivered_at},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
@@ -122,10 +122,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "UPDATE gateway_messages SET status = 'pending', delivered_at = NULL "
-                + "WHERE agent_id = %(agent_id)s AND status = 'delivered' "
-                + "AND (delivered_at IS NULL OR delivered_at < %(stale_before)s) "
-                + exclusion
-                + "RETURNING id",
+                "WHERE agent_id = %(agent_id)s AND status = 'delivered' "
+                "AND (delivered_at IS NULL OR delivered_at < %(stale_before)s) " + exclusion + "RETURNING id",
                 params,
             )
             return [uuid_from_row(row["id"]) for row in rows]
@@ -137,8 +135,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages SET status = 'completed', result = %(result)s, completed_at = %(now)s "
-                + "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered') "
-                + f"RETURNING {self._select_list()}",
+                "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered') "
+                f"RETURNING {self._select_list()}",
                 {"id": message_id, "agent_id": agent_id, "result": result, "now": now},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
@@ -147,7 +145,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                + "WHERE id = %(id)s AND agent_id = %(agent_id)s LIMIT 1",
+                "WHERE id = %(id)s AND agent_id = %(agent_id)s LIMIT 1",
                 {"id": message_id, "agent_id": agent_id},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
@@ -156,8 +154,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM gateway_messages "
-                + "WHERE agent_id = %(agent_id)s "
-                + "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                "WHERE agent_id = %(agent_id)s "
+                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
                 {"agent_id": agent_id, "limit": limit},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.core import access_cache, permissions
+from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.user import UserRecord
 from app.services.org_departments import admin_tenant
@@ -33,7 +34,9 @@ async def test_department_grant_is_dynamic_use(monkeypatch):
 
     tenant = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant)
-    agent = AgentRecord(id=uuid4(), name="Sales", tenant_id=tenant, creator_id=uuid4(), access_mode="custom")
+    agent = AgentRecord(
+        id=uuid4(), name="Sales", tenant_id=tenant, creator_id=uuid4(), access_mode=AgentSharingMode.CUSTOM
+    )
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[]))
@@ -81,9 +84,15 @@ def test_department_administration_accepts_authorized_selection(role):
 async def test_direct_manage_beats_department_use(monkeypatch):
     tenant = uuid4()
     user = UserRecord(id=uuid4(), tenant_id=tenant)
-    agent = AgentRecord(id=uuid4(), name="Sales", tenant_id=tenant, creator_id=uuid4(), access_mode="custom")
+    agent = AgentRecord(
+        id=uuid4(), name="Sales", tenant_id=tenant, creator_id=uuid4(), access_mode=AgentSharingMode.CUSTOM
+    )
     grant = AgentPermissionRecord(
-        id=uuid4(), agent_id=agent.id, scope_type="user", scope_id=user.id, access_level="manage"
+        id=uuid4(),
+        agent_id=agent.id,
+        scope_type=PermissionGrantScope.USER,
+        scope_id=user.id,
+        access_level=PermissionAccessLevel.MANAGE,
     )
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
@@ -97,9 +106,11 @@ async def test_direct_manage_beats_department_use(monkeypatch):
 async def test_accessible_relationship_users_filter_inactive_and_foreign_ids(monkeypatch):
     tenant = uuid4()
     creator, direct, department, inactive, foreign, admin = [uuid4() for _ in range(6)]
-    agent = AgentRecord(id=uuid4(), name="Sales", creator_id=creator, tenant_id=tenant, access_mode="custom")
+    agent = AgentRecord(
+        id=uuid4(), name="Sales", creator_id=creator, tenant_id=tenant, access_mode=AgentSharingMode.CUSTOM
+    )
     grants = [
-        AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type="user", scope_id=uid)
+        AgentPermissionRecord(id=uuid4(), agent_id=agent.id, scope_type=PermissionGrantScope.USER, scope_id=uid)
         for uid in (direct, inactive, foreign)
     ]
     monkeypatch.setattr(

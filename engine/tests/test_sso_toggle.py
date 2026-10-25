@@ -161,7 +161,7 @@ async def test_sso_config_uses_public_callback_for_unresolved_tenant(monkeypatch
 
     async def get_tenant(tid):
         assert tid == tenant_id
-        return  # soft-linked tenant deleted
+        # soft-linked tenant deleted
 
     monkeypatch.setattr(sso_scan_session_dao, "get", get_session)
     monkeypatch.setattr(identity_provider_dao, "list_active_sso_for_tenant", list_providers)

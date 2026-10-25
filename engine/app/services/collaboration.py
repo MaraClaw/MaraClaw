@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
 
+from app.core.domain.agents import AgentStatus
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.task_dao import task_dao
@@ -95,7 +96,7 @@ class CollaborationService:
             return []
 
         # Find agents by same creator or with company-wide permissions
-        agents = await agent_dao.list_by_statuses(["running", "stopped"], exclude_id=agent_id)
+        agents = await agent_dao.list_by_statuses([AgentStatus.RUNNING, AgentStatus.STOPPED], exclude_id=agent_id)
 
         return [
             {

@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock
 import anyio
 import pytest
 from fastapi import HTTPException
-from tests.channel_submission_fixtures import ChannelDatabase, channel_db as channel_db, receipt_db as receipt_db
+from tests.channel_submission_fixtures import ChannelDatabase, channel_db, receipt_db
+
+__all__ = ["channel_db", "receipt_db"]
 
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.db.connection import DbConnection

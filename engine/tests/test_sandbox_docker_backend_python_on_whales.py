@@ -98,7 +98,7 @@ def make_backend(
     backend = DockerBackend(
         SandboxConfig(allow_network=allow_network, cpu_limit="0.5", memory_limit="256m", **config_kwargs)
     )
-    backend._client = cast(Any, client)
+    backend._client = cast("Any", client)
     return backend
 
 

@@ -16,8 +16,8 @@ from app.core.security import check_token_generation, load_user_principal
 from app.dao.chat_dao import chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
+from app.services.chat_session_access import can_access_chat_session
 from app.services.chat_session_service import ensure_primary_platform_session
-from app.services.shared_chat import is_shared_session
 
 
 class ChatTicketRequest(BaseModel):
@@ -59,17 +59,17 @@ async def authorize(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord
     return user, agent, level
 
 
-async def authorized_session(binding: ChatTicketBinding) -> None:
+async def authorized_session(binding: ChatTicketBinding, user: UserRecord, agent: AgentRecord) -> None:
     session = await chat_session_dao.get_for_agent(binding.session_id, binding.agent_id)
     if session is None:
         raise HTTPException(403, "Session unavailable")
-    if not is_shared_session(session) and session.source_channel != "agent" and session.user_id != binding.user_id:
+    if not can_access_chat_session(user, agent, session):
         raise HTTPException(403, "Not authorized for this session")
 
 
 async def issue(binding: ChatTicketBinding) -> ChatTicketResponse:
-    await authorize(binding)
-    await authorized_session(binding)
+    user, agent, _ = await authorize(binding)
+    await authorized_session(binding, user, agent)
     ticket = secrets.token_urlsafe(32)
     try:
         redis = await get_redis()

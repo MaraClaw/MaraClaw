@@ -1,26 +1,32 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from importlib import import_module
 from typing import override
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 
+from app.core.domain.users import UserRole
 from app.core.json_types import uuid_from_row
 from app.dao import agent_dao, agent_permission_dao, agent_setup_dao
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
 from app.db.session import connection_ctx, transaction
+from app.records.user import UserRecord
+from app.schemas.schemas import AgentCreate
+from app.services import agent_provisioning
 
 
 class CreationConnection(DbConnection):
     def __init__(self, tenant: UUID | None, current: UUID | None):
-        self.tenant = tenant
-        self.current = current
+        self.tenant: UUID | None = tenant
+        self.current: UUID | None = current
         self.operations: list[tuple[str, object]] = []
         self.agent_tenant: UUID | None = None
-        self.commits = 0
-        self.rollbacks = 0
+        self.commits: int = 0
+        self.rollbacks: int = 0
 
     @override
     async def fetchone(self, query: str, params: Params = None) -> Row | None:
@@ -128,3 +134,43 @@ async def test_setup_and_agent_share_first_commit_through_real_dao_defaults():
     assert db.operations[-2:] == [("insert", agent_id), ("setup", agent_id)]
     assert agent.setup_pending
     assert work.state == "pending"
+
+
+@pytest.mark.parametrize("creator_tenant", [UUID(int=1), UUID(int=3), None])
+async def test_shared_provisioning_locks_tenants_then_fresh_actor_before_quota(monkeypatch, creator_tenant):
+    target, creator = UUID(int=2), uuid4()
+    actor = UserRecord(id=creator, tenant_id=creator_tenant, role=UserRole.PLATFORM_ADMIN)
+    db = CreationConnection(creator_tenant, creator_tenant)
+
+    async def fresh_actor(_id, *, fresh):
+        assert fresh
+        assert db.operations[-1] == ("creator", creator)
+        return actor
+
+    async def quota(principal):
+        assert principal is actor
+        db.operations.append(("quota", creator))
+
+    async def update(*, db_obj, obj_in):
+        return replace(db_obj, api_key_hash=obj_in["api_key_hash"])
+
+    monkeypatch.setattr(agent_provisioning.user_dao, "get_with_identity", fresh_actor)
+    monkeypatch.setattr(agent_provisioning.tenant_dao, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota)
+    monkeypatch.setattr(agent_provisioning.participant_dao, "create", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "ensure_access_granted_platform_relationships", AsyncMock())
+    monkeypatch.setattr(agent_provisioning.agent_dao, "update", update)
+    monkeypatch.setattr(import_module("app.dao.agent_dao"), "bump_agent_acl_version", AsyncMock())
+
+    async with transaction(db), agent_provisioning.agent_provisioning(actor, target) as context:
+        agent, _key = await agent_provisioning.provision_agent(context, AgentCreate(name="Serialized"))
+        assert db.commits == 0
+
+    tenants = sorted({item for item in (target, creator_tenant) if item is not None})
+    assert db.operations[: len(tenants) + 2] == [
+        *[("tenant", tenant) for tenant in tenants],
+        ("creator", creator),
+        ("quota", creator),
+    ]
+    assert db.commits == 1
+    assert agent.tenant_id == target

@@ -7,10 +7,19 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import TypeAdapter, ValidationError
+from tests.analytics_response_fixtures import (
+    export_status_projection,
+    org_ranking_projection,
+    summary_projection,
+    time_bucket_projection,
+    trending_query_projection,
+)
 from typing_extensions import TypeForm
 
 from app.api import admin_search_analytics as analytics_api, atlassian as atlassian_api, tools as tools_api
 from app.config import Settings
+from app.core.domain.channels import ChannelType
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_object_from
 from app.core.security import encrypt_data, get_current_user
 from app.records.agent import AgentRecord
@@ -25,7 +34,7 @@ type ToolState = tuple[UserRecord, AgentRecord, ToolRecord, AgentToolRecord]
 
 @pytest.fixture
 def tool_state(monkeypatch: pytest.MonkeyPatch) -> ToolState:
-    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role="org_admin")
+    user = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
     agent = AgentRecord(id=uuid4(), name="Operator", creator_id=user.id, tenant_id=user.tenant_id)
     settings = Settings(SECRET_KEY="operator-response-contract-test-key")
     monkeypatch.setattr(tool_config, "get_settings", lambda: settings)
@@ -164,7 +173,7 @@ async def test_atlassian_serializer_preserves_dynamic_cloud_id_without_secret() 
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=uuid4(),
-        channel_type="atlassian",
+        channel_type=ChannelType.ATLASSIAN,
         app_secret="never-return-this",
         extra_config={"cloud_id": None, "vendor": {"enabled": False}},
     )
@@ -186,7 +195,7 @@ async def test_atlassian_config_wire_keeps_redacted_envelope_and_empty_delete(
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=agent.id,
-        channel_type="atlassian",
+        channel_type=ChannelType.ATLASSIAN,
         app_secret="never-return-this",
         extra_config={"cloud_id": None, "vendor": False},
         created_at=datetime(2026, 10, 20, tzinfo=UTC),
@@ -234,12 +243,12 @@ async def test_atlassian_config_wire_keeps_redacted_envelope_and_empty_delete(
 
 
 @pytest.mark.parametrize("tenant_id", [None, UUID("00000000-0000-0000-0000-000000000001")])
-async def test_analytics_summary_keeps_partial_dictionary_identity_and_extras(
+async def test_analytics_summary_keeps_complete_projection_identity_and_scope(
     monkeypatch: pytest.MonkeyPatch, tenant_id: UUID | None
 ) -> None:
-    payload: dict[str, object] = {"event_count": 2, "by_kind": [], "extra": None}
+    payload = summary_projection()
 
-    async def summary(**_kwargs: object) -> dict[str, object]:
+    async def summary(**_kwargs: object) -> analytics_contracts.SearchAnalyticsSummaryProjection:
         return payload
 
     monkeypatch.setattr(analytics_api.web_search_event_dao, "summary", summary)
@@ -249,16 +258,16 @@ async def test_analytics_summary_keeps_partial_dictionary_identity_and_extras(
     )
 
     assert result is payload
-    assert result == {"event_count": 2, "by_kind": [], "extra": None, "scope": "org" if tenant_id else "system"}
+    assert result == {**summary_projection(), "scope": "org" if tenant_id else "system"}
 
 
-async def test_export_status_wire_keeps_legacy_datetime_encoding_and_extra_fields(
+async def test_export_status_wire_keeps_datetime_encoding_and_complete_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exported_at = datetime(2026, 10, 20, 1, 2, 3, tzinfo=UTC)
-    payload: dict[str, object] = {"pending": 1, "last_exported_at": exported_at, "extra": None}
+    payload = export_status_projection(exported_at)
 
-    async def status() -> dict[str, object]:
+    async def status() -> analytics_contracts.SearchAnalyticsExportStatusProjection:
         return payload
 
     monkeypatch.setattr(analytics_api.web_search_event_dao, "export_status", status)
@@ -266,7 +275,7 @@ async def test_export_status_wire_keeps_legacy_datetime_encoding_and_extra_field
     monkeypatch.setattr(analytics_api, "analytics_prefix", lambda: "web-search")
     app = FastAPI()
     app.include_router(analytics_api.router)
-    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role="platform_admin")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/admin/search-analytics/export-status")
@@ -274,9 +283,8 @@ async def test_export_status_wire_keeps_legacy_datetime_encoding_and_extra_field
     body = TypeAdapter(JsonObject).validate_json(response.content)
     assert response.status_code == 200
     assert body["last_exported_at"] == "2026-10-20T01:02:03Z"
-    assert body["extra"] is None
     assert body["bucket"] is None
-    assert "exported" not in body
+    assert body["exported"] == 2
 
 
 async def test_email_test_keeps_optional_fields_absent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,17 +337,17 @@ async def test_category_config_preserves_agent_overrides_and_masked_global_confi
     config = ChannelConfigRecord(
         id=uuid4(),
         agent_id=agent.id,
-        channel_type="custom",
+        channel_type=ChannelType.SLACK,
         app_secret=encrypt_data("agent-key", tool_config.get_settings().SECRET_KEY),
         extra_config={"credential": "agent-override", "optional": None, "vendor": False},
     )
 
-    async def channel(**_kwargs: object) -> ChannelConfigRecord:
-        return config
+    async def channel(*, agent_id: UUID, channel_type: ChannelType) -> ChannelConfigRecord | None:
+        return config if agent_id == config.agent_id and channel_type.value == config.channel_type.value else None
 
     monkeypatch.setattr(tools_api.channel_config_dao, "get_for_agent", channel)
 
-    result = await tools_api.get_category_config(agent.id, "custom", current_user=user)
+    result = await tools_api.get_category_config(agent.id, ChannelType.SLACK.value, current_user=user)
 
     assert result["config"]["credential"] == "agent-override"
     assert result["global_config"]["credential"] == "****cret"
@@ -416,20 +424,23 @@ async def test_category_test_fallback_matches_success_contract() -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "producer"), [("timeseries", "timeseries"), ("orgs", "top_orgs"), ("trending", "trending")]
+    ("path", "producer", "payload"),
+    [
+        ("timeseries", "timeseries", [time_bucket_projection()]),
+        ("orgs", "top_orgs", [org_ranking_projection()]),
+        ("trending", "trending", [trending_query_projection()]),
+    ],
 )
-async def test_analytics_list_wire_keeps_partial_rows_and_extra_null_fields(
-    monkeypatch: pytest.MonkeyPatch, path: str, producer: str
+async def test_analytics_list_wire_keeps_complete_projection_values(
+    monkeypatch: pytest.MonkeyPatch, path: str, producer: str, payload: list[JsonObject]
 ) -> None:
-    payload: list[dict[str, object]] = [{"extra": None, "event_count": 2}]
-
-    async def rows(**_kwargs: object) -> list[dict[str, object]]:
+    async def rows(**_kwargs: object) -> list[JsonObject]:
         return payload
 
     monkeypatch.setattr(analytics_api.web_search_event_dao, producer, rows)
     app = FastAPI()
     app.include_router(analytics_api.router)
-    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role="platform_admin")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/admin/search-analytics/{path}")
@@ -462,14 +473,7 @@ def test_fixed_contracts_reject_missing_required_fields_or_wrong_variants(
 
 def test_complete_analytics_contracts_support_pydantic_json_serialization() -> None:
     summary: analytics_contracts.SearchAnalyticsSummary = {
-        "event_count": 2,
-        "error_count": 0,
-        "quota_count": 1,
-        "unique_orgs": 1,
-        "unique_agents": 1,
-        "unattributed_count": 0,
-        "avg_latency_ms": 2.5,
-        "by_kind": [{"kind": "search", "event_count": 2}],
+        **summary_projection(),
         "scope": "org",
     }
     status: analytics_contracts.SearchAnalyticsExportStatus = {
@@ -486,12 +490,9 @@ def test_complete_analytics_contracts_support_pydantic_json_serialization() -> N
     }
 
     assert TypeAdapter(analytics_contracts.SearchAnalyticsSummary).validate_python(summary) == summary
-    assert (
-        TypeAdapter(analytics_contracts.SearchAnalyticsExportStatus).validate_json(
-            TypeAdapter(analytics_contracts.SearchAnalyticsExportStatus).dump_json(status)
-        )
-        == status
-    )
+    assert TypeAdapter(JsonObject).validate_json(
+        TypeAdapter(analytics_contracts.SearchAnalyticsExportStatus).dump_json(status)
+    ) == {**status, "last_exported_at": "2026-10-20T00:00:00Z"}
     assert TypeAdapter(list[analytics_contracts.SearchAnalyticsTimeBucket]).validate_python(
         [{"date": "2026-10-20", "event_count": 2, "error_count": 0, "quota_count": 1}]
     ) == [{"date": "2026-10-20", "event_count": 2, "error_count": 0, "quota_count": 1}]
@@ -521,7 +522,10 @@ def test_complete_analytics_contracts_support_pydantic_json_serialization() -> N
             analytics_contracts.SearchAnalyticsTrendingPassthrough,
             list[analytics_contracts.SearchAnalyticsTrendingQuery],
         ),
-        (analytics_contracts.SearchAnalyticsExportStatusPassthrough, analytics_contracts.SearchAnalyticsExportStatus),
+        (
+            analytics_contracts.SearchAnalyticsExportStatusPassthrough,
+            analytics_contracts.SearchAnalyticsExportStatusPayload,
+        ),
         (tool_contracts.CategoryTestPassthrough, tool_contracts.CategoryTestResponse),
     ],
 )
@@ -591,8 +595,12 @@ async def test_tool_mutation_wire_keeps_fixed_acknowledgements_and_empty_delete(
         "assign": ("PUT", f"/tools/agents/{agent.id}", [{"tool_id": str(tool.id), "enabled": True}]),
         "unassign": ("DELETE", f"/tools/agent-tool/{assignment.id}", None),
         "config": ("PUT", f"/tools/agents/{agent.id}/tool-config/{tool.id}", {"config": {"vendor": False}}),
-        "category": ("POST", f"/tools/agents/{agent.id}/category-config/custom", {"config": {"vendor": False}}),
-        "remove-category": ("DELETE", f"/tools/agents/{agent.id}/category-config/custom", None),
+        "category": (
+            "POST",
+            f"/tools/agents/{agent.id}/category-config/{ChannelType.SLACK.value}",
+            {"config": {"vendor": False}},
+        ),
+        "remove-category": ("DELETE", f"/tools/agents/{agent.id}/category-config/{ChannelType.SLACK.value}", None),
     }
     method, path, payload = requests[operation]
 

@@ -8,6 +8,7 @@ from typing import ClassVar, final
 from uuid import UUID, uuid4
 
 from app.core.json_types import int_from_row
+from app.core.notification_kinds import NotificationKind
 from app.core.row_memo import memo_drop
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
@@ -21,31 +22,31 @@ SUCCEEDED_SWEEP_LIMIT = 100
 # successful upgrade for the same or a newer notice exists.
 _OUTSTANDING = (
     "FROM openclaw_update_notices n JOIN agents a ON a.id = %(agent_id)s "
-    + "WHERE n.created_at > a.created_at AND NOT EXISTS ("
-    + "SELECT 1 FROM openclaw_update_runs r JOIN openclaw_update_notices done ON done.id = r.notice_id "
-    + "WHERE r.agent_id = a.id AND r.state = 'succeeded' "
-    + "AND (done.created_at, done.id) >= (n.created_at, n.id))"
+    "WHERE n.created_at > a.created_at AND NOT EXISTS ("
+    "SELECT 1 FROM openclaw_update_runs r JOIN openclaw_update_notices done ON done.id = r.notice_id "
+    "WHERE r.agent_id = a.id AND r.state = 'succeeded' "
+    "AND (done.created_at, done.id) >= (n.created_at, n.id))"
 )
 _FANOUT = (
     "WITH inserted AS ("
-    + "INSERT INTO notifications (id, user_id, type, title, body, link, ref_id, sender_name, is_read) "
-    + "SELECT gen_random_uuid(), u.id, 'openclaw_update', %(title)s, %(body)s, %(link)s, %(notice_id)s, "
-    + "%(sender)s, FALSE FROM users u "
-    + "JOIN identities i ON i.id = u.identity_id JOIN tenants t ON t.id = u.tenant_id "
-    + "WHERE u.is_active IS TRUE AND u.role <> 'platform_admin' "
-    + "AND i.is_active IS TRUE AND i.is_platform_admin IS FALSE AND t.is_active IS TRUE "
-    + "RETURNING 1) SELECT count(*) AS recipients FROM inserted"
+    "INSERT INTO notifications (id, user_id, type, title, body, link, ref_id, sender_name, is_read) "
+    "SELECT gen_random_uuid(), u.id, %(notification_kind)s, %(title)s, %(body)s, %(link)s, %(notice_id)s, "
+    "%(sender)s, FALSE FROM users u "
+    "JOIN identities i ON i.id = u.identity_id JOIN tenants t ON t.id = u.tenant_id "
+    "WHERE u.is_active IS TRUE AND u.role <> 'platform_admin' "
+    "AND i.is_active IS TRUE AND i.is_platform_admin IS FALSE AND t.is_active IS TRUE "
+    "RETURNING 1) SELECT count(*) AS recipients FROM inserted"
 )
 # Publication keeps its own agent-visible CAS: the agent must still be desired-running.
 _PUBLISH_AGENT = (
     "UPDATE agents SET container_id = %(new)s, container_port = %(port)s, openclaw_image_id = %(image)s, "
-    + "status = 'running', last_active_at = clock_timestamp(), updated_at = clock_timestamp() "
-    + "WHERE id = %(agent_id)s AND container_id IS NOT DISTINCT FROM %(old)s "
-    + "AND status IN ('running', 'idle') AND is_expired IS FALSE AND setup_pending IS FALSE "
-    + "AND (expires_at IS NULL OR expires_at > clock_timestamp()) "
-    + "AND (tenant_id IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = agents.tenant_id AND t.is_active IS TRUE)) "
-    + "AND EXISTS (SELECT 1 FROM users u WHERE u.id = agents.creator_id AND u.is_active IS TRUE) "
-    + "RETURNING id"
+    "status = 'running', last_active_at = clock_timestamp(), updated_at = clock_timestamp() "
+    "WHERE id = %(agent_id)s AND container_id IS NOT DISTINCT FROM %(old)s "
+    "AND status IN ('running', 'idle') AND is_expired IS FALSE AND setup_pending IS FALSE "
+    "AND (expires_at IS NULL OR expires_at > clock_timestamp()) "
+    "AND (tenant_id IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = agents.tenant_id AND t.is_active IS TRUE)) "
+    "AND EXISTS (SELECT 1 FROM users u WHERE u.id = agents.creator_id AND u.is_active IS TRUE) "
+    "RETURNING id"
 )
 
 
@@ -77,8 +78,8 @@ class OpenClawUpdateNoticeDAO(BaseDAO[OpenClawUpdateNoticeRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO openclaw_update_notices (id, request_id, title, body, mandatory, created_by) "
-                + "VALUES (%(id)s, %(request_id)s, %(title)s, %(body)s, %(mandatory)s, %(actor)s) "
-                + f"ON CONFLICT (request_id) DO NOTHING RETURNING {self._select_list()}",
+                "VALUES (%(id)s, %(request_id)s, %(title)s, %(body)s, %(mandatory)s, %(actor)s) "
+                f"ON CONFLICT (request_id) DO NOTHING RETURNING {self._select_list()}",
                 {
                     "id": notice_id,
                     "request_id": request_id,
@@ -100,6 +101,7 @@ class OpenClawUpdateNoticeDAO(BaseDAO[OpenClawUpdateNoticeRecord]):
                 await db.fetchval(
                     _FANOUT,
                     {
+                        "notification_kind": NotificationKind.OPENCLAW_UPDATE.value,
                         "title": title,
                         "body": body,
                         "link": f"/app/updates/{notice_id}",
@@ -110,7 +112,7 @@ class OpenClawUpdateNoticeDAO(BaseDAO[OpenClawUpdateNoticeRecord]):
             )
             stored = await db.fetchone(
                 "UPDATE openclaw_update_notices SET recipients = %(n)s WHERE id = %(id)s "
-                + f"RETURNING {self._select_list()}",
+                f"RETURNING {self._select_list()}",
                 {"n": recipients, "id": notice_id},
             )
             if stored is None:
@@ -122,7 +124,7 @@ class OpenClawUpdateNoticeDAO(BaseDAO[OpenClawUpdateNoticeRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list('n')} {_OUTSTANDING} "
-                + "ORDER BY n.mandatory DESC, n.created_at DESC, n.id DESC LIMIT 1",
+                "ORDER BY n.mandatory DESC, n.created_at DESC, n.id DESC LIMIT 1",
                 {"agent_id": agent_id},
             )
             return OpenClawUpdateNoticeRecord.from_row(row) if row is not None else None
@@ -154,9 +156,9 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO openclaw_update_runs (id, notice_id, agent_id, requested_by, state) "
-                + "VALUES (%(id)s, %(notice_id)s, %(agent_id)s, %(requested_by)s, 'pending') "
-                + "ON CONFLICT (agent_id) WHERE state IN ('pending', 'cutover') DO NOTHING "
-                + f"RETURNING {self._select_list()}",
+                "VALUES (%(id)s, %(notice_id)s, %(agent_id)s, %(requested_by)s, 'pending') "
+                "ON CONFLICT (agent_id) WHERE state IN ('pending', 'cutover') DO NOTHING "
+                f"RETURNING {self._select_list()}",
                 {"id": uuid4(), "notice_id": notice_id, "agent_id": agent_id, "requested_by": requested_by},
             )
             return OpenClawUpdateRunRecord.from_row(row) if row is not None else None
@@ -182,7 +184,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM openclaw_update_runs "
-                + "WHERE state IN ('pending', 'cutover') ORDER BY created_at, id"
+                "WHERE state IN ('pending', 'cutover') ORDER BY created_at, id"
             )
             return [OpenClawUpdateRunRecord.from_row(row) for row in rows]
 
@@ -191,8 +193,8 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM openclaw_update_runs "
-                + "WHERE state = 'succeeded' AND updated_at >= %(since)s "
-                + "AND (%(after)s::uuid IS NULL OR id > %(after)s) ORDER BY id LIMIT %(limit)s",
+                "WHERE state = 'succeeded' AND updated_at >= %(since)s "
+                "AND (%(after)s::uuid IS NULL OR id > %(after)s) ORDER BY id LIMIT %(limit)s",
                 {"since": since, "after": after, "limit": SUCCEEDED_SWEEP_LIMIT},
             )
             return [OpenClawUpdateRunRecord.from_row(row) for row in rows]
@@ -202,7 +204,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE openclaw_update_runs SET state = 'cutover', journal = %(journal)s, "
-                + "updated_at = clock_timestamp() WHERE id = %(id)s AND state = 'pending' RETURNING id",
+                "updated_at = clock_timestamp() WHERE id = %(id)s AND state = 'pending' RETURNING id",
                 {"id": run_id, "journal": as_jsonb(journal)},
             )
             return row is not None
@@ -211,7 +213,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE openclaw_update_runs SET journal = %(journal)s, updated_at = clock_timestamp() "
-                + "WHERE id = %(id)s AND state = 'cutover'",
+                "WHERE id = %(id)s AND state = 'cutover'",
                 {"id": run_id, "journal": as_jsonb(journal)},
             )
 
@@ -219,7 +221,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             await db.execute(
                 "UPDATE openclaw_update_runs SET state = 'failed', failure_code = %(code)s, "
-                + "updated_at = clock_timestamp() WHERE id = %(id)s AND state IN ('pending', 'cutover')",
+                "updated_at = clock_timestamp() WHERE id = %(id)s AND state IN ('pending', 'cutover')",
                 {"id": run_id, "code": code},
             )
 
@@ -228,7 +230,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE openclaw_update_runs SET state = 'failed', failure_code = %(code)s, "
-                + "updated_at = clock_timestamp() WHERE id = %(id)s AND state = 'pending' RETURNING id",
+                "updated_at = clock_timestamp() WHERE id = %(id)s AND state = 'pending' RETURNING id",
                 {"id": run_id, "code": code},
             )
             return row is not None
@@ -260,7 +262,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
                     raise _PublishLostError
                 done = await db.fetchone(
                     "UPDATE openclaw_update_runs SET state = 'succeeded', updated_at = clock_timestamp() "
-                    + "WHERE id = %(id)s AND state = 'cutover' RETURNING id",
+                    "WHERE id = %(id)s AND state = 'cutover' RETURNING id",
                     {"id": run_id},
                 )
                 if done is None:

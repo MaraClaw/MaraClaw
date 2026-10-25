@@ -27,7 +27,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 | Documents | `app/services/document_parser/`: inbound local anydoc (`firecrawl-anydoc==0.2.4`), isolated spawn; `app/services/document_conversion/`: outbound conversion. |
 | Shared organization members | `org_members` retains identity/contact/profile fields and agent relationship references; provider department hierarchy and people sync are retired. SSO/auth and IM channels remain separate. |
 | Templates / scripts | `agent_template/` is copied workspace scaffold; `agent_templates/` is DB-seeded role catalog. `app/scripts/` holds bootstrap/one-offs; `scripts/` holds schema/freeze/lint helpers; `docs/` holds operations/refactoring. |
-| Tests | `tests/AGENTS.md`: root-level pytest, no shared `conftest.py`, local fakes/monkeypatch; most API tests call handlers directly, no live Postgres in CI. |
+| Tests | `tests/AGENTS.md`: root-level pytest, no shared `conftest.py`, local fakes/monkeypatch; most API tests call handlers directly, with a separate live-PostgreSQL lifecycle CI job. |
 
 ## Engine-Wide Rules
 
@@ -74,7 +74,7 @@ uv run python -m app.scripts.bootstrap_db
 
 ## Runtime And Images
 
-- `../.github/workflows/engine-ci.yml` runs Ruff, basedpyright, ty and `scripts/test.sh` with explicit scope/terminal report/90% gate; `PYTEST_ADDOPTS` adds XML/HTML. No Docker/schema job or DB service. Local gates include both freeze scripts; `scripts/lint.sh` skips them and uses `ty check --force-exclude`.
+- `../.github/workflows/engine-ci.yml` runs Ruff, basedpyright, ty and `scripts/test.sh` with explicit scope/terminal report/90% gate; `PYTEST_ADDOPTS` adds XML/HTML. Separate `lifecycle-postgres` uses PostgreSQL 18.6 for setup/retry/authorization, start recovery, deletion/approval cleanup, ownership transfer and guest-config transaction regressions; it does not validate live Docker guests. Local gates include both freeze scripts; `scripts/lint.sh` skips them and uses `ty check --force-exclude`.
 - `Dockerfile`: pinned `uv==0.13.5`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
 - `start-from-docker.sh` builds `maraclaw-engine:local`, runs `maraclaw-engine`, forwards `.env` via `-e KEY` (not `--env-file`); mounts host Docker socket + Linux Docker CLI for python-on-whales/OpenClaw, dual-mounts `DATA_DIR` for host bind paths, creates `DOCKER_NETWORK` (default `maraclaw_network`).
 - Bubblewrap 0.12 rejects setuid execution; the image explicitly clears its setuid bit and requires usable host user namespaces for non-root sandboxing. Launcher retains `SYS_ADMIN SETUID SETGID SYS_CHROOT SETPCAP NET_ADMIN SYS_PTRACE` + `seccomp=unconfined`; validate the startup probe and a real backend command, not only file mode. The short probe does not mount `/proc`; a successful probe can still leave the full backend blocked by host permissions. Namespace failure must not trigger host execution.

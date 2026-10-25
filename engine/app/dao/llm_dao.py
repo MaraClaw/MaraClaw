@@ -61,8 +61,8 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
             return uuid_from_row_opt(
                 await db.fetchval(
                     "SELECT id FROM llm_models "
-                    + "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
-                    + "ORDER BY created_at ASC NULLS LAST LIMIT 1",
+                    "WHERE tenant_id = %(tenant_id)s AND enabled IS TRUE "
+                    "ORDER BY created_at ASC NULLS LAST LIMIT 1",
                     {"tenant_id": tenant_id},
                 )
             )
@@ -77,7 +77,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
             else:
                 rows = await db.fetchall(
                     f"SELECT {self._select_list()} FROM llm_models "
-                    + "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
+                    "WHERE tenant_id = %(tenant_id)s ORDER BY created_at DESC NULLS LAST",
                     {"tenant_id": tenant_id},
                 )
             return [LLMModelRecord.from_row(row) for row in rows]
@@ -89,8 +89,8 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM llm_models "
-                + "WHERE tenant_id = %(tenant_id)s AND auth_kind = %(auth_kind)s "
-                + "ORDER BY updated_at DESC NULLS LAST LIMIT 1",
+                "WHERE tenant_id = %(tenant_id)s AND auth_kind = %(auth_kind)s "
+                "ORDER BY updated_at DESC NULLS LAST LIMIT 1",
                 {"tenant_id": tenant_id, "auth_kind": auth_kind},
             )
             return LLMModelRecord.from_row(row) if row is not None else None

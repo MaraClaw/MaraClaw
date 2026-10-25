@@ -145,7 +145,7 @@ def _json_array(body: str) -> tuple[str, ...]:
         return ()
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         return ()
-    return tuple(cast(list[str], values))
+    return tuple(cast("list[str]", values))
 
 
 def _instruction_values(instructions: tuple[Instruction, ...], keyword: str) -> tuple[str, ...]:

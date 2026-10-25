@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from functools import partial
 
+from app.core.domain.activity import ActivityAction
 from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
@@ -76,7 +77,7 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
             detail["status"] = "cancelled"
             raise
         finally:
-            await log_activity(agent_id, "schedule_run", summary, detail=detail)
+            await log_activity(agent_id, ActivityAction.SCHEDULE_RUN, summary, detail=detail)
 
         logger.info(f"Schedule {schedule_id} executed for agent {agent.name}: {reply[:80]}")
 

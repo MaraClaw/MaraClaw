@@ -18,10 +18,12 @@ from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from test_schedule_occurrence_postgres import (
     accept_claim,
-    live_schedule as live_schedule,
-    manual_schedule as manual_schedule,
+    live_schedule,
+    manual_schedule,
     schedule_app,
 )
+
+__all__ = ["live_schedule", "manual_schedule"]
 
 
 @final
@@ -160,7 +162,7 @@ async def test_live_manual_owner_writes_reject_expiry_rotation_and_delete(
     expired = await write()
     (reclaimed,) = await runs.claim_pending(expires)
     rotated = await write()
-    await agent_schedule_dao.delete(id=manual_schedule.id)
+    await agent_schedule_dao.delete(record_id=manual_schedule.id)
     deleted = await runs.finish(reclaimed, expires, "success")
     # Then every stale write is fenced, including the previously current owner after deletion.
     assert [expired, rotated, deleted] == [False, False, False]

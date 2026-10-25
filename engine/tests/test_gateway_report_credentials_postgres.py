@@ -11,8 +11,10 @@ from app.db.session import get_connection, transaction
 from app.services import gateway_report_relay as relay
 from app.services.wechat_channel import WECHAT_CONTEXT_CACHE_KEY
 from test_channel_delivery_transport import transport
-from test_gateway_report_delivery_postgres import delivery_db as delivery_db, receipt_db as receipt_db
-from test_gateway_report_relay_postgres import relay_db as relay_db
+from test_gateway_report_delivery_postgres import delivery_db, receipt_db
+from test_gateway_report_relay_postgres import relay_db
+
+__all__ = ["delivery_db", "receipt_db", "relay_db"]
 
 
 @pytest.fixture(params=["slack", "discord", "wechat"])

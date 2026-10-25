@@ -7,6 +7,7 @@ import pytest
 from fastapi import Depends, FastAPI
 
 from app.api import admin
+from app.core.domain.users import UserRole
 from app.core.security import create_access_token
 from app.dao.identity_dao import identity_dao
 from app.dao.user_dao import user_dao
@@ -39,7 +40,7 @@ class PolicyCase:
 async def policy_case(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PolicyCase]:
     db = MemoryPolicyConnection(INITIAL)
     identity = IdentityRecord(id=uuid4(), email="operator@example.invalid", is_platform_admin=True)
-    user = UserRecord(id=uuid4(), identity_id=identity.id, role="platform_admin", identity=identity)
+    user = UserRecord(id=uuid4(), identity_id=identity.id, role=UserRole.PLATFORM_ADMIN, identity=identity)
 
     async def load_user(_id: UUID, *, fresh: bool = False) -> UserRecord:
         return user
@@ -99,7 +100,7 @@ async def test_non_platform_admin_cannot_access_transfer_policy(
 ) -> None:
     # Given: even a previously issued PA token must not retain revoked PA access.
     case = policy_case
-    case.user.role = role
+    case.user.role = UserRole(role)
     assert case.user.identity is not None
     case.user.identity.is_platform_admin = False
     # When

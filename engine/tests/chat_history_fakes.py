@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.test_redis_cache import FakeRedis
 
 from app.api import chat_sessions
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.agent import AgentRecord
@@ -22,7 +23,7 @@ pytest_plugins = ["tests.test_redis_cache"]
 class HistoryHarness:
     def __init__(self, cache: FakeRedis):
         self.cache = cache
-        self.viewer = UserRecord(id=uuid4(), role="member")
+        self.viewer = UserRecord(id=uuid4(), role=UserRole.MEMBER)
         self.agent = AgentRecord(id=uuid4(), name="History", creator_id=uuid4())
         self.session = ChatSessionRecord(id=uuid4(), agent_id=self.agent.id, user_id=self.viewer.id)
         self.timestamp = datetime(2026, 10, 24, 12, 0, 0, 123456, tzinfo=UTC)

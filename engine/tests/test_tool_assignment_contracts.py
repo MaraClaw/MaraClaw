@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from functools import partial
 from types import MappingProxyType, SimpleNamespace
-from typing import assert_type
+from typing import Self, assert_type
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -22,7 +22,7 @@ class _Cursor:
     def __init__(self, raw: _RawConnection) -> None:
         self.raw: _RawConnection = raw
 
-    async def __aenter__(self) -> _Cursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:

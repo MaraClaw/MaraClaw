@@ -5,16 +5,18 @@ from uuid import uuid4
 import pytest
 from tests.channel_shared_webhook_fixtures import (
     WEBHOOKS,
-    context as context,
+    context,
     invoke_webhook,
-    pipeline as pipeline,
-    webhook_pipeline as webhook_pipeline,
+    pipeline,
+    webhook_pipeline,
 )
 from tests.test_channel_shared_processors import PROCESSORS, invoke_processor
 
 from app.api import dingtalk
 from app.services.channels import feishu_submissions, slack_submissions, submissions
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEvent
+
+__all__ = ["context", "pipeline", "webhook_pipeline"]
 
 
 @pytest.fixture

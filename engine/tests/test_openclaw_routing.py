@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -148,10 +149,10 @@ def _message(*, slot: str | None, ref: str | None = None) -> GatewayMessageRecor
 
 def test_guest_model_ref_requires_both_parts() -> None:
     assert guest_model_ref(None) is None
-    assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model=""))) is None
-    assert guest_model_ref(cast(Any, SimpleNamespace(provider="openai", model="gpt-5.4"))) == "openai/gpt-5.4"
-    assert guest_model_ref(cast(Any, SimpleNamespace(provider="grok", model="grok-4.8"))) == "xai/grok-4.8"
-    assert guest_model_ref(cast(Any, SimpleNamespace(provider="xai", model="auto"))) == "xai/auto"
+    assert guest_model_ref(cast("Any", SimpleNamespace(provider="openai", model=""))) is None
+    assert guest_model_ref(cast("Any", SimpleNamespace(provider="openai", model="gpt-5.4"))) == "openai/gpt-5.4"
+    assert guest_model_ref(cast("Any", SimpleNamespace(provider="grok", model="grok-4.8"))) == "xai/grok-4.8"
+    assert guest_model_ref(cast("Any", SimpleNamespace(provider="xai", model="auto"))) == "xai/auto"
 
 
 def test_requires_primary_treats_missing_slot_as_primary() -> None:
@@ -345,7 +346,6 @@ async def test_enqueue_does_not_downgrade_guest_when_primary_is_pending(
 
     def fake_write(_agent, **kwargs):
         writes.append(kwargs)
-        return
 
     monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", fake_pending)
@@ -885,3 +885,277 @@ async def test_generic_wake_never_claims_or_releases(monkeypatch: pytest.MonkeyP
     await openclaw_routing._run_inbox_wake(agent, "hello", store.row.id)
     assert len(store.claims) == 1
     assert store.releases == []
+
+
+@pytest.fixture
+def wake_admission(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(openclaw_routing, "_wake_running", set())
+    monkeypatch.setattr(openclaw_routing, "_wake_again", {})
+    openclaw_routing.open_wake_admission()
+    try:
+        yield
+    finally:
+        openclaw_routing.open_wake_admission()
+
+
+def _blocking_wake(
+    monkeypatch: pytest.MonkeyPatch, entered: asyncio.Event, release: asyncio.Event | None = None
+) -> None:
+    async def wake(_agent: AgentRecord, *, content: str, message_id: uuid.UUID | None) -> bool:
+        del content, message_id
+        entered.set()
+        await (release or asyncio.Event()).wait()
+        return True
+
+    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", wake)
+
+
+async def test_cancelled_wake_releases_claim_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a wake cancelled after it claimed the gateway message
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    entered = asyncio.Event()
+    _blocking_wake(monkeypatch, entered)
+    wake = asyncio.create_task(openclaw_routing._run_inbox_wake(agent, "hello", store.row.id))
+    await entered.wait()
+    # When
+    wake.cancel()
+    # Then the claim is released and the cancellation still propagates
+    with pytest.raises(asyncio.CancelledError):
+        await wake
+    assert store.releases == store.claims
+    assert len(store.releases) == 1
+    assert store.row.status == "pending"
+
+
+async def test_repeated_cancellation_cannot_interrupt_claim_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a claim release that is still in flight when the wake is cancelled again
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    entered = asyncio.Event()
+    releasing = asyncio.Event()
+    finish_release = asyncio.Event()
+    released = asyncio.Event()
+    _blocking_wake(monkeypatch, entered)
+    release_delivery = store.release_delivery
+
+    async def slow_release(claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        releasing.set()
+        await finish_release.wait()
+        result = await release_delivery(claimed)
+        released.set()
+        return result
+
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "release_delivery", slow_release)
+    wake = asyncio.create_task(openclaw_routing._run_inbox_wake(agent, "hello", store.row.id))
+    await entered.wait()
+    wake.cancel()
+    await releasing.wait()
+    # When a second cancellation arrives mid-release
+    wake.cancel()
+    await asyncio.sleep(0)
+    assert not wake.done()
+    finish_release.set()
+    # Then the release finishes before the cancellation surfaces
+    with pytest.raises(asyncio.CancelledError):
+        await wake
+    assert released.is_set()
+    assert store.row.status == "pending"
+
+
+async def test_wake_refused_after_gate_closes_leaves_message_pending(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a pending message and a closed gate
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    wake = AsyncMock()
+    monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
+    openclaw_routing.close_wake_admission()
+    # When it is scheduled, with and without a follow-up already running
+    openclaw_routing._schedule_inbox_wake(agent, "hello", store.row.id)
+    openclaw_routing._wake_running.add(agent.id)
+    openclaw_routing._schedule_inbox_wake(agent, "again", store.row.id)
+    # Then no task or follow-up exists and the message waits for the guest gateway
+    wake.assert_not_called()
+    assert not openclaw_routing._wake_tasks
+    assert openclaw_routing._wake_again == {}
+    assert store.row.status == "pending"
+
+
+async def test_deferred_wake_is_refused_when_gate_closes_before_commit(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a wake deferred until the owning transaction commits
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    deferred: list[Coroutine[Any, Any, object]] = []
+    wake = AsyncMock()
+    monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
+    monkeypatch.setattr(openclaw_routing, "get_connection", lambda: object())
+    monkeypatch.setattr(
+        "app.api.background_tasks.schedule_background_task",
+        lambda coroutine, description: deferred.append(coroutine),
+    )
+    openclaw_routing._schedule_inbox_wake(agent, "hello", uuid.uuid4())
+    assert len(deferred) == 1
+    # When the gate closes and the commit launches it
+    openclaw_routing.close_wake_admission()
+    monkeypatch.setattr(openclaw_routing, "get_connection", lambda: None)
+    await deferred[0]
+    # Then it is refused instead of creating a task
+    wake.assert_not_called()
+    assert not openclaw_routing._wake_tasks
+
+
+async def test_follow_up_wake_is_dropped_once_gate_closes(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a running wake with a follow-up queued behind it
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    ran: list[str] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wake(_agent: AgentRecord, content: str, _message_id: uuid.UUID | None = None) -> None:
+        ran.append(content)
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
+    openclaw_routing._schedule_inbox_wake(agent, "first")
+    await entered.wait()
+    openclaw_routing._schedule_inbox_wake(agent, "follow-up")
+    assert openclaw_routing._wake_again == {agent.id: ("follow-up", None)}
+    # When the gate closes before the first wake returns
+    openclaw_routing.close_wake_admission()
+    drain = asyncio.create_task(openclaw_routing.drain_wake_tasks(grace_seconds=1))
+    await asyncio.sleep(0)
+    release.set()
+    await drain
+    # Then the follow-up was not started and left no state behind
+    assert ran == ["first"]
+    assert openclaw_routing._wake_again == {}
+    assert agent.id not in openclaw_routing._wake_running
+
+
+async def test_wake_finishing_within_grace_is_joined_not_cancelled(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given an in-flight scheduled wake
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    _blocking_wake(monkeypatch, entered, release)
+    openclaw_routing._schedule_inbox_wake(agent, "hello", store.row.id)
+    await entered.wait()
+    # When it finishes inside the grace period
+    drain = asyncio.create_task(openclaw_routing.drain_wake_tasks(grace_seconds=1))
+    await asyncio.sleep(0.01)
+    release.set()
+    await drain
+    # Then it completed and kept its delivery claim
+    assert not openclaw_routing._wake_tasks
+    assert store.releases == []
+    assert store.row.status == "delivered"
+
+
+async def test_wake_cancelled_after_grace_releases_claim_and_spares_foreign_tasks(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given an in-flight wake holding a gateway claim and a task owned elsewhere
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    entered = asyncio.Event()
+    _blocking_wake(monkeypatch, entered)
+    foreign = asyncio.create_task(asyncio.Event().wait())
+    openclaw_routing._schedule_inbox_wake(agent, "hello", store.row.id)
+    await entered.wait()
+    # When the grace period expires
+    await openclaw_routing.drain_wake_tasks(grace_seconds=0.01)
+    # Then the claim went back to the guest gateway and only the wake was cancelled
+    assert store.releases == store.claims
+    assert store.row.status == "pending"
+    assert not openclaw_routing._wake_tasks
+    assert not foreign.done()
+    foreign.cancel()
+    _ = await asyncio.gather(foreign, return_exceptions=True)
+
+
+async def _enqueue_with_direct_wake(monkeypatch: pytest.MonkeyPatch, wake: AsyncMock) -> GatewayMessageRecord:
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    prepared = openclaw_routing.PreparedOpenClawMessage(agent, "hello", "primary", None, "complex", "rule")
+    created = GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent.id, content="hello")
+    monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", AsyncMock(return_value=prepared))
+    monkeypatch.setattr(openclaw_routing, "_insert_prepared_message", AsyncMock(return_value=created))
+    monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
+    return await openclaw_routing.enqueue_openclaw_message(agent=agent, content="hello", await_wake=True)
+
+
+async def test_direct_wake_refused_after_gate_closes_leaves_message_pending(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a closed gate
+    wake = AsyncMock()
+    openclaw_routing.close_wake_admission()
+    # When a caller would await the wake itself
+    await _enqueue_with_direct_wake(monkeypatch, wake)
+    # Then the wake is not run and nothing was scheduled in its place
+    wake.assert_not_called()
+    assert not openclaw_routing._wake_tasks
+
+
+async def test_drain_waits_for_direct_wake_without_cancelling_its_caller(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a caller awaiting its own wake
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished: list[str] = []
+
+    async def wake(*_args: object) -> None:
+        entered.set()
+        await release.wait()
+        finished.append("wake")
+
+    caller = asyncio.create_task(_enqueue_with_direct_wake(monkeypatch, AsyncMock(side_effect=wake)))
+    await entered.wait()
+    # When a drain begins
+    drain = asyncio.create_task(openclaw_routing.drain_wake_tasks(grace_seconds=1))
+    await asyncio.sleep(0.01)
+    assert not drain.done()
+    release.set()
+    await drain
+    _ = await caller
+    # Then it waited for the wake, which finished uncancelled
+    assert finished == ["wake"]
+
+
+async def test_direct_wake_outliving_grace_is_cancelled_and_releases_claim_before_drain_returns(
+    monkeypatch: pytest.MonkeyPatch, wake_admission: None
+) -> None:
+    # Given a caller awaiting its own wake, which holds a gateway claim and never finishes
+    agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    store = _InboxStore(agent)
+    store.patch(monkeypatch)
+    prepared = openclaw_routing.PreparedOpenClawMessage(agent, "hello", "primary", None, "complex", "rule")
+    monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", AsyncMock(return_value=prepared))
+    monkeypatch.setattr(openclaw_routing, "_insert_prepared_message", AsyncMock(return_value=store.row))
+    entered = asyncio.Event()
+    _blocking_wake(monkeypatch, entered)
+    caller = asyncio.create_task(
+        openclaw_routing.enqueue_openclaw_message(agent=agent, content="hello", await_wake=True)
+    )
+    await entered.wait()
+    # When the drain runs out of grace
+    await openclaw_routing.drain_wake_tasks(grace_seconds=0.01)
+    # Then the claim was released before the drain returned and the caller sees a pending message, not a cancellation
+    assert store.releases == store.claims
+    assert store.row.status == "pending"
+    created = await caller
+    assert created.id == store.row.id

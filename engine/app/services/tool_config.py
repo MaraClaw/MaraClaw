@@ -159,7 +159,7 @@ async def set_tenant_tool_config(
         if existing is not None:
             await conn.execute(
                 "UPDATE tenant_settings SET value = %(value)s, updated_at = NOW() "
-                + "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
+                "WHERE tenant_id = %(tenant_id)s AND key = %(key)s",
                 {"tenant_id": tenant_id, "key": key, "value": as_jsonb(stored_value)},
             )
         else:

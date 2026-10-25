@@ -12,4 +12,4 @@ def disable_agentbay_logger_override() -> None:
     if agentbay_logger is None:
         return
     agentbay_logger._initialized = True
-    agentbay_logger.setup = classmethod(lambda cls, *args, **kwargs: None)
+    agentbay_logger.setup = classmethod(lambda _cls, *_args, **_kwargs: None)

@@ -171,6 +171,7 @@ class SubprocessBackend(BaseSandboxBackend):
         return "subprocess"
 
     def _venv_python(self, venv_path: Path) -> str:
+        del venv_path
         return "/workspace/.venv/bin/python"
 
     def _host_venv_python(self, work_path: Path) -> str:
@@ -320,7 +321,7 @@ class SubprocessBackend(BaseSandboxBackend):
             if not SubprocessBackend._bwrap_missing_warned:
                 logger.warning(
                     "[Subprocess] bubblewrap (bwrap) is not available. "
-                    + "execute_code will be rejected until bubblewrap is installed."
+                    "execute_code will be rejected until bubblewrap is installed."
                 )
                 SubprocessBackend._bwrap_missing_warned = True
             return None
@@ -536,8 +537,8 @@ class SubprocessBackend(BaseSandboxBackend):
                         duration_ms=duration_ms,
                         error=(
                             "bubblewrap (bwrap) is required for execute_code but is not available. "
-                            + "Install bwrap in the runtime environment or enable "
-                            + "allow_unsafe_fallback_when_bwrap_missing for local development."
+                            "Install bwrap in the runtime environment or enable "
+                            "allow_unsafe_fallback_when_bwrap_missing for local development."
                         ),
                     )
 

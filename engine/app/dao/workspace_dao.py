@@ -50,7 +50,7 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM workspace_file_revisions "
-                + "WHERE id = %(id)s AND agent_id = %(agent_id)s",
+                "WHERE id = %(id)s AND agent_id = %(agent_id)s",
                 {"id": revision_id, "agent_id": agent_id},
             )
             return WorkspaceFileRevisionRecord.from_row(row) if row is not None else None
@@ -65,8 +65,8 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM workspace_file_revisions "
-                + "WHERE agent_id = %(agent_id)s AND path = %(path)s "
-                + "ORDER BY created_at DESC LIMIT %(limit)s",
+                "WHERE agent_id = %(agent_id)s AND path = %(path)s "
+                "ORDER BY created_at DESC LIMIT %(limit)s",
                 {"agent_id": agent_id, "path": path, "limit": limit},
             )
             return [WorkspaceFileRevisionRecord.from_row(row) for row in rows]
@@ -83,11 +83,11 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM workspace_file_revisions "
-                + "WHERE agent_id = %(agent_id)s AND path = %(path)s "
-                + "AND actor_type = 'user' AND actor_id = %(actor_id)s "
-                + "AND group_key = %(group_key)s AND operation = 'autosave' "
-                + "AND updated_at >= %(cutoff)s "
-                + "ORDER BY updated_at DESC LIMIT 1",
+                "WHERE agent_id = %(agent_id)s AND path = %(path)s "
+                "AND actor_type = 'user' AND actor_id = %(actor_id)s "
+                "AND group_key = %(group_key)s AND operation = 'autosave' "
+                "AND updated_at >= %(cutoff)s "
+                "ORDER BY updated_at DESC LIMIT 1",
                 {
                     "agent_id": agent_id,
                     "path": path,
@@ -109,7 +109,7 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM workspace_edit_locks "
-                + "WHERE agent_id = %(agent_id)s AND path = %(path)s",
+                "WHERE agent_id = %(agent_id)s AND path = %(path)s",
                 {"agent_id": agent_id, "path": path},
             )
             return WorkspaceEditLockRecord.from_row(row) if row is not None else None
@@ -118,8 +118,8 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM workspace_edit_locks "
-                + "WHERE agent_id = %(agent_id)s AND expires_at > %(now)s "
-                + "ORDER BY path ASC",
+                "WHERE agent_id = %(agent_id)s AND expires_at > %(now)s "
+                "ORDER BY path ASC",
                 {"agent_id": agent_id, "now": now},
             )
             return [WorkspaceEditLockRecord.from_row(row) for row in rows]
@@ -128,8 +128,8 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         async with self.session() as db:
             value = await db.fetchval(
                 "WITH deleted AS ("
-                + "  DELETE FROM workspace_edit_locks WHERE expires_at <= %(now)s RETURNING 1"
-                + ") SELECT COUNT(*) FROM deleted",
+                "  DELETE FROM workspace_edit_locks WHERE expires_at <= %(now)s RETURNING 1"
+                ") SELECT COUNT(*) FROM deleted",
                 {"now": now},
             )
             return int_from_row(value)
@@ -144,7 +144,7 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         async with self.session() as db:
             await db.execute(
                 "DELETE FROM workspace_edit_locks "
-                + "WHERE agent_id = %(agent_id)s AND path = %(path)s AND user_id = %(user_id)s",
+                "WHERE agent_id = %(agent_id)s AND path = %(path)s AND user_id = %(user_id)s",
                 {"agent_id": agent_id, "path": path, "user_id": user_id},
             )
 
@@ -161,15 +161,15 @@ class WorkspaceEditLockDAO(BaseDAO[WorkspaceEditLockRecord]):
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO workspace_edit_locks "
-                + "(agent_id, path, user_id, session_id, expires_at, heartbeat_count) "
-                + "VALUES (%(agent_id)s, %(path)s, %(user_id)s, %(session_id)s, %(expires_at)s, 1) "
-                + "ON CONFLICT (agent_id, path) DO UPDATE SET "
-                + "user_id = EXCLUDED.user_id, "
-                + "session_id = EXCLUDED.session_id, "
-                + "expires_at = EXCLUDED.expires_at, "
-                + "heartbeat_count = workspace_edit_locks.heartbeat_count + 1, "
-                + "updated_at = NOW() "
-                + f"RETURNING {self._select_list()}",
+                "(agent_id, path, user_id, session_id, expires_at, heartbeat_count) "
+                "VALUES (%(agent_id)s, %(path)s, %(user_id)s, %(session_id)s, %(expires_at)s, 1) "
+                "ON CONFLICT (agent_id, path) DO UPDATE SET "
+                "user_id = EXCLUDED.user_id, "
+                "session_id = EXCLUDED.session_id, "
+                "expires_at = EXCLUDED.expires_at, "
+                "heartbeat_count = workspace_edit_locks.heartbeat_count + 1, "
+                "updated_at = NOW() "
+                f"RETURNING {self._select_list()}",
                 {
                     "agent_id": agent_id,
                     "path": path,

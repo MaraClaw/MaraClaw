@@ -2,26 +2,105 @@
 
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
 from app.api import auth as auth_api
 from app.core import security
-from app.core.json_types import object_mapping_from
+from app.core.json_types import json_object_from_response, object_mapping_from
 from app.core.security import create_access_token, hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import UserLogin
-from app.services import chat_tickets
+from app.services import chat_tickets, password_reset_service
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
+
+
+@pytest.mark.parametrize("flow", ["change", "reset"])
+@pytest.mark.parametrize("forced", [False, True])
+async def test_password_write_revokes_old_bearers_and_replaces_only_active_caller(
+    monkeypatch: pytest.MonkeyPatch, flow: str, forced: bool
+) -> None:
+    # Given two admitted memberships sharing an identity, including a cached principal.
+    identity = IdentityRecord(id=uuid.uuid4(), password_hash=hash_password("old-password"), must_change_password=forced)
+    user = UserRecord(
+        id=uuid.uuid4(), identity_id=identity.id, identity=identity, created_at=datetime(2026, 10, 25, tzinfo=UTC)
+    )
+    other = replace(user, id=uuid.uuid4())
+    generation = [7]
+
+    async def get_user(user_id: uuid.UUID, *, fresh: bool = False) -> UserRecord:
+        return user if user_id == user.id else other
+
+    async def get_generation(identity_id: uuid.UUID) -> int:
+        assert identity_id == identity.id
+        return generation[0]
+
+    async def bump(identity_id: uuid.UUID) -> int:
+        assert identity_id == identity.id
+        generation[0] += 1
+        return generation[0]
+
+    async def update(*, db_obj: IdentityRecord, obj_in: dict[str, object]) -> IdentityRecord:
+        for key, value in obj_in.items():
+            setattr(db_obj, key, value)
+        return db_obj
+
+    monkeypatch.setattr(security.user_dao, "get_with_identity", get_user)
+    monkeypatch.setattr(security.identity_dao, "get", AsyncMock(return_value=identity))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", get_generation)
+    monkeypatch.setattr(security.identity_dao, "bump_auth_generation", bump)
+    monkeypatch.setattr(security.identity_dao, "update", update)
+    monkeypatch.setattr(
+        password_reset_service, "consume_password_reset_token", AsyncMock(return_value={"identity_id": identity.id})
+    )
+    tokens = [
+        await create_access_token(str(member.id), member.role, identity_id=identity.id) for member in (user, other)
+    ]
+    app = FastAPI()
+    app.include_router(auth_api.router, prefix="/api")
+
+    @app.get("/privileged")
+    async def privileged(current_user: Annotated[UserRecord, Depends(security.get_current_user)]) -> dict[str, str]:
+        return {"id": str(current_user.id)}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        headers = {"Authorization": f"Bearer {tokens[0]}"}
+        assert (await client.get("/api/auth/me", headers=headers)).status_code == 200
+        assert (await client.get("/privileged", headers=headers)).status_code == (403 if forced else 200)
+        # When either password writer succeeds.
+        response = await client.request(
+            "PUT" if flow == "change" else "POST",
+            "/api/auth/me/password" if flow == "change" else "/api/auth/reset-password",
+            json={"old_password": "old-password", "new_password": "new-password", "token": "r" * 32},
+            headers=headers if flow == "change" else {},
+        )
+        # Then neither old bearer can survive, even with the unchanged cached membership.
+        assert response.status_code == 200
+        for token in tokens:
+            assert (await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})).status_code == 401
+        body = json_object_from_response(response)
+        if flow == "reset":
+            assert body == {"ok": True}
+        else:
+            assert body["ok"] is True
+            assert body["must_change_password"] is False
+            replacement = body["access_token"]
+            assert isinstance(replacement, str)
+            assert security.decode_access_token(replacement)["gen"] == 8
+            headers = {"Authorization": f"Bearer {replacement}"}
+            assert (await client.get("/api/auth/me", headers=headers)).status_code == 200
+            assert (await client.get("/privileged", headers=headers)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -340,7 +419,7 @@ async def test_get_me_returns_user():
         def model_validate(cls, obj):
             return cls(id=str(obj.id), email=obj.email)
 
-    with patch("app.api.auth.UserOut", new=DummyUserOut):
+    with patch("app.api.auth.AuthUser", new=DummyUserOut):
         result = await auth_api.get_me(current_user=user)
     assert result.id == str(user.id)
     assert result.email == user.email
@@ -374,7 +453,7 @@ async def test_oauth_callback_passes_redirect_uri():
     with (
         patch("app.services.auth_registry.auth_provider_registry.get_provider", new=AsyncMock(return_value=provider)),
         patch("app.api.auth.TokenResponse", new=DummyTokenResponse),
-        patch("app.api.auth.UserOut") as mock_user_out,
+        patch("app.api.auth.AuthUser") as mock_user_out,
         patch.object(auth_api, "create_access_token", return_value="jwt-token"),
         patch.object(auth_api.user_dao, "get_by_identity_id", new=AsyncMock(return_value=[user])),
         patch.object(auth_api.user_dao, "get_with_identity", new=AsyncMock(return_value=user)),

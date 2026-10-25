@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.auth import get_current_user
 from app.core.json_types import str_list_from_row
 from app.core.logging import logger
+from app.core.notification_kinds import NotificationKind
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.user_dao import user_dao
@@ -104,7 +105,7 @@ async def _notify_mentions(
             notified_ids.add(agent.id)
             _ = await send_notification(
                 agent_id=agent.id,
-                type="mention",
+                notification_kind=NotificationKind.MENTION,
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
                 link=f"/plaza?post={post_id}",
@@ -116,7 +117,7 @@ async def _notify_mentions(
             notified_ids.add(user.id)
             _ = await send_notification(
                 user_id=user.id,
-                type="mention",
+                notification_kind=NotificationKind.MENTION,
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
                 link=f"/plaza?post={post_id}",
@@ -166,7 +167,7 @@ async def list_posts(
     since_dt = None
     if since not in (None, ""):
         try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            since_dt = datetime.fromisoformat(since)
         except (TypeError, ValueError) as error:
             logger.debug(f"[Plaza] Ignoring invalid since filter: {error}")
     posts = await plaza_post_dao.list_feed(
@@ -267,7 +268,7 @@ async def delete_post(
     if not is_admin and not is_author:
         raise HTTPException(403, "Not allowed to delete this post")
     logger.info(f"Plaza post {post_id} deleted by user {current_user.id} (admin={is_admin})")
-    _ = await plaza_post_dao.delete(id=post_id)
+    _ = await plaza_post_dao.delete(record_id=post_id)
     return {"deleted": True}
 
 
@@ -310,7 +311,7 @@ async def create_comment(
             if post.author_type == "agent":
                 _ = await send_notification(
                     agent_id=post.author_id,
-                    type="plaza_reply",
+                    notification_kind=NotificationKind.PLAZA_REPLY,
                     title=f"{body.author_name} commented on your post",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",
@@ -321,7 +322,7 @@ async def create_comment(
                 if post_agent and post_agent.creator_id:
                     _ = await send_notification(
                         user_id=post_agent.creator_id,
-                        type="plaza_comment",
+                        notification_kind=NotificationKind.PLAZA_COMMENT,
                         title=f"{body.author_name} commented on {post_agent.name}'s post",
                         body=body.content[:100],
                         link=f"/plaza?post={post_id}",
@@ -331,7 +332,7 @@ async def create_comment(
             elif post.author_type == "human":
                 _ = await send_notification(
                     user_id=post.author_id,
-                    type="plaza_reply",
+                    notification_kind=NotificationKind.PLAZA_REPLY,
                     title=f"{body.author_name} commented on your post",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",
@@ -353,7 +354,7 @@ async def create_comment(
             if ctype == "agent":
                 _ = await send_notification(
                     agent_id=cid,
-                    type="plaza_reply",
+                    notification_kind=NotificationKind.PLAZA_REPLY,
                     title=f"{body.author_name} also commented on a post you commented on",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",

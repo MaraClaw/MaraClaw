@@ -19,8 +19,8 @@ FINISH_TOOL_DEFINITION: ToolDefinition = {
         "name": FINISH_TOOL_NAME,
         "description": (
             "Finish the current turn and send the final user-facing response. "
-            + "You MUST call this tool exactly when you are ready to stop. Put the full answer "
-            + "the user should see in content. Do not call any other tools in the same response."
+            "You MUST call this tool exactly when you are ready to stop. Put the full answer "
+            "the user should see in content. Do not call any other tools in the same response."
         ),
         "parameters": {
             "type": "object",
@@ -49,8 +49,8 @@ FINISH_TOOL_SEED: BuiltinToolDefinition = {
 
 FINISH_PROTOCOL_REMINDER = (
     "Your previous response did not call any tool, so this turn is not finished. "
-    + "You must either call another available tool if more work is needed, or call "
-    + "`finish` with the complete user-facing answer in `content`. Do not answer in plain text."
+    "You must either call another available tool if more work is needed, or call "
+    "`finish` with the complete user-facing answer in `content`. Do not answer in plain text."
 )
 
 

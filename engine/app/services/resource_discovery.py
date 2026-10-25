@@ -286,17 +286,17 @@ async def search_registries(query: str, max_results: int = 5, agent_id: uuid.UUI
 
         results.append(
             f"**{i}. {srv['display_name']}**{verified} {source_tag}\n"
-            + f"   ID: `{srv['name']}`\n"
-            + f"   {srv['description']}\n"
-            + f"   {deploy_info}{use_info}\n"
-            + f"   {'🔗 ' + hp if hp else ''}"
+            f"   ID: `{srv['name']}`\n"
+            f"   {srv['description']}\n"
+            f"   {deploy_info}{use_info}\n"
+            f"   {'🔗 ' + hp if hp else ''}"
         )
 
     header = f'🔍 Found {len(results)} MCP server(s) for "{query}":\n\n'
     footer = (
         "\n\n---\n"
-        + "💡 To import a remote server, use `import_mcp_server` with the server ID.\n"
-        + '   Example: import_mcp_server(server_id="gmail")'
+        "💡 To import a remote server, use `import_mcp_server` with the server ID.\n"
+        '   Example: import_mcp_server(server_id="gmail")'
     )
     return header + "\n\n".join(results) + footer
 
@@ -372,6 +372,7 @@ async def import_mcp_from_smithery(
     and stores the deploymentUrl for runtime execution via Smithery Connect.
     If config contains 'smithery_api_key', it's stored per-agent for future use.
     """
+    del reauthorize
     server_config: JsonObject = dict(config) if config is not None and config else {}  # mutable copy
 
     # Extract smithery_api_key from config (user-provided) or fallback to stored
@@ -384,11 +385,11 @@ async def import_mcp_from_smithery(
     if not api_key:
         return (
             "❌ Smithery API key is required to import MCP servers.\n\n"
-            + "Provide your Smithery API key. You can obtain one by:\n"
-            + "1. Signing up for or logging in to https://smithery.ai\n"
-            + "2. Creating an API key at https://smithery.ai/account/api-keys\n"
-            + "3. Providing the key, for example:\n"
-            + '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
+            "Provide your Smithery API key. You can obtain one by:\n"
+            "1. Signing up for or logging in to https://smithery.ai\n"
+            "2. Creating an API key at https://smithery.ai/account/api-keys\n"
+            "3. Providing the key, for example:\n"
+            '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
         )
 
     # Write key back to discover_resources / import_mcp_server AgentTool configs
@@ -447,8 +448,8 @@ async def import_mcp_from_smithery(
     if (remote := server_info.get("remote")) is None or not remote:
         return (
             f"⚠️ **{display_name}** (`{qualified_name}`) does not support remote hosting via Smithery Connect.\n"
-            + "This server requires local installation and cannot be imported automatically.\n"
-            + f"🔗 {json_as_str_or(server_info.get('homepage'))}"
+            "This server requires local installation and cannot be imported automatically.\n"
+            f"🔗 {json_as_str_or(server_info.get('homepage'))}"
         )
 
     # Step 2: Get full server details including tools from registry API
@@ -500,8 +501,8 @@ async def import_mcp_from_smithery(
         if auth_url not in (None, ""):
             auth_message = (
                 "\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
-                + f"{auth_url}\n"
-                + "The tool will be available after authorization is complete."
+                f"{auth_url}\n"
+                "The tool will be available after authorization is complete."
             )
 
     # Step 3.6: Override registry-advertised schema with the runtime server's
@@ -563,8 +564,8 @@ async def import_mcp_from_smithery(
                 if live_tools_normalized:
                     logger.info(
                         f"[ResourceDiscovery] Using live tools/list for {qualified_name}: "
-                        + f"{len(live_tools_normalized)} tool(s) override registry's "
-                        + f"{len(tools_discovered)}"
+                        f"{len(live_tools_normalized)} tool(s) override registry's "
+                        f"{len(tools_discovered)}"
                     )
                     tools_discovered = live_tools_normalized
                     live_ready = not auth_message

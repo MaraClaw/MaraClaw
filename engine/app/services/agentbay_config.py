@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.config import get_settings
+from app.core.domain.channels import ChannelType
 from app.core.security import decrypt_data
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.tool_dao import tool_dao
@@ -54,7 +55,7 @@ def _tool_api_key(tool: ToolRecord) -> str | None:
 
 async def _resolve_with_daos(agent_id: uuid.UUID | None) -> AgentBayConfigResolution:
     if agent_id is not None:
-        channel_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="agentbay")
+        channel_config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.AGENTBAY)
         if channel_config is not None and channel_config.is_configured and channel_config.app_secret not in (None, ""):
             api_key = _resolve_stored_api_key(channel_config.app_secret)
             if api_key is not None:

@@ -107,7 +107,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
     agent.gogcli_enabled = True
 
     # When
-    await manager.start_container(agent=agent)
+    await manager.replace_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None
@@ -151,7 +151,7 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
     agent.gogcli_enabled = True
 
     # When
-    await manager.start_container(agent=agent)
+    await manager.replace_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None
@@ -190,7 +190,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
     agent.gogcli_enabled = False
 
     # When
-    await manager.start_container(agent=agent)
+    await manager.replace_container(agent=agent)
 
     # Then
     assert docker_client.run_kwargs is not None

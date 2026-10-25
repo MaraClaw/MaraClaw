@@ -172,7 +172,7 @@ class SelfHostedBackend(BaseSandboxBackend):
                 result = json_object_from_response(response)
 
                 # Parse response - support multiple formats:
-                # Generic: {"success": true, "stdout": "...", "stderr": "...", "exit_code": 0}
+                # Generic responses expose success, stdout, stderr, and exit_code at the top level.
                 # aio-sandbox shell: {"success": true, "data": {"output": "..."}}
                 # aio-sandbox jupyter: {"output": "...", "status": "ok"}
 

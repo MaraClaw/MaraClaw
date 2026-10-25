@@ -2,6 +2,7 @@
 
 from typing import Literal, TypedDict
 
+from app.core.domain.agents import AgentStatus
 from app.services.agent_manager import ContainerStatus, InspectedContainerStatus
 
 
@@ -47,7 +48,7 @@ class AgentActivityMetrics(TypedDict):
 class AgentMetricsResponse(TypedDict):
     agent_id: str
     agent_name: str
-    status: str
+    status: AgentStatus
     container: ContainerStatus | InspectedContainerStatus
     tokens: AgentTokenMetrics
     tasks: AgentTaskMetrics

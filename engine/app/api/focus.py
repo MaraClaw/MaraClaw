@@ -3,8 +3,9 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.core.json_types import JsonObject
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
@@ -20,8 +21,8 @@ class FocusItemResponse(BaseModel):
     key: str
     title: str | None = None
     description: str
-    status: str
-    kind: str
+    status: FocusStatus
+    kind: FocusKind
     source: str
     metadata: JsonObject = Field(default_factory=dict)
     sort_order: int
@@ -34,10 +35,26 @@ class FocusUpsertBody(BaseModel):
     key: str | None = None
     title: str | None = None
     description: str
-    status: str = "in_progress"
-    kind: str = "normal"
+    status: FocusStatus = FocusStatus.IN_PROGRESS
+    kind: FocusKind = FocusKind.NORMAL
     source: str = "user"
     metadata: JsonObject | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def parse_status(cls, value: object) -> FocusStatus:
+        try:
+            return FocusStatus(value)
+        except ValueError as error:
+            raise HTTPException(400, "Invalid focus status") from error
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def parse_kind(cls, value: object) -> FocusKind:
+        try:
+            return FocusKind(value)
+        except ValueError as error:
+            raise HTTPException(400, "Invalid focus kind") from error
 
 
 @router.get("/", response_model=list[FocusItemResponse])
@@ -53,10 +70,6 @@ async def upsert_agent_focus(
     agent_id: uuid.UUID, body: FocusUpsertBody, current_user: UserRecord = Depends(get_current_user)
 ):
     _ = await check_agent_access(current_user, agent_id)
-    if body.status not in {"in_progress", "completed"}:
-        raise HTTPException(400, "Invalid focus status")
-    if body.kind not in {"normal", "system"}:
-        raise HTTPException(400, "Invalid focus kind")
     return await upsert_focus_item(
         agent_id,
         key=body.key,

@@ -7,12 +7,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
 
+from app.core.domain.focus import FocusKind, FocusStatus
 from app.core.json_types import JsonObject
 from app.dao.focus_dao import agent_focus_item_dao
 from app.records.focus import AgentFocusItemRecord
-
-VALID_STATUSES = {"in_progress", "completed"}
-VALID_KINDS = {"normal", "system"}
 
 
 class SerializedFocusItem(TypedDict):
@@ -21,8 +19,8 @@ class SerializedFocusItem(TypedDict):
     key: str
     title: str | None
     description: str
-    status: str
-    kind: str
+    status: FocusStatus
+    kind: FocusKind
     source: str
     metadata: JsonObject
     sort_order: int
@@ -73,8 +71,8 @@ async def upsert_focus_item(
     key: str | None,
     title: str | None = None,
     description: str,
-    status: str = "in_progress",
-    kind: str = "normal",
+    status: FocusStatus = FocusStatus.IN_PROGRESS,
+    kind: FocusKind = FocusKind.NORMAL,
     source: str = "user",
     metadata: JsonObject | None = None,
 ) -> SerializedFocusItem:
@@ -83,10 +81,6 @@ async def upsert_focus_item(
     item_key = item_key[:200]
     if kind == "system" and not item_key.startswith("system:"):
         item_key = f"system:{item_key}"[:200]
-    if status not in VALID_STATUSES:
-        status = "in_progress"
-    if kind not in VALID_KINDS:
-        kind = "normal"
 
     item = await agent_focus_item_dao.get_by_key(agent_id, item_key)
     if item:
@@ -136,8 +130,8 @@ async def ensure_focus_item(
         key=focus_ref,
         title=title,
         description=description,
-        status="in_progress",
-        kind="system" if system else "normal",
+        status=FocusStatus.IN_PROGRESS,
+        kind=FocusKind.SYSTEM if system else FocusKind.NORMAL,
         source=source,
     )
     return item["key"]
@@ -149,7 +143,7 @@ async def complete_focus_item(agent_id: uuid.UUID, *, key: str) -> SerializedFoc
         return None
     updated = await agent_focus_item_dao.update(
         db_obj=item,
-        obj_in={"status": "completed", "completed_at": datetime.now(UTC)},
+        obj_in={"status": FocusStatus.COMPLETED, "completed_at": datetime.now(UTC)},
     )
     return _serialize_focus_item(updated)
 

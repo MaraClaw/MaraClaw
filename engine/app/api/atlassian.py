@@ -9,6 +9,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.domain.channels import ChannelType
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
@@ -51,7 +52,7 @@ async def configure_atlassian_channel(
 
     encrypted_key = encrypt_data(api_key, get_settings().SECRET_KEY)
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -87,7 +88,7 @@ async def get_atlassian_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AtlassianChannelResponse:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
     return _serialize(config)
@@ -98,10 +99,10 @@ async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 @router.post("/agents/{agent_id}/atlassian-channel/test", response_model=dict[str, object])
@@ -110,7 +111,7 @@ async def check_atlassian_channel(
 ) -> AtlassianTestResponse:
     """Test connectivity to Atlassian Rovo MCP and list available tools."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
     if not config or config.app_secret in (None, ""):
         raise HTTPException(status_code=400, detail="Atlassian not configured")
 
@@ -148,7 +149,7 @@ async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID) -> str | None:
     from app.config import get_settings
     from app.core.security import decrypt_data
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="atlassian")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
     if not config or not config.is_configured or config.app_secret in (None, ""):
         return None
 

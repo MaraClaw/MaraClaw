@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from app.api import wecom as wecom_api
+from app.core.domain.channels import ChannelType
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
@@ -27,7 +28,7 @@ def make_channel(agent_id: uuid.UUID, *, connection_mode: str = "websocket") -> 
     return ChannelConfigRecord(
         id=uuid.uuid4(),
         agent_id=agent_id,
-        channel_type="wecom",
+        channel_type=ChannelType.WECOM,
         app_id="corp_id",
         app_secret="secret",
         is_configured=True,
@@ -155,8 +156,8 @@ async def test_delete_wecom_channel_stops_runtime_client(monkeypatch):
         assert agent_id == config.agent_id
         return config
 
-    async def fake_delete(*, id: uuid.UUID):
-        deleted_ids.append(id)
+    async def fake_delete(*, record_id: uuid.UUID):
+        deleted_ids.append(record_id)
         return config
 
     monkeypatch.setattr(wecom_api, "check_agent_access", fake_check_agent_access)

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from app.core.domain.channels import ChannelType
+
 
 @dataclass(frozen=True, slots=True)
 class ChannelKind:
@@ -15,7 +17,7 @@ class ChannelKind:
     by ``send_channel_message`` tool routing.
     """
 
-    channel_type: str
+    channel_type: ChannelType
     outbound_key: str
     display_name: str
     transport: str  # webhook | stream | gateway | poll | skill_only
@@ -35,23 +37,23 @@ _ALIASES: Final[dict[str, str]] = {
 
 
 CHANNEL_TYPES: Final[dict[str, ChannelKind]] = {
-    "feishu": ChannelKind("feishu", "feishu", "Feishu", "stream"),
-    "wecom": ChannelKind("wecom", "wecom", "WeCom", "stream"),
-    "wechat": ChannelKind("wechat", "wechat", "WeChat", "poll"),
+    "feishu": ChannelKind(ChannelType.FEISHU, "feishu", "Feishu", "stream"),
+    "wecom": ChannelKind(ChannelType.WECOM, "wecom", "WeCom", "stream"),
+    "wechat": ChannelKind(ChannelType.WECHAT, "wechat", "WeChat", "poll"),
     "whatsapp": ChannelKind(
-        "whatsapp",
+        ChannelType.WHATSAPP,
         "whatsapp",
         "WhatsApp",
         "webhook",
         supports_proactive=False,  # inbound exists; proactive sender not registered yet
     ),
-    "dingtalk": ChannelKind("dingtalk", "dingtalk", "DingTalk", "stream"),
-    "slack": ChannelKind("slack", "slack", "Slack", "webhook"),
-    "discord": ChannelKind("discord", "discord", "Discord", "gateway", supports_proactive=False),
-    "microsoft_teams": ChannelKind("microsoft_teams", "teams", "MS Teams", "webhook"),
-    "google_chat": ChannelKind("google_chat", "google_chat", "Google Chat", "webhook"),
+    "dingtalk": ChannelKind(ChannelType.DINGTALK, "dingtalk", "DingTalk", "stream"),
+    "slack": ChannelKind(ChannelType.SLACK, "slack", "Slack", "webhook"),
+    "discord": ChannelKind(ChannelType.DISCORD, "discord", "Discord", "gateway", supports_proactive=False),
+    "microsoft_teams": ChannelKind(ChannelType.MICROSOFT_TEAMS, "teams", "MS Teams", "webhook"),
+    "google_chat": ChannelKind(ChannelType.GOOGLE_CHAT, "google_chat", "Google Chat", "webhook"),
     "atlassian": ChannelKind(
-        "atlassian",
+        ChannelType.ATLASSIAN,
         "atlassian",
         "Atlassian",
         "skill_only",
@@ -59,7 +61,7 @@ CHANNEL_TYPES: Final[dict[str, ChannelKind]] = {
         supports_proactive=False,
     ),
     "agentbay": ChannelKind(
-        "agentbay",
+        ChannelType.AGENTBAY,
         "agentbay",
         "AgentBay",
         "skill_only",

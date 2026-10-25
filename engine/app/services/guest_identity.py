@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import override
 from uuid import UUID
 
-from python_on_whales import DockerClient
+from python_on_whales import Container, DockerClient
 from python_on_whales.exceptions import NoSuchContainer
 
 from app.records.agent import AgentRecord
@@ -38,9 +38,13 @@ def require_guest_owner(agent_id: UUID, reference: str, actual_agent_id: str | N
         raise GuestOwnershipError(agent_id, reference, actual_agent_id)
 
 
+def inspect_guest_container(client: DockerClient, reference: str) -> Container:
+    return client.container.inspect(reference)
+
+
 def _inspect(client: DockerClient, reference: str) -> GuestIdentity | None:
     try:
-        container = client.container.inspect(reference)
+        container = inspect_guest_container(client, reference)
     except NoSuchContainer:
         return None
     bindings = container.host_config.port_bindings or {}

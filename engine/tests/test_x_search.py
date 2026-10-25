@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import app.services.agent_tool_exec.x_search as x_search
+from app.services.agent_tool_exec import x_search
 
 
 def clear_xai_env(monkeypatch):

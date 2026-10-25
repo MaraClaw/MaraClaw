@@ -23,6 +23,12 @@ from app.dao import identity_dao, identity_provider_dao, user_dao
 from app.dao.base import as_uuid
 from app.records.identity import IdentityProviderRecord
 from app.records.user import UserRecord
+from app.services.auth_audience import (
+    AuthAudience,
+    require_member_account,
+    require_member_identity,
+    require_member_user,
+)
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
 
 type AuthProviderPayloadValue = (
@@ -138,16 +144,20 @@ class BaseAuthProvider(ABC):
         self,
         user_info: ExternalUserInfo,
         tenant_id: str | None = None,
+        *,
+        audience: AuthAudience = AuthAudience.SHARED,
     ) -> tuple[UserRecord, bool]:
         from app.db.session import connection_ctx
 
         async with connection_ctx():
-            return await self._find_or_create_user(user_info, tenant_id)
+            return await self._find_or_create_user(user_info, tenant_id, audience=audience)
 
     async def _find_or_create_user(
         self,
         user_info: ExternalUserInfo,
         tenant_id: str | None = None,
+        *,
+        audience: AuthAudience = AuthAudience.SHARED,
     ) -> tuple[UserRecord, bool]:
         """Find existing user or create new one via Identity/OrgMember."""
         from app.services.registration_service import registration_service
@@ -179,18 +189,24 @@ class BaseAuthProvider(ABC):
 
         pending_admission = False
         if user:
-            pending_admission = await stage_sso_admission(
-                user, provider, provider_user_id, target_id=effective_tenant_id
-            )
+            if audience is AuthAudience.MEMBER:
+                await require_member_account(user)
             if not user.identity_id:
                 identity = await registration_service.find_or_create_identity(
                     email=user_info.email, phone=user_info.mobile
                 )
+                if audience is AuthAudience.MEMBER:
+                    require_member_identity(identity)
+                    for membership in await user_dao.get_by_identity_id(identity.id):
+                        require_member_user(membership)
                 user = await user_dao.update(db_obj=user, obj_in={"identity_id": identity.id})
                 user.identity = identity
+            pending_admission = await stage_sso_admission(
+                user, provider, provider_user_id, target_id=effective_tenant_id
+            )
             user = await self._update_existing_user(user, user_info)
         else:
-            user = await self._create_new_user(user_info, tenant_id)
+            user = await self._create_new_user(user_info, tenant_id, audience=audience)
             is_new = True
 
         if pending_admission or await stage_sso_admission(
@@ -250,14 +266,21 @@ class BaseAuthProvider(ABC):
                     user = loaded
         return user
 
-    async def _create_new_user(self, user_info: ExternalUserInfo, tenant_id: str | None) -> UserRecord:
+    async def _create_new_user(
+        self, user_info: ExternalUserInfo, tenant_id: str | None, *, audience: AuthAudience = AuthAudience.SHARED
+    ) -> UserRecord:
         """Create new user from external identity."""
+        del tenant_id
         from app.services.registration_service import registration_service
 
         identity = await registration_service.find_or_create_identity(
             email=user_info.email,
             phone=user_info.mobile,
         )
+        if audience is AuthAudience.MEMBER:
+            require_member_identity(identity)
+            for membership in await user_dao.get_by_identity_id(identity.id):
+                require_member_user(membership)
 
         from app.services.sso_company_admission import create_sso_user
 
@@ -361,7 +384,7 @@ class DingTalkAuthProvider(BaseAuthProvider):
         scope = "openid corpid Contact.User.Read fieldEmail contact.user.mobile"
         params = (
             f"client_id={app_id}&redirect_uri={quote(redirect_uri)}&"
-            + f"state={state}&response_type=code&scope={quote(scope)}&prompt=consent"
+            f"state={state}&response_type=code&scope={quote(scope)}&prompt=consent"
         )
         # corp_id is optional: restricts the login page to a specific enterprise.
         # If not configured, DingTalk shows a company picker (still works for SSO).
@@ -406,10 +429,12 @@ class DingTalkAuthProvider(BaseAuthProvider):
                 err_msg = info_data.get("message") or info_data.get("errmsg") or str(info_data)
                 logger.error(
                     f"DingTalk user info fetch failed (HTTP {info_resp.status_code}): {info_data}. "
-                    + "This usually means the 'Contact.User.Read' OAuth scope is missing from "
-                    + "the authorization URL, or the app lacks the corresponding permission."
+                    "This usually means the 'Contact.User.Read' OAuth scope is missing from "
+                    "the authorization URL, or the app lacks the corresponding permission."
                 )
-                raise Exception(f"Failed to fetch user info: {err_msg}")
+                raise httpx.HTTPStatusError(
+                    f"Failed to fetch user info: {err_msg}", request=info_resp.request, response=info_resp
+                )
 
             # DingTalk new OAuth2 returns openId, unionId, nick, avatarUrl, mobile, email
             logger.info(f"DingTalk user info: {info_data}")
@@ -468,10 +493,10 @@ class WeComAuthProvider(BaseAuthProvider):
         base_url = "https://open.work.weixin.qq.com/wwlogin/sso/login"
         params = (
             "loginType=CorpPinCorp"
-            + f"&appid={self.corp_id}"
-            + f"&agentid={self.agent_id}"
-            + f"&redirect_uri={quote(redirect_uri)}"
-            + f"&state={state}"
+            f"&appid={self.corp_id}"
+            f"&agentid={self.agent_id}"
+            f"&redirect_uri={quote(redirect_uri)}"
+            f"&state={state}"
         )
         return f"{base_url}?{params}"
 
@@ -543,8 +568,8 @@ class WeComAuthProvider(BaseAuthProvider):
             else:
                 logger.info(
                     f"[WeCom SSO] No user_ticket for {userid}; "
-                    + "sensitive fields (avatar/email/mobile) will be unavailable. "
-                    + "Ensure the WeCom app has 'snsapi_privateinfo' scope."
+                    "sensitive fields (avatar/email/mobile) will be unavailable. "
+                    "Ensure the WeCom app has 'snsapi_privateinfo' scope."
                 )
 
             # Step 3b: Fetch non-sensitive profile fields from user/get (name, position).
@@ -656,13 +681,13 @@ class GoogleWorkspaceAuthProvider(BaseAuthProvider):
         self.config["redirect_uri"] = redirect_uri
         params = (
             f"client_id={quote(self.client_id or '')}"
-            + f"&redirect_uri={quote(redirect_uri)}"
-            + "&response_type=code"
-            + f"&scope={quote(scope_value)}"
-            + f"&state={quote(state or '')}"
-            + "&access_type=online"
-            + "&include_granted_scopes=true"
-            + "&prompt=select_account"
+            f"&redirect_uri={quote(redirect_uri)}"
+            "&response_type=code"
+            f"&scope={quote(scope_value)}"
+            f"&state={quote(state or '')}"
+            "&access_type=online"
+            "&include_granted_scopes=true"
+            "&prompt=select_account"
         )
         return f"{self.GOOGLE_AUTHORIZE_URL}?{params}"
 
@@ -781,10 +806,12 @@ class GoogleAuthProvider(BaseAuthProvider):
             )
             data = _payload_from_response(resp)
             if resp.status_code != 200:
-                raise Exception(
+                raise httpx.HTTPStatusError(
                     self._payload_string(data, "error_description")
                     or self._payload_string(data, "error")
-                    or "Failed to fetch Google user info"
+                    or "Failed to fetch Google user info",
+                    request=resp.request,
+                    response=resp,
                 )
 
             return ExternalUserInfo(
@@ -852,7 +879,11 @@ class GitHubAuthProvider(BaseAuthProvider):
             user_resp = await client.get(self.GITHUB_USER_INFO_URL, headers=headers)
             user_data = _payload_from_response(user_resp)
             if user_resp.status_code != 200:
-                raise Exception(self._payload_string(user_data, "message") or "Failed to fetch GitHub user info")
+                raise httpx.HTTPStatusError(
+                    self._payload_string(user_data, "message") or "Failed to fetch GitHub user info",
+                    request=user_resp.request,
+                    response=user_resp,
+                )
 
             email = self._payload_string(user_data, "email")
             if not email:

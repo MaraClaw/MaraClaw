@@ -25,7 +25,9 @@ async def _deliver(claim: BroadcastEmailRecord) -> None:
     if now >= claim.deliver_by or claim.attempts > MAX_ATTEMPTS:
         await broadcast_email_dao.fail(claim, error="delivery_limit", now=now)
         return
-    outcome = await attempt_email(claim.to_email, claim.subject, claim.body, message_id=claim.message_id)
+    outcome = await attempt_email(
+        claim.to_email, claim.subject, claim.body, message_id=claim.message_id, tenant_id=claim.tenant_id
+    )
     now = datetime.now(UTC)
     match outcome.kind:
         case "sent":

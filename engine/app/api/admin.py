@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 from app.api.admin_transfer_policy import router as transfer_policy_router
+from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.core.json_types import (
     date_from_row,
     int_from_row,
@@ -167,6 +169,7 @@ async def list_companies(
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ) -> list[CompanyStats]:
     """List companies with stats. ``q`` is prefix full-text search on name and slug."""
+    _ = current_user
     query = (q or "").strip()
     if len(query) > 200:
         raise HTTPException(status_code=400, detail="Search is too long")
@@ -181,7 +184,7 @@ async def list_companies(
         user_count = await user_dao.count_for_tenant(tid)
         active_user_count = await user_dao.count_for_tenant(tid, is_active=True)
         agent_count = await agent_dao.count_for_tenant(tid)
-        agent_running = await agent_dao.count_for_tenant(tid, status="running")
+        agent_running = await agent_dao.count_for_tenant(tid, status=AgentStatus.RUNNING)
         total_tokens, cache_read_tokens_total = await agent_dao.sum_tokens_for_tenant(tid)
         org_admin_email = await user_dao.first_org_admin_email(tid)
 
@@ -308,7 +311,7 @@ async def create_platform_admin(
 async def list_platform_admins(current_user: UserRecord = Depends(require_role("platform_admin"))):
     """List platform admins. Any platform admin may read; genesis is marked."""
     _ = current_user
-    users = await user_dao.list_by_role("platform_admin")
+    users = await user_dao.list_by_role(UserRole.PLATFORM_ADMIN)
     return [
         PlatformAdminOut(
             id=u.id,
@@ -433,6 +436,7 @@ async def get_platform_timeseries(
     Returns per-day: companies, users, tokens (existing) +
     sessions, DAU, WAU, MAU (new).
     """
+    _ = current_user
     companies_by_day: dict[date | str, int] = {**await tenant_dao.counts_by_created_day(start_date, end_date)}
     users_by_day: dict[date | str, int] = {**await user_dao.counts_by_created_day(start_date, end_date)}
     tokens_by_day = await agent_activity_log_dao.tokens_by_day(start_date, end_date)
@@ -500,6 +504,7 @@ async def get_platform_leaderboards(
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ) -> AdminLeaderboardsResponse:
     """Get Top 20 token consuming companies and agents."""
+    _ = current_user
     top_companies_raw = await agent_dao.top_token_companies(limit=20)
     top_companies: list[AdminCompanyLeaderboardEntry] = []
     for row in top_companies_raw:
@@ -541,6 +546,7 @@ async def get_enhanced_metrics(
     """Enhanced platform metrics: retention, avg tokens/session,
     channel distribution, tool categories, and churn warnings.
     """
+    _ = current_user
     now = datetime.now(UTC)
     thirty_days_ago = now - timedelta(days=30)
 
@@ -589,6 +595,7 @@ async def get_enhanced_metrics(
 @router.get("/platform-settings", response_model=PlatformSettingsOut)
 async def get_platform_settings(current_user: UserRecord = Depends(require_role("platform_admin"))):
     """Get platform-level settings."""
+    _ = current_user
     settings: dict[str, bool] = {}
 
     for key, default in [

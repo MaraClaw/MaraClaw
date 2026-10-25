@@ -8,6 +8,7 @@ from collections.abc import Coroutine
 from contextvars import Context
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
+from typing import Self
 from uuid import UUID
 
 from app.core.logging import get_trace_id, logger, set_trace_id
@@ -46,7 +47,7 @@ class ScheduleLeaseHold:
         self.fired_reason: str | None = None
         self.heartbeat_task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> ScheduleLeaseHold:
+    async def __aenter__(self) -> Self:
         self.loop = asyncio.get_running_loop()
         owner = asyncio.current_task()
         if owner is None:

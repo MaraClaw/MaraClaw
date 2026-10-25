@@ -34,9 +34,9 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "send_feishu_message",
             "description": (
                 "Send a Feishu IM message to a colleague. "
-                + "You can provide either the colleague's name "
-                + "or their Feishu user_id directly. "
-                + "To contact digital employees use send_message_to_agent instead."
+                "You can provide either the colleague's name "
+                "or their Feishu user_id directly. "
+                "To contact digital employees use send_message_to_agent instead."
             ),
             "parameters": {
                 "type": "object",
@@ -64,10 +64,10 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "send_channel_message",
             "description": (
                 "Send a message to a colleague via their configured external channel "
-                + "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat). "
-                + "Automatically detects the recipient's channel based on their org relationship. "
-                + "Use this only for channel users. "
-                + "For relationships labeled Platform User / 平台用户, use send_platform_message instead."
+                "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat). "
+                "Automatically detects the recipient's channel based on their org relationship. "
+                "Use this only for channel users. "
+                "For relationships labeled Platform User / 平台用户, use send_platform_message instead."
             ),
             "parameters": {
                 "type": "object",
@@ -84,8 +84,8 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
                         "type": "string",
                         "description": (
                             "Optional: Specific channel to use when the recipient exists on multiple channels. "
-                            + "Accepted values: feishu, dingtalk, wecom, slack, teams, microsoft_teams, "
-                            + "google_chat, gchat, wechat."
+                            "Accepted values: feishu, dingtalk, wecom, slack, teams, microsoft_teams, "
+                            "google_chat, gchat, wechat."
                         ),
                         "enum": [
                             "feishu",

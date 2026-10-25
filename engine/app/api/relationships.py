@@ -309,7 +309,7 @@ async def delete_relationship(
         raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
     rel = await agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
     if rel:
-        _ = await agent_relationship_dao.delete(id=rel_id)
+        _ = await agent_relationship_dao.delete(record_id=rel_id)
         await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}
@@ -450,7 +450,7 @@ async def delete_agent_relationship(
         raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
     rel = await agent_agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
     if rel:
-        _ = await agent_agent_relationship_dao.delete(id=rel_id)
+        _ = await agent_agent_relationship_dao.delete(record_id=rel_id)
         await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}

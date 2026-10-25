@@ -6,7 +6,9 @@ from uuid import uuid4
 import anyio
 import pytest
 from fastapi import HTTPException
-from tests.chatgpt_subscription_fakes import callback, oauth_store as oauth_store
+from tests.chatgpt_subscription_fakes import callback, oauth_store
+
+__all__ = ["oauth_store"]
 from tests.test_chatgpt_subscription import _ACCESS, FakeChatGPTTransport, _assert_no_secrets, _model, _user
 
 from app.config import get_settings

@@ -27,7 +27,7 @@ def _as_str(value: object) -> str:
 
 
 def _as_int(value: object, default: int) -> int:
-    raw = value if value else default
+    raw = value or default
     if isinstance(raw, bool):
         return int(raw)
     if isinstance(raw, int):
@@ -40,7 +40,7 @@ def _as_int(value: object, default: int) -> int:
 
 
 def _as_float(value: object, default: float) -> float:
-    raw = value if value else default
+    raw = value or default
     if isinstance(raw, bool):
         return float(raw)
     if isinstance(raw, int | float):
@@ -95,7 +95,7 @@ async def render_html_to_pptx(
 
         def parse_css_block(css: str) -> dict[str, dict[str, str]]:
             rules: dict[str, dict[str, str]] = {}
-            css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+            css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
             for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
                 decls = parse_style(match.group(2))
                 for selector in match.group(1).split(","):
@@ -426,16 +426,16 @@ async def render_html_to_pptx(
                 for child in visible_children(el):
                     y = render_flow_element(slide, child, y, x, width)
                 return y
-            if name in ("h1",):
+            if name == "h1":
                 add_textbox(slide, text, x, y, width, box_h or 0.85, style, 40, True)
                 return y + (box_h or 0.95)
-            if name in ("h2",):
+            if name == "h2":
                 add_textbox(slide, text, x, y, width, box_h or 0.62, style, 30, True)
                 return y + (box_h or 0.74)
-            if name in ("h3",):
+            if name == "h3":
                 add_textbox(slide, text, x, y, width, box_h or 0.45, style, 22, True)
                 return y + (box_h or 0.55)
-            if name in ("li",):
+            if name == "li":
                 add_textbox(slide, f"• {text}", x + 0.2, y, width - 0.2, box_h or 0.36, style, 18)
                 return y + (box_h or 0.42)
             if name in ("ul", "ol"):
@@ -620,8 +620,8 @@ async def render_html_to_pptx(
             await asyncio.to_thread(prs.save, str(tgt_file))
             return (
                 f"✅ Successfully converted HTML to high-fidelity PPTX screenshots: {target_path}\n"
-                + "Note: visual style is preserved by rendering each slide from Chrome. Text and layout are not directly editable; "
-                + "use render_mode='editable' when editable PPT elements are more important than visual fidelity."
+                "Note: visual style is preserved by rendering each slide from Chrome. Text and layout are not directly editable; "
+                "use render_mode='editable' when editable PPT elements are more important than visual fidelity."
             )
 
         if browser_layout is not None and browser_layout and render_browser_layout(browser_layout):
@@ -629,8 +629,8 @@ async def render_html_to_pptx(
             await asyncio.to_thread(prs.save, str(tgt_file))
             return (
                 f"✅ Successfully converted HTML to editable PPTX with browser layout: {target_path}\n"
-                + "Note: positions, sizes, colors, typography, cards, lists, and local images are sampled from a real browser. "
-                + "Effects such as shadows, filters, gradients, and complex text wrapping may still differ from HTML."
+                "Note: positions, sizes, colors, typography, cards, lists, and local images are sampled from a real browser. "
+                "Effects such as shadows, filters, gradients, and complex text wrapping may still differ from HTML."
             )
 
         body = soup.body or soup
@@ -659,8 +659,8 @@ async def render_html_to_pptx(
         await asyncio.to_thread(prs.save, str(tgt_file))
         return (
             f"✅ Successfully converted HTML to editable PPTX: {target_path}\n"
-            + "Note: common typography, colors, cards, lists, images, and simple absolute positioning are preserved; "
-            + "complex CSS such as flex/grid effects, shadows, filters, and animations may still need manual adjustment."
+            "Note: common typography, colors, cards, lists, images, and simple absolute positioning are preserved; "
+            "complex CSS such as flex/grid effects, shadows, filters, and animations may still need manual adjustment."
         )
     except Exception as e:
         logger.exception(f"Convert HTML to PPTX failed: {e}")

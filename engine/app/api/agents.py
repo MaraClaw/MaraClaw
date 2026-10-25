@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Final, assert_never
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
+from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.approvals import ApprovalAction, ApprovalStatus
 from app.core.json_types import int_from_row, json_as_int, object_mapping_from, uuid_from_row
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator, list_visible_agents
@@ -57,7 +59,8 @@ from app.services.agent_lifecycle import (
     start_agent_guest,
     stop_agent_guest,
 )
-from app.services.agent_manager import agent_manager as agent_manager
+from app.services.agent_manager import agent_manager
+from app.services.agent_provisioning import agent_provisioning, provision_agent
 from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 from app.services.company_transfer_retention import assert_agent_deletion_allowed
@@ -68,7 +71,8 @@ from app.services.enterprise_llm import (
 )
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.openclaw_update_exclusion import guest_write_exclusion
-from app.services.quota_guard import QuotaExceeded, check_agent_creation_quota
+
+__all__ = ["agent_manager", "router"]
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 settings = get_settings()
@@ -82,19 +86,29 @@ _DELETE_AGENT_CLEANUP_STATEMENTS: Final[tuple[str, ...]] = _DELETE_AGENT_CLEANUP
 class AgentPermissionUserAccess(BaseModel):
     id: uuid.UUID | None = None
     user_id: uuid.UUID | None = None
-    access_level: str = "use"
+    access_level: PermissionAccessLevel = PermissionAccessLevel.USE
 
 
 class AgentPermissionUpdate(BaseModel):
-    scope_type: str = "company"
+    scope_type: AgentSharingMode = AgentSharingMode.COMPANY
     scope_ids: list[uuid.UUID] = Field(default_factory=list[uuid.UUID])
     user_access: list[AgentPermissionUserAccess] = Field(default_factory=list[AgentPermissionUserAccess])
-    access_level: str = "use"
+    access_level: PermissionAccessLevel = PermissionAccessLevel.USE
     department_ids: list[uuid.UUID] | None = None
+
+    @field_validator("scope_type", mode="before")
+    @classmethod
+    def parse_scope(cls, value: object) -> AgentSharingMode:
+        if value == "user":
+            return AgentSharingMode.PRIVATE
+        try:
+            return AgentSharingMode(value)
+        except ValueError as exc:
+            raise HTTPException(400, "Unsupported scope_type") from exc
 
 
 class AgentApprovalResolveRequest(BaseModel):
-    action: str = "reject"
+    action: ApprovalAction = ApprovalAction.REJECT
 
 
 async def _get_active_admin_users(tenant_id: uuid.UUID | None) -> list[UserRecord]:
@@ -223,186 +237,43 @@ async def create_agent(
     data: AgentCreate, background_tasks: BackgroundTasks, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentCreatedResponse:
     """Create a new digital employee (any authenticated user)."""
-    try:
-        await check_agent_creation_quota(current_user.id)
-    except QuotaExceeded as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message) from exc
-
-    ttl_hours = current_user.quota_agent_ttl_hours
-
+    # Preserve FastAPI injection; provisioning schedules work only after commit.
+    del background_tasks
     target_tenant_id = current_user.tenant_id
     if current_user.role in ("platform_admin", "org_admin") and data.tenant_id:
         target_tenant_id = data.tenant_id
 
-    max_llm_calls = 1000
-    default_max_triggers = 20
-    default_min_poll = 5
-    default_webhook_rate = 5
-    default_heartbeat_interval = 240
-    tenant_default_model_id = None
-    tenant_secondary_model_id = None
-    tenant_fallback_model_id = None
-    if target_tenant_id:
-        tenant = await tenant_dao.get(target_tenant_id)
-        if tenant:
-            ttl_hours = tenant.default_agent_ttl_hours
-            max_llm_calls = tenant.default_max_llm_calls_per_day or 1000
-            default_max_triggers = tenant.default_max_triggers or 20
-            default_min_poll = tenant.min_poll_interval_floor or 5
-            default_webhook_rate = tenant.max_webhook_rate_ceiling or 5
-            tenant_default_model_id = tenant.default_model_id
-            tenant_secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
-            tenant_fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
-            if (
-                tenant.min_heartbeat_interval_minutes
-                and tenant.min_heartbeat_interval_minutes > default_heartbeat_interval
-            ):
-                default_heartbeat_interval = tenant.min_heartbeat_interval_minutes
-
-    can_assign_models = is_llm_pool_admin(current_user)
-    effective_primary_model_id = (
-        data.primary_model_id or tenant_default_model_id if can_assign_models else tenant_default_model_id
-    )
-    effective_secondary_model_id = (
-        data.secondary_model_id or tenant_secondary_model_id if can_assign_models else tenant_secondary_model_id
-    )
-    effective_fallback_model_id = (
-        data.fallback_model_id or tenant_fallback_model_id if can_assign_models else tenant_fallback_model_id
-    )
-    await assert_models_in_tenant_pool(
-        target_tenant_id,
-        effective_primary_model_id,
-        effective_secondary_model_id,
-        effective_fallback_model_id,
-    )
-    assert_distinct_model_slots(effective_primary_model_id, effective_secondary_model_id, effective_fallback_model_id)
-    expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours) if ttl_hours and ttl_hours > 0 else None
-
-    access_level = data.permission_access_level if data.permission_access_level in ("use", "manage") else "use"
     if data.permission_scope_type not in ("company", "user", "custom"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported permission_scope_type")
 
-    department_ids = set(data.department_ids)
-    if department_ids and data.permission_scope_type != "custom":
+    if data.department_ids and data.permission_scope_type != "custom":
         raise HTTPException(status_code=422, detail="Department grants require custom sharing")
-    if data.permission_scope_type == "company":
-        access_mode = "company"
-    elif data.permission_scope_type == "user":
-        access_mode = "private"
-    else:
-        access_mode = "custom"
 
-    async with connection_ctx() as db:
-        await lock_tenants(db, (target_tenant_id, current_user.tenant_id))
-        await lock_user(db, current_user.id, current_user.tenant_id)
-        actor = await user_dao.get_with_identity(current_user.id, fresh=True)
-        if actor is None or not actor.is_active or (actor.identity is not None and not actor.identity.is_active):
-            raise HTTPException(403, "User is inactive")
-        from app.core.security import raise_if_password_change_required
-
-        raise_if_password_change_required(actor)
-        if target_tenant_id != actor.tenant_id and actor.role not in ("platform_admin", "org_admin"):
-            raise HTTPException(403, "Organization access denied")
-        if department_ids:
-            departments = await org_department_dao.get_many(list(department_ids))
-            if len(departments) != len(department_ids) or any(
-                department.tenant_id != target_tenant_id for department in departments
-            ):
-                raise HTTPException(status_code=422, detail="Invalid department for this organization")
-        agent = await agent_dao.create(
-            obj_in={
-                "name": data.name,
-                "role_description": data.role_description,
-                "bio": data.bio,
-                "avatar_url": data.avatar_url,
-                "creator_id": current_user.id,
-                "tenant_id": target_tenant_id,
-                "agent_type": "openclaw",
-                "gogcli_enabled": bool(data.gogcli_enabled),
-                "primary_model_id": effective_primary_model_id,
-                "secondary_model_id": effective_secondary_model_id,
-                "fallback_model_id": effective_fallback_model_id,
-                "max_tokens_per_day": data.max_tokens_per_day,
-                "max_tokens_per_month": data.max_tokens_per_month,
-                "template_id": data.template_id,
-                "status": "idle",
-                "setup_pending": True,
-                "expires_at": expires_at,
-                "max_llm_calls_per_day": max_llm_calls,
-                "max_triggers": default_max_triggers,
-                "min_poll_interval_min": default_min_poll,
-                "webhook_rate_limit": default_webhook_rate,
-                "heartbeat_interval_minutes": default_heartbeat_interval,
-                "access_mode": access_mode,
-                "company_access_level": access_level,
-                **(
-                    {"autonomy_policy": data.autonomy_policy}
-                    if data.autonomy_policy is not None and data.autonomy_policy
-                    else {}
-                ),
-            }
+    async with agent_provisioning(current_user, target_tenant_id) as context:
+        tenant = context.tenant
+        can_assign_models = is_llm_pool_admin(context.actor)
+        primary = (data.primary_model_id if can_assign_models else None) or (
+            tenant.default_model_id if tenant else None
         )
-
-        _ = await participant_dao.create(
-            obj_in={
-                "type": "agent",
-                "ref_id": agent.id,
-                "display_name": agent.name,
-                "avatar_url": agent.avatar_url,
-            }
+        secondary = (data.secondary_model_id if can_assign_models else None) or (
+            tenant.default_secondary_model_id if tenant else None
         )
-
-        if data.permission_scope_type == "company":
-            _ = await agent_permission_dao.create(
-                obj_in={"agent_id": agent.id, "scope_type": "company", "access_level": access_level}
-            )
-        elif data.permission_scope_type == "user":
-            if data.permission_scope_ids:
-                for scope_id in data.permission_scope_ids:
-                    _ = await agent_permission_dao.create(
-                        obj_in={
-                            "agent_id": agent.id,
-                            "scope_type": "user",
-                            "scope_id": scope_id,
-                            "access_level": access_level,
-                        }
-                    )
-            else:
-                _ = await agent_permission_dao.create(
-                    obj_in={
-                        "agent_id": agent.id,
-                        "scope_type": "user",
-                        "scope_id": current_user.id,
-                        "access_level": "manage",
-                    }
-                )
-        else:
-            _ = await agent_permission_dao.create(
-                obj_in={
-                    "agent_id": agent.id,
-                    "scope_type": "user",
-                    "scope_id": current_user.id,
-                    "access_level": "manage",
-                }
-            )
-            for department_id in sorted(department_ids):
-                _ = await agent_permission_dao.create(
-                    obj_in={
-                        "agent_id": agent.id,
-                        "scope_type": "department",
-                        "scope_id": department_id,
-                        "access_level": "use",
-                    }
-                )
-
-        _ = await ensure_access_granted_platform_relationships(agent, created_by_user_id=current_user.id)
-        raw_key, key_hash = mint_openclaw_gateway_key()
-        agent = await agent_dao.update(db_obj=agent, obj_in={"api_key_hash": key_hash})
+        fallback = (data.fallback_model_id if can_assign_models else None) or (
+            tenant.default_fallback_model_id if tenant else None
+        )
+        await assert_models_in_tenant_pool(target_tenant_id, primary, secondary, fallback)
+        assert_distinct_model_slots(primary, secondary, fallback)
+        effective_data = data.model_copy(
+            update={"primary_model_id": primary, "secondary_model_id": secondary, "fallback_model_id": fallback}
+        )
+        agent, raw_key = await provision_agent(context, effective_data, setup_pending=True)
         await persist_agent_setup(agent, data, raw_key)
     await flush_request_transaction()
 
     return AgentCreatedResponse(
-        **agent_model_dump(await _agent_to_out(agent, current_user.id)), api_key=raw_key, access_level="manage"
+        **agent_model_dump(await _agent_to_out(agent, current_user.id)),
+        api_key=raw_key,
+        access_level=PermissionAccessLevel.MANAGE,
     )
 
 
@@ -435,7 +306,7 @@ async def get_agent_permissions(
     perms = list(await agent_permission_dao.list_for_agent(agent_id))
     can_manage = access_level == "manage"
     is_owner = is_agent_creator(current_user, agent)
-    access_mode = agent.access_mode or "company"
+    access_mode = agent.access_mode
 
     department_ids = {p.scope_id for p in perms if p.scope_type == "department" and p.scope_id}
     departments = await org_department_dao.get_many(list(department_ids)) if department_ids else []
@@ -453,7 +324,7 @@ async def get_agent_permissions(
             "scope_type": access_mode,
             "scope_ids": [],
             "user_access": [],
-            "access_level": "manage" if is_owner else "use",
+            "access_level": PermissionAccessLevel.MANAGE if is_owner else PermissionAccessLevel.USE,
             "effective_access_level": access_level,
             "can_manage": can_manage,
             "is_owner": is_owner,
@@ -462,10 +333,7 @@ async def get_agent_permissions(
 
     scope_type = access_mode
     scope_ids = [str(p.scope_id) for p in perms if p.scope_type == "user" and p.scope_id]
-    perm_access_level = agent.company_access_level or next(
-        (p.access_level for p in perms if p.scope_type == "company"),
-        "use",
-    )
+    perm_access_level = agent.company_access_level or PermissionAccessLevel.USE
 
     scope_names: list[PermissionScopeName] = []
     user_access: list[PermissionUserAccess] = []
@@ -477,23 +345,15 @@ async def get_agent_permissions(
 
     if display_user_ids:
         users_by_id = await user_dao.get_many_with_identity(list(display_user_ids))
-        users_by_id_str = {str(k): v for k, v in users_by_id.items()}
+        users_by_id_str = {str(k): v for k, v in users_by_id.items() if v.tenant_id == agent.tenant_id}
+        scope_ids = [sid for sid in scope_ids if sid in users_by_id_str]
         access_by_user_id = {
-            str(perm.scope_id): (perm.access_level or "use")
-            for perm in perms
-            if perm.scope_type == "user" and perm.scope_id
+            str(perm.scope_id): perm.access_level for perm in perms if perm.scope_type == "user" and perm.scope_id
         }
-        ordered_user_ids = [str(uid) for uid in display_user_ids]
+        ordered_user_ids = list(users_by_id_str)
         ordered_user_ids.sort(
             key=lambda sid: (user.display_name or user.email or "User") if (user := users_by_id_str.get(sid)) else ""
         )
-        for perm in perms:
-            if perm.scope_type != "user" or not perm.scope_id:
-                continue
-            sid = str(perm.scope_id)
-            if sid not in ordered_user_ids:
-                ordered_user_ids.append(sid)
-
         for sid in ordered_user_ids:
             u = users_by_id_str.get(sid)
             if not u:
@@ -507,7 +367,9 @@ async def get_agent_permissions(
                 "username": u.display_name or u.email or "User",
                 "email": u.email,
                 "role": u.role,
-                "access_level": "manage" if is_required else access_by_user_id.get(sid, "use"),
+                "access_level": PermissionAccessLevel.MANAGE
+                if is_required
+                else access_by_user_id.get(sid, PermissionAccessLevel.USE),
                 "is_required": is_required,
                 "required_reason": "creator" if is_creator else "company_admin" if is_admin else None,
             }
@@ -561,12 +423,6 @@ async def _update_agent_permissions_locked(
     scope_ids = data.scope_ids
     user_access = data.user_access
     access_level = data.access_level
-    if access_level not in ("use", "manage"):
-        access_level = "use"
-    if scope_type not in ("company", "user", "private", "custom"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported scope_type")
-    if scope_type == "user":
-        scope_type = "private"
 
     supplied_departments = data.department_ids
     if scope_type != "custom" and supplied_departments is not None and supplied_departments:
@@ -594,28 +450,28 @@ async def _update_agent_permissions_locked(
     if scope_type == "company":
         agent = await agent_dao.update(
             db_obj=agent,
-            obj_in={"access_mode": "company", "company_access_level": access_level},
+            obj_in={"access_mode": AgentSharingMode.COMPANY, "company_access_level": access_level},
         )
         _ = await agent_permission_dao.create(
-            obj_in={"agent_id": agent_id, "scope_type": "company", "access_level": access_level}
+            obj_in={"agent_id": agent_id, "scope_type": PermissionGrantScope.COMPANY, "access_level": access_level}
         )
     elif scope_type == "private":
         agent = await agent_dao.update(
             db_obj=agent,
-            obj_in={"access_mode": "private", "company_access_level": access_level},
+            obj_in={"access_mode": AgentSharingMode.PRIVATE, "company_access_level": access_level},
         )
         _ = await agent_permission_dao.create(
             obj_in={
                 "agent_id": agent_id,
-                "scope_type": "user",
+                "scope_type": PermissionGrantScope.USER,
                 "scope_id": agent.creator_id or current_user.id,
-                "access_level": "manage",
+                "access_level": PermissionAccessLevel.MANAGE,
             }
         )
     else:
         agent = await agent_dao.update(
             db_obj=agent,
-            obj_in={"access_mode": "custom", "company_access_level": access_level},
+            obj_in={"access_mode": AgentSharingMode.CUSTOM, "company_access_level": access_level},
         )
         seen_user_ids: set[uuid.UUID] = set()
         creator_id = agent.creator_id or current_user.id
@@ -628,13 +484,16 @@ async def _update_agent_permissions_locked(
             if uid in seen_user_ids:
                 continue
             lvl = item.access_level
-            if lvl not in ("use", "manage"):
-                lvl = "use"
             if uid in required_manager_ids:
-                lvl = "manage"
+                lvl = PermissionAccessLevel.MANAGE
             seen_user_ids.add(uid)
             _ = await agent_permission_dao.create(
-                obj_in={"agent_id": agent_id, "scope_type": "user", "scope_id": uid, "access_level": lvl}
+                obj_in={
+                    "agent_id": agent_id,
+                    "scope_type": PermissionGrantScope.USER,
+                    "scope_id": uid,
+                    "access_level": lvl,
+                }
             )
         for sid in scope_ids:
             if sid not in seen_user_ids:
@@ -642,20 +501,30 @@ async def _update_agent_permissions_locked(
                 _ = await agent_permission_dao.create(
                     obj_in={
                         "agent_id": agent_id,
-                        "scope_type": "user",
+                        "scope_type": PermissionGrantScope.USER,
                         "scope_id": sid,
-                        "access_level": "manage" if sid in required_manager_ids else access_level,
+                        "access_level": PermissionAccessLevel.MANAGE if sid in required_manager_ids else access_level,
                     }
                 )
         for uid in required_manager_ids:
             if uid not in seen_user_ids:
                 _ = await agent_permission_dao.create(
-                    obj_in={"agent_id": agent_id, "scope_type": "user", "scope_id": uid, "access_level": "manage"}
+                    obj_in={
+                        "agent_id": agent_id,
+                        "scope_type": PermissionGrantScope.USER,
+                        "scope_id": uid,
+                        "access_level": PermissionAccessLevel.MANAGE,
+                    }
                 )
 
     for department_id in sorted(department_ids):
         await agent_permission_dao.create(
-            obj_in={"agent_id": agent_id, "scope_type": "department", "scope_id": department_id, "access_level": "use"}
+            obj_in={
+                "agent_id": agent_id,
+                "scope_type": PermissionGrantScope.DEPARTMENT,
+                "scope_id": department_id,
+                "access_level": PermissionAccessLevel.USE,
+            }
         )
 
     relationships_changed = await ensure_access_granted_platform_relationships(
@@ -858,14 +727,16 @@ async def update_agent(
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
-    """Delete a digital employee (creator only)."""
+    """Delete a digital employee directly (platform admin only); everyone else files a deletion request."""
+    if current_user.role != "platform_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "agent_deletion_requires_request",
+                "message": "Agents are deleted through an approval request: POST /agent-deletion-requests",
+            },
+        )
     agent, _access = await check_agent_access(current_user, agent_id)
-    if not is_agent_creator(current_user, agent) and current_user.role not in (
-        "super_admin",
-        "org_admin",
-        "platform_admin",
-    ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only creator or admin can delete agent")
 
     if agent.is_system:
         raise HTTPException(
@@ -918,7 +789,9 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
 
 @router.get("/{agent_id}/approvals", response_model=None)
 async def list_agent_approvals(
-    agent_id: uuid.UUID, status_filter: str | None = None, current_user: UserRecord = Depends(get_current_user)
+    agent_id: uuid.UUID,
+    status_filter: ApprovalStatus | None = None,
+    current_user: UserRecord = Depends(get_current_user),
 ) -> list[AgentApprovalResponse]:
     """List approval requests for a specific agent. Only creator or admin can view."""
     agent, _access = await check_agent_access(current_user, agent_id)

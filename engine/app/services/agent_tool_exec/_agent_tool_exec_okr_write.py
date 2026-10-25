@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Protocol, TypeIs
 
+from app.core.domain.okr import KeyResultStatus
 from app.core.logging import logger
 from app.dao.okr_dao import okr_key_result_dao, okr_progress_log_dao
 
@@ -115,13 +116,13 @@ async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | N
 
         ratio = current_value / kr.target_value if kr.target_value else 0
         if ratio >= 1.0:
-            status = "completed"
+            status = KeyResultStatus.COMPLETED
         elif ratio >= 0.7:
-            status = "on_track"
+            status = KeyResultStatus.ON_TRACK
         elif ratio >= 0.4:
-            status = "at_risk"
+            status = KeyResultStatus.AT_RISK
         else:
-            status = "behind"
+            status = KeyResultStatus.BEHIND
 
         now = datetime.now(UTC).replace(tzinfo=None)
         kr = await okr_key_result_dao.update(
@@ -256,17 +257,20 @@ async def _update_any_kr_progress(
         current_value = _float_value(val)
         explicit_status = _string_argument(arguments, "status")
         if explicit_status:
-            status = explicit_status
+            try:
+                status = KeyResultStatus(explicit_status)
+            except ValueError:
+                return "Error: invalid key result status"
         else:
             progress = current_value / kr.target_value if kr.target_value != 0 else 0
             if progress >= 1.0:
-                status = "completed"
+                status = KeyResultStatus.COMPLETED
             elif progress >= 0.7:
-                status = "on_track"
+                status = KeyResultStatus.ON_TRACK
             elif progress >= 0.4:
-                status = "at_risk"
+                status = KeyResultStatus.AT_RISK
             else:
-                status = "behind"
+                status = KeyResultStatus.BEHIND
 
         now = datetime.now(UTC).replace(tzinfo=None)
         kr = await okr_key_result_dao.update(
@@ -290,7 +294,7 @@ async def _update_any_kr_progress(
 
         return (
             f"Successfully updated KR '{kr.title}'. Progress: {old_val} -> {kr.current_value} "
-            + f"{kr.unit or ''}. Status: {kr.status}"
+            f"{kr.unit or ''}. Status: {kr.status}"
         )
     except Exception as error:
         logger.exception("[OKR] update_any_kr_progress failed")

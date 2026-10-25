@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextvars import Context
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import Mock
 
 import pytest
@@ -29,7 +29,7 @@ class _FakeCursor:
     def __init__(self, parent: _FakeRawConnection) -> None:
         self._parent = parent
 
-    async def __aenter__(self) -> _FakeCursor:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
@@ -55,7 +55,7 @@ class _FakeCursor:
 
 
 class _FakeTransaction:
-    async def __aenter__(self) -> _FakeTransaction:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
@@ -88,7 +88,7 @@ class _FakeRawConnection:
 
 
 def _wrap(raw: _FakeRawConnection) -> DbConnection:
-    return DbConnection(cast(AsyncConnection[DictRow], raw))
+    return DbConnection(cast("AsyncConnection[DictRow]", raw))
 
 
 class _PoolConnectionCM:

@@ -11,6 +11,7 @@ from psycopg.errors import ForeignKeyViolation
 from starlette.types import Message, Scope
 
 from app.api import notification as notification_api
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.broadcast_email_dao import broadcast_email_dao as outbox
 from app.db.pool import get_pool
@@ -18,11 +19,13 @@ from app.db.session import bind_crud_connection, connection_ctx
 from app.records.broadcast_email import BroadcastEmailRecord, NewBroadcastEmail
 from broadcast_email_persistence_fixtures import (
     PersistenceDB,
-    broadcast_db as broadcast_db,
+    broadcast_db,
     enqueue,
     member,
     tenant,
 )
+
+__all__ = ["broadcast_db"]
 
 
 @pytest.mark.parametrize("failure", ["after_enqueue", "after_notifications"])
@@ -31,7 +34,7 @@ async def test_api_rolls_back_all_acceptance_on_later_failure(
 ):
     tenant_id = await tenant(broadcast_db)
     sender = await member(broadcast_db, tenant_id)
-    sender.role = "org_admin"
+    sender.role = UserRole.ORG_ADMIN
     _ = await member(broadcast_db, tenant_id)
     _ = await member(broadcast_db, tenant_id)
     monkeypatch.setattr(
@@ -68,7 +71,7 @@ async def test_api_commits_acceptance_before_response_body(
     # Given the production request transaction and an independent observer connection.
     tenant_id = await tenant(broadcast_db)
     sender = await member(broadcast_db, tenant_id)
-    sender.role = "org_admin"
+    sender.role = UserRole.ORG_ADMIN
     _ = await member(broadcast_db, tenant_id)
     monkeypatch.setattr(
         "app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=object())
@@ -129,7 +132,7 @@ async def test_api_accepts_only_selected_recipient_snapshots(
 ):
     tenant_id = await tenant(broadcast_db)
     sender = await member(broadcast_db, tenant_id)
-    sender.role = "org_admin"
+    sender.role = UserRole.ORG_ADMIN
     selected = await member(broadcast_db, tenant_id)
     _ = await member(broadcast_db, tenant_id, active=False)
     _ = await member(broadcast_db, await tenant(broadcast_db))

@@ -72,29 +72,29 @@ Use this skill when you need to find, evaluate, and synthesize information from 
                 "path": "scripts/search_helper.py",
                 "content": (
                     "#!/usr/bin/env python3\n"
-                    + '"""Helper utilities for structured web search."""\n\n'
-                    + "from datetime import datetime\n\n\n"
-                    + "def format_search_results(results: list[dict]) -> str:\n"
-                    + '    """Format raw search results into a structured report."""\n'
-                    + "    output = []\n"
-                    + "    for i, r in enumerate(results, 1):\n"
-                    + "        title = r.get('title', 'Untitled')\n"
-                    + "        url = r.get('url', '#')\n"
-                    + "        snippet = r.get('snippet', 'No description')\n"
-                    + "        output.append(f'{i}. [{title}]({url})')\n"
-                    + "        output.append(f'   {snippet}')\n"
-                    + "        output.append('')\n"
-                    + "    return '\\n'.join(output)\n\n\n"
-                    + "def assess_source_credibility(url: str) -> dict:\n"
-                    + '    """Basic heuristics for source credibility."""\n'
-                    + "    trusted = ['.edu', '.gov', '.org', 'arxiv.org', 'nature.com']\n"
-                    + "    score = 0.5\n"
-                    + "    for d in trusted:\n"
-                    + "        if d in url:\n"
-                    + "            score = 0.8\n"
-                    + "            break\n"
-                    + "    return {'url': url, 'credibility_score': score,\n"
-                    + "            'assessed_at': datetime.now().isoformat()}\n"
+                    '"""Helper utilities for structured web search."""\n\n'
+                    "from datetime import datetime\n\n\n"
+                    "def format_search_results(results: list[dict]) -> str:\n"
+                    '    """Format raw search results into a structured report."""\n'
+                    "    output = []\n"
+                    "    for i, r in enumerate(results, 1):\n"
+                    "        title = r.get('title', 'Untitled')\n"
+                    "        url = r.get('url', '#')\n"
+                    "        snippet = r.get('snippet', 'No description')\n"
+                    "        output.append(f'{i}. [{title}]({url})')\n"
+                    "        output.append(f'   {snippet}')\n"
+                    "        output.append('')\n"
+                    "    return '\\n'.join(output)\n\n\n"
+                    "def assess_source_credibility(url: str) -> dict:\n"
+                    '    """Basic heuristics for source credibility."""\n'
+                    "    trusted = ['.edu', '.gov', '.org', 'arxiv.org', 'nature.com']\n"
+                    "    score = 0.5\n"
+                    "    for d in trusted:\n"
+                    "        if d in url:\n"
+                    "            score = 0.8\n"
+                    "            break\n"
+                    "    return {'url': url, 'credibility_score': score,\n"
+                    "            'assessed_at': datetime.now().isoformat()}\n"
                 ),
             },
         ],
@@ -148,34 +148,34 @@ Use this skill for analyzing data, identifying patterns, and creating structured
                 "path": "scripts/analyze_csv.py",
                 "content": (
                     "#!/usr/bin/env python3\n"
-                    + '"""Utility for quick CSV data analysis."""\n\n'
-                    + "import csv\nimport statistics\nfrom collections import Counter\n\n\n"
-                    + "def analyze_column(data: list[dict], column: str) -> dict:\n"
-                    + '    """Analyze a single column from CSV data."""\n'
-                    + "    values = [row.get(column) for row in data if row.get(column) is not None]\n"
-                    + "    if not values:\n"
-                    + '        return {"column": column, "count": 0, "error": "No data"}\n\n'
-                    + '    result = {"column": column, "count": len(values), "unique": len(set(values))}\n\n'
-                    + "    # Try numeric analysis\n"
-                    + "    try:\n"
-                    + "        nums = [float(v) for v in values]\n"
-                    + "        result.update({\n"
-                    + '            "type": "numeric",\n'
-                    + '            "min": min(nums), "max": max(nums),\n'
-                    + '            "mean": round(statistics.mean(nums), 2),\n'
-                    + '            "median": round(statistics.median(nums), 2),\n'
-                    + "        })\n"
-                    + "    except (ValueError, TypeError):\n"
-                    + "        freq = Counter(values).most_common(5)\n"
-                    + '        result.update({"type": "categorical", "top_values": freq})\n\n'
-                    + "    return result\n\n\n"
-                    + "def quick_summary(filepath: str) -> str:\n"
-                    + '    """Generate a quick summary of a CSV file."""\n'
-                    + "    with open(filepath, 'r') as f:\n"
-                    + "        reader = csv.DictReader(f)\n"
-                    + "        data = list(reader)\n"
-                    + "    columns = data[0].keys() if data else []\n"
-                    + "    return f'Rows: {len(data)}, Columns: {len(columns)}'\n"
+                    '"""Utility for quick CSV data analysis."""\n\n'
+                    "import csv\nimport statistics\nfrom collections import Counter\n\n\n"
+                    "def analyze_column(data: list[dict], column: str) -> dict:\n"
+                    '    """Analyze a single column from CSV data."""\n'
+                    "    values = [row.get(column) for row in data if row.get(column) is not None]\n"
+                    "    if not values:\n"
+                    '        return {"column": column, "count": 0, "error": "No data"}\n\n'
+                    '    result = {"column": column, "count": len(values), "unique": len(set(values))}\n\n'
+                    "    # Try numeric analysis\n"
+                    "    try:\n"
+                    "        nums = [float(v) for v in values]\n"
+                    "        result.update({\n"
+                    '            "type": "numeric",\n'
+                    '            "min": min(nums), "max": max(nums),\n'
+                    '            "mean": round(statistics.mean(nums), 2),\n'
+                    '            "median": round(statistics.median(nums), 2),\n'
+                    "        })\n"
+                    "    except (ValueError, TypeError):\n"
+                    "        freq = Counter(values).most_common(5)\n"
+                    '        result.update({"type": "categorical", "top_values": freq})\n\n'
+                    "    return result\n\n\n"
+                    "def quick_summary(filepath: str) -> str:\n"
+                    '    """Generate a quick summary of a CSV file."""\n'
+                    "    with open(filepath, 'r') as f:\n"
+                    "        reader = csv.DictReader(f)\n"
+                    "        data = list(reader)\n"
+                    "    columns = data[0].keys() if data else []\n"
+                    "    return f'Rows: {len(data)}, Columns: {len(columns)}'\n"
                 ),
             },
             {

@@ -1,23 +1,151 @@
 import time
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 from app.api import chat_sessions, websocket
+from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_loads_object
 from app.core.security import get_current_user
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
+from app.records.agent import AgentRecord
+from app.records.chat import ChatMessageRecord, ChatSessionRecord
+from app.records.user import UserRecord
 from app.services import chat_submissions, chat_tickets
 from app.services.chat_submissions import ChatSubmission
+from app.services.shared_chat import shared_session_id
 from app.services.storage_runtime import LocalStorageBackend
 
 pytest_plugins = ("test_chat_submission_postgres",)
+
+
+@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
+async def test_locked_submission_replay_access_matrix(monkeypatch, source, viewer):
+    user = UserRecord(id=uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
+    agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid4())
+    session = ChatSessionRecord(
+        id=shared_session_id(agent.id) if source == "shared" else uuid4(),
+        agent_id=agent.id,
+        user_id=user.id if viewer == "owner" else uuid4(),
+        source_channel=source,
+    )
+    submission = ChatSubmission(client_submission_id=uuid4(), content="existing receipt")
+    receipt = ChatMessageRecord(
+        id=uuid4(),
+        user_id=user.id,
+        agent_id=agent.id,
+        role="user",
+        content=submission.content,
+        conversation_id=str(session.id),
+        client_submission_id=submission.client_submission_id,
+        submission_fingerprint=submission.fingerprint(),
+    )
+    state = SimpleNamespace(in_transaction=False, locked=False)
+
+    @asynccontextmanager
+    async def connection():
+        state.in_transaction = True
+        try:
+            yield
+        finally:
+            state.in_transaction = False
+
+    async def lock(session_id, agent_id):
+        assert state.in_transaction
+        assert (session_id, agent_id) == (session.id, agent.id)
+        state.locked = True
+        return session
+
+    async def find(_candidate):
+        assert state.locked
+        assert state.in_transaction
+        return receipt
+
+    find_receipt = AsyncMock(side_effect=find)
+    prepare = AsyncMock(side_effect=AssertionError("Replay must not prepare a turn"))
+    monkeypatch.setattr(chat_submissions, "connection_ctx", connection)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", find_receipt)
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
+
+    if viewer == "member" and source != "shared":
+        with pytest.raises(HTTPException) as error:
+            await chat_submissions.accept_submission(
+                submission, user=user, agent=agent, session_id=session.id, history=[]
+            )
+        assert error.value.status_code == 403
+        find_receipt.assert_not_awaited()
+    else:
+        accepted = await chat_submissions.accept_submission(
+            submission, user=user, agent=agent, session_id=session.id, history=[]
+        )
+        assert accepted.replayed
+        assert accepted.message.id == receipt.id
+    assert state.locked
+    prepare.assert_not_awaited()
+
+
+@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
+async def test_new_submission_access_preserves_archive_write_guard(monkeypatch, source, viewer):
+    user = UserRecord(id=uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
+    agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid4())
+    session = ChatSessionRecord(
+        id=shared_session_id(agent.id) if source == "shared" else uuid4(),
+        agent_id=agent.id,
+        user_id=user.id if viewer == "owner" else uuid4(),
+        source_channel=source,
+    )
+
+    @asynccontextmanager
+    async def connection():
+        yield
+
+    async def reserve(candidate):
+        return candidate
+
+    prepare = AsyncMock()
+    charge = AsyncMock()
+    enqueue = AsyncMock()
+    monkeypatch.setattr(chat_submissions, "connection_ctx", connection)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)
+    monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(chat_submissions, "charge_conversation_quota", charge)
+    monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", enqueue)
+    submission = ChatSubmission(client_submission_id=uuid4(), content="new message")
+
+    if source == "web" or (source == "agent" and viewer == "member"):
+        with pytest.raises(HTTPException) as error:
+            await chat_submissions.accept_submission(
+                submission, user=user, agent=agent, session_id=session.id, history=[]
+            )
+        assert error.value.status_code == (403 if viewer == "member" else 409)
+        prepare.assert_not_awaited()
+        charge.assert_not_awaited()
+        enqueue.assert_not_awaited()
+    else:
+        accepted = await chat_submissions.accept_submission(
+            submission, user=user, agent=agent, session_id=session.id, history=[]
+        )
+        assert not accepted.replayed
+        assert (accepted.message.user_id, accepted.message.conversation_id) == (user.id, str(session.id))
+        charge.assert_awaited_once_with(user)
+        enqueue.assert_awaited_once_with(
+            prepare.return_value, sender_user_id=user.id, conversation_id=str(session.id), deduplicate=False
+        )
 
 
 @pytest.mark.parametrize("with_attachments", [False, True])

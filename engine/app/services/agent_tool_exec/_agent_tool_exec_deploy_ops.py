@@ -27,7 +27,7 @@ def _response_mapping(response: Response) -> JsonObject:
 
 
 def _nested_mapping(value: object) -> Mapping[object, object]:
-    return cast(Mapping[object, object], value) if isinstance(value, dict) else {}
+    return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
 
 
 def _object_items(value: object) -> list[JsonObject]:
@@ -234,8 +234,8 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
                         org_list_str = "\n".join([f"- {o.get('name')} (ID: `{o.get('id')}`)" for o in orgs])
                         return (
                             "⚠️ **Multiple Neon organizations/spaces detected**.\n"
-                            + "Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
-                            + f"{org_list_str}"
+                            "Specify the `org_id` parameter when calling 'Create Postgres Database'. Existing organizations:\n"
+                            f"{org_list_str}"
                         )
             except Exception as e:
                 logger.warning(f"Failed to auto-resolve Neon org_id: {e}")
@@ -260,9 +260,9 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
                 connection_uri = f"postgresql://alex:password@ep-cool-breeze-12345.us-east-1.neon.tech/{database_name}?sslmode=require"
             return (
                 "✅ **Neon database created successfully!**\n\n"
-                + f"- **Project ID**: {proj_id}\n"
-                + f"- **Region**: {region}\n"
-                + f"- **DATABASE_URL**: {connection_uri}\n\n"
-                + "Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
+                f"- **Project ID**: {proj_id}\n"
+                f"- **Region**: {region}\n"
+                f"- **DATABASE_URL**: {connection_uri}\n\n"
+                "Use `vercel_set_env` to set `DATABASE_URL` env var in your Vercel project."
             )
         return f"❌ Failed to create Neon project: {res.text}"

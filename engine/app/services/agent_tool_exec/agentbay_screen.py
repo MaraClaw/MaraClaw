@@ -30,8 +30,8 @@ def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None
     height_raw: object = screen_data.get("height")
     dpi: object = screen_data.get("dpiScalingFactor")
     try:
-        width = int(cast(str | Buffer | SupportsInt | SupportsIndex, width_raw)) if width_raw is not None else None
-        height = int(cast(str | Buffer | SupportsInt | SupportsIndex, height_raw)) if height_raw is not None else None
+        width = int(cast("str | Buffer | SupportsInt | SupportsIndex", width_raw)) if width_raw is not None else None
+        height = int(cast("str | Buffer | SupportsInt | SupportsIndex", height_raw)) if height_raw is not None else None
     except TypeError, ValueError:
         width, height = None, None
     parts = []
@@ -136,6 +136,7 @@ def _agentbay_desktop_coordinate_note(
 
 
 async def _agentbay_computer_screenshot(agent_id: uuid.UUID | None, ws: Path, arguments: ToolArguments) -> str:
+    del ws
     if not agent_id:
         return "AgentBay tools require agent context"
     from app.services.agentbay_client import get_agentbay_client_for_agent
@@ -187,8 +188,8 @@ async def _agentbay_computer_screenshot(agent_id: uuid.UUID | None, ws: Path, ar
         )
         return (
             f"Internal desktop screenshot captured for analysis. [ImageID: {img_id}]\n{coordinate_note}\n"
-            + "TARGETING NOTE: Before clicking dialog buttons, text buttons, tabs, menus, checkboxes, close buttons, small controls, or any target whose center is not unambiguous, call agentbay_computer_precision_screenshot around the target and click from that enlarged crop.\n"
-            + "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
+            "TARGETING NOTE: Before clicking dialog buttons, text buttons, tabs, menus, checkboxes, close buttons, small controls, or any target whose center is not unambiguous, call agentbay_computer_precision_screenshot around the target and click from that enlarged crop.\n"
+            "NOTE: This screenshot is for LLM vision only and is not saved to the user's workspace."
         )
     except RuntimeError as e:
         return f"{e!s}. Please configure AgentBay in Agent settings."

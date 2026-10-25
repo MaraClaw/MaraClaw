@@ -2,7 +2,9 @@ from uuid import uuid4
 
 import pytest
 
-from test_websocket_turn_transaction import drive_turn, turn as turn
+from test_websocket_turn_transaction import drive_turn, turn
+
+__all__ = ["turn"]
 
 
 async def test_committed_replay_survives_reconnect_model_loss_and_exhausted_quota(monkeypatch, turn):

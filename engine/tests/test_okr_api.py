@@ -9,6 +9,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import okr as okr_api
+from app.core.domain.okr import KeyResultStatus
+from app.core.domain.users import UserRole
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.user import UserRecord
 
@@ -21,11 +23,11 @@ KR_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
 
 
 def _admin() -> UserRecord:
-    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role="org_admin", display_name="Admin")
+    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=UserRole.ORG_ADMIN, display_name="Admin")
 
 
 def _member() -> UserRecord:
-    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role="member", display_name="Member")
+    return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=UserRole.MEMBER, display_name="Member")
 
 
 def _settings(
@@ -161,7 +163,7 @@ async def test_kr_progress_auto_status_buckets(monkeypatch: pytest.MonkeyPatch) 
         title="Users",
         current_value=10.0,
         target_value=100.0,
-        status="behind",
+        status=KeyResultStatus.BEHIND,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         last_updated_at=None,
     )
@@ -171,7 +173,7 @@ async def test_kr_progress_auto_status_buckets(monkeypatch: pytest.MonkeyPatch) 
         title="Users",
         current_value=75.0,
         target_value=100.0,
-        status="on_track",
+        status=KeyResultStatus.ON_TRACK,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         last_updated_at=datetime(2026, 2, 1, tzinfo=UTC),
     )

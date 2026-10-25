@@ -50,11 +50,15 @@ async def test_openai_compatible_stream_normalizes_partial_json_reasoning_usage_
         'data: {"choices":[{"delta":{"content":"Hel',
         'data: lo "}}]}',
         'data: {"choices":[{"delta":{"reasoning_content":"think "}}]}',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
-        '"function":{"name":"lookup","arguments":"{\\"city\\": "}}]}}]}',
+        (
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+            '"function":{"name":"lookup","arguments":"{\\"city\\": "}}]}}]}'
+        ),
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"Paris\\"}"}}]}}]}',
-        'data: {"choices":[{"delta":{"content":"<think>hidden</think>world"},'
-        '"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}',
+        (
+            'data: {"choices":[{"delta":{"content":"<think>hidden</think>world"},'
+            '"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}'
+        ),
         "data: [DONE]",
     ]
     http_client = FakeStreamingHttpClient(FakeStreamResponse(stream_lines))
@@ -198,10 +202,12 @@ async def test_anthropic_stream_normalizes_native_text_thinking_signature_tool_a
 
 async def test_gemini_stream_normalizes_native_text_function_calls_usage_and_finish(monkeypatch):
     stream_lines = [
-        'data: {"candidates":[{"content":{"parts":[{"text":"Ge"},'
-        '{"functionCall":{"name":"lookup","args":{"city":"Paris"},"id":"native-1"}}]},'
-        '"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,'
-        '"candidatesTokenCount":2,"totalTokenCount":3}}',
+        (
+            'data: {"candidates":[{"content":{"parts":[{"text":"Ge"},'
+            '{"functionCall":{"name":"lookup","args":{"city":"Paris"},"id":"native-1"}}]},'
+            '"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,'
+            '"candidatesTokenCount":2,"totalTokenCount":3}}'
+        ),
         'data: {"candidates":[{"content":{"parts":[{"text":"mini"}]},"finishReason":"STOP"}]}',
     ]
     http_client = FakeStreamingHttpClient(FakeStreamResponse(stream_lines))

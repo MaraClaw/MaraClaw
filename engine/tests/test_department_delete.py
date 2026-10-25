@@ -7,7 +7,9 @@ import pytest
 from app.core.security import get_current_user
 from app.records.identity import IdentityRecord
 from app.services import org_departments
-from test_department_api import directory as directory
+from test_department_api import directory
+
+__all__ = ["directory"]
 
 
 @pytest.fixture

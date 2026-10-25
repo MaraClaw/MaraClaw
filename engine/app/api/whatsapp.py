@@ -11,6 +11,7 @@ from typing import TypedDict
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     json_as_str,
@@ -142,7 +143,7 @@ async def configure_whatsapp_channel(
         )
 
     extra_config: JsonObject = {"api_version": api_version}
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
+    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -177,7 +178,7 @@ async def get_whatsapp_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
     return ChannelConfigOut.model_validate(config)
@@ -197,10 +198,10 @@ async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord 
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
-    _ = await channel_config_dao.delete(id=config.id)
+    _ = await channel_config_dao.delete(record_id=config.id)
 
 
 @router.get("/channel/whatsapp/{agent_id}/webhook")
@@ -210,7 +211,7 @@ async def whatsapp_verify_webhook(
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
 ) -> Response:
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         return Response(status_code=404)
 
@@ -228,7 +229,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
     body = await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE)
     if body is None:
         return Response(status_code=413)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type="whatsapp")
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         return Response(status_code=404)
 

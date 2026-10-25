@@ -34,6 +34,10 @@ def _require_json_object(value: object) -> JsonObject:
     return value
 
 
+class MCPClientError(Exception):
+    """MCP protocol or connection failure reported by the client boundary."""
+
+
 class MCPClient:
     """Client for connecting to MCP servers via Streamable HTTP or SSE transport.
 
@@ -94,7 +98,7 @@ class MCPClient:
                         if is_json_object(data):
                             last_data = data
         if last_data is None:
-            raise Exception("No valid JSON found in SSE response")
+            raise MCPClientError("No valid JSON found in SSE response")
         return last_data
 
     # ── Streamable HTTP Transport ────────────────────────────────
@@ -139,7 +143,7 @@ class MCPClient:
 
             resp = await client.post(self.server_url, json=body, headers=self._headers())
             if resp.status_code not in (200, 201):
-                raise Exception(f"HTTP {resp.status_code}")
+                raise MCPClientError(f"HTTP {resp.status_code}")
             return self._parse_response(resp)
 
     # ── SSE Transport ────────────────────────────────────────────
@@ -165,7 +169,7 @@ class MCPClient:
             client.stream("GET", sse_url, headers=headers) as resp,
         ):
             if resp.status_code != 200:
-                raise Exception(f"SSE connect failed: HTTP {resp.status_code}")
+                raise MCPClientError(f"SSE connect failed: HTTP {resp.status_code}")
 
             # Read SSE events until we get the endpoint event
             async for line in resp.aiter_lines():
@@ -181,7 +185,7 @@ class MCPClient:
                         break
 
         if messages_url in (None, ""):
-            raise Exception("SSE endpoint did not return a messages URL")
+            raise MCPClientError("SSE endpoint did not return a messages URL")
 
         return messages_url
 
@@ -212,7 +216,7 @@ class MCPClient:
             client.stream("GET", sse_url, headers=headers_sse) as sse_resp,
         ):
             if sse_resp.status_code != 200:
-                raise Exception(f"SSE connect failed: HTTP {sse_resp.status_code}")
+                raise MCPClientError(f"SSE connect failed: HTTP {sse_resp.status_code}")
 
             messages_url = None
             event_type = ""
@@ -231,7 +235,7 @@ class MCPClient:
                         break
 
             if messages_url in (None, ""):
-                raise Exception("SSE endpoint did not return a messages URL")
+                raise MCPClientError("SSE endpoint did not return a messages URL")
 
             # Phase 2: MCP handshake - initialize + initialized notification
             init_body: JsonObject = {
@@ -279,7 +283,7 @@ class MCPClient:
                                     break  # Got our actual request response
 
             if result is None:
-                raise Exception("No response received from SSE transport")
+                raise MCPClientError("No response received from SSE transport")
             return result
 
     # ── Auto-detect Transport ────────────────────────────────────
@@ -317,7 +321,7 @@ class MCPClient:
         except OutboundPolicyError:
             raise
         except Exception as sse_err:
-            raise Exception(
+            raise MCPClientError(
                 f"Both transports failed. Streamable HTTP: {streamable_error_message}; SSE: {sse_err}"
             ) from sse_err
 
@@ -332,7 +336,7 @@ class MCPClient:
                 err = data["error"]
                 error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
                 msg = error_message if isinstance(error_message, str) else str(error_message)
-                raise Exception(f"MCP error: {msg}")
+                raise MCPClientError(f"MCP error: {msg}")
 
             result = data.get("result", {})
             if not is_json_object(result):
@@ -350,7 +354,7 @@ class MCPClient:
                 if is_json_object(tool)
             ]
         except httpx.HTTPError as e:
-            raise Exception(f"Connection failed: {str(e)[:200]}") from e
+            raise MCPClientError(f"Connection failed: {str(e)[:200]}") from e
 
     async def call_tool(self, tool_name: str, arguments: Mapping[str, JsonValue]) -> str:
         """Execute a tool on the MCP server."""
