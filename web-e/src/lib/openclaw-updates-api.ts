@@ -49,12 +49,12 @@ function requestContext(owner?: SessionOwner, signal?: AbortSignal): RequestCont
 
 export async function getOpenClawUpdate(noticeId: string, context: RequestContext = {}) {
   const { owner, signal } = context
-  return detailSchema.parse(await apiRequest<unknown>(`/api/openclaw-updates/${encodeURIComponent(noticeId)}`, requestContext(owner, signal)))
+  return apiRequest(`/api/openclaw-updates/${encodeURIComponent(noticeId)}`, { schema: detailSchema, ...requestContext(owner, signal) })
 }
 
 export async function getAgentOpenClawUpdate(agentId: string, context: RequestContext = {}) {
   const { owner, signal } = context
-  return agentUpdateSchema.parse(await apiRequest<unknown>(`/api/agents/${encodeURIComponent(agentId)}/openclaw-update`, requestContext(owner, signal)))
+  return apiRequest(`/api/agents/${encodeURIComponent(agentId)}/openclaw-update`, { schema: agentUpdateSchema, ...requestContext(owner, signal) })
 }
 
 export async function upgradeAgentOpenClaw(
@@ -62,7 +62,7 @@ export async function upgradeAgentOpenClaw(
 ): Promise<OpenClawRun> {
   const { owner, signal } = context
   const body = z.object({ notice_id: z.uuid() }).parse({ notice_id: noticeId })
-  return runSchema.parse(await apiRequest<unknown>(`/api/agents/${encodeURIComponent(agentId)}/openclaw-update`, {
-    ...requestContext(owner, signal), method: 'POST', body,
-  }))
+  return apiRequest(`/api/agents/${encodeURIComponent(agentId)}/openclaw-update`, {
+    schema: runSchema, ...requestContext(owner, signal), method: 'POST', body,
+  })
 }

@@ -1,73 +1,55 @@
 import { z } from 'zod'
 import { admissionSummarySchema, type AdmissionSummary } from './company-admissions.ts'
+import { MemberAuthUserSchema, MemberIdentityOutSchema, MemberRegisterInitResponseSchema, MemberTokenResponseSchema, MultiTenantResponseSchema, UserRoleSchema } from '../engine-contracts.generated.ts'
+import type { MemberAuthUser, MemberIdentityOut, MemberTokenResponse, SuggestedOrg as EngineSuggestedOrg, TenantChoice as EngineTenantChoice } from '../engine-contracts.generated.ts'
 
-export type UserRole = 'platform_admin' | 'org_admin' | 'agent_admin' | 'member' | string
-
-export type SuggestedOrg = {
-  id: string
-  name: string
-  slug: string
-}
+export type { UserRole } from '../engine-contracts.generated.ts'
+export type SuggestedOrg = EngineSuggestedOrg
+export type IdentityOut = MemberIdentityOut
+export type UserOut = Pick<MemberAuthUser, 'id' | 'display_name' | 'role'> &
+  Partial<Pick<MemberAuthUser, 'identity_id' | 'created_at' | 'is_active' | 'must_change_password' | 'timezone'>> & {
+    readonly email: string | null
+    readonly tenant_id: string | null
+    readonly email_verified: boolean
+  }
+export const userOutSchema = MemberAuthUserSchema.extend({
+  email: MemberAuthUserSchema.shape.email.default(null),
+  tenant_id: MemberAuthUserSchema.shape.tenant_id.default(null),
+  email_verified: MemberAuthUserSchema.shape.email_verified.default(false),
+}).strip()
+export const memberTokenSchema = MemberTokenResponseSchema.extend({
+  user: userOutSchema.nullable().default(null),
+  identity: MemberIdentityOutSchema.strip().nullable().optional(),
+  message: z.string().optional(),
+  admission_request: admissionSummarySchema.nullable().optional(),
+}).strip()
+export const memberRegisterSchema = MemberRegisterInitResponseSchema.extend({ user: userOutSchema }).strip()
+export type RegisterInitResponse = z.infer<typeof memberRegisterSchema>
+export const memberMultiTenantSchema = MultiTenantResponseSchema.extend({ requires_tenant_selection: z.literal(true) }).strip()
+export const memberLoginSchema = z.union([memberTokenSchema, memberMultiTenantSchema])
 
 const immediateJoinSchema = z.object({
   tenant: z.object({ id: z.uuid(), name: z.string(), slug: z.string() }).readonly(),
-  role: z.string(),
+  role: UserRoleSchema,
   access_token: z.string().nullable(),
 }).readonly()
 
 export const joinOrgResponseSchema = z.union([
+  z.object({ status: z.literal('approved'), request: admissionSummarySchema.unwrap().extend({ status: z.literal('approved') }).readonly() }).readonly(),
   z.object({ status: z.literal('pending'), request: admissionSummarySchema }).readonly(),
   immediateJoinSchema,
 ])
 
 export type JoinOrgResponse = z.infer<typeof joinOrgResponseSchema>
 
-export type IdentityOut = {
-  id: string
-  email?: string | null
-  is_platform_admin?: boolean
-  email_verified?: boolean
-  must_change_password?: boolean
+export type TokenResponse = Pick<MemberTokenResponse, 'access_token' | 'token_type' | 'needs_org_confirm' | 'suggested_org' | 'must_change_password'> & {
+  readonly user: UserOut | null
+  readonly identity?: IdentityOut | null | undefined
+  readonly message?: string | undefined
+  readonly admission_request?: AdmissionSummary | null | undefined
 }
-
-export type UserOut = {
-  id: string
-  identity_id?: string | null
-  email: string | null
-  display_name: string
-  role: UserRole
-  is_platform_admin?: boolean
-  tenant_id: string | null
-  email_verified: boolean
-  must_change_password?: boolean
-  readonly timezone?: string | null
-}
-
-export type TokenResponse = {
-  access_token: string
-  token_type?: string
-  user: UserOut
-  identity?: IdentityOut | null
-  needs_org_confirm?: boolean
-  suggested_org?: SuggestedOrg | null
-  must_change_password?: boolean
-  message?: string
-  admission_request?: AdmissionSummary | null
-}
-
-export type TenantChoice = {
-  tenant_id: string | null
-  tenant_name: string
-  tenant_slug: string
-  logo_url: string | null
-}
-
-export type MultiTenantResponse = {
-  requires_tenant_selection: true
-  login_identifier: string
-  tenants: TenantChoice[]
-  pending_token?: string | null
-}
+export type TenantChoice = EngineTenantChoice
+export type MultiTenantResponse = z.infer<typeof memberMultiTenantSchema>
 
 export type LoginRequest = {
   login_identifier: string
@@ -99,6 +81,7 @@ export type OkMessageResponse = {
 }
 
 export type ChangePasswordResponse = {
+  readonly access_token?: string
   ok: boolean
   must_change_password?: boolean
   message?: string
@@ -115,7 +98,7 @@ export function isMultiTenantResponse(value: unknown): value is MultiTenantRespo
     typeof value === 'object' &&
     value !== null &&
     'requires_tenant_selection' in value &&
-    (value as MultiTenantResponse).requires_tenant_selection === true
+    value.requires_tenant_selection === true
   )
 }
 
@@ -124,14 +107,9 @@ export function isTokenResponse(value: unknown): value is TokenResponse {
     typeof value === 'object' &&
     value !== null &&
     'access_token' in value &&
-    typeof (value as TokenResponse).access_token === 'string' &&
+    typeof value.access_token === 'string' &&
     'user' in value
   )
-}
-
-export function isPlatformAdminUser(user: UserOut | null | undefined): boolean {
-  if (!user) return false
-  return user.is_platform_admin === true || user.role === 'platform_admin'
 }
 
 export function userMustChangePassword(user: UserOut | null | undefined): boolean {
@@ -143,14 +121,14 @@ export function isNeedsVerificationDetail(value: unknown): value is NeedsVerific
     typeof value === 'object' &&
     value !== null &&
     'needs_verification' in value &&
-    (value as NeedsVerificationDetail).needs_verification === true
+    value.needs_verification === true
   )
 }
 
 export function sessionMustChangePassword(session: TokenResponse): boolean {
   return (
     session.must_change_password === true ||
-    session.user.must_change_password === true ||
+    session.user?.must_change_password === true ||
     session.identity?.must_change_password === true
   )
 }

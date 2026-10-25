@@ -1,6 +1,8 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { NotificationKind } from '../src/lib/notifications-api'
 import type { AgentUpdate } from '../src/lib/openclaw-updates-api'
+import { originalCompany, originalUser } from './session-fencing-fixture'
 
 const agentId = '22222222-2222-4222-8222-222222222222'
 const notice = {
@@ -14,7 +16,7 @@ const agentPath = `/app/agents/${agentId}`
 async function prepare(page: Page) {
   const update: AgentUpdate = { notice, run: null, required: true, can_upgrade: true }
   const state = {
-    agent: { id: agentId, name: 'Research assistant', status: 'stopped', creator_id: 'member', access_level: 'manage' },
+    agent: { id: agentId, name: 'Research assistant', status: 'stopped', creator_id: originalUser.id, access_level: 'manage' },
     update,
     upgrades: 0, starts: 0, fileReads: 0, statusError: false,
     statusReady: Promise.resolve(),
@@ -23,11 +25,11 @@ async function prepare(page: Page) {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     switch (path) {
-      case '/api/auth/me': return route.fulfill({ json: { id: 'member', email: 'member@example.test', display_name: 'Member', role: 'member', tenant_id: 'tenant', email_verified: true } })
-      case '/api/tenants/me': return route.fulfill({ json: { id: 'tenant', name: 'Example team', slug: 'example' } })
+      case '/api/member/auth/me': return route.fulfill({ json: originalUser })
+      case '/api/tenants/me': return route.fulfill({ json: originalCompany })
       case '/api/onboarding/status': return route.fulfill({ json: { status: 'completed' } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 1 } })
-      case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: 'openclaw_update', is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })
+      case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: NotificationKind.OpenClawUpdate, is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })
       case '/api/agents/': return route.fulfill({ json: [state.agent] })
       case `/api/agents/${agentId}`: return route.fulfill({ json: state.agent })
       case `/api/agents/${agentId}/metrics`: return route.fulfill({ json: {} })

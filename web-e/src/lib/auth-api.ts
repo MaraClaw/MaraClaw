@@ -1,8 +1,8 @@
-import { apiRequest } from './http.ts'
+import { ApiError, apiRequest, type SchemaRequestOptions } from './http.ts'
 import { z } from 'zod'
-import type { SessionOwner } from './auth-session.ts'
-import { joinOrgResponseSchema } from './types/auth.ts'
-import { admissionSummarySchema } from './types/company-admissions.ts'
+import { authSession, type SessionOwner } from './auth-session.ts'
+import { joinOrgResponseSchema, memberLoginSchema, memberRegisterSchema, memberTokenSchema, userOutSchema } from './types/auth.ts'
+import { TenantChoiceSchema } from './engine-contracts.generated.ts'
 import { paymentReviewResponseSchema, type TransferInput } from './types/company-transfers.ts'
 import type {
   AuthProvider,
@@ -12,6 +12,7 @@ import type {
   LoginRequest,
   MultiTenantResponse,
   OkMessageResponse,
+  RegisterInitResponse,
   TenantChoice,
   TenantSwitchResponse,
   TokenResponse,
@@ -25,14 +26,26 @@ function requestContext(owner?: SessionOwner, signal?: AbortSignal) {
   }
 }
 
+async function memberSessionRequest<T>(path: string, options: SchemaRequestOptions<T>): Promise<T> {
+  const owner = options.owner ?? authSession.capture()
+  try {
+    return await apiRequest(path, { ...options, owner })
+  } catch (error) {
+    if (error instanceof ApiError && error.isMemberAudienceRejection && authSession.getSnapshot().token !== null) {
+      authSession.expire(owner)
+    }
+    throw error
+  }
+}
+
 const chatTicketSchema = z.object({ ticket: z.string().min(1), session_id: z.string().min(1) })
 export type ChatTicket = z.infer<typeof chatTicketSchema>
 export type ChatTicketRequest = { readonly agent_id: string; readonly session_id?: string }
 
 export async function issueChatTicket(body: ChatTicketRequest, owner: SessionOwner, signal: AbortSignal): Promise<ChatTicket> {
-  return chatTicketSchema.parse(await apiRequest<unknown>('/api/auth/chat-ticket', {
-    method: 'POST', body, ...requestContext(owner, signal),
-  }))
+  return apiRequest('/api/auth/chat-ticket', {
+    schema: chatTicketSchema, method: 'POST', body, ...requestContext(owner, signal),
+  })
 }
 
 export async function loginRequest(
@@ -40,8 +53,8 @@ export async function loginRequest(
   signal?: AbortSignal,
   owner?: SessionOwner,
 ): Promise<TokenResponse | MultiTenantResponse> {
-  return apiRequest<TokenResponse | MultiTenantResponse>('/api/auth/login', {
-    method: 'POST',
+  return memberSessionRequest('/api/member/auth/login', {
+    schema: memberLoginSchema, method: 'POST',
     body,
     token: null,
     ...requestContext(owner, signal),
@@ -57,19 +70,18 @@ export async function registerRequest(
   },
   signal?: AbortSignal,
   owner?: SessionOwner,
-): Promise<TokenResponse> {
-  const { admission_request, ...session } = await apiRequest<Omit<TokenResponse, 'admission_request'> & { admission_request?: unknown }>('/api/auth/register/init', {
-    method: 'POST',
+): Promise<RegisterInitResponse> {
+  return memberSessionRequest('/api/member/auth/register/init', {
+    schema: memberRegisterSchema, method: 'POST',
     body,
     token: null,
     ...requestContext(owner, signal),
   })
-  return admission_request === undefined ? session : { ...session, admission_request: admissionSummarySchema.nullable().parse(admission_request) }
 }
 
 export async function fetchCurrentUser(token: string, signal?: AbortSignal, owner?: SessionOwner): Promise<UserOut> {
-  return apiRequest<UserOut>('/api/auth/me', {
-    method: 'GET',
+  return apiRequest('/api/member/auth/me', {
+    schema: userOutSchema, method: 'GET',
     token,
     ...requestContext(owner, signal),
   })
@@ -79,8 +91,8 @@ export async function updateCurrentUser(
   body: { display_name?: string; email?: string; timezone?: string | null },
   owner?: SessionOwner,
 ): Promise<UserOut> {
-  return apiRequest<UserOut>('/api/auth/me', {
-    method: 'PATCH',
+  return apiRequest('/api/member/auth/me', {
+    schema: userOutSchema, method: 'PATCH',
     body,
     ...requestContext(owner),
   })
@@ -94,26 +106,27 @@ export async function lookupOrgByEmail(email: string, owner?: SessionOwner): Pro
 }
 
 export async function joinSuggestedOrg(tenantId: string, owner?: SessionOwner): Promise<JoinOrgResponse> {
-  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-suggested', {
-    method: 'POST',
+  return apiRequest('/api/tenants/join-suggested', {
+    schema: joinOrgResponseSchema, method: 'POST',
     body: { tenant_id: tenantId },
     ...requestContext(owner),
-  }))
+  })
 }
 
 export async function joinDefaultOrg(owner?: SessionOwner): Promise<JoinOrgResponse> {
-  return joinOrgResponseSchema.parse(await apiRequest<unknown>('/api/tenants/join-default', {
-    method: 'POST',
+  return apiRequest('/api/tenants/join-default', {
+    schema: joinOrgResponseSchema, method: 'POST',
     ...requestContext(owner),
-  }))
+  })
 }
 
 export async function transferOrg(body: TransferInput, owner?: SessionOwner) {
-  return z.union([paymentReviewResponseSchema, joinOrgResponseSchema]).parse(await apiRequest<unknown>('/api/tenants/transfer', {
+  return apiRequest('/api/tenants/transfer', {
+    schema: z.union([paymentReviewResponseSchema, joinOrgResponseSchema]),
     method: 'POST',
     body,
     ...requestContext(owner),
-  }))
+  })
 }
 
 export async function forgotPasswordRequest(email: string, signal?: AbortSignal): Promise<OkMessageResponse> {
@@ -149,8 +162,8 @@ export async function changePasswordRequest(body: {
 }
 
 export async function verifyEmailRequest(token: string, signal?: AbortSignal, owner?: SessionOwner): Promise<TokenResponse> {
-  return apiRequest<TokenResponse>('/api/auth/verify-email', {
-    method: 'POST',
+  return memberSessionRequest('/api/member/auth/verify-email', {
+    schema: memberTokenSchema, method: 'POST',
     body: { token },
     token: null,
     ...requestContext(owner, signal),
@@ -204,8 +217,8 @@ export async function oauthCallback(
   body: { code?: string; pending_token?: string; tenant_id?: string },
   owner?: SessionOwner,
 ): Promise<TokenResponse | MultiTenantResponse> {
-  return apiRequest(`/api/auth/${encodeURIComponent(provider)}/callback`, {
-    method: 'POST',
+  return memberSessionRequest(`/api/member/auth/${encodeURIComponent(provider)}/callback`, {
+    schema: memberLoginSchema, method: 'POST',
     body,
     token: null,
     ...requestContext(owner),
@@ -213,31 +226,32 @@ export async function oauthCallback(
 }
 
 export async function bindProvider(provider: string, code: string, owner?: SessionOwner): Promise<UserOut> {
-  return apiRequest(`/api/auth/${encodeURIComponent(provider)}/bind`, {
-    method: 'POST',
+  return apiRequest(`/api/member/auth/${encodeURIComponent(provider)}/bind`, {
+    schema: userOutSchema, method: 'POST',
     body: { provider_type: provider, code },
     ...requestContext(owner),
   })
 }
 
 export async function unbindProvider(provider: string, owner?: SessionOwner): Promise<UserOut> {
-  return apiRequest(`/api/auth/${encodeURIComponent(provider)}/unbind`, {
-    method: 'POST',
+  return apiRequest(`/api/member/auth/${encodeURIComponent(provider)}/unbind`, {
+    schema: userOutSchema, method: 'POST',
     body: { provider_type: provider },
     ...requestContext(owner),
   })
 }
 
 export async function fetchMyTenants(owner?: SessionOwner): Promise<TenantChoice[]> {
-  return apiRequest<TenantChoice[]>('/api/auth/my-tenants', requestContext(owner))
+  return apiRequest('/api/auth/my-tenants', { schema: z.array(TenantChoiceSchema), ...requestContext(owner) })
 }
 
 export async function switchTenant(tenantId: string, owner?: SessionOwner): Promise<TenantSwitchResponse> {
-  const result = z.object({ access_token: z.string().min(1), redirect_url: z.string().nullable().optional(), message: z.string().optional() }).parse(await apiRequest<unknown>('/api/auth/switch-tenant', {
+  const result = await apiRequest('/api/auth/switch-tenant', {
+    schema: z.object({ access_token: z.string().min(1), redirect_url: z.string().nullable().optional(), message: z.string().optional() }),
     method: 'POST',
     body: { tenant_id: tenantId },
     ...requestContext(owner),
-  }))
+  })
   return {
     access_token: result.access_token,
     ...(result.redirect_url === undefined ? {} : { redirect_url: result.redirect_url }),

@@ -15,7 +15,7 @@ const fallback = { ...company, id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name:
 const originalUser: UserOut = {
   id: 'a4ad792f-8901-44f0-a9b6-8947da623f38', email: 'member@example.test',
   display_name: 'Original member', role: 'member', tenant_id: null, email_verified: true,
-  must_change_password: false, is_platform_admin: false,
+  must_change_password: false, is_active: true, created_at: '2026-10-25T08:00:00Z',
 }
 const refreshedUser: UserOut = {
   ...originalUser, display_name: 'Refreshed member', tenant_id: company.id,
@@ -40,15 +40,19 @@ async function prepareMember(page: Page, user: UserOut = originalUser, replaceme
     const path = new URL(request.url()).pathname
     const sessionUser = request.headers().authorization === `Bearer ${replacementToken}` ? replacementUser : user
     calls.push(path)
-    expect(request.method()).toBe('GET')
+    expect(request.method()).toBe(path === '/api/tenants/invitations/preview' ? 'POST' : 'GET')
     if (path === '/api/auth/providers') expect(request.headers().authorization).toBeUndefined()
     else expect([`Bearer ${originalToken}`, `Bearer ${replacementToken}`]).toContain(request.headers().authorization)
     switch (path) {
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         await route.fulfill({ json: sessionUser })
         break
       case '/api/tenants/lookup-by-email':
         await route.fulfill({ json: { match: company, fallback } })
+        break
+      case '/api/tenants/invitations/preview':
+        expect(request.postDataJSON()).toEqual({ invitation_code: 'company-invite' })
+        await route.fulfill({ json: { tenant: { id: company.id, name: company.name } } })
         break
       case '/api/tenants/me':
         await route.fulfill({ json: sessionUser.tenant_id === fallback.id ? fallback : company })
@@ -77,17 +81,19 @@ async function prepareMember(page: Page, user: UserOut = originalUser, replaceme
 }
 
 const flows = [
-  { name: 'suggested join', route: '/join', endpoint: 'join-suggested', button: `Join ${company.name}`, tenant: company },
-  { name: 'default join', route: '/join', endpoint: 'join-default', button: `Continue with ${fallback.name}`, tenant: fallback },
-  { name: 'invite transfer', route: '/transfer', endpoint: 'transfer', button: 'Transfer with invite', tenant: company },
-  { name: 'domain transfer', route: '/transfer', endpoint: 'transfer', button: `Transfer to ${company.name}`, tenant: company },
+  { name: 'invitation join', route: '/join', endpoint: 'join', button: 'Join organization', tenant: company },
+  { name: 'default join', route: '/join', endpoint: 'join-default', button: 'Continue in default workspace', tenant: fallback },
+  { name: 'invite transfer', route: '/transfer', endpoint: 'transfer', button: 'Continue transfer', tenant: company },
 ] as const
 
 async function openFlow(page: Page, flow: (typeof flows)[number]) {
   await page.goto(flow.route)
+  if (flow.name !== 'default join') {
+    await page.getByLabel('Invitation code', { exact: true }).fill('company-invite')
+    await page.getByRole('button', { name: 'Validate invitation', exact: true }).click()
+  }
   if (flow.route === '/transfer') {
     await page.getByLabel('Current password').fill('current-password')
-    if (flow.name === 'invite transfer') await page.getByLabel('Invitation code').fill('company-invite')
   }
   await expect(page.getByRole('button', { name: flow.button, exact: true })).toBeEnabled()
 }
@@ -105,7 +111,7 @@ for (const flow of flows.filter((flow) => flow.route === '/join')) {
     }))
     await openFlow(page, flow)
     const refreshed = page.waitForRequest((request) =>
-      new URL(request.url()).pathname === '/api/auth/me' && request.headers().authorization === `Bearer ${replacementToken}`,
+      new URL(request.url()).pathname === '/api/member/auth/me' && request.headers().authorization === `Bearer ${replacementToken}`,
     )
     // When
     await page.getByRole('button', { name: flow.button, exact: true }).click()
@@ -138,7 +144,7 @@ for (const flow of flows.filter((flow) => flow.route === '/transfer')) {
     await expect(page.getByRole('link', { name: 'View admission request', exact: true })).toHaveAttribute('href', `/app/admissions/${pending.id}`)
     await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(0)
     expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(originalToken)
-    expect(calls.filter((path) => path === '/api/auth/me')).toHaveLength(1)
+    expect(calls.filter((path) => path === '/api/member/auth/me')).toHaveLength(1)
     expect(calls).not.toContain('/api/auth/switch-tenant')
   })
 }
@@ -147,13 +153,11 @@ test('default transfer is blocked for a nondefault company member without submit
   // Given
   const calls = await prepareMember(page, { ...originalUser, tenant_id: company.id })
   await page.goto('/transfer')
-  await page.getByLabel('Current password').fill('current-password')
-  await page.getByLabel('Invitation code').fill('company-invite')
   // When
-  await page.getByLabel('Current password').press('Enter')
+  await page.getByLabel('Invitation code', { exact: true }).press('Enter')
   // Then
   await expect(page.getByRole('alert')).toContainText('Only default-organization members can transfer')
-  await expect(page.getByRole('button', { name: 'Transfer with invite', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Validate invitation', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: `Transfer to ${company.name}`, exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: `Transfer to ${fallback.name}`, exact: true })).toHaveCount(0)
   expect(calls).not.toContain('/api/tenants/transfer')
@@ -204,7 +208,7 @@ test('join waits for the replacement-token identity before reporting success', a
   await prepareMember(page)
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/auth/me', async (route) => {
+  await page.route('**/api/member/auth/me', async (route) => {
     if (route.request().headers().authorization === `Bearer ${replacementToken}`) {
       requested.resolve()
       await release.promise
@@ -225,15 +229,15 @@ test('join waits for the replacement-token identity before reporting success', a
   await expect(page).toHaveURL(/\/app(?:\/|$)/)
 })
 
-for (const outcome of ['unauthorized', 'platform-admin'] as const) {
+for (const outcome of ['unauthorized', 'audience-rejected'] as const) {
   test(`join does not admit a session when refreshed identity is ${outcome}`, async ({ page }) => {
     // Given
     await prepareMember(page)
-    await page.route('**/api/auth/me', (route) => {
+    await page.route('**/api/member/auth/me', (route) => {
       if (route.request().headers().authorization !== `Bearer ${replacementToken}`) return route.fulfill({ json: originalUser })
       return outcome === 'unauthorized'
         ? route.fulfill({ status: 401, json: { detail: 'Expired replacement token' } })
-        : route.fulfill({ json: { ...refreshedUser, role: 'platform_admin', is_platform_admin: true } })
+        : route.fulfill({ status: 403, json: { detail: { code: 'member_audience_rejected', message: 'Member audience required' } } })
     })
     await page.route('**/api/tenants/join-default', (route) => route.fulfill({
       json: { tenant: fallback, role: 'member', access_token: replacementToken },
@@ -251,7 +255,7 @@ for (const outcome of ['unauthorized', 'platform-admin'] as const) {
 test('join preserves the refreshed identity force-password gate', async ({ page }) => {
   // Given
   await prepareMember(page)
-  await page.route('**/api/auth/me', (route) => route.fulfill({
+  await page.route('**/api/member/auth/me', (route) => route.fulfill({
     json: route.request().headers().authorization === `Bearer ${replacementToken}`
       ? { ...refreshedUser, must_change_password: true } : originalUser,
   }))

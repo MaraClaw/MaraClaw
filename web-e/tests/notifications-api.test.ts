@@ -1,8 +1,36 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { z } from 'zod'
 
-import { archiveNotification, listNotifications, markAllNotificationsRead, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
+import { archiveNotification, listNotifications, markAllNotificationsRead, NotificationKind, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+
+test('notification list preserves every canonical kind as its original wire string', async (t) => {
+  // Given
+  const kinds = [
+    'mention', 'plaza_reply', 'plaza_comment', 'broadcast', 'approval_pending', 'approval_resolved',
+    'autonomy_l2', 'company_admission_pending', 'company_admission_resolved', 'company_admission_created',
+    'agent_deletion_requested', 'agent_deletion_resolved', 'agent_ownership_transferred',
+    'organization_welcome', 'system_alert', 'system', 'openclaw_update',
+  ]
+  const response = kinds.map((type) => ({ id: 'notice', title: 'Title', type, archived_at: null }))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  // When
+  const rows = await listNotifications()
+  // Then
+  assert.deepEqual(rows, response)
+})
+
+for (const type of ['future_type', '', null, 17, undefined]) {
+  test(`notification list rejects unknown, invalid or missing kind ${JSON.stringify(type)}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'notice', title: 'Title', type, archived_at: null }]))
+    // When
+    const result = listNotifications()
+    // Then
+    await assert.rejects(result, z.ZodError)
+  })
+}
 
 test('notification list sends default and explicit offset paging with its category', async (t) => {
   // Given
@@ -32,7 +60,7 @@ test('notification list rejects invalid paging before sending a request', async 
 
 test('notification list accepts the engine response with a null timestamp', async (t) => {
   // Given
-  const notification = { id: 'notice', title: 'Title', body: 'Body', type: 'future_type', link: null, is_read: false, created_at: null, archived_at: null }
+  const notification = { id: 'notice', title: 'Title', body: 'Body', type: NotificationKind.System, link: null, is_read: false, created_at: null, archived_at: null }
   t.mock.method(globalThis, 'fetch', async () => Response.json([notification]))
   // When
   const rows = await listNotifications()
@@ -42,7 +70,7 @@ test('notification list accepts the engine response with a null timestamp', asyn
 
 test('archived notification timestamps survive parsing without changing read state', async (t) => {
   // Given
-  const row = { id: 'archived', title: 'Archived unread', is_read: false, archived_at: '2030-01-02T12:30:00+08:00' }
+  const row = { id: 'archived', title: 'Archived unread', type: NotificationKind.Broadcast, is_read: false, archived_at: '2030-01-02T12:30:00+08:00' }
   t.mock.method(globalThis, 'fetch', async () => Response.json([row]))
   // When
   const rows = await listNotifications({ view: 'archived' })
@@ -53,7 +81,7 @@ test('archived notification timestamps survive parsing without changing read sta
 for (const archived_at of ['yesterday', undefined]) {
   test(`notification boundary rejects invalid archive timestamp ${archived_at}`, async (t) => {
     // Given
-    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'bad', title: 'Bad', archived_at }]))
+    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'bad', title: 'Bad', type: NotificationKind.Broadcast, archived_at }]))
     // When / Then
     await assert.rejects(listNotifications())
   })

@@ -28,8 +28,8 @@ for (const cursor of [undefined, firstPage.next_cursor]) {
   })
 }
 
-for (const status of ['pending', 'claimed', 'running', 'succeeded', 'failed', 'cancelled', 'persisted_future_status']) {
-  test(`history preserves persisted ${status} without enum coercion and strips unsafe fields`, async (context) => {
+for (const status of ['pending', 'processing', 'completed', 'failed']) {
+  test(`history preserves canonical ${status} and open sources while stripping unsafe fields`, async (context) => {
     // Given
     const safe = { ...execution, status, source: 'future_source', started_at: '2026-10-23T00:01:00Z', finished_at: '2026-10-23T00:02:00+00:00' }
     context.mock.method(globalThis, 'fetch', async () => Response.json({
@@ -43,6 +43,7 @@ for (const status of ['pending', 'claimed', 'running', 'succeeded', 'failed', 'c
 }
 
 const malformedRows = [
+  { ...execution, status: 'persisted_future_status' },
   { ...execution, id: 'not-uuid' }, { ...execution, agent_id: null }, { ...execution, trigger_id: '' },
   { ...execution, status: '' }, { ...execution, status: 1 }, { ...execution, source: '' },
   { ...execution, scheduled_at: '2026-10-23T00:00:00' }, { ...execution, scheduled_at: null },

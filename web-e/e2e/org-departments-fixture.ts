@@ -30,7 +30,7 @@ export async function prepareOrgDepartments(page: Page, role = 'member', switchT
     const request = route.request()
     const url = new URL(request.url())
     switch (url.pathname) {
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         if (role === 'member') return route.fallback()
         await route.fulfill({ json: { ...originalUser, role } })
         return

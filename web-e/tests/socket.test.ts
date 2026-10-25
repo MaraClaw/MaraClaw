@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { ChatEventType } from '../src/lib/chat/protocol.ts'
+import { createChatSubmissions } from '../src/lib/chat/submissions.ts'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
 import { ControlledSocket, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
 
@@ -172,30 +174,32 @@ test('ownership is captured before transport creation even when creation replace
   assert.deepEqual(old.sent, [])
 })
 
-test('malformed frames become error events when the socket is current', async () => {
-  // Given
-  const f = fixture()
-  const conn = f.connect()
-  await Promise.resolve()
-  // When
-  f.socket().frame('not json')
-  // Then
-  assert.equal(f.events[0]?.type, 'error')
-  conn.close()
-})
+for (const frame of ['not json', '{"type":"chunk","content":42}', '{"type":"unknown","content":"ignored"}']) {
+  test(`malformed frame ${frame} becomes an error event when the socket is current`, async (t) => {
+    // Given
+    const f = fixture()
+    const conn = f.connect()
+    t.after(conn.close)
+    await Promise.resolve()
+    // When
+    f.socket().frame(frame)
+    // Then
+    assert.deepEqual(f.events, [{ type: ChatEventType.ERROR, content: 'Malformed chat event' }])
+  })
+}
 
 test('persisted identities survive decoding while legacy events remain valid', async () => {
   // Given
   const f = fixture()
   const conn = f.connect()
   await Promise.resolve()
-  const done = { type: 'done', role: 'assistant', content: 'same', message_id: 'parent', entry_id: 'parent' }
+  const done = { type: 'done', role: 'assistant', content: 'same', message_id: '44444444-4444-4444-8444-444444444444', entry_id: '44444444-4444-4444-8444-444444444444' }
   // When
   f.socket().frame(JSON.stringify(done))
   f.socket().frame('{"type":"done","content":"legacy"}')
   f.socket().frame('{"type":"done","message_id":42}')
   // Then
-  assert.deepEqual(f.events, [done, { type: 'done', content: 'legacy' }, { type: 'error', content: 'Malformed chat event' }])
+  assert.deepEqual(f.events, [done, { type: 'done', content: 'legacy' }, { type: ChatEventType.ERROR, content: 'Malformed chat event' }])
   conn.close()
 })
 
@@ -232,11 +236,16 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
   test(`turn rejection ${reason} decodes without becoming a completion or closing the socket`, async (t) => {
     // Given
     const f = fixture()
-    const conn = f.connect()
+    const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+    const conn = connectAgentChat('agent-a', 'thread-a', { ...f.handlers, submissions })
     t.after(() => conn.close())
     await Promise.resolve()
     f.socket().open()
-    const frame = { type: 'turn_rejected', client_submission_id: firstSubmission, reason, content: 'Message not accepted.' }
+    const rejected = submission('Rejected')
+    const waiting = submission('Still pending', secondSubmission)
+    conn.send(rejected)
+    conn.send(waiting)
+    const frame = { type: ChatEventType.TURN_REJECTED, ...(reason === 'invalid_submission_id' ? {} : { client_submission_id: firstSubmission }), reason, content: 'Message not accepted.' }
     // When
     f.socket().frame(JSON.stringify(frame))
     // Then
@@ -244,6 +253,7 @@ for (const reason of ['quota_exceeded', 'agent_expired', 'no_company_model', 'en
     const event = f.events[0]
     assert.ok(event && isTurnRejected(event))
     assert.equal(event.reason, reason)
+    assert.deepEqual(submissions.pending(), reason === 'invalid_submission_id' ? [rejected, waiting] : [waiting])
     assert.equal(f.socket().readyState, 1)
     assert.deepEqual(f.codes, [])
   })
@@ -264,6 +274,6 @@ for (const frame of [
     // When
     f.socket().frame(JSON.stringify(frame))
     // Then
-    assert.deepEqual(f.events, [{ type: 'error', content: 'Malformed chat event' }])
+    assert.deepEqual(f.events, [{ type: ChatEventType.ERROR, content: 'Malformed chat event' }])
   })
 }

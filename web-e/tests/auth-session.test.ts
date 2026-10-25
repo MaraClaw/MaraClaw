@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { createAuthSessionController } from '../src/lib/auth-session-controller.ts'
+import { ApiError } from '../src/lib/http.ts'
 import type { UserOut } from '../src/lib/types/auth.ts'
 
 const user: UserOut = {
@@ -172,17 +173,15 @@ test('storage change fences completion even before its event is handled', async 
   assert.equal(writes(), count)
 })
 
-test('platform operators are rejected by both application and refresh', async () => {
+test('current member-audience rejection expires the validated session', async () => {
   // Given
   const { store, storage } = fixture()
-  const operator = { ...user, is_platform_admin: true }
-  const controller = createAuthSessionController(store, () => Promise.resolve(operator))
+  const failure = new ApiError(403, { code: 'member_audience_rejected' })
+  const controller = createAuthSessionController(store, () => Promise.reject(failure))
   // When
   const refreshed = await controller.refreshUser(store.capture())
-  const applied = store.applySession(store.capture(), { access_token: 'operator', user: operator })
   // Then
   assert.equal(refreshed, false)
-  assert.equal(applied, false)
   assert.equal(store.getSnapshot().status, 'anonymous')
   assert.equal(storage.read(), null)
 })

@@ -2,6 +2,7 @@ import type { AuthSessionStore, SessionOwner } from './auth-session.ts'
 import { subscribeStoredToken } from './auth-storage.ts'
 import type { StorageEventSource } from './auth-storage.ts'
 import type { UserOut } from './types/auth.ts'
+import { ApiError } from './http.ts'
 
 export class InvalidReplacementTokenError extends Error {
   constructor() {
@@ -38,9 +39,8 @@ export function createAuthSessionController(store: AuthSessionStore, fetchUser: 
       return !request.signal.aborted && store.commitRefresh(attempt, user)
     } catch (error) {
       if (request.signal.aborted || !store.isCurrent(attempt.owner)) return false
-      // ApiError is deliberately recognized structurally to avoid an HTTP import cycle.
       if (error instanceof Error && 'status' in error && typeof error.status === 'number') {
-        store.failRefresh(attempt, error.status)
+        store.failRefresh(attempt, error instanceof ApiError && error.isMemberAudienceRejection ? 'member_audience_rejected' : error.status)
         return false
       }
       if (error instanceof TypeError || (error instanceof Error && (error.name === 'AbortError' || error.name === 'StaleSessionError'))) {

@@ -21,6 +21,13 @@ const quote = {
   source_eligible: true, has_owned_agents: true, explicit_choice_required: true, free_requires_destructive_consent: true,
 }
 
+test('a transfer quote cannot waive destructive free-transfer consent', async (context) => {
+  // Given
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ ...quote, free_requires_destructive_consent: false }))
+  // When / Then
+  await assert.rejects(getTransferQuote({ owner: authSession.capture() }), ZodError)
+})
+
 for (const [currency, amount, expected] of [['JPY', 123, '¥123'], ['USD', 123, '$1.23'], ['KWD', 1234, 'KWD\u00a01.234']] as const) {
   test(`minor-unit formatting uses the resolved ${currency} currency exponent`, () => {
     // Given / When

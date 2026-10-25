@@ -24,18 +24,17 @@ export type OrgDepartmentMember = z.infer<typeof departmentMemberSchema>
 type OrgDepartmentName = z.infer<typeof orgDepartmentNameSchema>
 
 export async function listOrgDepartments(signal: AbortSignal): Promise<readonly OrgDepartment[]> {
-  const response = await apiRequest<unknown>('/api/departments/options', { signal })
-  return optionsSchema.parse(response).departments
+  const response = await apiRequest('/api/departments/options', { schema: optionsSchema, signal })
+  return response.departments
 }
 
 export async function listOrgDepartmentMembers(departmentId: string, signal: AbortSignal): Promise<readonly OrgDepartmentMember[]> {
-  const response = await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}/members`, { signal })
-  return membersSchema.parse(response).members
+  const response = await apiRequest(`/api/departments/${encodeURIComponent(departmentId)}/members`, { schema: membersSchema, signal })
+  return response.members
 }
 
 export async function renameOrgDepartment(departmentId: string, name: OrgDepartmentName) {
-  const response = await apiRequest<unknown>(`/api/departments/${encodeURIComponent(departmentId)}`, {
-    method: 'PATCH', body: { name },
+  return apiRequest(`/api/departments/${encodeURIComponent(departmentId)}`, {
+    schema: renamedDepartmentSchema, method: 'PATCH', body: { name },
   })
-  return renamedDepartmentSchema.parse(response)
 }

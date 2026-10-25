@@ -26,7 +26,8 @@ for (const status of [202, 401, 503]) {
       release.resolve()
       await completed.promise
       // Then
-      await expect(page.getByLabel('Current password')).toHaveValue('')
+      await expect(page.getByLabel('Current password')).toHaveCount(0)
+      await expect(page.getByLabel('Invitation code', { exact: true })).toHaveValue('')
       await expect(page.getByRole('status').filter({ hasText: 'Awaiting payment review' })).toHaveCount(0)
       await expect(page.getByText('Obsolete source error', { exact: true })).toHaveCount(0)
       expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('replacement-token')

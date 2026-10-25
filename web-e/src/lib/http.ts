@@ -22,6 +22,11 @@ export class ApiError extends Error {
     this.status = status
     this.detail = detail
   }
+
+  get isMemberAudienceRejection(): boolean {
+    return this.status === 403 && this.detail !== null && typeof this.detail === 'object' &&
+      'code' in this.detail && this.detail.code === 'member_audience_rejected'
+  }
 }
 
 export function userFacingRequestError(error: unknown, fallback: string): string {
@@ -68,6 +73,10 @@ export type RequestOptions = {
   readonly cache?: RequestCache
   readonly idempotencyKey?: string | undefined
 }
+
+export type ResponseSchema<T> = { readonly parse: (input: unknown) => T }
+
+export type SchemaRequestOptions<T> = RequestOptions & { readonly schema: ResponseSchema<T> }
 
 export const MAX_PREVIEW_BYTES = 20 * 1024 * 1024
 
@@ -174,11 +183,20 @@ export function createHttpClient(
     return data
   }
 
+  function apiRequest<T>(path: string, options: SchemaRequestOptions<T>): Promise<T>
+  function apiRequest<T = unknown>(
+    path: string, options?: RequestOptions & { readonly schema?: never },
+  ): Promise<T>
+  async function apiRequest(
+    path: string, options: RequestOptions & { readonly schema?: ResponseSchema<unknown> } = {},
+  ): Promise<unknown> {
+    const { schema } = options
+    const raw = await execute(path, options)
+    return schema === undefined ? raw : schema.parse(raw)
+  }
+
   return {
-    async apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-      // Existing generic transport contract: domain callers own response schema parsing.
-      return await execute(path, options) as T
-    },
+    apiRequest,
     async apiFormRequest<T>(
       path: string, form: FormData, options: Omit<RequestOptions, 'body'> = {},
     ): Promise<T> {

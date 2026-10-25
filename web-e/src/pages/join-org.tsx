@@ -1,172 +1,77 @@
-import { Building2, Loader2, Sparkles, Users } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { Building2, Lock, Users } from 'lucide-react'
+import { useId, useRef, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 
 import { AuthShell } from '@/components/auth/auth-shell'
 import { AdmissionPending } from '@/components/auth/admission-pending'
+import { InvitationCode } from '@/components/auth/invitation-code'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
-import { joinDefaultOrg, joinSuggestedOrg, lookupOrgByEmail } from '@/lib/auth-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
-import type { SuggestedOrg } from '@/lib/types/auth'
-import type { AdmissionSummary } from '@/lib/types/company-admissions'
-
-type JoinState = { suggested?: SuggestedOrg | null }
+import { useInvitationLink } from '@/hooks/use-invitation-link'
+import { useInvitationPreview } from '@/hooks/use-invitation-preview'
+import { useJoinedWorkspace } from '@/hooks/use-joined-workspace'
+import { joinDefaultOrg } from '@/lib/auth-api'
+import { joinInvitation } from '@/lib/invitations-api'
+import { userFacingRequestError } from '@/lib/http'
+import { userMustChangePassword, type JoinOrgResponse } from '@/lib/types/auth'
 
 const highlights = [
-  {
-    icon: Building2,
-    title: 'Email match',
-    body: 'A claimed company domain can place you with your teammates.',
-  },
-  {
-    icon: Users,
-    title: 'OpenClaw fallback',
-    body: 'If nothing matches, continue in the default member organization.',
-  },
-  {
-    icon: Sparkles,
-    title: 'One workspace',
-    body: 'You can transfer later if you join the wrong place.',
-  },
+  { icon: Building2, title: 'An invitation comes first', body: 'Validate the code sent to your email to reveal the destination.' },
+  { icon: Lock, title: 'Confirm before joining', body: 'A valid invitation joins the company without another approval.' },
+  { icon: Users, title: 'No invitation yet?', body: 'Continue in the default member workspace and transfer later.' },
 ]
 
 export function JoinOrgPage() {
-  const { status, user, owner, isCurrent, refreshReplacement } = useAuth()
-  const navigate = useNavigate()
-  const fromState = (useLocation().state as JoinState | null)?.suggested ?? null
-  const formId = useId()
-  const [suggested, setSuggested] = useState<SuggestedOrg | null>(fromState)
-  const [fallback, setFallback] = useState<SuggestedOrg | null>(null)
-  const [needsVerify, setNeedsVerify] = useState(false)
+  const { status, user } = useAuth()
+  const code = useInvitationLink()
+  if (status === 'loading') return <p role="status" className="p-6 text-sm text-muted-foreground">Loading…</p>
+  if (status === 'anonymous') return <Navigate to="/login" replace state={{ from: { pathname: code ? `/transfer#code=${encodeURIComponent(code)}` : '/join' } }} />
+  if (userMustChangePassword(user)) return <Navigate to="/app/settings" replace />
+  if (user?.tenant_id) return <Navigate to="/app" replace />
+  return <JoinSession initialCode={code} />
+}
+
+function JoinSession({ initialCode }: { readonly initialCode: string }) {
+  const { owner } = useAuth()
+  const [session, setSession] = useState({ owner, generation: 0 })
+  if (session.owner !== owner) { setSession({ owner, generation: session.generation + 1 }); return null }
+  return <JoinForm key={session.generation} initialCode={session.generation === 0 ? initialCode : ''} />
+}
+
+function JoinForm({ initialCode }: { readonly initialCode: string }) {
+  const headingId = useId()
+  const { owner, user, isCurrent } = useAuth()
+  const invitation = useInvitationPreview(initialCode)
+  const enter = useJoinedWorkspace()
+  const submitting = useRef(false)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [admission, setAdmission] = useState<AdmissionSummary | null>(null)
-
-  useEffect(() => {
-    const expectedOwner = owner
-    if (!isCurrent(expectedOwner)) return
-    if (status === 'anonymous') {
-      navigate('/login', { replace: true })
-      return
-    }
-    if (status !== 'authenticated' || !user) return
-    const member = user
-    if (member.tenant_id) {
-      navigate('/app', { replace: true })
-      return
-    }
-
-    let cancelled = false
-    async function load() {
-      try {
-        if (member.email_verified === false) setNeedsVerify(true)
-        if (member.email) {
-          const lookup = await lookupOrgByEmail(member.email, expectedOwner)
-          if (cancelled || !isCurrent(expectedOwner)) return
-          setSuggested(lookup.match ?? fromState)
-          setFallback(lookup.fallback)
-        }
-      } catch (err) {
-        if (!cancelled && isCurrent(expectedOwner) && err instanceof ApiError && err.status === 401) {
-          navigate('/login', { replace: true })
-        }
-      } finally {
-        if (!cancelled && isCurrent(expectedOwner)) setLoading(false)
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [fromState, navigate, status, user, owner, isCurrent])
-
-  async function choose(kind: 'suggested' | 'default') {
-    const expectedOwner = owner
-    if (!isCurrent(expectedOwner)) return
+  const [result, setResult] = useState<JoinOrgResponse | null>(null)
+  async function choose(invited: boolean) {
+    if (!isCurrent(owner) || submitting.current || (invited && !invitation.preview)) return
+    submitting.current = true
+    setBusy(true)
     setError(null)
-    setPending(true)
     try {
-      const result =
-        kind === 'suggested' && suggested
-          ? await joinSuggestedOrg(suggested.id, expectedOwner)
-          : await joinDefaultOrg(expectedOwner)
-      if (!isCurrent(expectedOwner)) return
-      if ('request' in result) {
-        setAdmission(result.request)
-        return
-      }
-      const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
-      if (!installedOwner || !isCurrent(installedOwner)) return
-      toast.success('Organization joined')
-      navigate('/app', { replace: true })
-    } catch (err) {
-      if (!isCurrent(expectedOwner)) return
-      setError(
-        err instanceof ApiError
-          ? (formatApiDetail(err.detail) ?? err.message)
-          : 'Could not join organization',
-      )
+      const joined = result ?? (invited ? await joinInvitation(invitation.code.trim(), owner) : await joinDefaultOrg(owner))
+      if (!isCurrent(owner)) return
+      setResult(joined)
+      await enter(joined)
+    } catch (cause) {
+      if (isCurrent(owner)) setError(userFacingRequestError(cause, 'Unable to join or open the workspace. Try again.'))
     } finally {
-      if (isCurrent(expectedOwner)) setPending(false)
+      if (isCurrent(owner)) { submitting.current = false; setBusy(false) }
     }
   }
-
-  const fallbackName = fallback?.name ?? 'OpenClaw'
-
-  if (status === 'loading') {
-    return (
-      <div className="flex min-h-svh items-center justify-center bg-background">
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  return (
-    <AuthShell
-      headingId={`${formId}-heading`}
-      title="Join an organization"
-      description={
-        needsVerify
-          ? 'Verify your email before joining a company suggested by that address.'
-          : suggested
-            ? `Your email matches ${suggested.name}. Request admission to that company, or continue in ${fallbackName}.`
-            : loading
-              ? 'Looking up your organization…'
-              : `Continue in ${fallbackName}, the default organization for members.`
-      }
-      brandTitle="Land in the right workspace"
-      brandBody="We match claimed email domains to companies. You stay in control of the final choice."
-      highlights={highlights}
-    >
-      {admission ? <AdmissionPending request={admission} /> : null}
-      {error ? (
-        <div
-          role="alert"
-          className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
-        >
-          {error}
-        </div>
-      ) : null}
-
-      <div className="flex flex-col gap-2">
-        {suggested && !needsVerify ? (
-          <Button className="h-11" disabled={pending || admission !== null} onClick={() => void choose('suggested')}>
-            {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-            Join {suggested.name}
-          </Button>
-        ) : null}
-        <Button
-          variant={suggested && !needsVerify ? 'outline' : 'default'}
-          className="h-11"
-          disabled={pending || loading}
-          onClick={() => void choose('default')}
-        >
-          Continue with {fallbackName}
-        </Button>
-      </div>
-    </AuthShell>
-  )
+  return <AuthShell headingId={headingId} title="Join an organization" description="Validate your invitation to see the company, then confirm that you want to join."
+    brandTitle="Land in the right workspace" brandBody="Only the company that invited you is shown. No organization directory or domain matching is needed." highlights={highlights}>
+    {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}
+    {user?.email_verified === false ? <p className="mb-4 text-sm text-muted-foreground">Verify your email before joining a company.</p> : null}
+    {result && 'request' in result && result.status === 'pending' ? <AdmissionPending request={result.request} /> : null}
+    <InvitationCode invitation={invitation} disabled={busy || result !== null || user?.email_verified === false} />
+    {invitation.preview || result ? <Button className="h-11 w-full" disabled={busy || user?.email_verified === false || (result !== null && 'request' in result && result.status === 'pending')} onClick={() => void choose(Boolean(invitation.preview))}>
+      {busy ? 'Opening workspace…' : result ? 'Open joined workspace' : 'Join organization'}
+    </Button> : null}
+    <Button variant="outline" className="mt-4 h-11 w-full" disabled={busy || result !== null} onClick={() => void choose(false)}>Continue in default workspace</Button>
+  </AuthShell>
 }

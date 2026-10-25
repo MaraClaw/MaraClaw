@@ -54,14 +54,8 @@ export async function listChatHistoryPage(target: ChatHistoryTarget, request: Pa
   const params = new URLSearchParams({ limit: '50' })
   if (request.cursor != null) params.set('cursor', request.cursor)
   const owner = request.owner ?? authSession.capture()
-  const data = request.signal === undefined
-    ? await apiRequest<unknown>(
-      `/api/agents/${encodeURIComponent(target.agentId)}/sessions/${encodeURIComponent(target.sessionId)}/messages/page?${params}`,
-      { owner },
-    )
-    : await apiRequest<unknown>(
-      `/api/agents/${encodeURIComponent(target.agentId)}/sessions/${encodeURIComponent(target.sessionId)}/messages/page?${params}`,
-      { owner, signal: request.signal },
-    )
-  return pageSchema.parse(data)
+  return apiRequest(
+    `/api/agents/${encodeURIComponent(target.agentId)}/sessions/${encodeURIComponent(target.sessionId)}/messages/page?${params}`,
+    { schema: pageSchema, owner, ...(request.signal === undefined ? {} : { signal: request.signal }) },
+  )
 }

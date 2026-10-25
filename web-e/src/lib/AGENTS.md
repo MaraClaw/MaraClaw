@@ -13,8 +13,8 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `api.ts` | `getApiBaseUrl` / `apiUrl` / `wsUrl`. Empty `VITE_API_BASE_URL` = same-origin. Rejects hostname `0.0.0.0`. |
 | `http.ts` | Only fetch wrapper: `apiRequest`, `apiFormRequest`, `apiBinaryRequest`, `ApiError`, `formatApiDetail`, `userFacingRequestError`. Bearer unless `token` overridden. Owner fences cover headers/body awaits; current-owner 401 expires that session. JSON 204 → `undefined`. Binary previews stream with a 20 MiB cap, no-store and no redirects. |
 | `auth-storage.ts` | localStorage `maraclaw-enduser-token` |
-| `auth-api.ts` | `/api/auth/*` and `/api/tenants/*` (login/register/SSO/password/join/switch). `issueChatTicket` mints tickets via POST `/api/auth/chat-ticket`. Public calls pass `token: null`. |
-| `types/auth.ts` | `UserOut`, `TokenResponse`, `MultiTenantResponse`, `isPlatformAdminUser`, `isTokenResponse` |
+| `auth-api.ts` | `/api/member/auth/*` for member login/register/SSO/current user; shared `/api/auth/*` for password/tickets/tenant selection and `/api/tenants/*` for join/switch. Public calls pass `token: null`. |
+| `types/auth.ts` | Generated member DTO adapters: `UserOut`, `TokenResponse`, `RegisterInitResponse`, `MultiTenantResponse`, `isTokenResponse`. Audience eligibility is enforced by the server. |
 | `company-admissions-api.ts`, `types/company-admissions.ts` | Zod-parsed applicant request summaries/details from `/api/company-admissions/mine` and `/:id`; owner/signal-fenced. Pending join/transfer/register responses reuse the summary schema without installing target membership. |
 | `sso-storage.ts` | sessionStorage `maraclaw-sso-state` / `provider` / `intent` |
 | `auth-highlights.ts` | AuthShell copy for forgot/reset/verify/sso. Login/register inline their own. |

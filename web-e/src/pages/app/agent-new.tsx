@@ -72,7 +72,7 @@ export function AgentNewPage() {
         name: values.name,
         template_id: values.template_id || undefined,
         role_description: values.role_description,
-        permission_scope_type: { private: 'user', company: 'company', department: 'custom' }[values.visibility],
+        permission_scope_type: ({ private: 'user', company: 'company', department: 'custom' } as const)[values.visibility],
         ...(values.visibility === 'department' && values.department_id ? { department_ids: [values.department_id] } : {}),
         permission_access_level: 'use',
         gogcli_enabled: values.gogcli_enabled,

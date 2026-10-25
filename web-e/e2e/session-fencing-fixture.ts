@@ -1,7 +1,9 @@
 import { expect, type Page } from '@playwright/test'
 import { z } from 'zod'
 
-import type { TenantChoice, UserOut } from '../src/lib/types/auth'
+import type { TenantChoice, UserOut, userOutSchema } from '../src/lib/types/auth'
+import type { AgentOutSchema } from '../src/lib/engine-contracts.generated'
+import type { OnboardingStatus } from '../src/lib/onboarding-api'
 import type { AgentOut } from '../src/lib/workspace-api'
 
 export const tokenKey = 'maraclaw-enduser-token'
@@ -13,25 +15,27 @@ export const originalCompany = {
 export const replacementCompany = {
   id: 'e9c9d722-3f86-4ae1-b829-435079266026', name: 'Fencing Replacement Company', slug: 'fencing-replacement',
 } as const
-export const originalUser: UserOut = {
+export const originalUser: UserOut & z.input<typeof userOutSchema> = {
   id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db',
   email: 'original@fencing.test', display_name: 'Original fencing member', role: 'member',
-  tenant_id: originalCompany.id, email_verified: true, must_change_password: false, is_platform_admin: false,
+  tenant_id: originalCompany.id, email_verified: true, must_change_password: false,
+  created_at: '2030-01-01T00:00:00Z', is_active: true,
 }
-export const replacementUser: UserOut = {
+export const replacementUser: UserOut & z.input<typeof userOutSchema> = {
   ...originalUser, id: '49926b42-c074-4aa1-9aa1-54f0adbf70b9',
   email: 'replacement@fencing.test', display_name: 'Replacement fencing member', tenant_id: replacementCompany.id,
 }
-export const originalAgent: AgentOut = {
+export const originalAgent: AgentOut & z.input<typeof AgentOutSchema> = {
   id: '5458ec51-a954-4306-8626-68e16921d95f', name: 'Original company agent',
   role_description: 'Belongs only to the original company', status: 'stopped', creator_id: originalUser.id,
   access_level: 'manage',
+  autonomy_policy: {}, created_at: '2030-01-01T00:00:00Z', tokens_used_month: 0, tokens_used_today: 0,
 }
-export const replacementAgent: AgentOut = {
+export const replacementAgent: AgentOut & z.input<typeof AgentOutSchema> = {
   ...originalAgent, id: '4f14671e-0517-4bb1-b0b5-8772db8ad2e9', name: 'Replacement company agent',
   role_description: 'Belongs only to the replacement company', creator_id: replacementUser.id,
 }
-export const delayedAgent: AgentOut = {
+export const delayedAgent: AgentOut & z.input<typeof AgentOutSchema> = {
   ...originalAgent, id: '466ed379-3187-43b6-ac44-e7b21fbbec32', name: 'Delayed original-company creation',
 }
 
@@ -60,7 +64,7 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         await route.fulfill({ json: { ticket: `opaque-workspace-${++tickets}`, session_id: body.session_id ?? 'resolved-session' } })
         return
       }
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         await route.fulfill({ json: replacing ? nextUser : originalUser })
         return
       case '/api/auth/my-tenants': {
@@ -84,7 +88,10 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         await route.fulfill({ json: [replacing ? replacementAgent : originalAgent] })
         return
       case '/api/onboarding/status':
-        await route.fulfill({ json: { exists: true, status: 'completed', current_step: 'completed' } })
+        await route.fulfill({ json: {
+          exists: true, status: 'completed', current_step: 'completed', entry_mode: null,
+          personal_assistant_agent_id: null, completed_at: '2030-01-01T00:00:00Z',
+        } satisfies OnboardingStatus })
         return
       case '/api/notifications/unread-count':
         await route.fulfill({ json: { unread_count: 0 } })
@@ -103,6 +110,13 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         expect(request.method()).toBe('GET')
         expect(request.headers().authorization).toBe(`Bearer ${replacing ? switchToken : originalToken}`)
         await route.fulfill({ json: { notice: null, run: null, required: false, can_upgrade: false } })
+        return
+      case `/api/agents/${originalAgent.id}/setup`:
+      case `/api/agents/${replacementAgent.id}/setup`:
+      case `/api/agents/${delayedAgent.id}/setup`:
+        expect(request.method()).toBe('GET')
+        expect(request.headers().authorization).toBe(`Bearer ${replacing ? switchToken : originalToken}`)
+        await route.fulfill({ json: { setup_pending: false, state: null, failure_code: null, retryable: false } })
         return
       case `/api/agents/${delayedAgent.id}/sessions`:
         await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })

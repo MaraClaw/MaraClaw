@@ -28,11 +28,11 @@ test('SSO retains the stored provider for organization selection after consuming
     sessionStorage.setItem('maraclaw-sso-provider', 'example')
   })
   const bodies: unknown[] = []
-  await page.route('**/api/auth/example/callback', async (route) => {
+  await page.route('**/api/member/auth/example/callback', async (route) => {
     const body: unknown = route.request().postDataJSON()
     bodies.push(body)
     await route.fulfill({ json: bodies.length === 1
-      ? { requires_tenant_selection: true, pending_token: 'pending', tenants: [{ tenant_id: originalCompany.id, tenant_name: originalCompany.name }] }
+      ? { requires_tenant_selection: true, pending_token: 'pending', login_identifier: originalUser.email, tenants: [{ tenant_id: originalCompany.id, tenant_name: originalCompany.name }] }
       : { access_token: 'sso-token', user: originalUser },
     })
   })
@@ -46,22 +46,27 @@ test('SSO retains the stored provider for organization selection after consuming
   expect(await page.evaluate(() => sessionStorage.getItem('maraclaw-sso-provider'))).toBeNull()
 })
 
-test('SSO displays a current asynchronous callback failure', async ({ page }) => {
-  await page.route('**/api/auth/example/callback', (route) => route.fulfill({
-    status: 403, json: { detail: 'Company sign-in refused' },
-  }))
+for (const failure of [
+  { detail: 'Company sign-in refused', message: 'Company sign-in refused' },
+  { detail: { code: 'member_audience_rejected', message: 'Member audience required' }, message: 'Member audience required' },
+]) {
+  test(`SSO displays a current asynchronous callback failure: ${failure.message}`, async ({ page }) => {
+    await page.route('**/api/member/auth/example/callback', (route) => route.fulfill({
+      status: 403, json: { detail: failure.detail },
+    }))
 
-  await page.goto('/sso/callback?provider=example&code=code')
+    await page.goto('/sso/callback?provider=example&code=code')
 
-  await expect(page.getByRole('alert')).toHaveText('Company sign-in refused')
-  await expect(page.getByRole('link', { name: 'Back to sign in' })).toBeVisible()
-})
+    await expect(page.getByRole('alert')).toHaveText(failure.message)
+    await expect(page.getByRole('link', { name: 'Back to sign in' })).toBeVisible()
+  })
+}
 
 test('SSO bind completes once and returns to settings', async ({ page }) => {
   await prepareWorkspace(page)
   await page.addInitScript(() => sessionStorage.setItem('maraclaw-sso-intent', 'bind'))
   const bodies: unknown[] = []
-  await page.route('**/api/auth/example/bind', async (route) => {
+  await page.route('**/api/member/auth/example/bind', async (route) => {
     bodies.push(route.request().postDataJSON())
     await route.fulfill({ json: originalUser })
   })

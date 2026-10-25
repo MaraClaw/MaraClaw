@@ -11,8 +11,9 @@ import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import type { TokenResponse, UserOut } from '../src/lib/types/auth.ts'
 
 const user: UserOut = {
-  id: 'member', email: 'member@example.com', display_name: 'Member',
-  role: 'member', tenant_id: 'tenant-a', email_verified: true,
+  id: '11111111-1111-4111-8111-111111111111', email: 'member@example.com', display_name: 'Member',
+  role: 'member', tenant_id: '22222222-2222-4222-8222-222222222222', email_verified: true,
+  created_at: '2026-10-25T08:00:00Z', is_active: true,
 }
 const session: TokenResponse = { access_token: 'token-a', user }
 
@@ -136,9 +137,9 @@ test('same-token replacement hides the old tenant and validates using its new ow
   assert.equal(authSession.getSnapshot().user, null)
   assert.equal(authSession.getSnapshot().status, 'loading')
   assert.equal(request.authorization, 'Bearer token-a')
-  send(request.response, 200, { ...user, tenant_id: 'tenant-b' })
+  send(request.response, 200, { ...user, tenant_id: '33333333-3333-4333-8333-333333333333' })
   assert.equal(await refresh, true)
-  assert.equal(authSession.getSnapshot().user?.tenant_id, 'tenant-b')
+  assert.equal(authSession.getSnapshot().user?.tenant_id, '33333333-3333-4333-8333-333333333333')
 })
 
 test('late replacement validation cannot overwrite a newer session', async (t) => {
@@ -192,6 +193,31 @@ test('current 401 expires the identity and fences continuation guards', async (t
   assert.equal(authSession.getSnapshot().status, 'anonymous')
   assert.equal(authSession.isCurrent(owner), false)
 })
+
+for (const operation of ['login', 'refresh'] as const) {
+  test(`real member ${operation} HTTP audience rejection expires its current session`, async (t) => {
+    // Given
+    const arrived = Promise.withResolvers<{ readonly path: string | undefined; readonly authorization: string | undefined }>()
+    const { controller, localStorage } = await wire(t, (request, response) => {
+      arrived.resolve({ path: request.url, authorization: request.headers.authorization })
+      send(response, 403, { detail: { code: 'member_audience_rejected', message: 'Member audience required' } })
+    })
+    const owner = authSession.capture()
+    // When
+    const result = operation === 'login'
+      ? await assert.rejects(loginRequest({ login_identifier: 'member@example.com', password: 'password' }, undefined, owner),
+        (error: unknown) => error instanceof ApiError && error.isMemberAudienceRejection)
+      : await controller.refreshUser(owner)
+    // Then
+    const request = await arrived.promise
+    assert.equal(request.path, `/api/member/auth/${operation === 'login' ? 'login' : 'me'}`)
+    assert.equal(request.authorization, operation === 'login' ? undefined : 'Bearer token-a')
+    if (operation === 'refresh') assert.equal(result, false)
+    assert.equal(authSession.getSnapshot().status, 'anonymous')
+    assert.equal(authSession.isCurrent(owner), false)
+    assert.equal(localStorage.getItem('maraclaw-enduser-token'), null)
+  })
+}
 
 test('malformed canonical join and switch responses leave the validated session untouched', async (t) => {
   // Given

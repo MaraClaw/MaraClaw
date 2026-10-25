@@ -17,11 +17,12 @@ import { authSession } from '@/lib/auth-session'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
-import { connectAgentChat, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
+import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
 import { createChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isWritableSession } from '@/lib/chat/sessions'
+import { ChatEventType, archivedSessionId } from '@/lib/chat/protocol'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createSession,
@@ -74,6 +75,7 @@ export function AgentChatPage() {
   const [retryStartedAt, setRetryStartedAt] = useState<number | null>(null)
   const [socketReady, setSocketReady] = useState(0)
   const [socketStopped, setSocketStopped] = useState(false)
+  const [archivedId, setArchivedId] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
@@ -112,7 +114,7 @@ export function AgentChatPage() {
   const activeId = sessionId ?? sharedSessionQuery.data?.id
   const activeSession = sessionsQuery.data?.find((session) => session.id === activeId)
     ?? (sharedSessionQuery.data?.id === activeId ? sharedSessionQuery.data : undefined)
-  const writable = !sessionId || isWritableSession(activeSession)
+  const writable = archivedId !== activeId && (!sessionId || isWritableSession(activeSession))
   const installedSkillsQuery = useWorkspaceQuery({
     ...installedAgentSkillsOptions(agent.id),
     enabled: authSession.isCurrent(mountedOwner) && Boolean(token) && writable,
@@ -245,13 +247,28 @@ export function AgentChatPage() {
       },
       onEvent(event: ChatInbound) {
         if (!current()) return
-        if (isTurnAccepted(event)) {
+        const archived = archivedSessionId(event)
+        if (archived !== undefined) {
+          if (archived !== activeId) return
+          setArchivedId(archived)
+          setInfo('Archived conversation. Read-only history.')
+          setBusy(false)
+          setThinking('')
+          setSocketStopped(true)
+          sendRef.current = null
+          queuedSendRef.current = null
+          conn.close()
+          return
+        }
+        const textContent = 'content' in event && typeof event.content === 'string' ? event.content : ''
+        switch (event.type) {
+        case ChatEventType.TURN_ACCEPTED: {
           updateLines((previous) => acceptSubmission(previous, event))
           setBusy(true)
           setInfo(null)
           return
         }
-        if (event.type === 'connected') {
+        case ChatEventType.CONNECTED: {
           const sentKey = `maraclaw-onboarding-sent:${agent.id}`
           const alreadySent =
             typeof sessionStorage !== 'undefined' && sessionStorage.getItem(sentKey) === '1'
@@ -262,47 +279,47 @@ export function AgentChatPage() {
           }
           return
         }
-        if (event.type === 'chunk') {
-          liveRef.current += event.content ?? ''
+        case ChatEventType.CHUNK: {
+          liveRef.current += textContent
           setLive(liveRef.current)
           setBusy(true)
           return
         }
-        if (event.type === 'thinking') {
-          setThinking((prev) => isCurrent() ? prev + (event.content ?? '') : prev)
+        case ChatEventType.THINKING: {
+          setThinking((prev) => isCurrent() ? prev + textContent : prev)
           return
         }
-        if (event.type === 'tool_call') {
+        case ChatEventType.TOOL_CALL: {
           if (event.live_preview?.screenshot_url) {
-            setLivePreview({ env: event.live_preview.env, screenshot: event.live_preview.screenshot_url })
+            setLivePreview({ env: event.live_preview.env ?? undefined, screenshot: event.live_preview.screenshot_url })
           }
           updateLines((prev) => isCurrent() ? [
             ...prev,
             {
               role: 'tool',
-              content: `${event.name ?? 'tool'} · ${event.status ?? ''}${event.result ? `\n${String(event.result).slice(0, 400)}` : ''}`,
+              content: `${event.name ?? 'tool'} · ${event.status ?? ''}${event.result ? `\n${(typeof event.result === 'string' ? event.result : JSON.stringify(event.result)).slice(0, 400)}` : ''}`,
             },
           ] : prev)
           return
         }
-        if (event.type === 'agentbay_live') {
+        case ChatEventType.AGENTBAY_LIVE: {
           if (event.live_preview?.screenshot_url) {
-            setLivePreview({ env: event.env ?? event.live_preview.env, screenshot: event.live_preview.screenshot_url })
+            setLivePreview({ env: event.env ?? event.live_preview.env ?? undefined, screenshot: event.live_preview.screenshot_url })
           } else if (event.output) {
             setInfo(`AgentBay ${event.env ?? 'code'}: ${event.output.slice(0, 180)}`)
           }
           return
         }
-        if (event.type === 'workspace_draft') {
+        case ChatEventType.WORKSPACE_DRAFT: {
           setInfo(`Editing ${event.name ?? 'file'}…`)
           return
         }
-        if (event.type === 'status' && (event.content ?? '') === 'thinking') {
-          setBusy(true)
+        case ChatEventType.STATUS: {
+          if (textContent === 'thinking') setBusy(true)
           return
         }
-        if (event.type === 'info') {
-          const text = event.content ?? ''
+        case ChatEventType.INFO: {
+          const text = textContent
           if (FORWARDED_INFO.test(text)) {
             setBusy(true)
             return
@@ -310,10 +327,10 @@ export function AgentChatPage() {
           setInfo(text || null)
           return
         }
-        if (isTurnRejected(event)) {
+        case ChatEventType.TURN_REJECTED: {
           const recovery = recoverRejectedTurn(linesRef.current, event)
           if (!recovery.matched) {
-            if (event.client_submission_id === undefined) setInfo(recovery.notice)
+            if (!('client_submission_id' in event)) setInfo(recovery.notice)
             return
           }
           updateLines(recovery.lines)
@@ -326,24 +343,24 @@ export function AgentChatPage() {
           composerRef.current?.focus()
           return
         }
-        if (event.type === 'error') {
-          setInfo(event.content ?? 'Chat error')
+        case ChatEventType.ERROR: {
+          setInfo(textContent || 'Chat error')
           setThinking('')
           setBusy(false)
           if (submissions.pending().length) setSlow(true)
           return
         }
-        if (event.type === 'done') {
-          const content = event.content || liveRef.current
+        case ChatEventType.DONE: {
+          const content = textContent || liveRef.current
           const role = event.role ?? 'assistant'
           if (content || event.attachments?.length) {
             updateLines((prev) => {
               if (!isCurrent()) return prev
               return appendCompletion(prev, {
                 role, content,
-                ...(event.message_id === undefined ? {} : { message_id: event.message_id }),
-                ...(event.entry_id === undefined ? {} : { entry_id: event.entry_id }),
-                ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
+                ...(event.message_id == null ? {} : { message_id: event.message_id }),
+                ...(event.entry_id == null ? {} : { entry_id: event.entry_id }),
+                ...(event.attachments == null ? {} : { attachments: event.attachments }),
               })
             })
           }
@@ -354,9 +371,17 @@ export function AgentChatPage() {
           void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
           return
         }
-        if (event.type === 'onboarded') {
+        case ChatEventType.ONBOARDED: {
           sessionStorage.setItem(`maraclaw-onboarding-sent:${agent.id}`, '1')
           void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
+          return
+        }
+        case ChatEventType.TRIGGER_NOTIFICATION:
+          return
+        default: {
+          const unreachable: never = event
+          throw new Error(`Unhandled chat event: ${JSON.stringify(unreachable)}`)
+        }
         }
       },
       onClose(code) {
@@ -470,7 +495,7 @@ export function AgentChatPage() {
 
   return (
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-        {sessionId && !writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+        {!writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
           <p>Archived conversation. Read-only history.</p>
           <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>Return to shared conversation</Link>
         </div> : null}

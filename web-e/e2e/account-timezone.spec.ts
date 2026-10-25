@@ -9,7 +9,7 @@ test('Settings timezone persists across reload and seeds a new schedule with an 
   const fixture = await prepareSchedules(page)
   let timezone: string | null = null
   const patches: unknown[] = []
-  await page.route('**/api/auth/me', async (route) => {
+  await page.route('**/api/member/auth/me', async (route) => {
     expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
     if (route.request().method() === 'PATCH') {
       const body = z.object({ timezone: z.string() }).strict().parse(route.request().postDataJSON())
@@ -44,7 +44,7 @@ for (const timezone of ['Asia/Shanghai', 'America/New_York']) {
   test(`legacy ${timezone} remains the exact selected option and is omitted from name-only edits`, async ({ page }) => {
     // Given
     const fixture = await prepareSchedules(page, [{ ...savedSchedule, timezone }])
-    await page.route('**/api/auth/me', (route) => route.fulfill({ json: { ...originalUser, timezone: 'Etc/GMT-7' } }))
+    await page.route('**/api/member/auth/me', (route) => route.fulfill({ json: { ...originalUser, timezone: 'Etc/GMT-7' } }))
     await page.goto(schedulesPath)
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await expect(page.getByLabel('Timezone')).toHaveValue(timezone)
@@ -68,7 +68,7 @@ test('timezone preference pending and error states retain the selected draft and
   await prepareSchedules(page)
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/auth/me', async (route) => {
+  await page.route('**/api/member/auth/me', async (route) => {
     if (route.request().method() !== 'PATCH') return route.fallback()
     expect(route.request().postDataJSON()).toEqual({ timezone: 'Etc/GMT-7' })
     requested.resolve()
@@ -97,7 +97,7 @@ for (const status of [200, 401, 503]) {
     await prepareSchedules(page)
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
-    await page.route('**/api/auth/me', async (route) => {
+    await page.route('**/api/member/auth/me', async (route) => {
       if (route.request().method() !== 'PATCH') return route.fallback()
       expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
       requested.resolve()
@@ -115,7 +115,7 @@ for (const status of [200, 401, 503]) {
       await expect(page.getByLabel('Timezone')).toHaveValue('UTC')
       await page.clock.install()
       const completed = page.waitForEvent('requestfinished', {
-        predicate: (request) => request.method() === 'PATCH' && new URL(request.url()).pathname === '/api/auth/me',
+        predicate: (request) => request.method() === 'PATCH' && new URL(request.url()).pathname === '/api/member/auth/me',
       })
       // When
       release.resolve()

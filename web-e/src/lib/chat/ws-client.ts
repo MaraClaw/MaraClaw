@@ -3,7 +3,7 @@ import { authSession } from '../auth-session.ts'
 import { issueChatTicket } from '../auth-api.ts'
 import { ApiError } from '../http.ts'
 import type { AuthSessionStore, SessionOwner } from '../auth-session.ts'
-import { inboundSchema, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from './protocol.ts'
+import { ChatEventType, inboundSchema, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from './protocol.ts'
 import { createChatSubmissions, type ChatSubmissions } from './submissions.ts'
 export { isTurnAccepted, isTurnRejected } from './protocol.ts'
 export type { ChatInbound, ChatOutbound, ChatTurnAcceptance, ChatTurnRejection } from './protocol.ts'
@@ -157,13 +157,13 @@ export function connectAgentChat(
         data = JSON.parse(String(event.data))
       } catch (error) {
         if (!(error instanceof SyntaxError)) throw error
-        handlers.onEvent({ type: 'error', content: 'Malformed chat event' })
+        handlers.onEvent({ type: ChatEventType.ERROR, content: 'Malformed chat event' })
         return
       }
       const parsed = inboundSchema.safeParse(data)
-      if (!parsed.success) { handlers.onEvent({ type: 'error', content: 'Malformed chat event' }); return }
+      if (!parsed.success) { handlers.onEvent({ type: ChatEventType.ERROR, content: 'Malformed chat event' }); return }
       if (isTurnAccepted(parsed.data) && !submissions.accept(parsed.data)) return
-      if (isTurnRejected(parsed.data) && parsed.data.client_submission_id !== undefined) submissions.reject(parsed.data.client_submission_id)
+          if (isTurnRejected(parsed.data) && 'client_submission_id' in parsed.data) submissions.reject(parsed.data.client_submission_id)
       handlers.onEvent(parsed.data)
     }
     source.onclose = (event) => {

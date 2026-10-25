@@ -11,7 +11,7 @@ const company = {
 const member: UserOut = {
   id: 'f936188e-a374-4edf-9b05-ac6c9cb236a6', email: 'member@routing.test',
   display_name: 'Routing member', role: 'member', tenant_id: company.id, email_verified: true,
-  is_platform_admin: false,
+  is_active: true, created_at: '2026-10-25T08:00:00Z',
 }
 
 async function prepareMember(page: Page, mustChangePassword: boolean) {
@@ -26,7 +26,7 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     switch (path) {
-      case '/api/auth/me':
+      case '/api/member/auth/me':
         identityRequests.push(route.request().method())
         await route.fulfill({ json: { ...member, must_change_password: requiresPassword } })
         break
@@ -131,7 +131,7 @@ test('settings saves the trimmed profile and refreshes the signed-in identity', 
   const updated = { ...member, display_name: 'Updated member' }
   const updates: unknown[] = []
   let refreshes = 0
-  await page.route('**/api/auth/me', async (route) => {
+  await page.route('**/api/member/auth/me', async (route) => {
     if (route.request().method() === 'PATCH') {
       updates.push(route.request().postDataJSON())
       await route.fulfill({ json: member })
@@ -224,7 +224,7 @@ test('settings places active connected sign-in after password and retains unlink
     { id: 'inactive', provider_type: 'hidden', name: 'Inactive sign-in', is_active: false },
   ] }))
   const unlinks: unknown[] = []
-  await page.route('**/api/auth/example/unbind', async (route) => {
+  await page.route('**/api/member/auth/example/unbind', async (route) => {
     expect(route.request().method()).toBe('POST')
     unlinks.push(route.request().postDataJSON())
     await route.fulfill({ json: member })

@@ -1,68 +1,10 @@
-import { apiRequest } from '@/lib/http'
-
-export type OkrSettings = {
-  enabled: boolean
-  first_enabled_at?: string | null
-  daily_report_enabled: boolean
-  daily_report_time: string
-  daily_report_skip_non_workdays: boolean
-  period_frequency: string
-  period_length_days?: number | null
-  period_frequency_locked: boolean
-  okr_agent_id?: string | null
-}
-
-export type OkrPeriod = {
-  start: string
-  end: string
-  label: string
-  is_current: boolean
-}
-
-export type OkrKeyResult = {
-  id: string
-  objective_id: string
-  title: string
-  target_value: number
-  current_value: number
-  unit?: string | null
-  status: string
-}
-
-export type OkrObjective = {
-  id: string
-  title: string
-  description?: string | null
-  owner_type: string
-  owner_id?: string | null
-  owner_name?: string | null
-  period_start: string
-  period_end: string
-  status: string
-  key_results: OkrKeyResult[]
-}
-
-export type DailyReport = {
-  id: string
-  member_type: string
-  member_id: string
-  display_name: string
-  report_date: string
-  content: string
-  status: string
-}
-
-export type CompanyReport = {
-  id: string
-  report_type: string
-  period_start: string
-  period_end: string
-  period_label: string
-  content: string
-  submitted_count: number
-  missing_count: number
-  needs_refresh: boolean
-}
+import { apiRequest } from './http.ts'
+import { z } from 'zod'
+import { CompanyReportOutSchema, KeyResultOutSchema, MemberDailyReportOutSchema, ObjectiveOutSchema, OKRSettingsOutSchema, PeriodOutSchema } from './engine-contracts.generated.ts'
+import type { CompanyReportRegenerate, KeyResultCreate, ObjectiveCreate, ObjectiveUpdate, OKRSettingsUpdate } from './engine-contracts.generated.ts'
+export type { CompanyReportOut as CompanyReport, KeyResultOut as OkrKeyResult, MemberDailyReportOut as DailyReport, OKRSettingsOut as OkrSettings, PeriodOut as OkrPeriod } from './engine-contracts.generated.ts'
+const objectiveSchema = ObjectiveOutSchema.extend({ key_results: z.array(KeyResultOutSchema).default([]) })
+export type OkrObjective = z.infer<typeof objectiveSchema>
 
 export type MemberWithoutOkr = {
   id: string
@@ -71,20 +13,20 @@ export type MemberWithoutOkr = {
   source_label?: string | null
 }
 
-export async function getOkrSettings(): Promise<OkrSettings> {
-  return apiRequest('/api/okr/settings')
+export async function getOkrSettings() {
+  return apiRequest('/api/okr/settings', { schema: OKRSettingsOutSchema })
 }
 
-export async function updateOkrSettings(body: Partial<OkrSettings>): Promise<OkrSettings> {
-  return apiRequest('/api/okr/settings', { method: 'PUT', body })
+export async function updateOkrSettings(body: OKRSettingsUpdate) {
+  return apiRequest('/api/okr/settings', { schema: OKRSettingsOutSchema, method: 'PUT', body })
 }
 
 export async function syncOkrRelationships(): Promise<{ status: string; okr_agent_id?: string }> {
   return apiRequest('/api/okr/sync-relationships', { method: 'POST' })
 }
 
-export async function listOkrPeriods(): Promise<OkrPeriod[]> {
-  return apiRequest('/api/okr/periods')
+export async function listOkrPeriods() {
+  return apiRequest('/api/okr/periods', { schema: z.array(PeriodOutSchema) })
 }
 
 export async function listObjectives(periodStart?: string, periodEnd?: string): Promise<OkrObjective[]> {
@@ -92,53 +34,43 @@ export async function listObjectives(periodStart?: string, periodEnd?: string): 
   if (periodStart) query.set('period_start', periodStart)
   if (periodEnd) query.set('period_end', periodEnd)
   const suffix = query.toString() ? `?${query}` : ''
-  return apiRequest(`/api/okr/objectives${suffix}`)
+  return apiRequest(`/api/okr/objectives${suffix}`, { schema: z.array(objectiveSchema) })
 }
 
-export async function createObjective(body: {
-  title: string
-  description?: string
-  owner_type?: string
-  owner_id?: string
-  period_start: string
-  period_end: string
-}): Promise<OkrObjective> {
-  return apiRequest('/api/okr/objectives', { method: 'POST', body })
+export async function createObjective(body: ObjectiveCreate): Promise<OkrObjective> {
+  return apiRequest('/api/okr/objectives', { schema: objectiveSchema, method: 'POST', body })
 }
 
-export async function updateObjective(id: string, body: { title?: string; status?: string }): Promise<OkrObjective> {
-  return apiRequest(`/api/okr/objectives/${id}`, { method: 'PATCH', body })
+export async function updateObjective(id: string, body: ObjectiveUpdate): Promise<OkrObjective> {
+  return apiRequest(`/api/okr/objectives/${id}`, { schema: objectiveSchema, method: 'PATCH', body })
 }
 
 export async function createKeyResult(
   objectiveId: string,
-  body: { title: string; target_value: number; unit?: string },
-): Promise<OkrKeyResult> {
-  return apiRequest(`/api/okr/objectives/${objectiveId}/key-results`, { method: 'POST', body })
+  body: KeyResultCreate,
+) {
+  return apiRequest(`/api/okr/objectives/${objectiveId}/key-results`, { schema: KeyResultOutSchema, method: 'POST', body })
 }
 
-export async function updateKrProgress(krId: string, value: number, note?: string): Promise<OkrKeyResult> {
-  return apiRequest(`/api/okr/key-results/${krId}/progress`, { method: 'POST', body: { value, note } })
+export async function updateKrProgress(krId: string, value: number, note?: string) {
+  return apiRequest(`/api/okr/key-results/${krId}/progress`, { schema: KeyResultOutSchema, method: 'POST', body: { value, note } })
 }
 
-export async function listDailyReports(reportDate?: string): Promise<DailyReport[]> {
+export async function listDailyReports(reportDate?: string) {
   const suffix = reportDate ? `?report_date=${reportDate}` : ''
-  return apiRequest(`/api/okr/member-daily-reports${suffix}`)
+  return apiRequest(`/api/okr/member-daily-reports${suffix}`, { schema: z.array(MemberDailyReportOutSchema) })
 }
 
-export async function submitDailyReport(body: { report_date: string; content: string }): Promise<DailyReport> {
-  return apiRequest('/api/okr/member-daily-reports', { method: 'POST', body })
+export async function submitDailyReport(body: { report_date: string; content: string }) {
+  return apiRequest('/api/okr/member-daily-reports', { schema: MemberDailyReportOutSchema, method: 'POST', body })
 }
 
-export async function listCompanyReports(): Promise<CompanyReport[]> {
-  return apiRequest('/api/okr/company-reports')
+export async function listCompanyReports() {
+  return apiRequest('/api/okr/company-reports', { schema: z.array(CompanyReportOutSchema) })
 }
 
-export async function regenerateCompanyReport(body: {
-  report_type: string
-  period_start: string
-}): Promise<CompanyReport> {
-  return apiRequest('/api/okr/company-reports/regenerate', { method: 'POST', body })
+export async function regenerateCompanyReport(body: CompanyReportRegenerate) {
+  return apiRequest('/api/okr/company-reports/regenerate', { schema: CompanyReportOutSchema, method: 'POST', body })
 }
 
 export async function membersWithoutOkr(): Promise<{

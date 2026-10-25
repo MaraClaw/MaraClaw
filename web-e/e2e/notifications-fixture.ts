@@ -1,17 +1,17 @@
 import { expect, type Page } from '@playwright/test'
 
-import { notificationCategories, notificationViewSchema, type NotificationCategory, type NotificationRow } from '../src/lib/notifications-api'
+import { notificationCategories, NotificationKind, notificationViewSchema, type NotificationCategory, type NotificationRow } from '../src/lib/notifications-api'
 import { originalToken, prepareWorkspace, replacementToken } from './session-fencing-fixture'
 
 export const inboxPath = '/app/notifications'
-export const replacementNotice: NotificationRow = { id: 'replacement', title: 'Replacement company notification', type: 'broadcast', is_read: false, archived_at: null }
+export const replacementNotice: NotificationRow = { id: 'replacement', title: 'Replacement company notification', type: NotificationKind.Broadcast, is_read: false, archived_at: null }
 const categoryTypes = {
-  all: [], tool: ['autonomy_l2'],
-  approval: ['approval_pending', 'approval_resolved', 'company_admission_pending', 'company_admission_resolved'],
-  social: ['plaza_comment', 'plaza_reply', 'mention', 'broadcast'], broadcast: ['broadcast'],
-} satisfies Record<NotificationCategory, readonly string[]>
+  all: [], tool: [NotificationKind.AutonomyL2],
+  approval: [NotificationKind.ApprovalPending, NotificationKind.ApprovalResolved, NotificationKind.CompanyAdmissionPending, NotificationKind.CompanyAdmissionResolved],
+  social: [NotificationKind.PlazaComment, NotificationKind.PlazaReply, NotificationKind.Mention, NotificationKind.Broadcast], broadcast: [NotificationKind.Broadcast],
+} satisfies Record<NotificationCategory, readonly NotificationKind[]>
 
-export function notice(id: string, type: string, is_read = false): NotificationRow {
+export function notice(id: string, type: NotificationKind, is_read = false): NotificationRow {
   return { id, title: id, type, is_read, created_at: '2030-01-01T00:00:00Z', archived_at: null }
 }
 

@@ -11,6 +11,6 @@ export async function listAgentPermissionDepartments(
   agentId: string,
   signal: AbortSignal,
 ): Promise<readonly PermissionDepartment[]> {
-  const response = await apiRequest<unknown>(`/api/agents/${agentId}/permissions/departments`, { signal })
-  return departmentsResponseSchema.parse(response).departments
+  const response = await apiRequest(`/api/agents/${agentId}/permissions/departments`, { schema: departmentsResponseSchema, signal })
+  return response.departments
 }

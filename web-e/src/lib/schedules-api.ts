@@ -47,51 +47,43 @@ type RunRequest = Readonly<{ signal?: AbortSignal }>
 type HistoryPageRequest = Readonly<{ cursor?: string; signal?: AbortSignal; outcome?: ScheduleHistoryOutcome }>
 
 export async function listSchedules(agentId: string): Promise<ScheduleOut[]> {
-  return z.array(scheduleSchema).parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/`))
+  return apiRequest(`/api/agents/${agentId}/schedules/`, { schema: z.array(scheduleSchema) })
 }
 
 export async function createSchedule(agentId: string, body: ScheduleCreate): Promise<ScheduleOut> {
-  return scheduleSchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/`, {
-    method: 'POST', body: createSchema.parse(body),
-  }))
+  return apiRequest(`/api/agents/${agentId}/schedules/`, {
+    schema: scheduleSchema, method: 'POST', body: createSchema.parse(body),
+  })
 }
 
 export async function updateSchedule(agentId: string, scheduleId: string, body: SchedulePatch): Promise<ScheduleOut> {
-  return scheduleSchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}`, {
-    method: 'PATCH', body: patchSchema.parse(body),
-  }))
+  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}`, {
+    schema: scheduleSchema, method: 'PATCH', body: patchSchema.parse(body),
+  })
 }
 
 export async function runSchedule(agentId: string, scheduleId: string, idempotencyKey?: string): Promise<ScheduleRunAcceptance> {
-  return runAcceptanceSchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}/run`, {
-    method: 'POST', idempotencyKey,
-  }))
+  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}/run`, {
+    schema: runAcceptanceSchema, method: 'POST', idempotencyKey,
+  })
 }
 
 export async function getScheduleRun(
   { agentId, scheduleId, runId }: ScheduleRunTarget, options: RunRequest = {},
 ): Promise<ScheduleRunReceipt> {
-  if (options.signal !== undefined) {
-    return runReceiptSchema.parse(await apiRequest<unknown>(
-      `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}`, { signal: options.signal },
-    ))
-  }
-  return runReceiptSchema.parse(await apiRequest<unknown>(
+  return apiRequest(
     `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}`,
-  ))
+    { schema: runReceiptSchema, ...(options.signal === undefined ? {} : { signal: options.signal }) },
+  )
 }
 
 export async function cancelScheduleRun(
   { agentId, scheduleId, runId }: ScheduleRunTarget, options: RunRequest = {},
 ): Promise<ScheduleRunReceipt> {
-  if (options.signal !== undefined) {
-    return runReceiptSchema.parse(await apiRequest<unknown>(
-      `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}/cancel`, { signal: options.signal, method: 'POST' },
-    ))
-  }
-  return runReceiptSchema.parse(await apiRequest<unknown>(
-    `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}/cancel`, { method: 'POST' },
-  ))
+  return apiRequest(
+    `/api/agents/${agentId}/schedules/${scheduleId}/runs/${runId}/cancel`,
+    { schema: runReceiptSchema, method: 'POST', ...(options.signal === undefined ? {} : { signal: options.signal }) },
+  )
 }
 
 export async function deleteSchedule(agentId: string, scheduleId: string): Promise<void> {
@@ -99,7 +91,7 @@ export async function deleteSchedule(agentId: string, scheduleId: string): Promi
 }
 
 export async function listScheduleHistory(agentId: string, scheduleId: string) {
-  return historySchema.parse(await apiRequest<unknown>(`/api/agents/${agentId}/schedules/${scheduleId}/history`))
+  return apiRequest(`/api/agents/${agentId}/schedules/${scheduleId}/history`, { schema: historySchema })
 }
 
 export async function listScheduleHistoryPage(
@@ -108,12 +100,8 @@ export async function listScheduleHistoryPage(
   const query = new URLSearchParams({ limit: '20' })
   if (cursor !== undefined) query.set('cursor', cursor)
   if (outcome !== undefined) query.set('outcome', outcome)
-  if (signal !== undefined) {
-    return historyPageSchema.parse(await apiRequest<unknown>(
-      `/api/agents/${agentId}/schedules/${scheduleId}/history/page?${query}`, { signal },
-    ))
-  }
-  return historyPageSchema.parse(await apiRequest<unknown>(
+  return apiRequest(
     `/api/agents/${agentId}/schedules/${scheduleId}/history/page?${query}`,
-  ))
+    { schema: historyPageSchema, ...(signal === undefined ? {} : { signal }) },
+  )
 }

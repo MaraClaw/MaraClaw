@@ -22,7 +22,7 @@ test('replacement continuation suppresses effects when another owner is queued a
   const controller = createAuthSessionController(store, () => pending.promise)
   const unsubscribe = store.subscribe(() => {
     const snapshot = store.getSnapshot()
-    if (snapshot.status === 'authenticated' && snapshot.user.tenant_id === 'tenant-b') {
+    if (snapshot.status === 'authenticated' && snapshot.user?.tenant_id === 'tenant-b') {
       queueMicrotask(() => {
         store.applySession(snapshot.owner, { access_token: 'unrelated', user: { ...user, tenant_id: 'tenant-c' } })
       })

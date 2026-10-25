@@ -13,6 +13,20 @@ const summary = {
   created_at: '2026-10-20T12:00:00Z', decided_at: null, decision_reason: null,
 } as const
 
+const registrationUser = {
+  id: '11111111-1111-4111-8111-111111111111', display_name: 'Member', email: 'member@example.test',
+  role: 'member', tenant_id: '22222222-2222-4222-8222-222222222222', email_verified: true,
+  created_at: '2026-10-25T08:00:00Z', is_active: true,
+}
+const registration = {
+  access_token: 'source-token', user: registrationUser, email: registrationUser.email,
+  user_id: registrationUser.id, message: 'Registration complete',
+  admission_request: {
+    ...summary, id: '33333333-3333-4333-8333-333333333333', source_tenant_id: registrationUser.tenant_id,
+    target_tenant: { id: '44444444-4444-4444-8444-444444444444', name: 'Company' },
+  },
+}
+
 for (const submit of [
   { name: 'suggested join', run: () => joinSuggestedOrg('target', authSession.capture()) },
   { name: 'transfer', run: () => transferOrg({ password: 'password', invitation_code: 'invite' }, authSession.capture()) },
@@ -131,7 +145,9 @@ test('mine discards a response after its signal is aborted', async (context) => 
 
 test('registration rejects a malformed admission rather than installing it', async (context) => {
   // Given
-  context.mock.method(globalThis, 'fetch', async () => Response.json({ access_token: 'source-token', user: {}, admission_request: { id: 'missing-status' } }))
+  context.mock.method(globalThis, 'fetch', async () => Response.json({
+    ...registration, admission_request: { ...registration.admission_request, status: 'joined' },
+  }))
   // When
   const result = registerRequest({ email: 'member@example.test', password: 'password' })
   // Then
@@ -140,14 +156,13 @@ test('registration rejects a malformed admission rather than installing it', asy
 
 test('registration keeps the source token and membership alongside the parsed pending admission', async (context) => {
   // Given
-  const user = { id: 'member', display_name: 'Member', email: 'member@example.test', role: 'member', tenant_id: 'source', email_verified: true }
-  context.mock.method(globalThis, 'fetch', async () => Response.json({ access_token: 'source-token', user, admission_request: summary }))
+  context.mock.method(globalThis, 'fetch', async () => Response.json(registration))
   // When
   const result = await registerRequest({ email: 'member@example.test', password: 'password' })
   // Then
   assert.equal(result.access_token, 'source-token')
-  assert.deepEqual(result.user, user)
-  assert.deepEqual(result.admission_request, summary)
+  assert.deepEqual(result.user, registrationUser)
+  assert.deepEqual(result.admission_request, registration.admission_request)
 })
 
 test('a pending submission is discarded when its owner retires before completion', async (context) => {

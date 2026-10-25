@@ -77,11 +77,14 @@ export function SettingsPage() {
     if (!isCurrent(expectedOwner)) return
     setPasswordError(null)
     try {
-      await changePasswordRequest({
+      const result = await changePasswordRequest({
         old_password: values.old_password,
         new_password: values.new_password,
       }, expectedOwner)
-      if (!isCurrent(expectedOwner) || !await refreshUser(expectedOwner) || !isCurrent(expectedOwner)) return
+      if (!isCurrent(expectedOwner)) return
+      if (!result.access_token) { logout(); return }
+      const installedOwner = await refreshReplacement(expectedOwner, result.access_token)
+      if (!installedOwner || !isCurrent(installedOwner)) return
       passwordForm.reset()
       toast.success(mustChangePassword ? 'Password updated. You can use the workspace now.' : 'Password updated')
     } catch (error) {

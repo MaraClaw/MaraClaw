@@ -35,7 +35,7 @@ type PreviewTransport = {
 
 const previewTransport: PreviewTransport = {
   metadata(resource, { owner, signal }) {
-    return apiRequest<unknown>(
+    return apiRequest(
       `/api/agents/${encodeURIComponent(resource.agentId)}/files/preview-metadata?${new URLSearchParams({ path: resource.path })}`,
       { owner, signal, cache: 'no-store' },
     )
