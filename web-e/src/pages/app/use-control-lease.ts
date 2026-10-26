@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import type { SessionQueryScope } from '@/hooks/session-query-scope'
-import { controlScreenshot, type ControlLease, type ControlResult } from '@/lib/control-api'
+import { controlScreenshot, type ControlLease, type ControlResult, type CredentialCapture } from '@/lib/control-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 
 export function useControlLease(scope: SessionQueryScope) {
@@ -12,6 +12,9 @@ export function useControlLease(scope: SessionQueryScope) {
   const [domain, setDomain] = useState('')
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
+  const [capture, setCapture] = useState<CredentialCapture | null>({ mode: 'create' })
+  const [captureError, setCaptureError] = useState('')
+  const releasing = useRef<ControlLease | null>(null)
   const busyOwner = useRef<symbol | null>(null)
   const dragFrom = useRef<{ x: number; y: number } | null>(null)
   const mounted = useRef(true)
@@ -34,6 +37,7 @@ export function useControlLease(scope: SessionQueryScope) {
     setScreenshot(null)
     setDomain('')
     setTyped('')
+    setCapture({ mode: 'create' })
     setBusy(false)
     busyOwner.current = null
     dragFrom.current = null
@@ -41,6 +45,7 @@ export function useControlLease(scope: SessionQueryScope) {
   }, [isCurrent])
 
   function start(next: ControlLease) {
+    setCaptureError('')
     owner.current = next
     setLease(next)
     return next
@@ -58,22 +63,42 @@ export function useControlLease(scope: SessionQueryScope) {
     }
   }
 
-  const request = useCallback(async (action: (captured: ControlLease) => Promise<ControlResult>) => {
+  const request = useCallback(async (
+    action: (captured: ControlLease) => Promise<ControlResult>, release = false,
+  ) => {
     const captured = owner.current
-    if (!captured || !isCurrent(captured)) return
+    if (!captured || !isCurrent(captured) || releasing.current === captured) return
+    if (release) releasing.current = captured
     try {
       const result = await action(captured)
-      if (!isCurrent(captured)) return
+      if (!isCurrent(captured) || (!release && releasing.current === captured)) return
+      if (release) {
+        end(captured)
+        void scope.client.invalidateQueries({ queryKey: ['credentials', captured.agentId] })
+      }
       return result
     } catch (error) {
-      if (!isCurrent(captured)) return
-      if (error instanceof ApiError && (error.status === 400 || error.status === 409)) {
-        end(captured, true)
-        return
+      if (!isCurrent(captured) || (!release && releasing.current === captured)) return
+      if (error instanceof ApiError) {
+        const code = error.detail && typeof error.detail === 'object' && 'code' in error.detail ? error.detail.code : null
+        if (error.status === 409 && code === 'take_control_lost') {
+          end(captured, true)
+          return
+        }
+        if (release && ((error.status === 409 && code === 'credential_revision_conflict') || (error.status === 404 && error.detail === 'Credential not found'))) {
+          end(captured)
+          void scope.client.invalidateQueries({ queryKey: ['credentials', captured.agentId] })
+          setCaptureError(error.status === 409
+            ? 'Control released. Cookies were not saved because the selected credential changed. Take control again and reselect a credential, or create a new one.'
+            : 'Control released. Cookies were not saved because the selected credential is no longer available. Take control again and choose a new credential.')
+          return
+        }
       }
       toast.error(userFacingRequestError(error, 'Unable to update the remote session'), { id: 'control-request-error' })
+    } finally {
+      if (release && releasing.current === captured) releasing.current = null
     }
-  }, [end, isCurrent])
+  }, [end, isCurrent, scope])
 
   useEffect(() => {
     if (!lease) return
@@ -103,6 +128,7 @@ export function useControlLease(scope: SessionQueryScope) {
 
   return {
     lease, screenshot, domain, setDomain, typed, setTyped, busy, beginBusy,
+    capture, setCapture, captureError,
     startDrag, finishDrag, start, end, isMounted, isCurrent, request,
   }
 }
