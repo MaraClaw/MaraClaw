@@ -1,5 +1,6 @@
 """Department administration HTTP boundaries."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -32,6 +33,32 @@ class DepartmentDeletionPreviewOut(BaseModel):
     agent_grant_count: int = Field(
         ge=0, description="Department-to-agent grant associations, not people losing effective access."
     )
+
+
+class DepartmentMergeRequest(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
+    destination_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class DepartmentMergeSelection:
+    source_id: UUID
+    destination_id: UUID
+    tenant_id: UUID | None
+
+
+class DepartmentMergePreviewOut(BaseModel):
+    """Advisory associations before merge, recomputed by apply under its locks."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    source: DepartmentOut
+    destination: DepartmentOut
+    source_membership_count: int = Field(ge=0)
+    destination_membership_count: int = Field(ge=0)
+    overlapping_membership_count: int = Field(ge=0)
+    source_agent_grant_count: int = Field(ge=0, description="Eligible custom-agent department use grants.")
+    destination_agent_grant_count: int = Field(ge=0, description="Eligible custom-agent department use grants.")
+    overlapping_agent_grant_count: int = Field(ge=0)
 
 
 class DepartmentOptionOut(BaseModel):
