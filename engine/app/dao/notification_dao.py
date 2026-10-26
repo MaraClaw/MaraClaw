@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import ClassVar, Literal, assert_never, final
 from uuid import UUID
 
@@ -26,6 +27,24 @@ _NOTIFICATION_COLUMNS = (
     "archived_at",
     "created_at",
 )
+
+
+def _user_list_clauses(
+    view: Literal["active", "archived"], unread_only: bool, types: Sequence[NotificationKind] | None
+) -> list[str]:
+    clauses = ["user_id = %(user_id)s", VISIBLE_NOTIFICATION_SQL]
+    match view:
+        case "active":
+            clauses.append("archived_at IS NULL")
+        case "archived":
+            clauses.append("archived_at IS NOT NULL")
+        case unreachable:
+            assert_never(unreachable)
+    if unread_only:
+        clauses.append("is_read IS FALSE")
+    if types is not None:
+        clauses.append("type = ANY(%(types)s)")
+    return clauses
 
 
 @final
@@ -57,18 +76,8 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
         offset: int = 0,
     ) -> Sequence[NotificationRecord]:
         params: dict[str, object] = {"user_id": user_id, "limit": limit, "offset": offset}
-        clauses = ["user_id = %(user_id)s", VISIBLE_NOTIFICATION_SQL]
-        match view:
-            case "active":
-                clauses.append("archived_at IS NULL")
-            case "archived":
-                clauses.append("archived_at IS NOT NULL")
-            case unreachable:
-                assert_never(unreachable)
-        if unread_only:
-            clauses.append("is_read IS FALSE")
+        clauses = _user_list_clauses(view, unread_only, types)
         if types is not None:
-            clauses.append("type = ANY(%(types)s)")
             params["types"] = [kind.value for kind in types]
         where = " AND ".join(clauses)
         async with self.session() as db:
@@ -76,6 +85,33 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 f"SELECT {self._select_list()} FROM notifications "
                 f"WHERE {where} ORDER BY created_at DESC, id DESC "
                 "OFFSET %(offset)s LIMIT %(limit)s",
+                params,
+            )
+            return [NotificationRecord.from_row(row) for row in rows]
+
+    async def list_page_for_user(
+        self,
+        user_id: UUID,
+        *,
+        view: Literal["active", "archived"] = "active",
+        unread_only: bool = False,
+        types: Sequence[NotificationKind] | None = None,
+        limit: int = 50,
+        before: tuple[datetime, UUID] | None = None,
+    ) -> Sequence[NotificationRecord]:
+        """Return a live seek page plus one lookahead row, under the current user's filters."""
+        params: dict[str, UUID | int | datetime | list[str]] = {"user_id": user_id, "limit": limit + 1}
+        clauses = _user_list_clauses(view, unread_only, types)
+        if types is not None:
+            params["types"] = [kind.value for kind in types]
+        if before is not None:
+            clauses.append("(created_at, id) < (%(before_created_at)s, %(before_id)s)")
+            params["before_created_at"], params["before_id"] = before
+        where = " AND ".join(clauses)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM notifications "
+                f"WHERE {where} ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
                 params,
             )
             return [NotificationRecord.from_row(row) for row in rows]

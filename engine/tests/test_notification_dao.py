@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -112,3 +113,38 @@ async def test_count_predicates_match_bulk_scope(
         assert isinstance(bound_types, list)
         assert all(type(value) is str for value in bound_types)
     assert result == 0
+
+
+@pytest.mark.parametrize("types", [None, [], [NotificationKind.BROADCAST]])
+@pytest.mark.parametrize("unread_only", [False, True])
+@pytest.mark.parametrize("view", ["active", "archived"])
+@pytest.mark.parametrize("seek", [False, True])
+async def test_page_seeks_tuple_with_lookahead_under_every_filter(
+    notification_db: NotificationConnection,
+    types: list[NotificationKind] | None,
+    unread_only: bool,
+    view: Literal["active", "archived"],
+    seek: bool,
+) -> None:
+    # Given
+    boundary = (datetime(2026, 10, 23, 12, 0, 0, 123456, tzinfo=UTC), UUID(int=30))
+    # When
+    result = await notification_dao.list_page_for_user(
+        USER_ID, types=types, unread_only=unread_only, view=view, limit=7, before=boundary if seek else None
+    )
+    # Then
+    query, params = notification_db.executed[0]
+    assert "user_id = %(user_id)s AND " + RETAINED_SCOPE in query
+    assert ("archived_at IS NULL" if view == "active" else "archived_at IS NOT NULL") in query
+    assert ("is_read IS FALSE" in query) is unread_only
+    assert ("type = ANY(%(types)s)" in query) is (types is not None)
+    assert ("(created_at, id) < (%(before_created_at)s, %(before_id)s)" in query) is seek
+    assert query.endswith("ORDER BY created_at DESC, id DESC LIMIT %(limit)s")
+    assert "OFFSET" not in query
+    assert params == {
+        "user_id": USER_ID,
+        "limit": 8,
+        **({} if types is None else {"types": [kind.value for kind in types]}),
+        **({"before_created_at": boundary[0], "before_id": boundary[1]} if seek else {}),
+    }
+    assert result == []
