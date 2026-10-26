@@ -42,6 +42,11 @@ export const AdmissionStatus = { PENDING: "pending", APPROVED: "approved", REJEC
 export const AdmissionStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("approved"), z.literal("rejected"), z.literal("withdrawn")]), z.string());
 export type AdmissionStatus = z.infer<typeof AdmissionStatusSchema>;
 
+export const AgentAccessReasonValues = ["creator","administrator","company","direct","department"] as const;
+export const AgentAccessReason = { CREATOR: "creator", ADMINISTRATOR: "administrator", COMPANY: "company", DIRECT: "direct", DEPARTMENT: "department" } as const;
+export const AgentAccessReasonSchema = z.intersection(z.union([z.literal("creator"), z.literal("administrator"), z.literal("company"), z.literal("direct"), z.literal("department")]), z.string());
+export type AgentAccessReason = z.infer<typeof AgentAccessReasonSchema>;
+
 export const AgentActivityResponseSchema = z.looseObject({ ["action_type"]: ActivityActionSchema, ["created_at"]: z.union([z.string(), z.null()]), ["detail"]: z.looseObject({  }), ["id"]: z.string(), ["related_id"]: z.union([z.string(), z.null()]), ["summary"]: z.string() });
 export type AgentActivityResponse = z.infer<typeof AgentActivityResponseSchema>;
 
@@ -97,7 +102,7 @@ export const AgentStatus = { CREATING: "creating", RUNNING: "running", IDLE: "id
 export const AgentStatusSchema = z.intersection(z.union([z.literal("creating"), z.literal("running"), z.literal("idle"), z.literal("stopped"), z.literal("error")]), z.string());
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
-export const AgentOutSchema = z.looseObject({ ["access_mode"]: AgentSharingModeSchema.optional(), ["agent_type"]: z.string().optional(), ["api_key_hash"]: z.union([z.string(), z.null()]).optional(), ["autonomy_policy"]: JsonOutputObjectSchema, ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["bio"]: z.union([z.string(), z.null()]).optional(), ["cache_creation_tokens_month"]: z.number().refine(Number.isInteger).optional(), ["cache_creation_tokens_today"]: z.number().refine(Number.isInteger).optional(), ["cache_creation_tokens_total"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_month"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_today"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_total"]: z.number().refine(Number.isInteger).optional(), ["company_access_level"]: CompanyAccessLevelSchema.optional(), ["context_window_size"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["creator_id"]: z.guid(), ["creator_username"]: z.union([z.string(), z.null()]).optional(), ["expires_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["fallback_model_id"]: z.union([z.guid(), z.null()]).optional(), ["gogcli_enabled"]: z.boolean().optional(), ["has_api_key"]: z.boolean().optional(), ["heartbeat_active_hours"]: z.string().optional(), ["heartbeat_enabled"]: z.boolean().optional(), ["heartbeat_interval_minutes"]: z.number().refine(Number.isInteger).optional(), ["id"]: z.guid(), ["is_expired"]: z.boolean().optional(), ["is_system"]: z.boolean().optional(), ["last_active_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["last_heartbeat_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["llm_calls_today"]: z.number().refine(Number.isInteger).optional(), ["max_llm_calls_per_day"]: z.number().refine(Number.isInteger).optional(), ["max_tokens_per_day"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["max_tokens_per_month"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["max_tool_rounds"]: z.number().refine(Number.isInteger).optional(), ["max_triggers"]: z.number().refine(Number.isInteger).optional(), ["min_poll_interval_min"]: z.number().refine(Number.isInteger).optional(), ["name"]: z.string(), ["onboarded_for_me"]: z.boolean().optional(), ["openclaw_last_seen"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["primary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["role_description"]: z.string(), ["secondary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["status"]: AgentStatusSchema, ["timezone"]: z.union([z.string(), z.null()]).optional(), ["tokens_used_month"]: z.number().refine(Number.isInteger), ["tokens_used_today"]: z.number().refine(Number.isInteger), ["tokens_used_total"]: z.number().refine(Number.isInteger).optional(), ["unread_count"]: z.number().refine(Number.isInteger).optional(), ["webhook_rate_limit"]: z.number().refine(Number.isInteger).optional(), ["welcome_message"]: z.union([z.string(), z.null()]).optional() });
+export const AgentOutSchema = z.looseObject({ ["access_mode"]: AgentSharingModeSchema.optional(), ["access_reason"]: z.union([AgentAccessReasonSchema, z.null()]).optional(), ["agent_type"]: z.string().optional(), ["api_key_hash"]: z.union([z.string(), z.null()]).optional(), ["autonomy_policy"]: JsonOutputObjectSchema, ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["bio"]: z.union([z.string(), z.null()]).optional(), ["cache_creation_tokens_month"]: z.number().refine(Number.isInteger).optional(), ["cache_creation_tokens_today"]: z.number().refine(Number.isInteger).optional(), ["cache_creation_tokens_total"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_month"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_today"]: z.number().refine(Number.isInteger).optional(), ["cache_read_tokens_total"]: z.number().refine(Number.isInteger).optional(), ["company_access_level"]: CompanyAccessLevelSchema.optional(), ["context_window_size"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["creator_id"]: z.guid(), ["creator_username"]: z.union([z.string(), z.null()]).optional(), ["expires_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["fallback_model_id"]: z.union([z.guid(), z.null()]).optional(), ["gogcli_enabled"]: z.boolean().optional(), ["has_api_key"]: z.boolean().optional(), ["heartbeat_active_hours"]: z.string().optional(), ["heartbeat_enabled"]: z.boolean().optional(), ["heartbeat_interval_minutes"]: z.number().refine(Number.isInteger).optional(), ["id"]: z.guid(), ["is_expired"]: z.boolean().optional(), ["is_system"]: z.boolean().optional(), ["last_active_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["last_heartbeat_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["llm_calls_today"]: z.number().refine(Number.isInteger).optional(), ["max_llm_calls_per_day"]: z.number().refine(Number.isInteger).optional(), ["max_tokens_per_day"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["max_tokens_per_month"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["max_tool_rounds"]: z.number().refine(Number.isInteger).optional(), ["max_triggers"]: z.number().refine(Number.isInteger).optional(), ["min_poll_interval_min"]: z.number().refine(Number.isInteger).optional(), ["name"]: z.string(), ["onboarded_for_me"]: z.boolean().optional(), ["openclaw_last_seen"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["primary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["role_description"]: z.string(), ["secondary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["status"]: AgentStatusSchema, ["timezone"]: z.union([z.string(), z.null()]).optional(), ["tokens_used_month"]: z.number().refine(Number.isInteger), ["tokens_used_today"]: z.number().refine(Number.isInteger), ["tokens_used_total"]: z.number().refine(Number.isInteger).optional(), ["unread_count"]: z.number().refine(Number.isInteger).optional(), ["webhook_rate_limit"]: z.number().refine(Number.isInteger).optional(), ["welcome_message"]: z.union([z.string(), z.null()]).optional() });
 export type AgentOut = z.infer<typeof AgentOutSchema>;
 
 export const AgentPermissionUserAccessSchema = z.looseObject({ ["access_level"]: PermissionAccessLevelSchema.optional(), ["id"]: z.union([z.guid(), z.null()]).optional(), ["user_id"]: z.union([z.guid(), z.null()]).optional() });
@@ -148,6 +153,12 @@ export const ApprovalStatusValues = ["pending","approved","rejected"] as const;
 export const ApprovalStatus = { PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" } as const;
 export const ApprovalStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("approved"), z.literal("rejected")]), z.string());
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
+
+export const AssignmentOutSchema = z.looseObject({ ["department_id"]: z.union([z.guid(), z.null()]), ["tenant_id"]: z.guid(), ["user_id"]: z.guid() });
+export type AssignmentOut = z.infer<typeof AssignmentOutSchema>;
+
+export const AssignmentsOutSchema = z.looseObject({ ["department_ids"]: z.array(z.guid()), ["tenant_id"]: z.guid(), ["user_id"]: z.guid() });
+export type AssignmentsOut = z.infer<typeof AssignmentsOutSchema>;
 
 export const AuthUserSchema = z.looseObject({ ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["display_name"]: z.string(), ["email"]: z.union([z.string(), z.null()]).optional(), ["email_verified"]: z.boolean().optional(), ["id"]: z.guid(), ["identity_id"]: z.union([z.guid(), z.null()]).optional(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["is_platform_admin"]: z.boolean().optional(), ["must_change_password"]: z.boolean().optional(), ["primary_mobile"]: z.union([z.string(), z.null()]).optional(), ["registration_source"]: z.union([z.string(), z.null()]).optional(), ["role"]: UserRoleSchema, ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["timezone"]: z.union([z.string(), z.null()]).optional(), ["title"]: z.union([z.string(), z.null()]).optional() });
 export type AuthUser = z.infer<typeof AuthUserSchema>;
@@ -346,6 +357,36 @@ export const DeletionStatusValues = ["pending","executed","cancelled"] as const;
 export const DeletionStatus = { PENDING: "pending", EXECUTED: "executed", CANCELLED: "cancelled" } as const;
 export const DeletionStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("executed"), z.literal("cancelled")]), z.string());
 export type DeletionStatus = z.infer<typeof DeletionStatusSchema>;
+
+export const DepartmentAssignmentSchema = z.looseObject({ ["department_id"]: z.union([z.guid(), z.null()]) });
+export type DepartmentAssignment = z.infer<typeof DepartmentAssignmentSchema>;
+
+export const DepartmentAssignmentsSchema = z.looseObject({ ["department_ids"]: z.array(z.guid()) });
+export type DepartmentAssignments = z.infer<typeof DepartmentAssignmentsSchema>;
+
+export const DepartmentCreateSchema = z.looseObject({ ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
+export type DepartmentCreate = z.infer<typeof DepartmentCreateSchema>;
+
+export const DepartmentDeletionPreviewOutSchema = z.looseObject({ ["agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["membership_count"]: z.number().min(0).refine(Number.isInteger) });
+export type DepartmentDeletionPreviewOut = z.infer<typeof DepartmentDeletionPreviewOutSchema>;
+
+export const DepartmentMemberOutSchema = z.looseObject({ ["display_name"]: z.string(), ["membership_id"]: z.guid() });
+export type DepartmentMemberOut = z.infer<typeof DepartmentMemberOutSchema>;
+
+export const DepartmentMembersOutSchema = z.looseObject({ ["members"]: z.array(DepartmentMemberOutSchema) });
+export type DepartmentMembersOut = z.infer<typeof DepartmentMembersOutSchema>;
+
+export const DepartmentOptionOutSchema = z.looseObject({ ["id"]: z.guid(), ["name"]: z.string() });
+export type DepartmentOptionOut = z.infer<typeof DepartmentOptionOutSchema>;
+
+export const DepartmentOptionsOutSchema = z.looseObject({ ["departments"]: z.array(DepartmentOptionOutSchema) });
+export type DepartmentOptionsOut = z.infer<typeof DepartmentOptionsOutSchema>;
+
+export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
+export type DepartmentOut = z.infer<typeof DepartmentOutSchema>;
+
+export const DepartmentsOutSchema = z.looseObject({ ["assignments"]: z.array(AssignmentOutSchema), ["departments"]: z.array(DepartmentOutSchema) });
+export type DepartmentsOut = z.infer<typeof DepartmentsOutSchema>;
 
 export const DingTalkExtraConfigSchema = z.looseObject({ ["agent_id"]: z.string().optional(), ["connection_mode"]: z.string().optional() });
 export type DingTalkExtraConfig = z.infer<typeof DingTalkExtraConfigSchema>;
@@ -555,6 +596,9 @@ export type PressKeysRequest = z.infer<typeof PressKeysRequestSchema>;
 
 export const ProgressUpdateSchema = z.looseObject({ ["note"]: z.union([z.string(), z.null()]).optional(), ["status"]: z.union([KeyResultStatusSchema, z.null()]).optional(), ["value"]: z.number() });
 export type ProgressUpdate = z.infer<typeof ProgressUpdateSchema>;
+
+export const ReadSelectedRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type ReadSelectedRequest = z.infer<typeof ReadSelectedRequestSchema>;
 
 export const RegisterInitRequestSchema = z.looseObject({ ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.email(), ["invitation_code"]: z.union([z.string(), z.null()]).optional(), ["password"]: z.string().refine(value => [...value].length >= 6).refine(value => [...value].length <= 128), ["target_tenant_id"]: z.union([z.guid(), z.null()]).optional() });
 export type RegisterInitRequest = z.infer<typeof RegisterInitRequestSchema>;

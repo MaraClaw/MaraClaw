@@ -804,6 +804,24 @@
         "title": "AdmissionTenant",
         "type": "object"
       },
+      "AgentAccessReason": {
+        "enum": [
+          "creator",
+          "administrator",
+          "company",
+          "direct",
+          "department"
+        ],
+        "title": "AgentAccessReason",
+        "type": "string",
+        "x-enum-varnames": [
+          "CREATOR",
+          "ADMINISTRATOR",
+          "COMPANY",
+          "DIRECT",
+          "DEPARTMENT"
+        ]
+      },
       "AgentActivityResponse": {
         "properties": {
           "action_type": {
@@ -1422,6 +1440,17 @@
           "access_mode": {
             "$ref": "#/components/schemas/AgentSharingMode",
             "default": "company"
+          },
+          "access_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAccessReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Winning access reason for this viewer; null when no same-tenant access policy matches."
           },
           "agent_type": {
             "default": "openclaw",
@@ -5069,6 +5098,28 @@
           "name"
         ],
         "title": "DepartmentCreate",
+        "type": "object"
+      },
+      "DepartmentDeletionPreviewOut": {
+        "properties": {
+          "agent_grant_count": {
+            "description": "Department-to-agent grant associations, not people losing effective access.",
+            "minimum": 0.0,
+            "title": "Agent Grant Count",
+            "type": "integer"
+          },
+          "membership_count": {
+            "description": "Department membership associations currently selected for removal.",
+            "minimum": 0.0,
+            "title": "Membership Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "membership_count",
+          "agent_grant_count"
+        ],
+        "title": "DepartmentDeletionPreviewOut",
         "type": "object"
       },
       "DepartmentMemberOut": {
@@ -10661,6 +10712,25 @@
           "recipients"
         ],
         "title": "PublishNoticeOut",
+        "type": "object"
+      },
+      "ReadSelectedRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "ReadSelectedRequest",
         "type": "object"
       },
       "ReadyResponse": {
@@ -27430,6 +27500,72 @@
         ]
       }
     },
+    "/api/departments/{department_id}/deletion-preview": {
+      "get": {
+        "description": "Advisory association counts; deletion independently rechecks current state.",
+        "operationId": "get_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f64656c6574696f6e2d70726576696577",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "department_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Department Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentDeletionPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Department Deletion Preview",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
     "/api/departments/{department_id}/members": {
       "get": {
         "operationId": "get_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f6d656d62657273",
@@ -31142,6 +31278,52 @@
           }
         ],
         "summary": "Mark All Read",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/read-selected": {
+      "post": {
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f726561642d73656c6563746564",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadSelectedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Selected Read",
         "tags": [
           "notifications"
         ]
@@ -37545,6 +37727,7 @@
       "AdmissionDecision",
       "AdmissionMethod",
       "AdmissionStatus",
+      "AgentAccessReason",
       "AgentActivityResponse",
       "AgentApprovalResolveRequest",
       "AgentConversationResponse",
@@ -37565,6 +37748,8 @@
       "ApprovalAction",
       "ApprovalDecisionRequest",
       "ApprovalStatus",
+      "AssignmentOut",
+      "AssignmentsOut",
       "AuthUser",
       "BroadcastRequest",
       "BulkToolUpdateItem",
@@ -37595,6 +37780,14 @@
       "DeletionPage",
       "DeletionRequestCreate",
       "DeletionStatus",
+      "DepartmentAssignment",
+      "DepartmentAssignments",
+      "DepartmentCreate",
+      "DepartmentDeletionPreviewOut",
+      "DepartmentMembersOut",
+      "DepartmentOptionsOut",
+      "DepartmentOut",
+      "DepartmentsOut",
       "DingTalkChannelPayload",
       "DiscordChannelPayload",
       "DragRequest",
@@ -37655,6 +37848,7 @@
       "PersonalAssistantRequest",
       "PressKeysRequest",
       "ProgressUpdate",
+      "ReadSelectedRequest",
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",
@@ -37725,6 +37919,7 @@
       "AdmissionMethod",
       "AdmissionStatus",
       "AdmissionTenant",
+      "AgentAccessReason",
       "AgentActivityResponse",
       "AgentApprovalResolveRequest",
       "AgentBayLiveEvent",
@@ -37749,6 +37944,8 @@
       "ApprovalStatus",
       "ArchivedSessionDetail",
       "ArchivedSessionErrorEvent",
+      "AssignmentOut",
+      "AssignmentsOut",
       "AtlassianTestResponse",
       "AtlassianTestSuccess",
       "AtlassianToolPreview",
@@ -37792,6 +37989,16 @@
       "DeletionStatus",
       "DeletionSummary",
       "DeletionViewer",
+      "DepartmentAssignment",
+      "DepartmentAssignments",
+      "DepartmentCreate",
+      "DepartmentDeletionPreviewOut",
+      "DepartmentMemberOut",
+      "DepartmentMembersOut",
+      "DepartmentOptionOut",
+      "DepartmentOptionsOut",
+      "DepartmentOut",
+      "DepartmentsOut",
       "DingTalkChannelPayload",
       "DingTalkExtraConfig",
       "DiscordChannelPayload",
@@ -37868,6 +38075,7 @@
       "PersonalAssistantRequest",
       "PressKeysRequest",
       "ProgressUpdate",
+      "ReadSelectedRequest",
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",

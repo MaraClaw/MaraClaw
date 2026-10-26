@@ -25,6 +25,8 @@ type TerminalReason = Literal[
     "destination_relationship_changed",
     "destination_session_unavailable",
     "payload_rejected",
+    "whatsapp_window_unavailable",
+    "whatsapp_window_expired",
 ]
 _destination_kind = TypeAdapter(DestinationKind)
 _terminal_reason = TypeAdapter(TerminalReason)

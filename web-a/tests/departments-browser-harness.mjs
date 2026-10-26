@@ -17,7 +17,7 @@ export const admission = {
   applicant: { id: '9693e39c-ec62-4003-9701-7b5b530c9662', email: 'applicant@example.test' },
 }
 const row = (id, tenantId = tenant) => ({ id, email: `${id}@example.test`, display_name: id, role: 'member', is_active: true, is_genesis: false, tenant_id: tenantId, agents_count: 0, created_at: '2026-10-20T00:00:00Z', source: 'local' })
-const admin = { ...row('operator'), identity_id: 'identity', avatar_url: null, role: 'platform_admin', is_platform_admin: true, is_genesis: true, email_verified: true, must_change_password: false }
+const admin = { ...row('operator'), id: '11111111-1111-4111-8111-111111111111', identity_id: '11111111-1111-4111-8111-111111111111', avatar_url: null, title: null, primary_mobile: null, registration_source: null, role: 'platform_admin', is_platform_admin: true, is_genesis: true, email_verified: true, must_change_password: false }
 export const directory = (name = 'Operations', tenantId = tenant) => ({
   departments: [{ id: departmentId, tenant_id: tenantId, name, created_at: '2026-10-20T00:00:00Z' }, { id: 'engineering', tenant_id: tenantId, name: 'Engineering', created_at: '2026-10-20T00:00:00Z' }],
   assignments: [{ user_id: 'Member', tenant_id: tenantId, department_id: departmentId }, { user_id: 'Member', tenant_id: tenantId, department_id: 'engineering' }],
@@ -35,7 +35,7 @@ export async function createHarness() {
   async function scenario(options, exercise) {
     const browser = await chromium.launch({ headless: true })
     receipt.cleanup.browsersCreated++
-    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], admission: { ...admission } }
+    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], previewStatus: 200, preview: { membership_count: 1, agent_grant_count: 3 }, previewGate: null, previews: [], admission: { ...admission } }
     const errors = []
     const context = await browser.newContext({ ...(options.mobile ? devices['iPhone 14'] : { viewport: { width: options.width ?? 1440, height: 1000 } }), colorScheme: options.scheme ?? 'light', reducedMotion: 'reduce' })
     receipt.cleanup.contextsCreated++
@@ -57,11 +57,19 @@ export async function createHarness() {
         let status = 200
         let exchange
         if (path === '/api/auth/me') body = user
+        else if (path === '/api/tenants/me') body = { id: tenant, is_active: true, is_default_end_user_org: false }
         else if (path === '/api/auth/login') body = { access_token: 'synthetic-department-token', token_type: 'bearer', user }
         else if (path === '/api/admin/companies') body = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
         else if (path === '/api/admin/platform-admins') body = []
         else if (path === '/api/users/page') body = { items: [row('Member', selected)], next_cursor: null }
         else if (path === '/api/departments') body = state.directories[selected]
+        else if (path === `/api/departments/${encodeURIComponent(departmentId)}/deletion-preview` && request.method() === 'GET') {
+          status = state.previewStatus
+          body = status === 200 ? state.preview : { detail: 'Synthetic preview unavailable' }
+          exchange = { gate: state.previewGate, delivered: Promise.withResolvers() }
+          state.previews.push(exchange)
+          if (exchange.gate) await exchange.gate.promise
+        }
         else if (path === `/api/departments/${encodeURIComponent(departmentId)}` && request.method() === 'DELETE') {
           status = state.deleteStatus
           const current = state.directories[selected]
@@ -91,8 +99,8 @@ export async function createHarness() {
       await page.screenshot({ path: join(output, 'failure.png') })
       throw error
     } finally {
-      for (const exchange of state.exchanges) exchange.gate?.resolve()
-      await Promise.all(state.exchanges.map((exchange) => exchange.delivered.promise))
+      for (const exchange of [...state.exchanges, ...state.previews]) exchange.gate?.resolve()
+      await Promise.all([...state.exchanges, ...state.previews].map((exchange) => exchange.delivered.promise))
       await context.close()
       receipt.cleanup.contextsClosed++
       await browser.close()

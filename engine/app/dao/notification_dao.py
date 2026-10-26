@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import ClassVar, Literal, assert_never, final
 from uuid import UUID
 
-from app.core.json_types import int_from_row
+from app.core.json_types import int_from_row, uuid_from_row
 from app.core.notification_kinds import NotificationKind
 from app.dao.base import BaseDAO
 from app.dao.company_transfer_disposition_sql import VISIBLE_NOTIFICATION_SQL
@@ -115,6 +115,20 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 + VISIBLE_NOTIFICATION_SQL,
                 {"id": notification_id, "user_id": user_id},
             )
+
+    async def mark_selected_read_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+        distinct_ids = sorted(set(ids))
+        params = {"ids": distinct_ids, "user_id": user_id}
+        where = "id = ANY(%(ids)s) AND user_id = %(user_id)s AND " + VISIBLE_NOTIFICATION_SQL
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT id FROM notifications WHERE {where} ORDER BY id FOR UPDATE",
+                params,
+            )
+            if {uuid_from_row(row["id"]) for row in rows} != set(distinct_ids):
+                return False
+            await db.execute(f"UPDATE notifications SET is_read = TRUE WHERE {where}", params)
+            return True
 
     async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[NotificationKind] | None = None) -> None:
         params: dict[str, object] = {"user_id": user_id}

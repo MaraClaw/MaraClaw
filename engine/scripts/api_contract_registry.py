@@ -6,6 +6,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from app.core.domain.activity import ActivityAction
 from app.core.domain.agents import (
+    AgentAccessReason,
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
@@ -40,6 +41,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "auth",
         "member_auth",
         "company_admissions",
+        "departments",
         "focus",
         "notification",
         "okr",
@@ -62,6 +64,7 @@ AUDITED_HTTP_MODULES = frozenset(
 
 ENUM_TYPES: tuple[type[StrEnum], ...] = (
     ActivityAction,
+    AgentAccessReason,
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,

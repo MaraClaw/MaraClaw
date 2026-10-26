@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { ReadSelectedRequestSchema } from '../src/lib/engine-contracts.generated'
 
 import { notificationCategories, NotificationKind, notificationViewSchema, type NotificationCategory, type NotificationRow } from '../src/lib/notifications-api'
 import { originalToken, prepareWorkspace, replacementToken } from './session-fencing-fixture'
@@ -40,6 +41,12 @@ export async function prepareNotifications(page: Page, initial: readonly Notific
       if (url.pathname.endsWith('/read-all')) {
         rows = rows.map((row) => ({ ...row, is_read: row.is_read || (row.archived_at === null && matches(row, category)) }))
         return route.fulfill({ status: 204 })
+      }
+      if (url.pathname.endsWith('/read-selected')) {
+        const { ids } = ReadSelectedRequestSchema.parse(request.postDataJSON())
+        if (ids.some((id) => !rows.some((row) => row.id === id))) return route.fulfill({ status: 404, json: { detail: 'Notification not found' } })
+        rows = rows.map((row) => ({ ...row, is_read: row.is_read || ids.includes(row.id) }))
+        return route.fulfill({ json: { ok: true } })
       }
       const [, id, action] = /^\/api\/notifications\/([^/]+)\/(read|archive|restore)$/.exec(url.pathname) ?? []
       expect(action, 'Unexpected notification write').toBeDefined()

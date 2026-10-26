@@ -1,10 +1,10 @@
 """Notification API - list, archive, read state, and broadcast."""
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
@@ -136,6 +136,21 @@ async def mark_all_read(
 ) -> NotificationReadResponse:
     """Mark matching notifications as read for the current user."""
     await notification_dao.mark_all_read_for_user(current_user.id, types=_types_for_category(category))
+    return {"ok": True}
+
+
+class ReadSelectedRequest(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+
+
+@router.post("/notifications/read-selected")
+async def mark_selected_read(
+    req: ReadSelectedRequest, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    if not await notification_dao.mark_selected_read_for_user(req.ids, current_user.id):
+        raise HTTPException(404, "Notification not found")
     return {"ok": True}
 
 

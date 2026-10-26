@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { skipToken, useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -10,7 +11,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
-import type { Department } from '@/lib/departments-api'
+import { previewDepartmentDeletion, type Department } from '@/lib/departments-api'
 import { ApiError } from '@/lib/http'
 import { useDeleteDepartment, useRenameDepartment } from './users-department-queries'
 
@@ -30,6 +31,14 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
   const deletion = useDeleteDepartment()
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [previewAttempt, setPreviewAttempt] = useState(0)
+  const preview = useQuery({
+    queryKey: ['admin-department-deletion-preview', tenantId, department.id, formId, previewAttempt, confirming],
+    queryFn: confirming ? ({ signal }) => previewDepartmentDeletion(tenantId, department.id, signal) : skipToken,
+    gcTime: 0,
+    retry: false,
+  })
+  const previewReady = preview.isSuccess && !preview.isFetching
   const editButton = useRef<HTMLButtonElement>(null)
   const deleteButton = useRef<HTMLButtonElement>(null)
   const confirmHeading = useRef<HTMLHeadingElement>(null)
@@ -88,7 +97,7 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
   }
 
   function onDelete() {
-    if (deleting.current) return
+    if (deleting.current || !previewReady || !isCurrent()) return
     deleting.current = true
     deletion.mutate({ tenantId, departmentId: department.id }, {
       onSuccess: () => {
@@ -123,6 +132,20 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
             <p id={`${formId}-delete-consequence`} className="text-sm text-muted-foreground">
               This permanently removes the department, its member assignments and its department-based agent access grants. Members and their other access stay unchanged. This cannot be undone.
             </p>
+            {preview.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading deletion preview…</p> : preview.isError ? (
+              <div className="space-y-2">
+                <p role="alert" className="text-sm text-destructive">Could not load deletion preview. Try again before deleting.</p>
+                <Button type="button" variant="outline" size="sm" className="h-11 sm:h-9" onClick={() => { confirmHeading.current?.focus(); void preview.refetch() }}>Retry preview</Button>
+              </div>
+            ) : preview.data ? (
+              <div className="space-y-2 text-sm">
+                <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
+                  <dt>Department memberships</dt><dd className="tabular-nums">{preview.data.membership_count}</dd>
+                  <dt>Department-to-agent grants</dt><dd className="tabular-nums">{preview.data.agent_grant_count}</dd>
+                </dl>
+                <p className="text-xs text-muted-foreground sm:text-sm">These associations will be removed, not people. Other access may remain. Counts may change before deletion.</p>
+              </div>
+            ) : null}
             {deletion.isError ? (
               <p role="alert" className="text-sm text-destructive wrap-anywhere">
                 {deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete department. Check your connection and try again.'}
@@ -132,7 +155,7 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
               <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" disabled={deletion.isPending} onClick={cancelDeletion}>
                 Cancel
               </Button>
-              <Button type="button" variant="destructive" size="sm" className="h-11 sm:h-9" disabled={deletion.isPending} onClick={onDelete}>
+              <Button type="button" variant="destructive" size="sm" className="h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 sm:h-9" disabled={deletion.isPending || !previewReady} onClick={onDelete}>
                 Delete department
               </Button>
             </div>
@@ -213,7 +236,7 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
               variant="ghost"
               size="sm"
               className="h-11 text-destructive sm:h-9"
-              onClick={() => { deletion.reset(); setConfirming(true) }}
+              onClick={() => { deletion.reset(); setPreviewAttempt((value) => value + 1); setConfirming(true) }}
             >
               Delete<span className="sr-only"> {department.name}</span>
             </Button>

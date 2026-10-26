@@ -30,6 +30,7 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
+from app.services.channels.whatsapp_window import provider_timestamp, utcnow
 
 router = APIRouter(tags=["whatsapp"])
 
@@ -237,6 +238,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
     signature = request.headers.get("x-hub-signature-256")
     if not _verify_signature(app_secret, body, signature):
         return Response(status_code=401)
+    received_at = utcnow()
 
     try:
         payload = json_loads_object(body)
@@ -252,6 +254,10 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
             value = json_object_from(change.get("value"))
             messages = value.get("messages")
             message_items = messages if isinstance(messages, list) else []
+            metadata = json_object_from(value.get("metadata"))
+            account = json_as_str_or(metadata.get("phone_number_id")).strip()
+            if not account or account != (config.app_id or "").strip():
+                continue
 
             for message_raw in message_items:
                 message = json_object_from(message_raw)
@@ -274,17 +280,18 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                 )
                 from app.services.quota_guard import AgentExpired, QuotaExceeded
 
-                metadata = json_object_from(value.get("metadata"))
-                account = json_as_str_or(metadata.get("phone_number_id")) or config.app_id or ""
                 native = ChannelEvent(
                     config_id=config.id,
                     agent_id=agent_id,
                     provider="whatsapp",
-                    event_key=json.dumps([account, message_id], separators=(",", ":")),
+                    event_key=message_id,
                     sender_id=sender_phone,
                     conversation_id=f"whatsapp_{sender_phone}",
                     text=user_text,
                     kind=json_as_str_or(message.get("type"), "text"),
+                    provider_timestamp=provider_timestamp(message.get("timestamp"), received_at),
+                    provider_account_id=account,
+                    provider_timestamp_source=json.dumps(message.get("timestamp"), separators=(",", ":")),
                 )
                 try:
                     await accept_channel_event(native)

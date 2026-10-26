@@ -37,8 +37,9 @@ Scope: auth/theme context lifetimes, session-fenced query adapters, notification
   Infinite-query wrappers fence manual next-page, previous-page and refetch actions as well as the query function.
 - Notification lists start at offset 0, request 50 rows and advance only after a full 50-row page.
   Only `notificationUnreadOptions` sets the 30,000 ms polling interval; category belongs in both query keys.
-- Both notification read factories use mutation scope `notifications-read`.
+- Notification single, all, selected-read, archive and restore factories use mutation scope `notifications-read`.
   Success cancels the `notifications` prefix before invalidating every category with `refetchType: 'all'`.
+- `use-notification-selection.ts` scopes selected loaded rows to the current owner/view/category and caps selection at 200. Selection identity fences late read completions; context identity fences load-more completions.
 - Update polling: 1,500 ms for `isActiveUpdate(run)`, otherwise 30,000 ms, including background polling.
   Query enabled only for a nonempty agent ID; stale time 0, always refetch on mount and refetch on focus.
   Newly observed terminal runs refresh agent/list/detail queries; upgrade success installs its run before invalidation.

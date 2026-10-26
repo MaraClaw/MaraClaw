@@ -4,7 +4,7 @@ import { MutationObserver, QueryObserver } from '@tanstack/react-query'
 
 import {
   notificationArchiveOptions, notificationKeys, notificationRestoreOptions,
-  notificationsOptions, notificationUnreadOptions,
+  notificationsOptions, notificationUnreadOptions, notificationsReadSelectedOptions,
 } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { createSessionQueryScope, ownQueryClient } from '../src/hooks/session-query-client.ts'
@@ -16,6 +16,40 @@ const notification = notificationSchema.parse({
   id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: NotificationKind.Broadcast, title: 'Notice', body: '',
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: null, archived_at: null,
 })
+
+for (const retire of ['logout', 'replacement', 'same-token'] as const) for (const status of [200, 503]) {
+  test(`selected read late ${status} cannot affect a ${retire} session`, async (t) => {
+    // Given
+    const { policy } = createFixture()
+    const owner = policy.capture()
+    const { client } = createSessionQueryScope(owner)
+    t.after(() => client.clear())
+    t.after(ownQueryClient(policy, owner, client))
+    const response = Promise.withResolvers<Response>()
+    const started = Promise.withResolvers<void>()
+    t.after(() => response.resolve(Response.json({ ok: true })))
+    t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
+    const mutation = new MutationObserver(client, ownMutationOptions(policy, owner, notificationsReadSelectedOptions(client)))
+    const rejected = assert.rejects(mutation.mutate([notification.id]), StaleSessionError)
+    await started.promise
+    // When
+    switch (retire) {
+      case 'logout': policy.logout(); break
+      case 'replacement': policy.replace('token-b'); break
+      case 'same-token': policy.replace('token-a'); break
+    }
+    const replacement = createSessionQueryScope(policy.capture()).client
+    t.after(() => replacement.clear())
+    replacement.setQueryData(notificationKeys.list(0), [notification])
+    replacement.setQueryData(notificationKeys.unread, { unread_count: 7 })
+    response.resolve(Response.json(status === 200 ? { ok: true } : { detail: 'Unavailable' }, { status }))
+    await rejected
+    // Then
+    assert.deepEqual(replacement.getQueryData(notificationKeys.list(0)), [notification])
+    assert.deepEqual(replacement.getQueryData(notificationKeys.unread), { unread_count: 7 })
+    assert.ok(replacement.getQueryCache().getAll().every((query) => !query.state.isInvalidated))
+  })
+}
 
 test('a late active response cannot overwrite the selected archived view', async (t) => {
   // Given

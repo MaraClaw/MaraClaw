@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { z } from 'zod'
 
-import { archiveNotification, listNotifications, markAllNotificationsRead, NotificationKind, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
+import { archiveNotification, listNotifications, markAllNotificationsRead, markSelectedNotificationsRead, NotificationKind, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 
 test('notification list preserves every canonical kind as its original wire string', async (t) => {
@@ -147,4 +147,38 @@ test('bulk notification read carries the selected category in the POST request',
   await markAllNotificationsRead('social')
   // Then
   assert.deepEqual(requests, [{ url: '/api/notifications/read-all?category=social', method: 'POST' }])
+})
+
+const selectedId = '11111111-1111-4111-8111-111111111111'
+for (const ids of [[], Array.from({ length: 201 }, () => selectedId), ['invalid-id']]) {
+  test(`selected read rejects invalid submitted IDs before transport (${ids.length})`, async (t) => {
+    // Given
+    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }))
+    // When / Then
+    await assert.rejects(markSelectedNotificationsRead(ids), z.ZodError)
+    assert.equal(fetch.mock.callCount(), 0)
+  })
+}
+
+test('selected read submits one bounded batch without deduplicating away the submitted bound', async (t) => {
+  // Given
+  const requests: { readonly input: string; readonly body: unknown; readonly method: string | undefined }[] = []
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ input: String(input), body: JSON.parse(String(init?.body)), method: init?.method })
+    return Response.json({ ok: true })
+  })
+  const ids = Array.from({ length: 200 }, () => selectedId)
+  // When
+  await markSelectedNotificationsRead(ids)
+  // Then
+  assert.deepEqual(requests, [{ input: '/api/notifications/read-selected', body: { ids }, method: 'POST' }])
+})
+
+test('selected read parses its response and preserves a generic batch failure', async (t) => {
+  // Given
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false }))
+  // When / Then
+  await assert.rejects(markSelectedNotificationsRead([selectedId]), z.ZodError)
+  fetch.mock.mockImplementation(async () => Response.json({ detail: 'Notification not found' }, { status: 404 }))
+  await assert.rejects(markSelectedNotificationsRead([selectedId]), (error: unknown) => error instanceof ApiError && error.status === 404)
 })

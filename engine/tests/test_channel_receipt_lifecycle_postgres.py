@@ -10,6 +10,7 @@ from tests.test_channel_event_receipts_postgres import counts
 
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.db.session import get_connection, transaction
+from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.services.channels import submissions
 from app.services.channels.submissions import ChannelEventConflictError, accept_channel_event
 
@@ -110,12 +111,11 @@ async def test_receipt_identity_mismatch_is_a_typed_conflict(channel_db, field):
     fixture = channel_db
     async with transaction(fixture.db.first):
         await accept_channel_event(fixture.event)
-        statement = (
-            "UPDATE channel_event_receipts SET agent_id = %(id)s"
-            if field == "agent_id"
-            else "UPDATE channel_event_receipts SET tenant_id = %(id)s"
-        )
-        await fixture.db.first.execute(statement, {"id": uuid4()})
+        row = await fixture.db.first.fetchone("SELECT * FROM channel_event_receipts")
+        assert row is not None
+        accepted = ChannelEventReceiptRecord.from_row(row)
+        await fixture.db.first.execute("DELETE FROM channel_event_receipts")
+        assert await channel_event_receipt_dao.reserve(replace(accepted, **{field: uuid4()}))
     # When the authenticated native identity is redelivered.
     with pytest.raises(ChannelEventConflictError):
         async with transaction(fixture.db.second):

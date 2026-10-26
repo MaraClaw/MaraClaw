@@ -13,7 +13,14 @@ from app.dao.user_dao import user_dao
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
-from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentCreate, DepartmentMembersOut, DepartmentOut
+from app.schemas.department import (
+    AssignmentOut,
+    AssignmentsOut,
+    DepartmentCreate,
+    DepartmentDeletionPreviewOut,
+    DepartmentMembersOut,
+    DepartmentOut,
+)
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import END_USER_ROLES
 
@@ -91,6 +98,18 @@ async def assign_department(actor: UserRecord, assignment: AssignmentOut) -> Ass
         ),
     )
     return assignment
+
+
+async def preview_department_deletion(
+    actor: UserRecord, department_id: UUID, tenant_id: UUID | None
+) -> DepartmentDeletionPreviewOut:
+    tenant = admin_tenant(actor, tenant_id)
+    if await tenant_dao.get(tenant) is None:
+        raise HTTPException(404, "Organization not found")
+    preview = await org_department_dao.deletion_preview(tenant, department_id)
+    if preview is None:
+        raise HTTPException(404, "Department not found")
+    return preview
 
 
 async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: UUID | None) -> None:

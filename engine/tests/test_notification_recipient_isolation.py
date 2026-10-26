@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
-from typing import override
+from typing import final, override
 from uuid import UUID
 
 import httpx
@@ -34,12 +34,25 @@ RECIPIENTS = pytest.mark.parametrize("actor", [OWNER, SAME_TENANT, FOREIGN_TENAN
 OTHER_RECIPIENTS = pytest.mark.parametrize("actor", [SAME_TENANT, FOREIGN_TENANT], ids=["same", "foreign"])
 
 
+@final
 class _RecipientCursor(_Cursor):
     """Add the ID predicate missing from the shared filter-only cursor fake."""
 
     @override
     async def execute(self, query: str, params: Params = None) -> None:
         sql = " ".join(query.split())
+        if "id = ANY(%(ids)s)" in sql:
+            assert isinstance(params, Mapping)
+            self.raw.executed.append((sql, dict(params)))
+            ids = params["ids"]
+            assert isinstance(ids, list)
+            matching = [row for row in self.raw.notifications if row.id in ids and row.user_id == params["user_id"]]
+            if sql.startswith("SELECT "):
+                self.rows = [{"id": row.id} for row in matching]
+            else:
+                for row in matching:
+                    row.is_read = True
+            return
         if sql.startswith("UPDATE notifications SET archived_at ="):
             assert isinstance(params, Mapping)
             self.raw.executed.append((sql, dict(params)))
@@ -200,3 +213,63 @@ async def test_archive_mutations_hide_foreign_ownership(
     assert foreign.status_code == missing.status_code == 404
     assert foreign.json() == missing.json()
     assert [(row.id, row.is_read, row.archived_at) for row in populated_db.notifications] == before
+
+
+@pytest.mark.parametrize("invalid_id", [UUID(int=4), UUID(int=5), UUID(int=999)], ids=["same", "foreign", "missing"])
+async def test_selected_read_rejects_mixed_invalid_sets_without_writes(
+    client: httpx.AsyncClient, populated_db: NotificationConnection, invalid_id: UUID
+) -> None:
+    # Given: a valid unread selection mixed with one inaccessible selector.
+    before = [(row.id, row.is_read, row.archived_at) for row in populated_db.notifications]
+    # When
+    response = await client.post(
+        "/api/notifications/read-selected",
+        headers={"x-test-user": str(OWNER.id)},
+        json={"ids": [str(PRIVATE_ID), str(invalid_id)]},
+    )
+    # Then
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Notification not found"}
+    assert [(row.id, row.is_read, row.archived_at) for row in populated_db.notifications] == before
+    assert all(not query.startswith("UPDATE ") for query, _params in populated_db.executed)
+
+
+@pytest.mark.parametrize("count", [1, 200])
+async def test_selected_read_accepts_submitted_bounds_and_duplicate_ids(
+    client: httpx.AsyncClient, populated_db: NotificationConnection, count: int
+) -> None:
+    # Given: duplicates of one owned row, with an unselected unread sibling.
+    # When
+    response = await client.post(
+        "/api/notifications/read-selected",
+        headers={"x-test-user": str(OWNER.id)},
+        json={"ids": [str(PRIVATE_ID)] * count},
+    )
+    # Then
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert {row.id for row in populated_db.notifications if row.is_read} == {PRIVATE_ID, OWNER_READ_ID}
+
+
+@pytest.mark.parametrize("ids", [[], [str(PRIVATE_ID)] * 201, ["not-a-uuid"], [None], None])
+async def test_selected_read_validates_submitted_ids_before_database_access(
+    client: httpx.AsyncClient, populated_db: NotificationConnection, ids: list[str | None] | None
+) -> None:
+    # Given / When: invalid UUIDs or submitted bounds, even when deduplication would fit.
+    response = await client.post(
+        "/api/notifications/read-selected", headers={"x-test-user": str(OWNER.id)}, json={"ids": ids}
+    )
+    # Then
+    assert response.status_code == 422
+    assert populated_db.executed == []
+
+
+async def test_selected_read_requires_authentication() -> None:
+    # Given: the real auth dependency, without the membership fixture override.
+    app = FastAPI()
+    app.include_router(notification_api.router, prefix="/api")
+    # When
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/notifications/read-selected", json={"ids": [str(PRIVATE_ID)]})
+    # Then
+    assert response.status_code == 401

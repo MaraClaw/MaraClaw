@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2 } from 'lucide-react'
 import { Link, matchPath, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
+import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Button } from '@/components/ui/button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
@@ -55,10 +56,9 @@ export function AgentLayout() {
   const chat = Boolean(matchPath('/app/agents/:agentId/chat/*', pathname))
   const layoutClass = cn(
     'grid h-full min-h-0 overflow-hidden md:grid-cols-[6rem_minmax(0,1fr)]',
-    chat ? 'grid-rows-[auto_minmax(0,1fr)] md:grid-rows-1'
-      : 'grid-rows-[auto_auto_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]',
+    'grid-rows-[auto_auto_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]',
   )
-  const railClass = cn('md:col-start-1 md:row-start-1', !chat && 'md:row-span-2')
+  const railClass = 'md:col-start-1 md:row-start-1 md:row-span-2'
   const update = useOpenClawUpdate(agentId)
   const query = useQuery({
     queryKey: ['agent', agentId],
@@ -105,15 +105,16 @@ export function AgentLayout() {
 
   return (
     <div className={layoutClass}>
-      {!chat ? <div className="min-w-0 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
-        <AgentsListButton />
-      </div> : null}
+      <div className="min-w-0 space-y-2 bg-background px-5 pt-4 pb-2 empty:p-0 md:col-start-2 md:row-start-1">
+        {!chat ? <AgentsListButton /> : null}
+        <AgentAccessExplanation reason={agent.access_reason} />
+      </div>
       <SectionRail
         items={tabs}
         label="Agent sections"
         className={railClass}
       />
-      <div className={cn('relative min-h-0 min-w-0 md:col-start-2', chat ? 'md:row-start-1' : 'md:row-start-2')}>
+      <div className="relative min-h-0 min-w-0 md:col-start-2 md:row-start-2">
         <div className="absolute inset-0 overflow-y-auto overscroll-y-contain">
           {canMountAgentOutlet(pathname, update.gate)
             ? <Outlet context={{ agent }} />

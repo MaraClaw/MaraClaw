@@ -7,6 +7,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.domain.agents import (
+    AgentAccessReason,
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
@@ -299,6 +300,10 @@ class AgentOut(BaseModel):
     is_system: bool = False
     access_mode: AgentSharingMode = AgentSharingMode.COMPANY
     company_access_level: CompanyAccessLevel = PermissionAccessLevel.USE
+    access_reason: AgentAccessReason | None = Field(
+        default=None,
+        description="Winning access reason for this viewer; null when no same-tenant access policy matches.",
+    )
     llm_calls_today: int = 0
     max_llm_calls_per_day: int = 1000
     agent_type: str = "openclaw"

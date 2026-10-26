@@ -8,8 +8,21 @@ from app.core.notification_kinds import NotificationKind
 from app.dao.notification_dao import notification_dao
 from app.schemas.notification_responses import NotificationResponse
 from notification_archive_fixtures import ArchiveScenario, archive_scenario, schema_db
+from notification_read_selected_postgres import (
+    test_selected_read_enforces_submitted_upper_bound_in_postgres,
+    test_selected_read_rejects_hidden_rows_even_when_archived_or_read,
+    test_selected_read_rejects_mixed_invalid_ids_atomically,
+    test_selected_read_rolls_back_when_commit_fails,
+)
 
-__all__ = ["archive_scenario", "schema_db"]
+__all__ = [
+    "archive_scenario",
+    "schema_db",
+    "test_selected_read_enforces_submitted_upper_bound_in_postgres",
+    "test_selected_read_rejects_hidden_rows_even_when_archived_or_read",
+    "test_selected_read_rejects_mixed_invalid_ids_atomically",
+    "test_selected_read_rolls_back_when_commit_fails",
+]
 
 ROWS = TypeAdapter(list[NotificationResponse])
 
@@ -197,3 +210,32 @@ async def test_bulk_read_covers_all_active_matches_without_reading_archived_or_o
         tool.id: False,
         foreign.id: False,
     }
+
+
+async def test_selected_read_is_idempotent_for_archived_and_already_read_notices(
+    archive_scenario: ArchiveScenario,
+) -> None:
+    # Given: selected active, archived, already-read rows plus an unselected unread row.
+    scenario = archive_scenario
+    active = await scenario.notice()
+    archived = await scenario.notice()
+    read = await scenario.notice(is_read=True)
+    await scenario.notice()
+    assert await notification_dao.archive_for_user(archived.id, scenario.owner.id)
+    before = await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id")
+    selected = [active.id, archived.id, read.id]
+    # When: the same duplicate-containing selection is submitted twice.
+    responses = [
+        await scenario.client.post(
+            "/api/notifications/read-selected",
+            headers=scenario.headers(scenario.owner),
+            json={"ids": [str(note_id) for note_id in [*selected, archived.id]]},
+        )
+        for _attempt in range(2)
+    ]
+    # Then: only is_read changes; replay neither restores archived rows nor reads unselected rows.
+    assert [response.status_code for response in responses] == [200, 200]
+    assert all(response.json() == {"ok": True} for response in responses)
+    assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == [
+        {**row, "is_read": True} if row["id"] in selected else row for row in before
+    ]

@@ -6,7 +6,7 @@ from uuid import UUID
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.org_department import OrgDepartmentRecord
-from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentMemberOut
+from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentDeletionPreviewOut, DepartmentMemberOut
 
 
 @final
@@ -93,6 +93,19 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
                 {"tenant": department.tenant_id, "department": department.id},
             )
             return {uuid_from_row(row["id"]) for row in rows}
+
+    async def deletion_preview(self, tenant_id: UUID, department_id: UUID) -> DepartmentDeletionPreviewOut | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT (SELECT count(*) FROM local_department_memberships m "
+                "WHERE m.tenant_id = d.tenant_id AND m.department_id = d.id) AS membership_count, "
+                "(SELECT count(*) FROM agent_permissions p JOIN agents a ON a.id = p.agent_id "
+                "WHERE a.tenant_id = d.tenant_id AND p.scope_type = 'department' "
+                "AND p.scope_id = d.id) AS agent_grant_count "
+                "FROM local_departments d WHERE d.tenant_id = %(tenant)s AND d.id = %(department)s",
+                {"tenant": tenant_id, "department": department_id},
+            )
+            return None if row is None else DepartmentDeletionPreviewOut.model_validate(row)
 
     async def delete_department(self, department: OrgDepartmentRecord) -> None:
         async with self.session() as db:

@@ -1050,9 +1050,29 @@ CREATE TABLE IF NOT EXISTS channel_event_receipts (
     agent_id UUID NOT NULL,
     tenant_id UUID,
     fingerprint TEXT NOT NULL CHECK (fingerprint ~ '^v1:[0-9a-f]{64}$'),
+    provider_timestamp TIMESTAMP WITH TIME ZONE,
+    provider_account_id TEXT,
+    conversation_id TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     PRIMARY KEY (config_id, provider, event_key)
 );
+
+CREATE INDEX IF NOT EXISTS ix_channel_event_receipts_reply_window
+    ON channel_event_receipts (config_id, provider, provider_account_id, agent_id, tenant_id,
+                               conversation_id, provider_timestamp DESC)
+    WHERE provider_timestamp IS NOT NULL AND provider_timestamp <= created_at;
+
+CREATE OR REPLACE FUNCTION protect_channel_event_receipt() RETURNS trigger AS $$
+BEGIN
+    IF NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'Channel event receipt is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER channel_event_receipt_immutable
+BEFORE UPDATE ON channel_event_receipts FOR EACH ROW EXECUTE FUNCTION protect_channel_event_receipt();
 
 CREATE TABLE IF NOT EXISTS chat_messages (
 	id UUID NOT NULL, 
@@ -1245,7 +1265,8 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     terminal_reason TEXT CHECK (terminal_reason IN (
         'source_agent_unavailable', 'source_tenant_changed',
         'destination_agent_unavailable', 'destination_tenant_changed',
-        'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected'
+        'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected',
+        'whatsapp_window_unavailable', 'whatsapp_window_expired'
     )),
     terminal_at TIMESTAMP WITH TIME ZONE,
     im_plan JSONB,

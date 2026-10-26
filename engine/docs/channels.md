@@ -31,6 +31,22 @@ WhatsApp validates the raw-body signature before processing, visits every messag
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
 events replay safely when the provider redelivers the batch.
 
+WhatsApp free-form replies require a signed inbound `metadata.phone_number_id`
+matching the configured receiving phone number. Its Unix-second message timestamp,
+account, and conversation are immutable receipt evidence committed with acceptance;
+changed metadata conflicts on native-message replay. Missing, malformed, or
+future-dated timestamps never open a reply window, including on later replay.
+Immediately before each WhatsApp POST, including resumed or later chunks, the
+transport selects the latest eligible provider timestamp for the exact current
+configuration, phone account, agent, tenant, provider, and conversation. The allowed
+interval is `provider_timestamp <= now < provider_timestamp + 24 hours`, not 24 hours
+from engine receipt. Missing evidence and expiry persist respectively as
+`whatsapp_window_unavailable` and `whatsapp_window_expired`; these terminal intents
+are not retried or revived by subsequent inbound activity. New inbound activity can
+only authorize a new reply turn. No template or proactive sender is added.
+The receipt columns and terminal reasons require a fresh schema baseline; no
+existing-database upgrade is supplied.
+
 WeCom text/KF webhook acknowledgments wait for acceptance. DingTalk stream callbacks
 await acceptance on the application loop before returning an SDK success acknowledgment;
 an unavailable loop or failed acceptance returns a retryable SDK error. Feishu WebSocket

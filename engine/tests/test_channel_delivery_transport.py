@@ -1,18 +1,21 @@
 import json
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
 
 from app.core.json_types import json_object_from_response
+from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.outbound_plan import OutboundChunk, OutboundProvider, OutboundTarget
 from app.services import gateway_report_relay as relay
 from app.services.channels import google_chat, outbound_transport
 from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_plan import ConfiguredOutbound
+from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
 
 
@@ -34,7 +37,7 @@ def configured(provider: OutboundProvider) -> ConfiguredOutbound:
     target = OutboundTarget(
         provider=provider,
         config_id=config.id,
-        account=("account",),
+        account=("application",),
         destination="destination",
         recipient_type="open_id",
         endpoint="v23.0",
@@ -68,6 +71,10 @@ async def test_transport_sends_exact_chunk_with_only_supported_stable_keys(monke
     transport(monkeypatch, respond)
     monkeypatch.setattr(google_chat, "_service_account_access_token", token)
     outbound = configured(provider)
+    if provider == "whatsapp":
+        monkeypatch.setattr(
+            channel_event_receipt_dao, "latest_eligible_timestamp", AsyncMock(return_value=datetime.now(UTC))
+        )
     chunk = OutboundChunk(text="  exact\n世界  ", key=uuid4())
 
     await outbound_transport.send_chunk(outbound, chunk)
@@ -97,6 +104,43 @@ async def test_transport_sends_exact_chunk_with_only_supported_stable_keys(monke
                 "type": "text",
                 "text": {"preview_url": False, "body": chunk.text},
             }
+
+
+@pytest.mark.parametrize(
+    ("age", "reason"),
+    [
+        (None, "whatsapp_window_unavailable"),
+        (timedelta(microseconds=-1), "whatsapp_window_unavailable"),
+        (timedelta(), None),
+        (timedelta(hours=24) - timedelta(microseconds=1), None),
+        (timedelta(hours=24), "whatsapp_window_expired"),
+        (timedelta(hours=24, microseconds=1), "whatsapp_window_expired"),
+    ],
+)
+async def test_whatsapp_checks_strict_window_at_actual_transport_boundary(monkeypatch, age, reason):
+    now = datetime(2026, 10, 21, tzinfo=UTC)
+    timestamp = now - age if age is not None else None
+    lookup = AsyncMock(return_value=timestamp)
+    monkeypatch.setattr(channel_event_receipt_dao, "latest_eligible_timestamp", lookup)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"messages": [{"id": "ack"}]})
+
+    transport(monkeypatch, respond)
+    if reason is not None:
+        with pytest.raises(WhatsAppReplyWindowError) as failure:
+            await outbound_transport.send_chunk(
+                configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
+            )
+        assert failure.value.reason == reason
+    else:
+        await outbound_transport.send_chunk(
+            configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
+        )
+    assert len(requests) == (1 if reason is None else 0)
+    lookup.assert_awaited_once()
 
 
 @pytest.mark.parametrize("kind", ["seconds", "http_date", "discord_body"])

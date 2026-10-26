@@ -13,6 +13,8 @@ from test_channel_delivery_transport import configured, transport
 @pytest.mark.parametrize("provider", ["slack", "discord"])
 async def test_rotated_tokens_prove_same_public_principal_without_persisting_hash(monkeypatch, provider):
     outbound = configured(provider)
+    outbound.config.app_id = "account"
+    outbound = type(outbound)(outbound.target.model_copy(update={"account": ("account",)}), outbound.config)
     requests: list[httpx.Request] = []
 
     def respond(request):

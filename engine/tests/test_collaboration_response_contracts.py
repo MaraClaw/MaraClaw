@@ -13,7 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypeForm
 
 from app.api import advanced, agents, background_tasks, okr, relationships
-from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.agents import AgentAccessReason, AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.notification_kinds import NotificationKind
@@ -91,9 +91,12 @@ def test_handler_response_contracts_are_pydantic_compatible(route: APIRoute) -> 
     assert schema
 
 
-def test_agent_projection_preserves_model_dump_fields_and_nested_copy(agent: AgentRecord) -> None:
+@pytest.mark.parametrize("reason", [None, *AgentAccessReason])
+def test_agent_projection_preserves_model_dump_fields_and_nested_copy(
+    agent: AgentRecord, reason: AgentAccessReason | None
+) -> None:
     policy: JsonObject = {"future": {"steps": [None, True, 3.5, {"mode": "custom"}]}}
-    model = AgentOut.model_validate(agent).model_copy(update={"autonomy_policy": policy})
+    model = AgentOut.model_validate(agent).model_copy(update={"autonomy_policy": policy, "access_reason": reason})
 
     result = agent_model_dump(model)
 
@@ -133,6 +136,7 @@ async def test_agent_detail_keeps_python_dump_wire_encoding(
         AgentOut.model_validate(agent).model_copy(update={"onboarded_for_me": False}).model_dump(mode="json")
     )
     expected["created_at"] = agent.created_at.isoformat()
+    expected["access_reason"] = "creator"
 
     response = await client.get(f"/api/agents/{agent.id}")
 

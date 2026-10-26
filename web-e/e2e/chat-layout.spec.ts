@@ -10,11 +10,14 @@ for (const width of [390, 1440, 1920]) {
       test.use({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme,
         isMobile: width === 390, hasTouch: width === 390, deviceScaleFactor: width === 390 ? 3 : 1, reducedMotion: 'reduce' })
 
-      for (const path of [sharedPath, chatPath(), chatPath(archivedSession)]) {
-        test(`chat fills the workspace without session navigation at ${path}`, async ({ page }, testInfo) => {
+      for (const [path, reason] of [sharedPath, chatPath(), chatPath(archivedSession)].flatMap((path) =>
+        [[path, undefined], [path, null]] as const)) {
+        test(`chat fills the workspace without session navigation at ${path} (${reason === null ? 'null' : 'omitted'} access explanation)`, async ({ page }, testInfo) => {
           // Given: archives exist, and a long shared history needs its own scroll container.
           const chat = await prepareChat(page, Array.from({ length: 35 }, (_, index) =>
             message(`layout-${index}`, `History message ${index + 1}: a longer reply that wraps on a phone.`)))
+          await page.route(`**/api/agents/${originalAgent.id}`, (route) =>
+            route.fulfill({ json: { ...originalAgent, access_reason: reason } }))
           const errors: string[] = []
           page.on('pageerror', (error) => errors.push(error.message))
           // When

@@ -62,6 +62,11 @@ export async function markAllNotificationsRead() {
   return apiRequest('/api/notifications/read-all', { schema: readResultSchema, method: 'POST' })
 }
 
+export async function markSelectedNotificationsRead(ids: readonly NotificationId[]) {
+  const input = z.object({ ids: z.array(z.uuid()).min(1).max(200) }).parse({ ids })
+  return apiRequest('/api/notifications/read-selected', { schema: readResultSchema, method: 'POST', body: input })
+}
+
 export async function archiveNotification(id: NotificationId) {
   return apiRequest(`/api/notifications/${id}/archive`, { schema: readResultSchema, method: 'POST' })
 }

@@ -5,7 +5,13 @@ from datetime import datetime
 from typing import Literal, NotRequired, TypedDict
 from uuid import UUID
 
-from app.core.domain.agents import AgentSharingMode, AgentStatus, CompanyAccessLevel, PermissionAccessLevel
+from app.core.domain.agents import (
+    AgentAccessReason,
+    AgentSharingMode,
+    AgentStatus,
+    CompanyAccessLevel,
+    PermissionAccessLevel,
+)
 from app.core.domain.approvals import ApprovalStatus
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
@@ -68,6 +74,7 @@ class AgentModelDump(TypedDict):
     is_system: bool
     access_mode: AgentSharingMode
     company_access_level: CompanyAccessLevel
+    access_reason: AgentAccessReason | None
     llm_calls_today: int
     max_llm_calls_per_day: int
     agent_type: str
@@ -122,6 +129,7 @@ def agent_model_dump(model: AgentOut) -> AgentModelDump:
         "is_system": model.is_system,
         "access_mode": model.access_mode,
         "company_access_level": model.company_access_level,
+        "access_reason": model.access_reason,
         "llm_calls_today": model.llm_calls_today,
         "max_llm_calls_per_day": model.max_llm_calls_per_day,
         "agent_type": model.agent_type,

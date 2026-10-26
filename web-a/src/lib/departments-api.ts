@@ -30,6 +30,11 @@ const userDepartmentsSchema = z.object({
   department_ids: z.array(z.string()).readonly(),
 }).readonly()
 
+const deletionPreviewSchema = z.object({
+  membership_count: z.number().int().nonnegative(),
+  agent_grant_count: z.number().int().nonnegative(),
+}).readonly()
+
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
 export type Department = z.infer<typeof departmentSchema>
 export type UserDepartments = z.infer<typeof userDepartmentsSchema>
@@ -68,6 +73,13 @@ export async function renameDepartment(tenantId: string, departmentId: string, i
 export async function deleteDepartment(tenantId: string, departmentId: string): Promise<void> {
   const query = new URLSearchParams({ tenant_id: tenantId })
   await apiRequest<void>(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, { method: 'DELETE' })
+}
+
+export async function previewDepartmentDeletion(tenantId: string, departmentId: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  return apiRequest(`/api/departments/${encodeURIComponent(departmentId)}/deletion-preview?${query}`, {
+    schema: deletionPreviewSchema, signal,
+  })
 }
 
 export async function setUserDepartment(

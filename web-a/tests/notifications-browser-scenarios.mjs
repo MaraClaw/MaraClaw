@@ -26,7 +26,8 @@ export async function exerciseNotifications(page, { active, receipt, output, rel
   try {
     await page.snapshot(); await page.locator('button[aria-label="Archive notification: Operations update"]').focus()
     await page.keyboard.press('Enter'); await active.hold.started.promise
-    assert.equal(await button('Archived').evaluate((element) => element.disabled), true)
+    await visible(page.locator('button[aria-label="Archive notification: Operations update"][disabled]'))
+    assert.equal(await button('Archived').evaluate((element) => element.disabled), false)
     assert.equal(await page.locator('button[aria-label="Archive notification: Operations update"]').evaluate((element) => element.disabled), true)
     active.hold.released.resolve()
     await page.locator('button[aria-label="Archive notification: Operations update"]').waitFor({ state: 'detached', timeout: 15_000 })
@@ -68,6 +69,80 @@ export async function exerciseNotifications(page, { active, receipt, output, rel
   // Given page two, when changing views in either direction, then pagination restarts at zero.
   active.items = Array.from({ length: 51 }, (_, index) => ({ ...original[1], id: `44444444-4444-4444-8444-${String(index + 1).padStart(12, '0')}`, title: `Paged notice ${index + 1}` })).concat(saved)
   await reload(); await visible(page.locator('button[aria-label="Archive notification: Paged notice 50"]'))
+
+  // Given selected rows, when the batch fails, then selection remains available for retry.
+  const choose = (title) => page.locator(`input[aria-label="Select notification: ${title}"]`)
+  await page.snapshot(); await choose('Paged notice 1').focus()
+  const session = await page.resolveSessionId()
+  for (const type of ['keyDown', 'keyUp']) await page.cdp.send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32 }, session)
+  await visible(button('Mark selected as read \\(1\\)'))
+  active.failSelected = 503
+  await page.snapshot(); await button('Mark selected as read \\(1\\)').click()
+  await visible(page.locator('[role="alert"]').filter({ hasText: 'Unable to mark selected' }))
+  assert.equal(await choose('Paged notice 1').evaluate((element) => element.checked), true)
+  await capture('selected-error')
+
+  // Given a held page snapshot, when navigating and selecting another view, then completion preserves replacement selection.
+  await page.snapshot(); await page.locator('main input[type="checkbox"]').first().click()
+  await visible(button('Mark selected as read \\(50\\)')); await capture('selected-page')
+  active.hold = { started: Promise.withResolvers(), released: Promise.withResolvers() }
+  try {
+    await page.snapshot(); await button('Mark selected as read \\(50\\)').click(); await active.hold.started.promise
+    const submitted = receipt.requests.filter((call) => call.scenario === active.name && call.path.endsWith('/read-selected')).at(-1)
+    assert.equal(submitted.ids.length, 50)
+    assert.deepEqual(submitted.ids, active.items.slice(0, 50).map((item) => item.id))
+    await capture('selected-pending')
+    await page.snapshot(); await button('Next').click(); await visible(choose('Paged notice 51'))
+    assert.equal(await choose('Paged notice 51').evaluate((element) => element.checked), false)
+    await page.snapshot(); await choose('Paged notice 51').click()
+    await view('Archived'); await visible(choose('Saved: Operations update'))
+    assert.equal(await choose('Saved: Operations update').evaluate((element) => element.checked), false)
+    await page.snapshot(); await choose('Saved: Operations update').click()
+    active.hold.released.resolve()
+    await visible(button('Mark selected as read \\(1\\)'))
+    assert.equal(await choose('Saved: Operations update').evaluate((element) => element.checked), true)
+    assert.equal(receipt.requests.filter((call) => call.scenario === active.name && call.path.endsWith('/read-selected')).length, 2)
+    await capture('selected-replacement')
+  } finally { active.hold.released.resolve(); active.hold = undefined }
+  await page.snapshot(); await button('Mark selected as read \\(1\\)').click()
+  await visible(button('Mark selected as read \\(0\\)')); await count(0)
+  await capture('selected-archived-read')
+
+  await view('Active'); await visible(choose('Paged notice 1'))
+  await page.snapshot(); await choose('Paged notice 1').click()
+  active.hold = { started: Promise.withResolvers(), released: Promise.withResolvers() }
+  active.failSelected = 503
+  try {
+    await page.snapshot(); await button('Mark selected as read \\(1\\)').click(); await active.hold.started.promise
+    await page.snapshot(); await button('Next').click(); await visible(choose('Paged notice 51'))
+    await page.snapshot(); await choose('Paged notice 51').click()
+    await view('Archived'); await visible(choose('Saved: Operations update'))
+    await page.snapshot(); await choose('Saved: Operations update').click()
+    active.hold.released.resolve()
+    await visible(button('Mark selected as read \\(1\\)'))
+    assert.equal(await page.locator('main [role="alert"]').count(), 0)
+    assert.equal(await choose('Saved: Operations update').evaluate((element) => element.checked), true)
+    await capture('selected-navigation-failure')
+  } finally { active.hold.released.resolve(); active.hold = undefined }
+
+  // Given a held batch, when a storage event replaces the admin session, then its completion cannot clear new selection.
+  await view('Active'); await visible(choose('Paged notice 1'))
+  await page.snapshot(); await choose('Paged notice 1').click()
+  active.hold = { started: Promise.withResolvers(), released: Promise.withResolvers() }
+  try {
+    await page.snapshot(); await button('Mark selected as read \\(1\\)').click(); await active.hold.started.promise
+    await page.evaluate(() => {
+      localStorage.setItem('maraclaw-admin-token', 'replacement-synthetic-notifications-token')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'maraclaw-admin-token', newValue: 'replacement-synthetic-notifications-token', storageArea: localStorage }))
+    })
+    await visible(button('Mark selected as read \\(0\\)'))
+    await page.snapshot(); await choose('Paged notice 2').click()
+    active.hold.released.resolve()
+    await visible(button('Mark selected as read \\(1\\)'))
+    assert.equal(await choose('Paged notice 2').evaluate((element) => element.checked), true)
+    await capture('selected-session-replacement')
+  } finally { active.hold.released.resolve(); active.hold = undefined }
+
   await page.snapshot(); await button('Next').click(); await visible(page.locator('button[aria-label="Archive notification: Paged notice 51"]'))
   await view('Archived'); await visible(page.locator('button[aria-label="Restore notification: Saved: Operations update"]'))
   assert.ok(receipt.requests.some((call) => call.scenario === active.name && call.query === '?limit=50&offset=0&view=archived'))

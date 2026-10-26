@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-query'
+import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { deleteDepartment, type DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { deleteDepartment, previewDepartmentDeletion, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { deleteDepartmentOptions } from '../src/pages/users-department-mutations.ts'
@@ -19,6 +20,37 @@ const directory: DepartmentsResponse = {
     { tenant_id: input.tenantId, user_id: 'member-b', department_id: department.id },
     { tenant_id: input.tenantId, user_id: 'member-a', department_id: 'engineering' },
   ],
+}
+
+test('deletion preview parses association counts and forwards encoded scope and cancellation', async (t) => {
+  // Given
+  const controller = new AbortController()
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json({ membership_count: 0, agent_grant_count: 12 }))
+  // When
+  const result = await previewDepartmentDeletion(input.tenantId, input.departmentId, controller.signal)
+  // Then
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, '/api/departments/department%2Fa%20%2B%3F/deletion-preview?tenant_id=tenant+%26a')
+  assert.equal(options?.signal, controller.signal)
+  assert.deepEqual(result, { membership_count: 0, agent_grant_count: 12 })
+})
+
+for (const body of [{}, { membership_count: -1, agent_grant_count: 0 }, { membership_count: 1, agent_grant_count: 1.5 }, { membership_count: '2', agent_grant_count: 0 }]) {
+  test(`deletion preview rejects malformed counts ${JSON.stringify(body)}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    // When / Then
+    await assert.rejects(previewDepartmentDeletion(input.tenantId, input.departmentId), z.ZodError)
+  })
+}
+
+for (const status of [403, 404, 503]) {
+  test(`deletion preview preserves failure ${status} for retry`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Unavailable' }, { status }))
+    // When / Then
+    await assert.rejects(previewDepartmentDeletion(input.tenantId, input.departmentId), (error) => error instanceof ApiError && error.status === status)
+  })
 }
 
 test('delete sends the encoded tenant-scoped DELETE and accepts an empty 204', async (t) => {

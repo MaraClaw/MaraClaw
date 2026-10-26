@@ -10,7 +10,14 @@ from typing import ClassVar, Protocol, TypedDict
 from fastapi import HTTPException, status
 
 from app.core import access_cache
-from app.core.domain.agents import AgentSharingMode, AgentStatus, CompanyAccessLevel, PermissionAccessLevel
+from app.core.domain.agents import (
+    AgentAccessDecision,
+    AgentAccessReason,
+    AgentSharingMode,
+    AgentStatus,
+    CompanyAccessLevel,
+    PermissionAccessLevel,
+)
 from app.core.domain.users import UserRole
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
 from app.dao.org_department_dao import org_department_dao
@@ -91,42 +98,51 @@ def decide_agent_access(
     treat the list as empty (caller should load first).
     """
     early = _access_without_permissions(user, agent)
-    if isinstance(early, _NeedPerms):
-        return _access_from_permissions(user, agent, permissions or ())
-    return early
+    decision = _access_from_permissions(user, agent, permissions or ()) if isinstance(early, _NeedPerms) else early
+    return decision.level if decision is not None else None
 
 
-def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> PermissionAccessLevel | _NeedPerms | None:
+def _access_without_permissions(user: _UserLike, agent: _AgentLike) -> AgentAccessDecision | _NeedPerms | None:
     if agent.tenant_id != user.tenant_id:
         return None
     if agent.creator_id == user.id:
-        return PermissionAccessLevel.MANAGE
+        return AgentAccessDecision(PermissionAccessLevel.MANAGE, AgentAccessReason.CREATOR)
     access_mode = agent.access_mode or "company"
     if _is_admin(user) and access_mode != "private":
-        return PermissionAccessLevel.MANAGE
+        return AgentAccessDecision(PermissionAccessLevel.MANAGE, AgentAccessReason.ADMINISTRATOR)
     company_level = agent.company_access_level
     if access_mode == "company" and company_level:
-        return company_level
+        return AgentAccessDecision(company_level, AgentAccessReason.COMPANY)
     return _NEED_PERMS
 
 
 def _access_from_permissions(
     user: _UserLike, agent: _AgentLike, permissions: Sequence[AgentPermissionRecord]
-) -> PermissionAccessLevel | None:
+) -> AgentAccessDecision | None:
     access_mode = agent.access_mode or "company"
     if access_mode == "company":
-        return agent.company_access_level or next(
-            (perm.access_level for perm in permissions if perm.scope_type == "company"),
-            PermissionAccessLevel.USE,
+        return AgentAccessDecision(
+            agent.company_access_level
+            or next(
+                (perm.access_level for perm in permissions if perm.scope_type == "company"),
+                PermissionAccessLevel.USE,
+            ),
+            AgentAccessReason.COMPANY,
         )
     if access_mode == "custom":
         for perm in permissions:
             if perm.scope_type == "user" and perm.scope_id == user.id:
-                return perm.access_level
+                return AgentAccessDecision(perm.access_level, AgentAccessReason.DIRECT)
     return None
 
 
 async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> PermissionAccessLevel | None:
+    decision = await compute_agent_access_decision(user, agent)
+    return decision.level if decision is not None else None
+
+
+async def compute_agent_access_decision(user: _UserLike, agent: _AgentLike) -> AgentAccessDecision | None:
+    """Resolve the winning access level and viewer-specific provenance together."""
     early = _access_without_permissions(user, agent)
     if isinstance(early, _NeedPerms):
         permissions = await agent_permission_dao.list_for_agent(agent.id)
@@ -134,7 +150,7 @@ async def compute_agent_access_level(user: _UserLike, agent: _AgentLike) -> Perm
         if direct is not None:
             return direct
         if agent.access_mode == "custom" and await org_department_dao.has_agent_access(user.id, agent.id):
-            return PermissionAccessLevel.USE
+            return AgentAccessDecision(PermissionAccessLevel.USE, AgentAccessReason.DEPARTMENT)
         return None
     return early
 
