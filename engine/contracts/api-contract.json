@@ -1435,6 +1435,191 @@
         "title": "AgentInstalledToolResponse",
         "type": "object"
       },
+      "AgentLifecycleAvailabilityOut": {
+        "properties": {
+          "blocking_codes": {
+            "items": {
+              "$ref": "#/components/schemas/LifecycleBlockCode"
+            },
+            "title": "Blocking Codes",
+            "type": "array"
+          },
+          "can_retry_mcp": {
+            "title": "Can Retry Mcp",
+            "type": "boolean"
+          },
+          "can_retry_setup": {
+            "title": "Can Retry Setup",
+            "type": "boolean"
+          },
+          "can_start": {
+            "title": "Can Start",
+            "type": "boolean"
+          },
+          "policy_eligible": {
+            "title": "Policy Eligible",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "policy_eligible",
+          "blocking_codes",
+          "can_start",
+          "can_retry_setup",
+          "can_retry_mcp"
+        ],
+        "title": "AgentLifecycleAvailabilityOut",
+        "type": "object"
+      },
+      "AgentLifecycleOut": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/AgentLifecycleAvailabilityOut"
+          },
+          "optional_mcp": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSetupMCPStatus"
+            },
+            "title": "Optional Mcp",
+            "type": "array"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/AgentLifecycleRuntimeOut"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/AgentSetupStatus"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentLifecycleStartOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "upgrade": {
+            "$ref": "#/components/schemas/AgentUpdateOut"
+          }
+        },
+        "required": [
+          "as_of",
+          "runtime",
+          "setup",
+          "start",
+          "optional_mcp",
+          "upgrade",
+          "availability"
+        ],
+        "title": "AgentLifecycleOut",
+        "type": "object"
+      },
+      "AgentLifecycleRuntimeOut": {
+        "properties": {
+          "recorded_container_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Container Id"
+          },
+          "recorded_status": {
+            "$ref": "#/components/schemas/AgentStatus"
+          }
+        },
+        "required": [
+          "recorded_status",
+          "recorded_container_id"
+        ],
+        "title": "AgentLifecycleRuntimeOut",
+        "type": "object"
+      },
+      "AgentLifecycleStartOut": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_failure_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "capacity_exceeded",
+                  "configuration_failed",
+                  "readiness_failed",
+                  "ownership_conflict",
+                  "runtime_failed",
+                  "publication_failed",
+                  "upgrade_in_progress"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure Code"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "succeeded",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "state",
+          "attempts",
+          "last_attempt_at",
+          "next_retry_at",
+          "last_failure_code"
+        ],
+        "title": "AgentLifecycleStartOut",
+        "type": "object"
+      },
       "AgentOut": {
         "properties": {
           "access_mode": {
@@ -1456,17 +1641,6 @@
             "default": "openclaw",
             "title": "Agent Type",
             "type": "string"
-          },
-          "api_key_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key Hash"
           },
           "autonomy_policy": {
             "$ref": "#/components/schemas/JsonObject-Output"
@@ -1930,6 +2104,78 @@
           "target_agent_id"
         ],
         "title": "AgentRelationshipIn",
+        "type": "object"
+      },
+      "AgentSetupMCPRetry": {
+        "additionalProperties": false,
+        "properties": {
+          "server_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id"
+        ],
+        "title": "AgentSetupMCPRetry",
+        "type": "object"
+      },
+      "AgentSetupMCPStatus": {
+        "properties": {
+          "attempts": {
+            "minimum": 0.0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "warning"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "warning_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "missing_credentials",
+                  "authorization_required",
+                  "unsupported_remote_transport",
+                  "connection_failed",
+                  "tools_unverified",
+                  "import_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning Code"
+          }
+        },
+        "required": [
+          "server_id",
+          "state",
+          "warning_code",
+          "attempts",
+          "retryable"
+        ],
+        "title": "AgentSetupMCPStatus",
         "type": "object"
       },
       "AgentSetupStatus": {
@@ -2547,6 +2793,17 @@
         ],
         "title": "AgentUpdateOut",
         "type": "object"
+      },
+      "AgentWorkBlockCode": {
+        "enum": [
+          "expired",
+          "owner_inactive",
+          "identity_inactive",
+          "tenant_inactive",
+          "owner_tenant_changed",
+          "transfer_pending"
+        ],
+        "type": "string"
       },
       "ApplicantPage": {
         "properties": {
@@ -8004,6 +8261,26 @@
         ],
         "title": "LLMTestRequest",
         "type": "object"
+      },
+      "LifecycleBlockCode": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/AgentWorkBlockCode"
+          },
+          {
+            "$ref": "#/components/schemas/LifecycleOperationalBlockCode"
+          }
+        ]
+      },
+      "LifecycleOperationalBlockCode": {
+        "enum": [
+          "setup_pending",
+          "runtime_stopped",
+          "runtime_not_running",
+          "upgrade_in_progress",
+          "upgrade_required"
+        ],
+        "type": "string"
       },
       "LinkupKeyCreateRequest": {
         "properties": {
@@ -21097,6 +21374,54 @@
         ]
       }
     },
+    "/api/agents/{agent_id}/lifecycle": {
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f6c6966656379636c65",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentLifecycleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Agent Lifecycle",
+        "tags": [
+          "agent-lifecycle"
+        ]
+      }
+    },
     "/api/agents/{agent_id}/metrics": {
       "get": {
         "description": "Get observability metrics for an agent.",
@@ -23021,6 +23346,64 @@
           }
         ],
         "summary": "Read Setup Status",
+        "tags": [
+          "agent-setup"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/setup/mcp-retry": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f73657475702f6d63702d7265747279",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSetupMCPRetry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSetupMCPStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Optional Mcp",
         "tags": [
           "agent-setup"
         ]
@@ -37733,9 +38116,13 @@
       "AgentConversationResponse",
       "AgentCreate",
       "AgentInstalledToolResponse",
+      "AgentLifecycleOut",
       "AgentOut",
       "AgentPermissionScope",
       "AgentPermissionUpdate",
+      "AgentSetupMCPRetry",
+      "AgentSetupMCPStatus",
+      "AgentSetupStatus",
       "AgentSharingMode",
       "AgentStatus",
       "AgentToolConfigResponse",
@@ -37926,10 +38313,17 @@
       "AgentConversationResponse",
       "AgentCreate",
       "AgentInstalledToolResponse",
+      "AgentLifecycleAvailabilityOut",
+      "AgentLifecycleOut",
+      "AgentLifecycleRuntimeOut",
+      "AgentLifecycleStartOut",
       "AgentOut",
       "AgentPermissionScope",
       "AgentPermissionUpdate",
       "AgentPermissionUserAccess",
+      "AgentSetupMCPRetry",
+      "AgentSetupMCPStatus",
+      "AgentSetupStatus",
       "AgentSharingMode",
       "AgentStatus",
       "AgentToolConfigResponse",
@@ -37938,6 +38332,8 @@
       "AgentToolUpdate",
       "AgentToolWithConfigResponse",
       "AgentUpdate",
+      "AgentUpdateOut",
+      "AgentWorkBlockCode",
       "ApplicantPage",
       "ApprovalAction",
       "ApprovalDecisionRequest",
@@ -38030,6 +38426,8 @@
       "KeyResultOut",
       "KeyResultStatus",
       "KeyResultUpdate",
+      "LifecycleBlockCode",
+      "LifecycleOperationalBlockCode",
       "LivePreview",
       "LockRequest",
       "MCPServerUpdate",
@@ -38062,6 +38460,8 @@
       "OnboardingRejectionReason",
       "OnboardingStartRequest",
       "OnboardingTurnRejectedEvent",
+      "OpenClawNoticeOut",
+      "OpenClawRunOut",
       "OrgAdminCreateRequest",
       "OrgAdminCreateResponse",
       "OrgAdminOut",
