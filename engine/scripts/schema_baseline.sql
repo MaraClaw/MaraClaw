@@ -852,6 +852,7 @@ CREATE TABLE IF NOT EXISTS agent_agent_relationships (
 CREATE TABLE IF NOT EXISTS agent_credentials (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
+	revision BIGINT DEFAULT 1 NOT NULL CONSTRAINT ck_agent_credentials_revision_positive CHECK (revision > 0),
 	credential_type VARCHAR(20) NOT NULL, 
 	platform VARCHAR(100) NOT NULL, 
 	display_name VARCHAR(200) NOT NULL, 

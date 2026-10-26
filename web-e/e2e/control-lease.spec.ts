@@ -10,6 +10,7 @@ async function prepareControl(page: Page) {
   await prepareWorkspace(page)
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
   await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
+  await page.route(`**/api/agents/${originalAgent.id}/credentials/`, (route) => route.fulfill({ json: [] }))
   await page.route(`**/api/agents/${originalAgent.id}/sessions?**`, (route) => route.fulfill({
     json: [{ id: 'control-session', title: 'Control thread', source_channel: 'shared' }],
   }))
@@ -20,11 +21,10 @@ async function prepareControl(page: Page) {
 }
 
 for (const loss of [
-  { endpoint: 'screenshot', status: 200 },
-  { endpoint: 'screenshot', status: 400 },
+  { endpoint: 'screenshot', status: 409 },
   { endpoint: 'press_keys', status: 409 },
   { endpoint: 'unlock', status: 409 },
-  { endpoint: 'current-url', status: 400 },
+  { endpoint: 'current-url', status: 409 },
 ] as const) {
   test(`ends control when ${loss.endpoint} reports lease loss (${loss.status})`, async ({ page }) => {
     // Given
@@ -35,7 +35,7 @@ for (const loss of [
       const endpoint = new URL(route.request().url()).pathname.slice(controlPath.length)
       requests.push(endpoint)
       if (loseLease && endpoint === loss.endpoint) {
-        await route.fulfill({ status: loss.status, json: { status: 'lost_lock', detail: 'Lease expired' } })
+        await route.fulfill({ status: loss.status, json: { detail: { code: 'take_control_lost', message: 'Lease expired' } } })
         return
       }
       await route.fulfill({ json: {
@@ -116,7 +116,7 @@ test('normal control forwards input and releases with cookie export', async ({ p
     expect(request.body).toMatchObject({ session_id: 'control-session', owner_token: ownerToken })
   }
   expect(requests.find(({ endpoint }) => endpoint === 'unlock')?.body).toMatchObject({
-    export_cookies: true, platform_hint: 'vendor.example.test',
+    export_cookies: true, platform_hint: 'vendor.example.test', capture: { mode: 'create' },
   })
   await expect(page.getByAltText('Live AgentBay session')).toHaveCount(0)
   const count = requests.length
@@ -139,7 +139,7 @@ test('late screenshot and repeated loss cannot revive or notify a retired lease'
     const endpoint = new URL(route.request().url()).pathname.slice(controlPath.length)
     if (endpoint === 'press_keys') {
       if (++actions === 1) { actionRequested.resolve(); await actionReply.promise }
-      await route.fulfill({ json: { status: 'lost_lock' } })
+      await route.fulfill({ status: 409, json: { detail: { code: 'take_control_lost' } } })
       return
     }
     if (endpoint === 'screenshot') {

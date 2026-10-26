@@ -19,9 +19,12 @@ from app.schemas.notification_responses import (
     NotificationBroadcastEmailCancellationResponse,
     NotificationBroadcastEmailStatusResponse,
     NotificationBroadcastResponse,
+    NotificationCursor,
+    NotificationPageResponse,
     NotificationReadResponse,
     NotificationResponse,
     NotificationUnreadCountResponse,
+    notification_response,
 )
 
 router = APIRouter(tags=["notifications"])
@@ -53,6 +56,35 @@ def _types_for_category(category: str | None) -> list[NotificationKind] | None:
     return CATEGORY_TYPE_MAP[category]
 
 
+@router.get("/notifications/page")
+async def list_notifications_page(
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = Query(None),
+    unread_only: bool = Query(False),
+    category: str | None = Query(None),
+    view: Literal["active", "archived"] = Query("active"),
+    current_user: UserRecord = Depends(get_current_user),
+) -> NotificationPageResponse:
+    """Traverse the live inbox; read/archive changes may alter later page membership."""
+    position = NotificationCursor.decode(cursor) if cursor is not None else None
+    notifications = await notification_dao.list_page_for_user(
+        current_user.id,
+        view=view,
+        unread_only=unread_only,
+        types=_types_for_category(category),
+        limit=limit,
+        before=(position.created_at, position.id) if position is not None else None,
+    )
+    items = notifications[:limit]
+    next_cursor = None
+    if len(notifications) > limit:
+        last = items[-1]
+        next_cursor = NotificationCursor.model_validate(
+            {"version": 1, "created_at": last.created_at, "id": last.id}
+        ).encode()
+    return {"items": [notification_response(item) for item in items], "next_cursor": next_cursor}
+
+
 @router.get("/notifications")
 async def list_notifications(
     limit: int = Query(50, le=200),
@@ -71,21 +103,7 @@ async def list_notifications(
         limit=limit,
         offset=offset,
     )
-    return [
-        {
-            "id": str(n.id),
-            "type": n.type,
-            "title": n.title,
-            "body": n.body,
-            "link": n.link,
-            "ref_id": str(n.ref_id) if n.ref_id else None,
-            "sender_name": n.sender_name,
-            "is_read": n.is_read,
-            "archived_at": n.archived_at.isoformat() if n.archived_at else None,
-            "created_at": n.created_at.isoformat() if n.created_at else None,
-        }
-        for n in notifications
-    ]
+    return [notification_response(item) for item in notifications]
 
 
 @router.get("/notifications/unread-count")

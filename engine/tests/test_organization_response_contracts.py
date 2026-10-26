@@ -72,6 +72,7 @@ async def test_credential_http_preserves_datetime_encoding_and_hides_cookies(mon
     assert payload["created_at"] == "2026-01-02T00:00:00+00:00"
     assert payload["updated_at"] is None
     assert payload["has_cookies"] is True
+    assert payload["revision"] == cred.revision == 1
     assert "cookies_json" not in payload
     app.dependency_overrides.clear()
 

@@ -8,29 +8,35 @@ using AES-256-CBC and are NEVER returned in API responses.
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import TypedDict
 
+from app.api.agent_credential_validation import CredentialSafeRoute
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_loads_value, object_mapping_from
 from app.core.permissions import check_agent_access
 from app.core.security import encrypt_data, get_current_user
-from app.dao.agent_credential_dao import agent_credential_dao
-from app.records.agent_credential import AgentCredentialRecord
+from app.dao.agent_credential_dao import (
+    CredentialChanges,
+    CredentialRevisionConflictError,
+    agent_credential_dao,
+    revision_conflict_detail,
+)
+from app.records.agent_credential import AgentCredentialRecord, CredentialRevision
 from app.records.user import UserRecord
 from app.schemas.agent_credential import (
     AgentCredentialCreate,
     AgentCredentialUpdate,
 )
 
-router = APIRouter(prefix="/agents/{agent_id}/credentials", tags=["agent-credentials"])
+router = APIRouter(prefix="/agents/{agent_id}/credentials", tags=["agent-credentials"], route_class=CredentialSafeRoute)
 
 
 class AgentCredentialPayload(TypedDict):
     id: uuid.UUID
     agent_id: uuid.UUID
+    revision: int
     credential_type: str
     platform: str
     display_name: str
@@ -51,6 +57,7 @@ def _to_response(cred: AgentCredentialRecord) -> AgentCredentialPayload:
     return {
         "id": cred.id,
         "agent_id": cred.agent_id,
+        "revision": cred.revision,
         "credential_type": cred.credential_type,
         "platform": cred.platform,
         "display_name": cred.display_name or "",
@@ -107,10 +114,10 @@ async def create_credential(
         except (json.JSONDecodeError, ValueError, TypeError) as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid cookies_json format: {e}",
+                detail="Invalid cookies_json format: expected a JSON array",
             ) from e
 
-    obj_in: dict[str, Any] = {
+    obj_in: dict[str, object] = {
         "agent_id": agent_id,
         "credential_type": data.credential_type,
         "platform": data.platform,
@@ -137,7 +144,8 @@ async def update_credential(
     """Update an existing credential.
 
     Only provided fields are updated. Sensitive fields are re-encrypted.
-    If cookies_json is updated, status is reset to 'active'.
+    expected_revision must still be current; accepted edits advance it once
+    and clear injection evidence. New cookies reset status to 'active'.
     """
     _agent, access_level = await check_agent_access(current_user, agent_id)
     if access_level != "manage" and current_user.role not in ("platform_admin", "org_admin"):
@@ -152,12 +160,17 @@ async def update_credential(
 
     settings = get_settings()
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
-    obj_in: dict[str, Any] = {}
+    obj_in: CredentialChanges = {}
 
     # Handle plaintext fields
-    for field in ("credential_type", "platform", "display_name", "status"):
-        if field in update_data:
-            obj_in[field] = update_data[field]
+    if "credential_type" in update_data:
+        obj_in["credential_type"] = data.credential_type
+    if "platform" in update_data:
+        obj_in["platform"] = data.platform
+    if "display_name" in update_data:
+        obj_in["display_name"] = data.display_name
+    if "status" in update_data:
+        obj_in["status"] = data.status
 
     if "cookies_json" in update_data:
         if update_data["cookies_json"]:
@@ -173,7 +186,7 @@ async def update_credential(
             except (json.JSONDecodeError, ValueError, TypeError) as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid cookies_json format: {e}",
+                    detail="Invalid cookies_json format: expected a JSON array",
                 ) from e
             obj_in["cookies_json"] = encrypt_data(cookies_json, settings.SECRET_KEY)
             obj_in["cookies_updated_at"] = datetime.now(UTC)
@@ -183,7 +196,12 @@ async def update_credential(
             obj_in["cookies_json"] = None
             obj_in["cookies_updated_at"] = None
 
-    updated = await agent_credential_dao.update(db_obj=cred, obj_in=obj_in)
+    try:
+        updated = await agent_credential_dao.edit(
+            CredentialRevision(credential_id, agent_id, data.expected_revision), obj_in
+        )
+    except CredentialRevisionConflictError as error:
+        raise HTTPException(status_code=409, detail=revision_conflict_detail()) from error
     return _to_response(updated)
 
 

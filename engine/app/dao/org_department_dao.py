@@ -6,7 +6,13 @@ from uuid import UUID
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.org_department import OrgDepartmentRecord
-from app.schemas.department import AssignmentOut, AssignmentsOut, DepartmentDeletionPreviewOut, DepartmentMemberOut
+from app.schemas.department import (
+    AssignmentOut,
+    AssignmentsOut,
+    DepartmentDeletionPreviewOut,
+    DepartmentMemberOut,
+    DepartmentMergePreviewOut,
+)
 
 
 @final
@@ -124,6 +130,49 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
             await db.execute(
                 "DELETE FROM local_departments WHERE tenant_id = %(tenant)s AND id = %(department)s", params
             )
+
+    async def merge_preview(
+        self, source: OrgDepartmentRecord, destination: OrgDepartmentRecord
+    ) -> DepartmentMergePreviewOut:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "WITH members AS (SELECT user_id, bool_or(department_id = %(source)s) AS source, "
+                "bool_or(department_id = %(destination)s) AS destination FROM local_department_memberships "
+                "WHERE tenant_id = %(tenant)s AND department_id IN (%(source)s, %(destination)s) GROUP BY user_id), "
+                "grants AS (SELECT a.id, bool_or(p.scope_id = %(source)s) AS source, "
+                "bool_or(p.scope_id = %(destination)s) AS destination FROM agent_permissions p "
+                "JOIN agents a ON a.id = p.agent_id WHERE a.tenant_id = %(tenant)s AND a.access_mode = 'custom' "
+                "AND p.scope_type = 'department' AND p.access_level = 'use' "
+                "AND p.scope_id IN (%(source)s, %(destination)s) GROUP BY a.id) "
+                "SELECT (SELECT count(*) FROM members WHERE source) AS source_membership_count, "
+                "(SELECT count(*) FROM members WHERE destination) AS destination_membership_count, "
+                "(SELECT count(*) FROM members WHERE source AND destination) AS overlapping_membership_count, "
+                "(SELECT count(*) FROM grants WHERE source) AS source_agent_grant_count, "
+                "(SELECT count(*) FROM grants WHERE destination) AS destination_agent_grant_count, "
+                "(SELECT count(*) FROM grants WHERE source AND destination) AS overlapping_agent_grant_count",
+                {"tenant": source.tenant_id, "source": source.id, "destination": destination.id},
+            )
+            return DepartmentMergePreviewOut.model_validate({**rows[0], "source": source, "destination": destination})
+
+    async def merge_departments(self, source: OrgDepartmentRecord, destination: OrgDepartmentRecord) -> None:
+        async with self.session() as db:
+            params = {"tenant": source.tenant_id, "source": source.id, "destination": destination.id}
+            await db.execute(
+                "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) "
+                "SELECT user_id, tenant_id, %(destination)s FROM local_department_memberships "
+                "WHERE tenant_id = %(tenant)s AND department_id = %(source)s "
+                "ON CONFLICT (user_id, department_id) DO NOTHING",
+                params,
+            )
+            await db.execute(
+                "INSERT INTO agent_permissions (id, agent_id, scope_type, scope_id, access_level) "
+                "SELECT gen_random_uuid(), a.id, 'department', %(destination)s, 'use' FROM agent_permissions p "
+                "JOIN agents a ON a.id = p.agent_id WHERE a.tenant_id = %(tenant)s AND a.access_mode = 'custom' "
+                "AND p.scope_type = 'department' AND p.scope_id = %(source)s AND p.access_level = 'use' "
+                "ON CONFLICT (agent_id, scope_id) WHERE scope_type = 'department' DO NOTHING",
+                params,
+            )
+            await self.delete_department(source)
 
     async def has_agent_access(self, user_id: UUID, agent_id: UUID) -> bool:
         async with self.session() as db:

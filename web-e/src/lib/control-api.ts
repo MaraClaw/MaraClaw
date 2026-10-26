@@ -1,7 +1,15 @@
 import { z } from 'zod'
 
-import { apiRequest } from './http.ts'
-import { ControlActionResultSchema, ControlEnvironmentSchema, ControlStatusSchema } from './engine-contracts.generated.ts'
+import { apiRequest, type RequestOptions } from './http.ts'
+import {
+  AgentCredentialPayloadSchema, AgentCredentialUpdateSchema, CredentialCaptureSchema,
+  ControlActionResultSchema, ControlEnvironmentSchema, ControlStatusSchema,
+} from './engine-contracts.generated.ts'
+
+export type CredentialCapture = Readonly<z.infer<typeof CredentialCaptureSchema>>
+export type ControlUnlockOptions =
+  | { readonly export_cookies: false }
+  | { readonly export_cookies: true; readonly platform_hint: string; readonly capture: CredentialCapture }
 
 export type ControlLease = {
   readonly agentId: string
@@ -40,11 +48,11 @@ async function ownerRequest(lease: ControlLease, endpoint: string, body: object 
 
 export function controlUnlock(
   lease: ControlLease,
-  opts?: { export_cookies?: boolean; platform_hint?: string },
+  opts: ControlUnlockOptions = { export_cookies: false },
 ): Promise<ControlResult> {
-  return ownerRequest(lease, 'unlock', {
-    export_cookies: opts?.export_cookies ?? true, platform_hint: opts?.platform_hint,
-  })
+  return ownerRequest(lease, 'unlock', opts.export_cookies
+    ? { ...opts, capture: CredentialCaptureSchema.parse(opts.capture) }
+    : opts)
 }
 
 export function controlScreenshot(lease: ControlLease): Promise<ControlResult> {
@@ -77,26 +85,38 @@ export function controlDrag(
   })
 }
 
-export type AgentCredential = {
-  id: string
-  agent_id: string
-  credential_type: string
-  platform: string
-  display_name: string
-  status: string
-  has_cookies: boolean
-  cookies_updated_at?: string | null
-}
+const agentCredentialSchema = z.object(AgentCredentialPayloadSchema.shape).extend({ revision: z.number().int().positive().safe() })
+export type AgentCredential = Readonly<z.infer<typeof agentCredentialSchema>>
+const credentialUpdateSchema = z.object(AgentCredentialUpdateSchema.shape)
+export type CredentialUpdate = Readonly<z.infer<typeof credentialUpdateSchema>>
 
-export async function listCredentials(agentId: string): Promise<AgentCredential[]> {
-  return apiRequest(`/api/agents/${agentId}/credentials/`)
+export async function listCredentials(
+  agentId: string, options: Pick<RequestOptions, 'owner' | 'signal'> = {},
+): Promise<AgentCredential[]> {
+  return apiRequest(`/api/agents/${agentId}/credentials/`, {
+    schema: z.array(agentCredentialSchema),
+    ...(options.owner === undefined ? {} : { owner: options.owner }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
 }
 
 export async function createCredential(
   agentId: string,
   body: { platform: string; display_name?: string; cookies_json?: string; credential_type?: string },
 ): Promise<AgentCredential> {
-  return apiRequest(`/api/agents/${agentId}/credentials/`, { method: 'POST', body })
+  return apiRequest(`/api/agents/${agentId}/credentials/`, { schema: agentCredentialSchema, method: 'POST', body })
+}
+
+export async function updateCredential(
+  target: { readonly agentId: string; readonly credentialId: string },
+  body: CredentialUpdate,
+  options: Pick<RequestOptions, 'owner' | 'signal'> = {},
+): Promise<AgentCredential> {
+  return apiRequest(`/api/agents/${target.agentId}/credentials/${target.credentialId}`, {
+    schema: agentCredentialSchema, method: 'PUT', body: credentialUpdateSchema.parse(body),
+    ...(options.owner === undefined ? {} : { owner: options.owner }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
 }
 
 export async function deleteCredential(agentId: string, credentialId: string): Promise<void> {

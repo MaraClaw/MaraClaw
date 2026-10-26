@@ -6,7 +6,11 @@ import {
   listDepartments,
   type DepartmentsResponse,
 } from '@/lib/departments-api'
-import { deleteDepartmentOptions, replaceUserDepartmentsOptions, renameDepartmentOptions } from './users-department-mutations'
+import { deleteDepartmentOptions, mergeDepartmentOptions, replaceUserDepartmentsOptions, renameDepartmentOptions } from './users-department-mutations'
+
+export function useMergeDepartment() {
+  return useMutation(mergeDepartmentOptions(useQueryClient()))
+}
 
 export function useRenameDepartment() {
   return useMutation(renameDepartmentOptions(useQueryClient()))

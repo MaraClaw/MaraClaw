@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { archiveNotification, listNotifications, markAllNotificationsRead, markSelectedNotificationsRead, NotificationKind, restoreNotification, unreadNotificationCount } from '../src/lib/notifications-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+const page = (items: readonly unknown[], next_cursor: string | null = null) => ({ items, next_cursor })
 
 test('notification list preserves every canonical kind as its original wire string', async (t) => {
   // Given
@@ -14,17 +15,17 @@ test('notification list preserves every canonical kind as its original wire stri
     'organization_welcome', 'system_alert', 'system', 'openclaw_update',
   ]
   const response = kinds.map((type) => ({ id: 'notice', title: 'Title', type, archived_at: null }))
-  t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(page(response)))
   // When
   const rows = await listNotifications()
   // Then
-  assert.deepEqual(rows, response)
+  assert.deepEqual(rows.items, response)
 })
 
 for (const type of ['future_type', '', null, 17, undefined]) {
   test(`notification list rejects unknown, invalid or missing kind ${JSON.stringify(type)}`, async (t) => {
     // Given
-    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'notice', title: 'Title', type, archived_at: null }]))
+    t.mock.method(globalThis, 'fetch', async () => Response.json(page([{ id: 'notice', title: 'Title', type, archived_at: null }])))
     // When
     const result = listNotifications()
     // Then
@@ -32,19 +33,19 @@ for (const type of ['future_type', '', null, 17, undefined]) {
   })
 }
 
-test('notification list sends default and explicit offset paging with its category', async (t) => {
+test('notification list sends default and opaque cursor paging with its filters', async (t) => {
   // Given
   const urls: URL[] = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
     urls.push(new URL(String(input), 'http://fixture.test'))
-    return Response.json([])
+    return Response.json(page([]))
   })
   // When
   await listNotifications()
-  await listNotifications({ category: 'approval', view: 'archived', limit: 200, offset: 400 })
+  await listNotifications({ category: 'approval', view: 'archived', limit: 200, cursor: 'older/+?=', unreadOnly: true })
   // Then
   assert.deepEqual(urls.map((url) => Object.fromEntries(url.searchParams)), [
-    { category: 'all', limit: '50', offset: '0', view: 'active' }, { category: 'approval', limit: '200', offset: '400', view: 'archived' },
+    { category: 'all', limit: '50', view: 'active', unread_only: 'false' }, { category: 'approval', limit: '200', view: 'archived', cursor: 'older/+?=', unread_only: 'true' },
   ])
 })
 
@@ -53,7 +54,7 @@ test('notification list rejects invalid paging before sending a request', async 
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([]))
   // When
   await assert.rejects(listNotifications({ limit: 201 }))
-  await assert.rejects(listNotifications({ offset: -1 }))
+  await assert.rejects(listNotifications({ cursor: '' }))
   // Then
   assert.equal(fetch.mock.callCount(), 0)
 })
@@ -61,27 +62,27 @@ test('notification list rejects invalid paging before sending a request', async 
 test('notification list accepts the engine response with a null timestamp', async (t) => {
   // Given
   const notification = { id: 'notice', title: 'Title', body: 'Body', type: NotificationKind.System, link: null, is_read: false, created_at: null, archived_at: null }
-  t.mock.method(globalThis, 'fetch', async () => Response.json([notification]))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(page([notification])))
   // When
   const rows = await listNotifications()
   // Then
-  assert.deepEqual(rows, [notification])
+  assert.deepEqual(rows.items, [notification])
 })
 
 test('archived notification timestamps survive parsing without changing read state', async (t) => {
   // Given
   const row = { id: 'archived', title: 'Archived unread', type: NotificationKind.Broadcast, is_read: false, archived_at: '2030-01-02T12:30:00+08:00' }
-  t.mock.method(globalThis, 'fetch', async () => Response.json([row]))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(page([row])))
   // When
   const rows = await listNotifications({ view: 'archived' })
   // Then
-  assert.deepEqual(rows, [row])
+  assert.deepEqual(rows.items, [row])
 })
 
 for (const archived_at of ['yesterday', undefined]) {
   test(`notification boundary rejects invalid archive timestamp ${archived_at}`, async (t) => {
     // Given
-    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 'bad', title: 'Bad', type: NotificationKind.Broadcast, archived_at }]))
+    t.mock.method(globalThis, 'fetch', async () => Response.json(page([{ id: 'bad', title: 'Bad', type: NotificationKind.Broadcast, archived_at }])))
     // When / Then
     await assert.rejects(listNotifications())
   })
@@ -117,7 +118,7 @@ test('notification list and count requests preserve the supplied abort signal', 
   const signals: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     signals.push(init?.signal)
-    return Response.json(String(input).includes('/unread-count') ? { unread_count: 1 } : [])
+    return Response.json(String(input).includes('/unread-count') ? { unread_count: 1 } : page([]))
   })
   // When
   await listNotifications({ signal: controller.signal })

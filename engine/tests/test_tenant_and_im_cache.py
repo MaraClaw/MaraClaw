@@ -47,7 +47,7 @@ def _tenant() -> TenantRecord:
 @pytest.mark.asyncio
 async def test_tenant_cache_roundtrip(fake_cache: FakeRedis) -> None:
     tenant = _tenant()
-    await tenant_cache.set_cached_tenant(tenant)
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=await tenant_cache.peek_tenant_version(tenant.id))
     loaded = await tenant_cache.get_cached_tenant(tenant.id)
     assert loaded is not None
     assert loaded.slug == "acme"
@@ -58,9 +58,62 @@ async def test_tenant_cache_roundtrip(fake_cache: FakeRedis) -> None:
 @pytest.mark.asyncio
 async def test_tenant_cache_bump_invalidates(fake_cache: FakeRedis) -> None:
     tenant = _tenant()
-    await tenant_cache.set_cached_tenant(tenant)
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=await tenant_cache.peek_tenant_version(tenant.id))
     await tenant_cache.bump_tenant_cache(tenant.id)
     assert await tenant_cache.get_cached_tenant(tenant.id) is None
+
+
+async def test_tenant_misses_when_only_generation_read_fails(fake_cache: FakeRedis) -> None:
+    tenant = _tenant()
+    fake_cache.store[tenant_cache._ver_key(tenant.id)] = "0"
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=await tenant_cache.peek_tenant_version(tenant.id))
+    fake_cache.fail_gets.add(tenant_cache._ver_key(tenant.id))
+
+    loaded = await tenant_cache.get_cached_tenant(tenant.id)
+
+    assert loaded is None
+
+
+@pytest.mark.parametrize("recreate", [False, True])
+async def test_expired_generation_cannot_revalidate_old_tenant(fake_cache: FakeRedis, recreate: bool) -> None:
+    tenant = _tenant()
+    key = tenant_cache._ver_key(tenant.id)
+    await redis_cache.bump_version(key)
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=await tenant_cache.peek_tenant_version(tenant.id))
+    fake_cache.store.pop(key)
+
+    if recreate:
+        await redis_cache.bump_version(key)
+    loaded = await tenant_cache.get_cached_tenant(tenant.id)
+
+    assert loaded is None
+
+
+@pytest.mark.parametrize("after_observation", [False, True])
+async def test_tenant_fill_requires_successful_generation_observations(
+    fake_cache: FakeRedis, after_observation: bool
+) -> None:
+    tenant = _tenant()
+    observed = await tenant_cache.peek_tenant_version(tenant.id) if after_observation else None
+    fake_cache.fail_gets.add(tenant_cache._ver_key(tenant.id))
+    if not after_observation:
+        observed = await tenant_cache.peek_tenant_version(tenant.id)
+        fake_cache.fail_gets.clear()
+        redis_cache.reset_circuit()
+
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=observed)
+
+    assert tenant_cache._row_key(tenant.id) not in fake_cache.store
+
+
+async def test_tenant_fill_refuses_missing_current_generation(fake_cache: FakeRedis) -> None:
+    tenant = _tenant()
+    observed = await tenant_cache.peek_tenant_version(tenant.id)
+    fake_cache.store.pop(tenant_cache._ver_key(tenant.id))
+
+    await tenant_cache.set_cached_tenant(tenant, observed_ver=observed)
+
+    assert tenant_cache._row_key(tenant.id) not in fake_cache.store
 
 
 @pytest.mark.asyncio

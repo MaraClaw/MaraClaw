@@ -49,19 +49,26 @@ const countSchema = z.union([
   z.object({ unread_count: z.number().int().nonnegative() }).transform((value) => value.unread_count),
   z.object({ count: z.number().int().nonnegative() }).transform((value) => value.count),
 ])
-const pageSchema = z.object({ limit: z.number().int().min(1).max(200), offset: z.number().int().nonnegative() })
+const pageSchema = z.object({ limit: z.number().int().min(1).max(200), cursor: z.string().min(1).nullable() })
+export const notificationPageSchema = z.object({
+  items: z.array(notificationSchema).readonly(),
+  next_cursor: z.string().min(1).nullable(),
+}).readonly()
+export type NotificationPage = z.infer<typeof notificationPageSchema>
 
-export async function listNotifications({ category = 'all', view = 'active', limit = 50, offset = 0, signal }: {
+export async function listNotifications({ category = 'all', view = 'active', limit = 50, cursor = null, unreadOnly = false, signal }: {
   readonly category?: NotificationCategory
   readonly view?: NotificationView
   readonly limit?: number
-  readonly offset?: number
+  readonly cursor?: string | null
+  readonly unreadOnly?: boolean
   readonly signal?: AbortSignal
-} = {}): Promise<readonly NotificationRow[]> {
-  const page = pageSchema.parse({ limit, offset })
-  const query = new URLSearchParams({ category, limit: String(page.limit), offset: String(page.offset), view: notificationViewSchema.parse(view) })
-  return apiRequest(`/api/notifications?${query}`, {
-    schema: z.array(notificationSchema), ...(signal === undefined ? {} : { signal }),
+} = {}): Promise<NotificationPage> {
+  const page = pageSchema.parse({ limit, cursor })
+  const query = new URLSearchParams({ category, limit: String(page.limit), view: notificationViewSchema.parse(view), unread_only: String(unreadOnly) })
+  if (page.cursor !== null) query.set('cursor', page.cursor)
+  return apiRequest(`/api/notifications/page?${query}`, {
+    schema: notificationPageSchema, ...(signal === undefined ? {} : { signal }),
   })
 }
 

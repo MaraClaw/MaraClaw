@@ -9,6 +9,7 @@ import pytest
 from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache, session_cache
+from app.core.cache_contracts import SessionCacheObservation
 from app.core.domain.users import UserRole
 from app.core.json_types import is_json_object
 from app.core.row_memo import clear_row_memo
@@ -58,10 +59,18 @@ def _user(**overrides) -> UserRecord:
     return user
 
 
+async def _observation(user: UserRecord) -> SessionCacheObservation | None:
+    user_ver = await session_cache.peek_user_version(user.id)
+    identity_ver = await session_cache.peek_identity_version(user.identity_id)
+    if user_ver is None or identity_ver is None:
+        return None
+    return SessionCacheObservation(user.identity_id, user_ver, identity_ver)
+
+
 @pytest.mark.asyncio
 async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRedis) -> None:
     user = _user()
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     clear_row_memo()
     loaded = await session_cache.get_cached_user(user.id)
     assert loaded is not None
@@ -78,7 +87,7 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
 async def test_session_cache_roundtrip_preserves_timezone(fake_cache: FakeRedis, timezone: str | None) -> None:
     # Given a member preference, including an explicitly unset preference.
     user = _user(timezone=timezone)
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     clear_row_memo()
     # When another request reads the Redis snapshot rather than the row memo.
     loaded = await session_cache.get_cached_user(user.id)
@@ -90,7 +99,9 @@ async def test_session_cache_roundtrip_preserves_timezone(fake_cache: FakeRedis,
 async def test_legacy_session_snapshot_defaults_timezone_to_unset(fake_cache: FakeRedis) -> None:
     # Given a pre-preference snapshot with no timezone key.
     user = _user()
-    payload = dict[str, object](session_cache._snapshot(user, "0", "0"))
+    observed = await _observation(user)
+    assert observed is not None
+    payload = dict[str, object](session_cache._snapshot(user, observed.user_version, observed.identity_version))
     user_payload = payload["user"]
     assert is_json_object(user_payload)
     user_payload.pop("timezone", None)
@@ -107,7 +118,9 @@ async def test_legacy_snapshot_ignores_retired_field_without_invalidating_sessio
     user = _user()
     assert user.identity is not None
     user.identity.must_change_password = True
-    payload = dict[str, object](session_cache._snapshot(user, "0", "0"))
+    observed = await _observation(user)
+    assert observed is not None
+    payload = dict[str, object](session_cache._snapshot(user, observed.user_version, observed.identity_version))
     identity_payload = payload["identity"]
     assert is_json_object(identity_payload)
     identity_payload["username"] = "legacy-handle"
@@ -130,7 +143,7 @@ async def test_legacy_snapshot_ignores_retired_field_without_invalidating_sessio
 @pytest.mark.asyncio
 async def test_session_cache_bump_user_invalidates(fake_cache: FakeRedis) -> None:
     user = _user()
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     await session_cache.bump_user_session(user.id)
     clear_row_memo()
     assert await session_cache.get_cached_user(user.id) is None
@@ -140,7 +153,7 @@ async def test_session_cache_bump_user_invalidates(fake_cache: FakeRedis) -> Non
 async def test_session_cache_identity_bump_invalidates(fake_cache: FakeRedis) -> None:
     user = _user()
     assert user.identity_id is not None
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     await session_cache.bump_identity_session(user.identity_id)
     assert await session_cache.get_cached_user(user.id) is None
 
@@ -148,9 +161,9 @@ async def test_session_cache_identity_bump_invalidates(fake_cache: FakeRedis) ->
 @pytest.mark.asyncio
 async def test_session_cache_set_skips_after_version_bump(fake_cache: FakeRedis) -> None:
     user = _user()
-    observed = await session_cache.peek_user_version(user.id)
+    observed = await _observation(user)
     await session_cache.bump_user_session(user.id)
-    await session_cache.set_cached_user(user, observed_user_ver=observed)
+    await session_cache.set_cached_user(user, observed=observed)
     clear_row_memo()
     assert await session_cache.get_cached_user(user.id) is None
 
@@ -159,7 +172,7 @@ async def test_session_cache_set_skips_after_version_bump(fake_cache: FakeRedis)
 async def test_session_cache_disabled(monkeypatch: pytest.MonkeyPatch, fake_cache: FakeRedis) -> None:
     monkeypatch.setattr(session_cache, "_ttl", lambda: 0)
     user = _user()
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     clear_row_memo()
     assert await session_cache.get_cached_user(user.id) is None
 
@@ -167,11 +180,95 @@ async def test_session_cache_disabled(monkeypatch: pytest.MonkeyPatch, fake_cach
 @pytest.mark.asyncio
 async def test_session_cache_redis_down_returns_none(fake_cache: FakeRedis) -> None:
     user = _user()
-    await session_cache.set_cached_user(user)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
     fake_cache.fail = True
     redis_cache.reset_circuit()
     clear_row_memo()
     assert await session_cache.get_cached_user(user.id) is None
+
+
+@pytest.mark.parametrize("dependency", ["user", "identity"])
+async def test_session_misses_when_only_generation_read_fails(fake_cache: FakeRedis, dependency: str) -> None:
+    user = _user()
+    assert user.identity_id is not None
+    key = (
+        session_cache.user_version_key(user.id)
+        if dependency == "user"
+        else session_cache.identity_version_key(user.identity_id)
+    )
+    fake_cache.store[key] = "0"
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    clear_row_memo()
+    fake_cache.fail_gets.add(key)
+
+    loaded = await session_cache.get_cached_user(user.id)
+
+    assert loaded is None
+
+
+@pytest.mark.parametrize("dependency", ["user", "identity"])
+@pytest.mark.parametrize("recreate", [False, True])
+async def test_expired_generation_cannot_revalidate_old_session(
+    fake_cache: FakeRedis, dependency: str, recreate: bool
+) -> None:
+    user = _user()
+    assert user.identity_id is not None
+    key = (
+        session_cache.user_version_key(user.id)
+        if dependency == "user"
+        else session_cache.identity_version_key(user.identity_id)
+    )
+    await redis_cache.bump_version(key)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    clear_row_memo()
+    fake_cache.store.pop(key)
+
+    if recreate:
+        await redis_cache.bump_version(key)
+    loaded = await session_cache.get_cached_user(user.id)
+
+    assert loaded is None
+
+
+@pytest.mark.parametrize("after_observation", [False, True])
+@pytest.mark.parametrize("dependency", ["user", "identity"])
+async def test_session_fill_requires_successful_generation_observations(
+    fake_cache: FakeRedis, dependency: str, after_observation: bool
+) -> None:
+    user = _user()
+    assert user.identity_id is not None
+    key = (
+        session_cache.user_version_key(user.id)
+        if dependency == "user"
+        else session_cache.identity_version_key(user.identity_id)
+    )
+    observed = await _observation(user) if after_observation else None
+    fake_cache.fail_gets.add(key)
+    if not after_observation:
+        observed = await _observation(user)
+        fake_cache.fail_gets.clear()
+        redis_cache.reset_circuit()
+
+    await session_cache.set_cached_user(user, observed=observed)
+
+    assert session_cache._sess_key(user.id) not in fake_cache.store
+
+
+@pytest.mark.parametrize("dependency", ["user", "identity"])
+async def test_session_fill_refuses_missing_current_generation(fake_cache: FakeRedis, dependency: str) -> None:
+    user = _user()
+    assert user.identity_id is not None
+    observed = await _observation(user)
+    key = (
+        session_cache.user_version_key(user.id)
+        if dependency == "user"
+        else session_cache.identity_version_key(user.identity_id)
+    )
+    fake_cache.store.pop(key)
+
+    await session_cache.set_cached_user(user, observed=observed)
+
+    assert session_cache._sess_key(user.id) not in fake_cache.store
 
 
 def test_snapshot_never_includes_hash() -> None:

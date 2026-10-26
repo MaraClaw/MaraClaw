@@ -19,6 +19,7 @@ import {
 import { createSession, listSessions, type AgentOut } from '@/lib/workspace-api'
 import { controlSessionId, isWritableSession } from '@/lib/chat/sessions'
 import { useControlLease } from './use-control-lease'
+import { ControlCaptureFields } from './control-capture-fields'
 
 export function AgentControlPage() {
   const scope = useWorkspaceSession()
@@ -35,7 +36,7 @@ export function AgentControlPage() {
   const sessionId = controlSessionId(availableSessions, selectedSessionId) ?? ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')
   const control = useControlLease(scope)
-  const { lease, screenshot, domain, setDomain, typed, setTyped, busy } = control
+  const { lease, screenshot, domain, setDomain, typed, setTyped, busy, capture, setCapture, captureError } = control
   const locked = lease !== null
   const imgRef = useRef<HTMLImageElement | null>(null)
 
@@ -91,14 +92,12 @@ export function AgentControlPage() {
     const finish = control.beginBusy()
     try {
       if (!lease) return
-      const result = await control.request((owner) => controlUnlock(owner, {
-        export_cookies: Boolean(domain),
-        platform_hint: domain || undefined,
-      }))
-      if (!result || !control.isCurrent(lease)) return
-      control.end(lease)
+      const result = await control.request((owner) => controlUnlock(owner, capture && domain.trim()
+        ? { export_cookies: true, platform_hint: domain.trim(), capture }
+        : { export_cookies: false }), true)
+      if (!result || !control.isMounted()) return
       toast.success(
-        result.cookies_exported ? `Unlocked. Exported ${result.cookie_count ?? 0} cookies.` : 'Unlocked',
+        result.cookies_exported ? `Control released. Saved ${result.cookie_count ?? 0} cookies.` : 'Control released. No cookies saved.',
       )
     } catch {
       if (!control.isMounted()) return
@@ -116,14 +115,15 @@ export function AgentControlPage() {
           Drive the live AgentBay browser or desktop. The agent waits while you are locked in.
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      {captureError ? <p role="alert" className="text-sm text-destructive">{captureError}</p> : null}
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs">
           <span className="text-muted-foreground">Chat session</span>
           <Select
             className="mt-1"
             value={sessionId}
             onChange={scope.effect((event) => setSessionId(event.target.value))}
-            disabled={locked}
+            disabled={locked || busy}
           >
             {availableSessions.map((session) => (
               <option key={session.id} value={session.id}>
@@ -138,18 +138,16 @@ export function AgentControlPage() {
             className="mt-1"
             value={envType}
             onChange={scope.effect((event) => setEnvType(event.target.value))}
-            disabled={locked}
+            disabled={locked || busy}
           >
             <option value="browser">Browser</option>
             <option value="computer">Computer</option>
             <option value="code">Code</option>
           </Select>
         </label>
-        <label className="text-xs">
-          <span className="text-muted-foreground">Cookie domain on unlock</span>
-          <Input className="mt-1 h-10" value={domain} onChange={scope.effect((event) => setDomain(event.target.value))} />
-        </label>
       </div>
+      <ControlCaptureFields agentId={agent.id} canManage={agent.access_level === 'manage'}
+        capture={capture} onCapture={setCapture} domain={domain} onDomain={setDomain} busy={busy} />
       <div className="flex flex-wrap gap-2">
         {locked ? (
           <Button size="sm" onClick={() => void unlock()} disabled={busy}>
@@ -165,7 +163,7 @@ export function AgentControlPage() {
             key={key}
             size="sm"
             variant="outline"
-            disabled={!locked}
+            disabled={!locked || busy}
             onClick={() => void control.request((owner) => controlPressKeys(owner, [key.toLowerCase()]))}
           >
             {key}
@@ -175,13 +173,14 @@ export function AgentControlPage() {
       <div className="flex gap-2">
         <Input
           value={typed}
+          aria-label="Remote session text"
           onChange={scope.effect((event) => setTyped(event.target.value))}
           placeholder="Type into the remote session"
-          disabled={!locked}
+          disabled={!locked || busy}
         />
         <Button
           size="sm"
-          disabled={!locked || !typed}
+          disabled={!locked || busy || !typed}
           onClick={() => {
             if (!scope.isCurrent()) return
             void control.request((owner) => controlType(owner, typed)).then((result) => {
@@ -225,7 +224,7 @@ export function AgentControlPage() {
         )}
       </div>
       <Label className="text-xs text-muted-foreground">
-        Click to click. Drag for sliders. Cookies export to the vault when you release with a domain set.
+        Click to click. Drag for sliders. Cookies are saved only with a domain and an explicit save choice.
       </Label>
     </div>
   )

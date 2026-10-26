@@ -2,6 +2,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Self
+from uuid import UUID
 
 import pytest
 
@@ -48,7 +49,16 @@ class _Cursor:
             if ("user_id = %(user_id)s" not in sql or row.user_id == params["user_id"])
             and ("is_read IS FALSE" not in sql or not row.is_read)
             and ("type = ANY(%(types)s)" not in sql or row.type in types)
+            and ("archived_at IS NULL" not in sql or row.archived_at is None)
+            and ("archived_at IS NOT NULL" not in sql or row.archived_at is not None)
         ]
+        if "before_created_at" in params:
+            stamp, notice_id = params["before_created_at"], params["before_id"]
+            assert isinstance(stamp, datetime)
+            assert isinstance(notice_id, UUID)
+            matching = [
+                row for row in matching if row.created_at is not None and (row.created_at, row.id) < (stamp, notice_id)
+            ]
         if sql.startswith("UPDATE notifications SET is_read = TRUE"):
             for row in matching:
                 row.is_read = True

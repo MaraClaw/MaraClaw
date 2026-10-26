@@ -35,7 +35,7 @@ export function NotificationsPage() {
   const restore = useMutation(notificationRestoreOptions(scope.client))
   const pending = markRead.isPending || markAll.isPending || markSelected.isPending || archive.isPending || restore.isPending
   const hasUnread = (unreadQuery.data ?? 0) > 0
-  const items = query.data?.pages.flat() ?? []
+  const items = [...new Map(query.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item])).values()]
   const selectionContext = useMemo(() => ({ scope, category, view }), [scope, category, view])
   const selection = useNotificationSelection(items, selectionContext)
 
@@ -75,7 +75,12 @@ export function NotificationsPage() {
       </fieldset>
       <div className="space-y-2">
         <Label htmlFor="notification-category">Category</Label>
-        <Select id="notification-category" value={category} onChange={(event) => { resetErrors(); setCategory(notificationCategorySchema.parse(event.currentTarget.value)) }}>
+        <Select id="notification-category" value={category} onChange={(event) => {
+          const next = notificationCategorySchema.parse(event.currentTarget.value)
+          resetErrors()
+          void scope.client.resetQueries({ queryKey: notificationKeys.list(next, view), exact: true })
+          setCategory(next)
+        }}>
           {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
         </Select>
         <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? 'Mark all read covers ALL active notifications matching this category, including those not loaded.' : 'Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.'}</p>
@@ -129,7 +134,7 @@ export function NotificationsPage() {
       </Button> : null}
       {query.isSuccess && items.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p className="text-sm text-muted-foreground">{view === 'active' ? 'No active notifications yet. Refresh to check for new updates.' : 'No archived notifications in this category. Archive a notification from Active to keep it here.'}</p>
-        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh Inbox</Button>
+        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={scope.effect(() => { selection.clear(); void scope.client.resetQueries({ queryKey: notificationKeys.list(category, view), exact: true }) })}>Refresh Inbox</Button>
       </div> : null}
     </div>
   )

@@ -1238,6 +1238,121 @@
         "title": "AgentCredentialCreate",
         "type": "object"
       },
+      "AgentCredentialPayload": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "cookies_updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cookies Updated At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "credential_type": {
+            "title": "Credential Type",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "has_cookies": {
+            "title": "Has Cookies",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_injected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Injected At"
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "agent_id",
+          "revision",
+          "credential_type",
+          "platform",
+          "display_name",
+          "status",
+          "cookies_updated_at",
+          "last_login_at",
+          "last_injected_at",
+          "has_cookies",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentCredentialPayload",
+        "type": "object"
+      },
       "AgentCredentialUpdate": {
         "description": "Schema for updating an existing credential.",
         "properties": {
@@ -1274,6 +1389,11 @@
             ],
             "title": "Display Name"
           },
+          "expected_revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
           "platform": {
             "anyOf": [
               {
@@ -1297,6 +1417,9 @@
             "title": "Status"
           }
         },
+        "required": [
+          "expected_revision"
+        ],
         "title": "AgentCredentialUpdate",
         "type": "object"
       },
@@ -4866,6 +4989,65 @@
         "title": "CreateSessionIn",
         "type": "object"
       },
+      "CredentialCapture": {
+        "discriminator": {
+          "mapping": {
+            "create": "#/components/schemas/CredentialCaptureCreate",
+            "replace": "#/components/schemas/CredentialCaptureReplace"
+          },
+          "propertyName": "mode"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CredentialCaptureCreate"
+          },
+          {
+            "$ref": "#/components/schemas/CredentialCaptureReplace"
+          }
+        ]
+      },
+      "CredentialCaptureCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "create",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "CredentialCaptureCreate",
+        "type": "object"
+      },
+      "CredentialCaptureReplace": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "format": "uuid",
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "replace",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "credential_id",
+          "expected_revision"
+        ],
+        "title": "CredentialCaptureReplace",
+        "type": "object"
+      },
       "CurrentUrlRequest": {
         "description": "Request to get the current page URL from the browser session.",
         "properties": {
@@ -5412,6 +5594,76 @@
           "members"
         ],
         "title": "DepartmentMembersOut",
+        "type": "object"
+      },
+      "DepartmentMergePreviewOut": {
+        "description": "Advisory associations before merge, recomputed by apply under its locks.",
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/DepartmentOut"
+          },
+          "destination_agent_grant_count": {
+            "description": "Eligible custom-agent department use grants.",
+            "minimum": 0.0,
+            "title": "Destination Agent Grant Count",
+            "type": "integer"
+          },
+          "destination_membership_count": {
+            "minimum": 0.0,
+            "title": "Destination Membership Count",
+            "type": "integer"
+          },
+          "overlapping_agent_grant_count": {
+            "minimum": 0.0,
+            "title": "Overlapping Agent Grant Count",
+            "type": "integer"
+          },
+          "overlapping_membership_count": {
+            "minimum": 0.0,
+            "title": "Overlapping Membership Count",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DepartmentOut"
+          },
+          "source_agent_grant_count": {
+            "description": "Eligible custom-agent department use grants.",
+            "minimum": 0.0,
+            "title": "Source Agent Grant Count",
+            "type": "integer"
+          },
+          "source_membership_count": {
+            "minimum": 0.0,
+            "title": "Source Membership Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "destination",
+          "source_membership_count",
+          "destination_membership_count",
+          "overlapping_membership_count",
+          "source_agent_grant_count",
+          "destination_agent_grant_count",
+          "overlapping_agent_grant_count"
+        ],
+        "title": "DepartmentMergePreviewOut",
+        "type": "object"
+      },
+      "DepartmentMergeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "destination_id": {
+            "format": "uuid",
+            "title": "Destination Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "destination_id"
+        ],
+        "title": "DepartmentMergeRequest",
         "type": "object"
       },
       "DepartmentOptionOut": {
@@ -9311,6 +9563,34 @@
           "SYSTEM",
           "OPENCLAW_UPDATE"
         ]
+      },
+      "NotificationPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "NotificationPageResponse",
+        "type": "object"
       },
       "NotificationReadResponse": {
         "properties": {
@@ -15046,6 +15326,16 @@
       "UnlockRequest": {
         "description": "Exit Take Control mode.",
         "properties": {
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CredentialCapture"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "export_cookies": {
             "default": true,
             "title": "Export Cookies",
@@ -19281,7 +19571,7 @@
         ]
       },
       "put": {
-        "description": "Update an existing credential.\n\nOnly provided fields are updated. Sensitive fields are re-encrypted.\nIf cookies_json is updated, status is reset to 'active'.",
+        "description": "Update an existing credential.\n\nOnly provided fields are updated. Sensitive fields are re-encrypted.\nexpected_revision must still be current; accepted edits advance it once\nand clear injection evidence. New cookies reset status to 'active'.",
         "operationId": "put_2f6170692f6167656e74732f7b6167656e745f69647d2f63726564656e7469616c732f7b63726564656e7469616c5f69647d",
         "parameters": [
           {
@@ -27997,6 +28287,156 @@
         ]
       }
     },
+    "/api/departments/{department_id}/merge": {
+      "post": {
+        "operationId": "post_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f6d65726765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "department_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Department Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepartmentMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentMergePreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Apply Department Merge",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
+    "/api/departments/{department_id}/merge-preview": {
+      "get": {
+        "operationId": "get_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f6d657267652d70726576696577",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "department_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Department Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "destination_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Destination Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentMergePreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Department Merge Preview",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
     "/api/enterprise/approvals": {
       "get": {
         "operationId": "get_2f6170692f656e74657270726973652f617070726f76616c73",
@@ -31606,6 +32046,113 @@
           }
         ],
         "summary": "Broadcast Email Status",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/page": {
+      "get": {
+        "description": "Traverse the live inbox; read/archive changes may alter later page membership.",
+        "operationId": "get_2f6170692f6e6f74696669636174696f6e732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "active",
+              "enum": [
+                "active",
+                "archived"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Notifications Page",
         "tags": [
           "notifications"
         ]
@@ -38115,6 +38662,9 @@
       "AgentApprovalResolveRequest",
       "AgentConversationResponse",
       "AgentCreate",
+      "AgentCredentialCreate",
+      "AgentCredentialPayload",
+      "AgentCredentialUpdate",
       "AgentInstalledToolResponse",
       "AgentLifecycleOut",
       "AgentOut",
@@ -38172,6 +38722,8 @@
       "DepartmentCreate",
       "DepartmentDeletionPreviewOut",
       "DepartmentMembersOut",
+      "DepartmentMergePreviewOut",
+      "DepartmentMergeRequest",
       "DepartmentOptionsOut",
       "DepartmentOut",
       "DepartmentsOut",
@@ -38213,6 +38765,7 @@
       "NotificationBroadcastEmailStatusResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
+      "NotificationPageResponse",
       "NotificationReadResponse",
       "NotificationResponse",
       "NotificationUnreadCountResponse",
@@ -38312,6 +38865,9 @@
       "AgentBayLiveEvent",
       "AgentConversationResponse",
       "AgentCreate",
+      "AgentCredentialCreate",
+      "AgentCredentialPayload",
+      "AgentCredentialUpdate",
       "AgentInstalledToolResponse",
       "AgentLifecycleAvailabilityOut",
       "AgentLifecycleOut",
@@ -38374,6 +38930,9 @@
       "ControlStatus",
       "ConversationMessageResponse",
       "CorrelatedTurnRejectedEvent",
+      "CredentialCapture",
+      "CredentialCaptureCreate",
+      "CredentialCaptureReplace",
       "CurrentUrlRequest",
       "DelegateRequest",
       "DeletionAgent",
@@ -38391,6 +38950,8 @@
       "DepartmentDeletionPreviewOut",
       "DepartmentMemberOut",
       "DepartmentMembersOut",
+      "DepartmentMergePreviewOut",
+      "DepartmentMergeRequest",
       "DepartmentOptionOut",
       "DepartmentOptionsOut",
       "DepartmentOut",
@@ -38446,6 +39007,7 @@
       "NotificationBroadcastEmailStatusResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
+      "NotificationPageResponse",
       "NotificationReadResponse",
       "NotificationResponse",
       "NotificationUnreadCountResponse",

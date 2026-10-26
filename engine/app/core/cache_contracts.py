@@ -1,6 +1,20 @@
+from dataclasses import dataclass
 from typing import TypedDict
+from uuid import UUID
 
 from app.core.json_types import JsonObject
+
+
+@dataclass(frozen=True, slots=True)
+class RedisValueRead:
+    value: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCacheObservation:
+    identity_id: UUID | None
+    user_version: str
+    identity_version: str
 
 
 class SessionIdentitySnapshot(TypedDict):

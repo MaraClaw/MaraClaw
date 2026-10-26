@@ -34,7 +34,10 @@ export const notificationSchema = NotificationResponseSchema.strip().extend({
   created_at: z.iso.datetime({ offset: true, local: true }).nullable(),
 }).readonly()
 
-const notificationsSchema = z.array(notificationSchema).readonly()
+export const notificationPageSchema = z.object({
+  items: z.array(notificationSchema).readonly(),
+  next_cursor: z.string().min(1).nullable(),
+}).readonly()
 const unreadCountSchema = NotificationUnreadCountResponseSchema.strip().extend({ unread_count: z.number().int().nonnegative() }).readonly()
 const readResultSchema = NotificationReadResponseSchema.strip().extend({ ok: z.literal(true) }).readonly()
 
@@ -42,11 +45,14 @@ export type AdminNotification = z.infer<typeof notificationSchema>
 export type NotificationId = AdminNotification['id']
 export type NotificationUnreadCount = z.infer<typeof unreadCountSchema>
 export type NotificationView = 'active' | 'archived'
+export type NotificationPage = z.infer<typeof notificationPageSchema>
 export const NOTIFICATIONS_PAGE_SIZE = 50
 
-export async function fetchNotifications(offset = 0, signal?: AbortSignal, view: NotificationView = 'active') {
+export async function fetchNotifications(cursor: string | null = null, signal?: AbortSignal, view: NotificationView = 'active') {
+  const query = new URLSearchParams({ limit: String(NOTIFICATIONS_PAGE_SIZE), view })
+  if (cursor !== null) query.set('cursor', cursor)
   return apiRequest(
-    `/api/notifications?limit=${NOTIFICATIONS_PAGE_SIZE}&offset=${offset}&view=${view}`, { schema: notificationsSchema, signal },
+    `/api/notifications/page?${query}`, { schema: notificationPageSchema, signal },
   )
 }
 

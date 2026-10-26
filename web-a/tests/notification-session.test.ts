@@ -40,12 +40,12 @@ for (const retire of ['logout', 'replacement', 'same-token'] as const) for (cons
     }
     const replacement = createSessionQueryScope(policy.capture()).client
     t.after(() => replacement.clear())
-    replacement.setQueryData(notificationKeys.list(0), [notification])
+    replacement.setQueryData(notificationKeys.list(null), [notification])
     replacement.setQueryData(notificationKeys.unread, { unread_count: 7 })
     response.resolve(Response.json(status === 200 ? { ok: true } : { detail: 'Unavailable' }, { status }))
     await rejected
     // Then
-    assert.deepEqual(replacement.getQueryData(notificationKeys.list(0)), [notification])
+    assert.deepEqual(replacement.getQueryData(notificationKeys.list(null)), [notification])
     assert.deepEqual(replacement.getQueryData(notificationKeys.unread), { unread_count: 7 })
     assert.ok(replacement.getQueryCache().getAll().every((query) => !query.state.isInvalidated))
   })
@@ -60,22 +60,22 @@ test('a late active response cannot overwrite the selected archived view', async
   const started = Promise.withResolvers<void>()
   const received = Promise.withResolvers<void>()
   const archived = { ...notification, archived_at: '2026-10-24T01:00:00Z' }
-  t.after(() => active.resolve(Response.json([notification])))
+  t.after(() => active.resolve(Response.json({ items: [notification], next_cursor: null })))
   t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => {
-    if (String(url).endsWith('view=archived')) return Response.json([archived])
+    if (String(url).endsWith('view=archived')) return Response.json({ items: [archived], next_cursor: null })
     started.resolve()
     return active.promise
   })
-  const observer = new QueryObserver(client, notificationsOptions(0, true))
+  const observer = new QueryObserver(client, notificationsOptions(null, true))
   t.after(observer.subscribe((result) => { if (result.isSuccess) received.resolve() }))
   await started.promise
   // When
-  observer.setOptions(notificationsOptions(0, true, 'archived'))
+  observer.setOptions(notificationsOptions(null, true, 'archived'))
   await received.promise
-  active.resolve(Response.json([notification]))
+  active.resolve(Response.json({ items: [notification], next_cursor: null }))
   // Then
-  assert.deepEqual(observer.getCurrentResult().data, [archived])
-  assert.deepEqual(client.getQueryData(notificationKeys.list(0, 'archived')), [archived])
+  assert.deepEqual(observer.getCurrentResult().data, { items: [archived], next_cursor: null })
+  assert.deepEqual(client.getQueryData(notificationKeys.list(null, 'archived')), { items: [archived], next_cursor: null })
 })
 
 for (const options of [notificationArchiveOptions, notificationRestoreOptions]) {
@@ -88,7 +88,7 @@ for (const options of [notificationArchiveOptions, notificationRestoreOptions]) 
         const { client } = createSessionQueryScope(owner)
         t.after(() => client.clear())
         t.after(ownQueryClient(policy, owner, client))
-        client.setQueryData(notificationKeys.list(0), [notification])
+        client.setQueryData(notificationKeys.list(null), [notification])
         const response = Promise.withResolvers<Response>()
         const started = Promise.withResolvers<void>()
         t.after(() => response.resolve(Response.json({ ok: true })))
@@ -104,13 +104,13 @@ for (const options of [notificationArchiveOptions, notificationRestoreOptions]) 
         }
         const replacement = createSessionQueryScope(policy.capture()).client
         t.after(() => replacement.clear())
-        replacement.setQueryData(notificationKeys.list(0), [notification])
+        replacement.setQueryData(notificationKeys.list(null), [notification])
         replacement.setQueryData(notificationKeys.unread, { unread_count: 9 })
         response.resolve(outcome === 'success' ? Response.json({ ok: true }) : Response.json({ detail: 'Unavailable' }, { status: 503 }))
         await result
         // Then
         assert.equal(client.getQueryCache().getAll().length, 0)
-        assert.deepEqual(replacement.getQueryData(notificationKeys.list(0)), [notification])
+        assert.deepEqual(replacement.getQueryData(notificationKeys.list(null)), [notification])
         assert.deepEqual(replacement.getQueryData(notificationKeys.unread), { unread_count: 9 })
         assert.ok(replacement.getQueryCache().getAll().every((query) => !query.state.isInvalidated))
       })
@@ -147,7 +147,7 @@ for (const options of [notificationArchiveOptions, notificationRestoreOptions]) 
     const { policy } = createFixture()
     const { client } = createSessionQueryScope(policy.capture())
     t.after(() => client.clear())
-    client.setQueryData(notificationKeys.list(0), [notification])
+    client.setQueryData(notificationKeys.list(null), [notification])
     client.setQueryData(notificationKeys.unread, { unread_count: 1 })
     const response = Promise.withResolvers<Response>()
     const started = Promise.withResolvers<void>()
@@ -160,7 +160,7 @@ for (const options of [notificationArchiveOptions, notificationRestoreOptions]) 
       return response.promise
     })
     const polls = [
-      client.fetchQuery({ ...notificationsOptions(0, true), staleTime: 0 }),
+      client.fetchQuery({ ...notificationsOptions(null, true), staleTime: 0 }),
       client.fetchQuery({ ...notificationUnreadOptions(true), staleTime: 0 }),
     ]
     await started.promise
@@ -171,7 +171,7 @@ for (const options of [notificationArchiveOptions, notificationRestoreOptions]) 
     await Promise.all(polls)
     // Then
     assert.ok(signals.every((signal) => signal?.aborted))
-    assert.deepEqual(client.getQueryData(notificationKeys.list(0)), [notification])
+    assert.deepEqual(client.getQueryData(notificationKeys.list(null)), [notification])
     assert.deepEqual(client.getQueryData(notificationKeys.unread), { unread_count: 1 })
     assert.ok(client.getQueryCache().getAll().every((query) => query.state.isInvalidated))
   })

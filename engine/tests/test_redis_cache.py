@@ -8,17 +8,19 @@ from typing import Any
 import pytest
 
 from app.core import events, redis_cache
+from app.core.cache_contracts import RedisValueRead
 from app.core.row_memo import clear_row_memo, memo_drop, memo_get, memo_set
 
 
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
-        self.fail = False
+        self.fail: bool = False
+        self.fail_gets: set[str] = set()
         self.expires: dict[str, int] = {}
 
     async def get(self, key: str) -> str | None:
-        if self.fail:
+        if self.fail or key in self.fail_gets:
             raise RuntimeError("redis down")
         return self.store.get(key)
 
@@ -82,9 +84,9 @@ async def test_cache_set_nx(fake_cache: FakeRedis) -> None:
 async def test_cache_json_and_version(fake_cache: FakeRedis) -> None:
     assert await redis_cache.cache_set_json("j", {"a": 1}, ttl=10) is True
     assert await redis_cache.cache_get_json("j") == {"a": 1}
-    assert await redis_cache.read_version("ver") == "0"
+    assert await redis_cache.read_version("ver") == RedisValueRead(None)
     await redis_cache.bump_version("ver", ttl=10)
-    assert await redis_cache.read_version("ver") == "1"
+    assert await redis_cache.read_version("ver") == RedisValueRead(fake_cache.store["ver"])
     assert fake_cache.expires["ver"] >= 3600
 
 
@@ -96,6 +98,42 @@ async def test_cache_fail_open(fake_cache: FakeRedis) -> None:
     assert await redis_cache.cache_set_nx("k", "v", ttl=10) is False
 
 
+async def test_version_failure_differs_from_successfully_missing_generation(fake_cache: FakeRedis) -> None:
+    missing = await redis_cache.read_version("ver")
+    fake_cache.fail_gets.add("ver")
+
+    failed = await redis_cache.read_version("ver")
+
+    assert failed != missing
+
+
+async def test_generations_are_stable_until_rotated(fake_cache: FakeRedis) -> None:
+    initial = await redis_cache.ensure_version("ver", ttl=10)
+    assert initial is not None
+    assert await redis_cache.ensure_version("ver", ttl=10) == initial
+
+    await redis_cache.bump_version("ver")
+
+    current = await redis_cache.read_version("ver")
+    assert current is not None
+    assert current.value is not None
+    assert current.value != initial
+
+
+async def test_generation_initialization_preserves_competing_writer(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def competing_set(key: str, value: str, *, ttl: int) -> bool:
+        fake_cache.store[key] = "competing-generation"
+        return False
+
+    monkeypatch.setattr(redis_cache, "cache_set_nx", competing_set)
+
+    observed = await redis_cache.ensure_version("ver", ttl=10)
+
+    assert observed == "competing-generation"
+
+
 @pytest.mark.asyncio
 async def test_circuit_does_not_block_invalidation(fake_cache: FakeRedis) -> None:
     await redis_cache.cache_set("sess", "old", ttl=10)
@@ -103,7 +141,7 @@ async def test_circuit_does_not_block_invalidation(fake_cache: FakeRedis) -> Non
     await redis_cache.cache_delete("sess")
     await redis_cache.bump_version("ver", ttl=10)
     assert "sess" not in fake_cache.store
-    assert fake_cache.store["ver"] == "1"
+    assert fake_cache.store["ver"]
 
 
 @pytest.mark.asyncio
@@ -176,7 +214,7 @@ async def test_deferred_version_flush(fake_cache: FakeRedis) -> None:
     await redis_cache.bump_version("ver")
     assert "ver" not in fake_cache.store
     await redis_cache.flush_deferred_versions()
-    assert fake_cache.store["ver"] == "1"
+    assert fake_cache.store["ver"]
     redis_cache.end_deferred_versions(token)
 
 

@@ -19,6 +19,8 @@ from app.schemas.department import (
     DepartmentCreate,
     DepartmentDeletionPreviewOut,
     DepartmentMembersOut,
+    DepartmentMergePreviewOut,
+    DepartmentMergeSelection,
     DepartmentOut,
 )
 from app.services.admin_audit import field_change, write_admin_audit
@@ -149,6 +151,61 @@ async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: U
             tenant_id=tenant,
             changes={"name": field_change(before_name, None)},
         )
+
+
+async def merge_departments(
+    actor: UserRecord, selection: DepartmentMergeSelection, *, apply: bool
+) -> DepartmentMergePreviewOut:
+    tenant = admin_tenant(actor, selection.tenant_id)
+    async with connection_ctx() as db:
+        await lock_tenants(db, (tenant, actor.tenant_id))
+        await lock_user(db, actor.id, actor.tenant_id)
+        fresh_actor = await user_dao.get_with_identity(actor.id, fresh=True)
+        if (
+            fresh_actor is None
+            or not fresh_actor.is_active
+            or (fresh_actor.identity is not None and not fresh_actor.identity.is_active)
+        ):
+            raise HTTPException(403, "Administrator is inactive")
+        raise_if_password_change_required(fresh_actor)
+        admin_tenant(fresh_actor, tenant)
+        if selection.source_id == selection.destination_id:
+            raise HTTPException(422, "Select a different destination department")
+        if await tenant_dao.get(tenant) is None:
+            raise HTTPException(404, "Organization not found")
+        departments = await org_department_dao.get_many([selection.source_id, selection.destination_id])
+        if len(departments) != 2 or any(department.tenant_id != tenant for department in departments):
+            raise HTTPException(404, "Department not found")
+        by_id = {department.id: department for department in departments}
+        source, destination = by_id[selection.source_id], by_id[selection.destination_id]
+        affected: set[UUID] = set()
+        if apply:
+            subjects = await org_department_dao.member_user_ids(source)
+            subjects.update(await org_department_dao.member_user_ids(destination))
+            for user_id in sorted(subjects - {actor.id}):
+                await lock_user(db, user_id, tenant)
+            affected = await org_department_dao.grant_agents_for_department(source)
+            affected.update(await org_department_dao.grant_agents_for_department(destination))
+            for agent_id in sorted(affected):
+                await lock_agent(db, agent_id, tenant)
+        preview = await org_department_dao.merge_preview(source, destination)
+        if apply:
+            await org_department_dao.merge_departments(source, destination)
+            for agent_id in sorted(affected):
+                await bump_agent_acl_version(agent_id)
+            await write_admin_audit(
+                actor=fresh_actor,
+                action="department.merge",
+                target_type="department",
+                target_id=source.id,
+                tenant_id=tenant,
+                changes={
+                    "name": field_change(preview.source.name, None),
+                    "destination_id": field_change(None, str(destination.id)),
+                },
+                details=preview.model_dump(mode="json"),
+            )
+        return preview
 
 
 async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> AssignmentsOut:
