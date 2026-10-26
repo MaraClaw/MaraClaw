@@ -11,7 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.cache_contracts import SessionIdentitySnapshot, SessionSnapshot
+from app.core.cache_contracts import SessionCacheObservation, SessionIdentitySnapshot, SessionSnapshot
 from app.core.domain.users import UserRole
 from app.core.json_types import (
     is_json_object,
@@ -28,6 +28,7 @@ from app.core.redis_cache import (
     cache_get_json,
     cache_key,
     cache_set_json,
+    ensure_version,
     has_pending_snapshot_writes,
     read_version,
 )
@@ -167,16 +168,18 @@ def _from_snapshot(data: object) -> UserRecord | None:
     )
 
 
-async def peek_user_version(user_id: UUID) -> str:
-    if _ttl() <= 0:
-        return "0"
-    return await read_version(user_version_key(user_id))
+async def peek_user_version(user_id: UUID) -> str | None:
+    if _ttl() <= 0 or has_pending_snapshot_writes():
+        return None
+    return await ensure_version(user_version_key(user_id), ttl=_ttl() * 40)
 
 
-async def peek_identity_version(identity_id: UUID | None) -> str:
-    if identity_id is None or _ttl() <= 0:
+async def peek_identity_version(identity_id: UUID | None) -> str | None:
+    if identity_id is None:
         return "0"
-    return await read_version(identity_version_key(identity_id))
+    if _ttl() <= 0 or has_pending_snapshot_writes():
+        return None
+    return await ensure_version(identity_version_key(identity_id), ttl=_ttl() * 40)
 
 
 async def get_cached_user(user_id: UUID) -> UserRecord | None:
@@ -188,21 +191,18 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
     cached: object = await cache_get_json(_sess_key(user_id))
     if not is_json_object(cached):
         return None
-    user_ver = await read_version(user_version_key(user_id))
-    ident_id = None
-    raw_ident = cached.get("identity")
-    if is_json_object(raw_ident):
-        ident_id = _parse_uuid(raw_ident.get("id"))
-    ident_ver = await read_version(identity_version_key(ident_id)) if ident_id else "0"
-    if str(cached.get("u_ver") or "0") != user_ver:
-        logger.debug("session_cache miss (user ver)")
-        return None
-    if str(cached.get("i_ver") or "0") != ident_ver:
-        logger.debug("session_cache miss (ident ver)")
-        return None
     user = _from_snapshot(cached)
-    if user is None:
+    if user is None or user.id != user_id:
         return None
+    if user.identity_id != (user.identity.id if user.identity else None):
+        return None
+    user_ver = await read_version(user_version_key(user_id))
+    if user_ver is None or user_ver.value is None or cached.get("u_ver") != user_ver.value:
+        return None
+    if user.identity_id is not None:
+        ident_ver = await read_version(identity_version_key(user.identity_id))
+        if ident_ver is None or ident_ver.value is None or cached.get("i_ver") != ident_ver.value:
+            return None
     memo_set(_MEMO_KIND, user_id, user)
     logger.debug("session_cache hit")
     return user
@@ -211,23 +211,21 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
 async def set_cached_user(
     user: UserRecord,
     *,
-    observed_user_ver: str | None = None,
-    observed_ident_ver: str | None = None,
+    observed: SessionCacheObservation | None = None,
 ) -> None:
     memo_set(_MEMO_KIND, user.id, user)
-    if _ttl() <= 0 or has_pending_snapshot_writes():
+    if _ttl() <= 0 or has_pending_snapshot_writes() or observed is None:
+        return
+    if user.identity_id != observed.identity_id:
         return
     user_ver = await read_version(user_version_key(user.id))
-    ident_ver = "0"
+    if user_ver is None or user_ver.value is None or user_ver.value != observed.user_version:
+        return
     if user.identity_id is not None:
         ident_ver = await read_version(identity_version_key(user.identity_id))
-    if observed_user_ver is not None and user_ver != observed_user_ver:
-        logger.debug("session_cache set skipped (user ver)")
-        return
-    if observed_ident_ver is not None and ident_ver != observed_ident_ver:
-        logger.debug("session_cache set skipped (ident ver)")
-        return
-    payload = _snapshot(user, user_ver, ident_ver)
+        if ident_ver is None or ident_ver.value is None or ident_ver.value != observed.identity_version:
+            return
+    payload = _snapshot(user, observed.user_version, observed.identity_version)
     _ = await cache_set_json(_sess_key(user.id), payload, ttl=_ttl())
 
 

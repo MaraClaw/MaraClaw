@@ -83,7 +83,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
             tenant_id = as_uuid(record_id)
         except TypeError, ValueError:
             tenant_id = None
-        observed_ver = "0"
+        observed_ver = None
         if tenant_id is not None:
             redis_hit = await get_cached_tenant(tenant_id)
             if redis_hit is not None:

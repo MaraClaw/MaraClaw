@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, ClassVar, final, override
 from uuid import UUID
 
+from app.core.cache_contracts import SessionCacheObservation
 from app.core.domain.users import UserRole
 from app.core.json_types import (
     int_from_row,
@@ -184,13 +185,21 @@ class UserDAO(BaseDAO[UserRecord]):
             uid = as_uuid(user_id)
         except TypeError, ValueError:
             uid = None
-        observed_user_ver = "0"
+        observed_user_ver = None
         if uid is not None and not fresh:
             cached = await get_cached_user(uid)
             if cached is not None:
                 return cached
             observed_user_ver = await peek_user_version(uid)
         async with self.session() as db:
+            observed = None
+            if observed_user_ver is not None:
+                identity_id = uuid_from_row_opt(
+                    await db.fetchval("SELECT identity_id FROM users WHERE id = %(id)s", {"id": uid})
+                )
+                identity_ver = await peek_identity_version(identity_id)
+                if identity_ver is not None:
+                    observed = SessionCacheObservation(identity_id, observed_user_ver, identity_ver)
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
                 "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
@@ -199,12 +208,7 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             user = _user_from_joined_row(row) if row is not None else None
             if user is not None and not fresh:
-                observed_ident_ver = await peek_identity_version(user.identity_id)
-                await set_cached_user(
-                    user,
-                    observed_user_ver=observed_user_ver,
-                    observed_ident_ver=observed_ident_ver,
-                )
+                await set_cached_user(user, observed=observed)
             return user
 
     async def charge_message_quota(self, user_id: UUID) -> int | None:

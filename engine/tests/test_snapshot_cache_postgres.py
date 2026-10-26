@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -15,6 +16,7 @@ from app.core.security import create_access_token
 from app.dao.identity_dao import identity_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db.connection import DbConnection, Params, Row
 from app.db.session import bind_crud_connection, connection_ctx
 from app.records.user import UserRecord
 
@@ -170,3 +172,71 @@ async def test_identity_version_alone_bypasses_warm_snapshot_when_members_are_un
     else:
         pytest.fail("Owning transaction did not raise")
     assert wire_cache.store == before
+
+
+@pytest.mark.parametrize("rebind", [False, True])
+async def test_identity_write_interleaving_refuses_unobserved_session_fill(
+    deletion_pg: DeletionPostgres, wire_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch, rebind: bool
+) -> None:
+    actor = deletion_pg.actor
+    assert actor.identity is not None
+    joined, resume = anyio.Event(), anyio.Event()
+    original = DbConnection.fetchone
+    results: list[UserRecord | None] = []
+    paused = False
+
+    async def fetchone(db: DbConnection, query: str, params: Params = None) -> Row | None:
+        nonlocal paused
+        target = not paused and "FROM users u LEFT JOIN identities" in query and params == {"user_id": actor.id}
+        if target:
+            paused = True
+            if rebind:
+                joined.set()
+                await resume.wait()
+        row = await original(db, query, params)
+        if target and not rebind:
+            joined.set()
+            await resume.wait()
+        return row
+
+    async def reader() -> None:
+        results.append(await user_dao.get_with_identity(actor.id))
+
+    monkeypatch.setattr(DbConnection, "fetchone", fetchone)
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(reader)
+            await joined.wait()
+            async with connection_ctx() as db:
+                if rebind:
+                    identity_id = uuid4()
+                    await db.execute(
+                        "INSERT INTO identities (id, email, password_hash) VALUES (%(id)s, %(email)s, 'hash')",
+                        {"id": identity_id, "email": f"{identity_id}@example.test"},
+                    )
+                    await db.execute(
+                        "UPDATE users SET identity_id = %(identity)s WHERE id = %(actor)s",
+                        {"identity": identity_id, "actor": actor.id},
+                    )
+                else:
+                    await identity_dao.update(db_obj=actor.identity, obj_in={"must_change_password": True})
+            resume.set()
+
+    assert results[0] is not None
+    assert redis_cache.cache_key("sess", "v1", actor.id) not in wire_cache.store
+    row_memo.clear_row_memo()
+    current = await user_dao.get_with_identity(actor.id)
+    assert current is not None
+    assert (current.identity_id != actor.identity_id) if rebind else current.must_change_password
+    row_memo.clear_row_memo()
+    cached = await user_dao.get_with_identity(actor.id)
+    assert cached is not None
+    assert cached.identity is not None
+    assert cached.identity.password_hash is None
+    assert cached.identity_id == current.identity_id
+    assert cached.must_change_password == current.must_change_password
+    fresh = await user_dao.get_with_identity(actor.id, fresh=True)
+    assert fresh is not None
+    assert fresh.identity is not None
+    assert fresh.identity.password_hash == "hash"
+    assert await user_dao.get_with_identity(actor.id) is cached

@@ -11,8 +11,10 @@ import json
 import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 from app.config import get_settings
+from app.core.cache_contracts import RedisValueRead
 from app.core.logging import logger
 
 _COOLDOWN_SECONDS = 2.0
@@ -64,6 +66,11 @@ async def _client():
 
 async def cache_get(key: str) -> str | None:
     """Return a string value, or None on miss / disable / Redis error."""
+    result = await _read_value(key)
+    return result.value if result is not None else None
+
+
+async def _read_value(key: str) -> RedisValueRead | None:
     if _cooling_down():
         return None
     try:
@@ -74,8 +81,8 @@ async def cache_get(key: str) -> str | None:
         logger.debug("redis_cache get skipped: {}", type(exc).__name__)
         return None
     if isinstance(value, bytes):
-        return value.decode()
-    return value if isinstance(value, str) else None
+        return RedisValueRead(value.decode())
+    return RedisValueRead(value if isinstance(value, str) else None)
 
 
 async def cache_set(key: str, value: str, *, ttl: int) -> bool:
@@ -154,13 +161,27 @@ def _json_default(value: object) -> object:
     return str(value)
 
 
-async def read_version(version_key: str) -> str:
-    raw = await cache_get(version_key)
-    return str(raw or "0")
+async def read_version(version_key: str) -> RedisValueRead | None:
+    """Separate an unavailable read (None) from a successful miss (value=None)."""
+    return await _read_value(version_key)
+
+
+async def ensure_version(version_key: str, *, ttl: int) -> str | None:
+    """Establish an opaque generation before loading the authoritative SQL row."""
+    result = await read_version(version_key)
+    if result is None:
+        return None
+    if result.value is not None:
+        return result.value
+    generation = uuid4().hex
+    if await cache_set_nx(version_key, generation, ttl=max(ttl, 3600)):
+        return generation
+    current = await read_version(version_key)
+    return current.value if current is not None else None
 
 
 async def bump_version(version_key: str, *, ttl: int | None = None) -> None:
-    """INCR a version token. Deferred until commit when a connection_ctx is open."""
+    """Rotate a generation. Deferred until commit when a connection_ctx is open."""
     pending = _deferred_versions.get()
     if pending is not None:
         pending.incrs.add(version_key)
@@ -176,10 +197,7 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
     expire_for = ttl if ttl not in (None, 0) and ttl > 0 else 3600
     try:
         client = await _client()
-        _ = await client.incr(version_key)
-        expire = getattr(client, "expire", None)
-        if expire is not None:
-            await expire(version_key, max(expire_for, 3600))
+        _ = await client.set(version_key, uuid4().hex, ex=max(expire_for, 3600))
     except Exception as exc:
         logger.debug("redis_cache incr skipped: {}", type(exc).__name__)
 
