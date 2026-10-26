@@ -3,6 +3,9 @@ import { expect, test } from '@playwright/test'
 import { NotificationKind } from '../src/lib/notifications-api'
 import { inboxPath, notice, prepareNotifications, replacementNotice } from './notifications-fixture'
 import { replacementToken, writeFromOtherTab } from './session-fencing-fixture'
+import { registerSelectedNotificationTests } from './selected-notification-cases'
+
+registerSelectedNotificationTests()
 
 test('bulk mutation retains its submitted category while the selected category changes', async ({ page }) => {
   // Given

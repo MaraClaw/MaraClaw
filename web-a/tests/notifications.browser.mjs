@@ -19,6 +19,8 @@ const admin = {
 await access(tmpdir())
 const output = await mkdtemp(join(tmpdir(), 'web-a-notifications-'))
 const receipt = { status: 'running', output, matrix, engine: 'omowright.connectPipe',
+  brief: 'Add advisory department associations and current-page selected notification reads using existing admin tokens and controls.',
+  layout: 'Preserve the centered inbox card stack and inline department fieldset; wrap selection controls at phone width.',
   disclosure: 'Synthetic account and notifications; real Vite UI; backend proxy disabled.',
   scenarios: [], screenshots: [], requests: [], violations: [], cleanup: { tabsCreated: 0, tabsClosed: 0 } }
 let browser, server, work, active
@@ -40,7 +42,8 @@ try {
       configureServer(vite) { vite.middlewares.use(async (request, response, next) => {
         if (!request.url.startsWith('/api/')) return next()
         const url = new URL(request.url, 'http://synthetic.invalid'), path = url.pathname, method = request.method
-        receipt.requests.push({ scenario: active?.name, path, method, query: url.search })
+        const call = { scenario: active?.name, path, method, query: url.search }
+        receipt.requests.push(call)
         let body, status = 200
         if (method === 'GET' && path === '/api/auth/me') body = admin
         else if (active && method === 'GET' && path === '/api/notifications/unread-count') body = { unread_count: active.items.filter((item) => !item.is_read && item.archived_at === null).length }
@@ -50,6 +53,16 @@ try {
             const archived = url.searchParams.get('view') === 'archived', offset = Number(url.searchParams.get('offset'))
             body = active.items.filter((item) => (item.archived_at !== null) === archived).slice(offset, offset + 50)
           }
+        } else if (active && method === 'POST' && path === '/api/notifications/read-selected') {
+          const owner = active, chunks = []
+          for await (const chunk of request) chunks.push(chunk)
+          const input = JSON.parse(Buffer.concat(chunks).toString())
+          assert.ok(Array.isArray(input.ids) && input.ids.length > 0 && input.ids.length <= 200)
+          call.ids = [...input.ids]
+          const held = owner.hold
+          if (held) { held.started.resolve(); await held.released.promise }
+          if (owner.failSelected) { status = owner.failSelected; owner.failSelected = undefined; body = { detail: 'Unavailable' } }
+          else { owner.items = owner.items.map((item) => input.ids.includes(item.id) ? { ...item, is_read: true } : item); body = { ok: true } }
         } else if (active && method === 'POST' && path === '/api/notifications/read-all') {
           active.items = active.items.map((item) => item.archived_at === null ? { ...item, is_read: true } : item); body = { ok: true }
         } else if (active && method === 'POST' && active.items.some((item) => ['read', 'archive', 'restore'].some((action) => path === `/api/notifications/${item.id}/${action}`))) {
@@ -92,11 +105,14 @@ try {
       await exerciseNotifications(page, { active, receipt, output, reload })
       assert.deepEqual(errors, [], 'no uncaught page errors'); assert.deepEqual(receipt.violations, [], 'all API traffic stays synthetic')
       console.log(`PASS ${active.name}: active / archived / read / archive / restore / failure / pagination / empty`)
+    } catch (error) {
+      receipt.failureDOM = await page.evaluate(() => document.querySelector('main')?.innerText)
+      throw error
     } finally { active.hold?.released.resolve(); await tab.close(); receipt.cleanup.tabsClosed++ }
   }
   receipt.status = 'passed'
 } catch (error) {
-  receipt.status = 'failed'; receipt.error = String(error); process.exitCode = 1
+  receipt.status = 'failed'; receipt.error = String(error); receipt.stack = error.stack; process.exitCode = 1
 } finally {
   active?.hold?.released.resolve()
   try { if (browser) { await browser.close(); receipt.cleanup.browserClosed = true } }

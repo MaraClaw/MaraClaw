@@ -597,6 +597,9 @@ export type PressKeysRequest = z.infer<typeof PressKeysRequestSchema>;
 export const ProgressUpdateSchema = z.looseObject({ ["note"]: z.union([z.string(), z.null()]).optional(), ["status"]: z.union([KeyResultStatusSchema, z.null()]).optional(), ["value"]: z.number() });
 export type ProgressUpdate = z.infer<typeof ProgressUpdateSchema>;
 
+export const ReadSelectedRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type ReadSelectedRequest = z.infer<typeof ReadSelectedRequestSchema>;
+
 export const RegisterInitRequestSchema = z.looseObject({ ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.email(), ["invitation_code"]: z.union([z.string(), z.null()]).optional(), ["password"]: z.string().refine(value => [...value].length >= 6).refine(value => [...value].length <= 128), ["target_tenant_id"]: z.union([z.guid(), z.null()]).optional() });
 export type RegisterInitRequest = z.infer<typeof RegisterInitRequestSchema>;
 

@@ -4,7 +4,7 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 
 import {
   notificationKeys, notificationReadOptions, notificationsOptions, notificationsReadAllOptions, notificationUnreadOptions,
-  notificationArchiveOptions, notificationRestoreOptions,
+  notificationArchiveOptions, notificationRestoreOptions, notificationsReadSelectedOptions,
 } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { NotificationKind, notificationSchema, type AdminNotification, type NotificationUnreadCount } from '../src/lib/notifications-api.ts'
@@ -16,6 +16,25 @@ const first = notificationSchema.parse({
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: null, archived_at: null,
 })
 const second = notificationSchema.parse({ ...first, id: '6bfe33f8-ddf3-4892-8560-c2a942958b83', title: 'Second' })
+
+test('selected read invalidates all views, pages and badge without guessing unread arithmetic', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const archived = { ...second, archived_at: '2026-10-24T01:00:00Z' }
+  client.setQueryData(notificationKeys.list(0), [first])
+  client.setQueryData(notificationKeys.list(50), [second])
+  client.setQueryData(notificationKeys.list(0, 'archived'), [archived])
+  client.setQueryData(notificationKeys.unread, { unread_count: 9 })
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }))
+  const mutation = new MutationObserver(client, notificationsReadSelectedOptions(client))
+  // When
+  await mutation.mutate([first.id, second.id])
+  // Then
+  assert.deepEqual(client.getQueryData(notificationKeys.unread), { unread_count: 9 })
+  assert.deepEqual(client.getQueryData(notificationKeys.list(0, 'archived')), [archived])
+  assert.ok(client.getQueryCache().findAll({ queryKey: notificationKeys.all }).every((query) => query.state.isInvalidated))
+})
 
 test('disabled notification queries make no requests behind the password-change gate', (t) => {
   // Given

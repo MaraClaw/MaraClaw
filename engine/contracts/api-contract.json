@@ -10714,6 +10714,25 @@
         "title": "PublishNoticeOut",
         "type": "object"
       },
+      "ReadSelectedRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "ReadSelectedRequest",
+        "type": "object"
+      },
       "ReadyResponse": {
         "properties": {
           "status": {
@@ -31264,6 +31283,52 @@
         ]
       }
     },
+    "/api/notifications/read-selected": {
+      "post": {
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f726561642d73656c6563746564",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadSelectedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Selected Read",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/unread-count": {
       "get": {
         "description": "Get the number of unread notifications for the current user.",
@@ -37783,6 +37848,7 @@
       "PersonalAssistantRequest",
       "PressKeysRequest",
       "ProgressUpdate",
+      "ReadSelectedRequest",
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",
@@ -38009,6 +38075,7 @@
       "PersonalAssistantRequest",
       "PressKeysRequest",
       "ProgressUpdate",
+      "ReadSelectedRequest",
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",

@@ -5,7 +5,7 @@ import { useSessionMutation } from './use-session-mutation'
 import type { NotificationView } from '@/lib/notifications-api'
 import {
   notificationReadOptions, notificationsOptions, notificationsReadAllOptions, notificationUnreadOptions,
-  notificationArchiveOptions, notificationRestoreOptions,
+  notificationArchiveOptions, notificationRestoreOptions, notificationsReadSelectedOptions,
 } from './notification-options'
 
 export function useNotificationUnreadCount() {
@@ -19,7 +19,8 @@ export function useNotifications(offset: number, view: NotificationView = 'activ
   const notifications = useQuery(notificationsOptions(offset, isAdmin && !mustChangePassword, view))
   const markRead = useSessionMutation(notificationReadOptions(client, view))
   const markAllRead = useSessionMutation(notificationsReadAllOptions(client))
+  const markSelectedRead = useSessionMutation(notificationsReadSelectedOptions(client))
   const archive = useSessionMutation(notificationArchiveOptions(client))
   const restore = useSessionMutation(notificationRestoreOptions(client))
-  return { notifications, markRead, markAllRead, archive, restore }
+  return { notifications, markRead, markAllRead, markSelectedRead, archive, restore }
 }

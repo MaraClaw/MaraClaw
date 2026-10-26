@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { apiRequest } from './http.ts'
-import { NotificationKindSchema } from './engine-contracts.generated.ts'
+import { NotificationKindSchema, ReadSelectedRequestSchema } from './engine-contracts.generated.ts'
 import type { NotificationKind as EngineNotificationKind } from './engine-contracts.generated.ts'
 
 export const NotificationKind = {
@@ -80,6 +80,11 @@ export async function markAllNotificationsRead(category: NotificationCategory): 
 }
 
 const archiveResultSchema = z.object({ ok: z.literal(true) })
+
+export async function markSelectedNotificationsRead(ids: readonly string[]): Promise<void> {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  await apiRequest('/api/notifications/read-selected', { method: 'POST', body, schema: archiveResultSchema })
+}
 
 export async function archiveNotification(id: string): Promise<void> {
   await apiRequest(`/api/notifications/${encodeURIComponent(id)}/archive`, { schema: archiveResultSchema, method: 'POST' })

@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 
 import {
-  archiveNotification, listNotifications, markAllNotificationsRead, markNotificationRead, restoreNotification, unreadNotificationCount,
+  archiveNotification, listNotifications, markAllNotificationsRead, markNotificationRead, markSelectedNotificationsRead, restoreNotification, unreadNotificationCount,
   type NotificationCategory, type NotificationRow, type NotificationView,
 } from '../lib/notifications-api.ts'
 
@@ -49,6 +49,14 @@ export function notificationsReadAllOptions(client: QueryClient) {
   return {
     scope: { id: 'notifications-read' },
     mutationFn: markAllNotificationsRead,
+    onSuccess: () => refreshNotifications(client),
+  }
+}
+
+export function notificationsReadSelectedOptions(client: QueryClient) {
+  return {
+    scope: { id: 'notifications-read' },
+    mutationFn: markSelectedNotificationsRead,
     onSuccess: () => refreshNotifications(client),
   }
 }
