@@ -2,6 +2,7 @@ import { useQuery } from '@/hooks/session-workspace'
 import { Loader2, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -55,6 +56,7 @@ export function AgentsListPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
                 <p className="line-clamp-2">{agent.role_description || 'No role description'}</p>
+                <AgentAccessExplanation reason={agent.access_reason} />
                 {agent.unread_count ? <p>{agent.unread_count} unread</p> : null}
                 {agent.is_expired ? <p className="text-destructive">Expired</p> : null}
               </CardContent>

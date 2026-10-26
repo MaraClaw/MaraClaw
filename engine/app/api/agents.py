@@ -15,7 +15,12 @@ from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, Perm
 from app.core.domain.approvals import ApprovalAction, ApprovalStatus
 from app.core.json_types import int_from_row, json_as_int, object_mapping_from, uuid_from_row
 from app.core.logging import logger
-from app.core.permissions import check_agent_access, is_agent_creator, list_visible_agents
+from app.core.permissions import (
+    check_agent_access,
+    compute_agent_access_decision,
+    is_agent_creator,
+    list_visible_agents,
+)
 from app.core.security import get_current_user
 from app.dao import agent_dao, agent_permission_dao, agent_template_dao
 from app.dao.approval_dao import approval_request_dao
@@ -166,16 +171,20 @@ async def _build_unread_count_by_agent(
     return {str(uuid_from_row(row["agent_id"])): int_from_row(row["cnt"]) for row in rows}
 
 
-def _serialize_agent_out(agent: AgentRecord, unread_count: int = 0) -> AgentOut:
-    return AgentOut.model_validate(agent).model_copy(update={"unread_count": unread_count})
+async def _serialize_agent_out(agent: AgentRecord, viewer: UserRecord, unread_count: int = 0) -> AgentOut:
+    decision = await compute_agent_access_decision(viewer, agent)
+    model = AgentOut.model_validate(agent)
+    model.access_reason = decision.reason if decision is not None else None
+    model.unread_count = unread_count
+    return model
 
 
-async def _agent_to_out(agent: AgentRecord, viewer_id: uuid.UUID) -> AgentOut:
+async def _agent_to_out(agent: AgentRecord, viewer: UserRecord) -> AgentOut:
     """Serialize one agent with ``onboarded_for_me`` for the given viewer."""
     from app.services.onboarding import is_onboarded
 
-    model = AgentOut.model_validate(agent)
-    model.onboarded_for_me = await is_onboarded(agent.id, viewer_id)
+    model = await _serialize_agent_out(agent, viewer)
+    model.onboarded_for_me = await is_onboarded(agent.id, viewer.id)
     return model
 
 
@@ -226,7 +235,7 @@ async def list_agents(
     onboarded = await onboarded_agent_ids(current_user.id, [a.id for a in agents])
     out: list[AgentOut] = []
     for a in agents:
-        model = _serialize_agent_out(a, unread_by_agent.get(str(a.id), 0))
+        model = await _serialize_agent_out(a, current_user, unread_by_agent.get(str(a.id), 0))
         model.onboarded_for_me = a.id in onboarded
         out.append(model)
     return out
@@ -271,7 +280,7 @@ async def create_agent(
     await flush_request_transaction()
 
     return AgentCreatedResponse(
-        **agent_model_dump(await _agent_to_out(agent, current_user.id)),
+        **agent_model_dump(await _agent_to_out(agent, current_user)),
         api_key=raw_key,
         access_level=PermissionAccessLevel.MANAGE,
     )
@@ -282,7 +291,7 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
     """Get agent details."""
     agent, access_level = await check_agent_access(current_user, agent_id)
     _ = await _lazy_reset_token_counters(agent)
-    out_model = await _agent_to_out(agent, current_user.id)
+    out_model = await _agent_to_out(agent, current_user)
     out = agent_model_dump(out_model)
 
     if agent.creator_id:
@@ -718,7 +727,7 @@ async def update_agent(
             if p_updates:
                 _ = await participant_dao.update(db_obj=p, obj_in=p_updates)
 
-    out_model = await _agent_to_out(agent, current_user.id)
+    out_model = await _agent_to_out(agent, current_user)
     out = AgentUpdatedResponse(**agent_model_dump(out_model))
     if clamped_fields:
         out["_clamped_fields"] = clamped_fields
@@ -763,7 +772,7 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
     outcome = await start_agent_guest(agent_id, _persist_agent_runtime)
     match outcome:
         case LifecycleSuccess(agent=agent):
-            return await _agent_to_out(agent, current_user.id)
+            return await _agent_to_out(agent, current_user)
         case LifecycleFailure(status_code=code, code=error_code, message=message):
             raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
         case unreachable:
@@ -780,7 +789,7 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
     outcome = await stop_agent_guest(agent_id, _persist_agent_runtime)
     match outcome:
         case LifecycleSuccess(agent=agent):
-            return await _agent_to_out(agent, current_user.id)
+            return await _agent_to_out(agent, current_user)
         case LifecycleFailure(status_code=code, code=error_code, message=message):
             raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
         case unreachable:

@@ -804,6 +804,24 @@
         "title": "AdmissionTenant",
         "type": "object"
       },
+      "AgentAccessReason": {
+        "enum": [
+          "creator",
+          "administrator",
+          "company",
+          "direct",
+          "department"
+        ],
+        "title": "AgentAccessReason",
+        "type": "string",
+        "x-enum-varnames": [
+          "CREATOR",
+          "ADMINISTRATOR",
+          "COMPANY",
+          "DIRECT",
+          "DEPARTMENT"
+        ]
+      },
       "AgentActivityResponse": {
         "properties": {
           "action_type": {
@@ -1422,6 +1440,17 @@
           "access_mode": {
             "$ref": "#/components/schemas/AgentSharingMode",
             "default": "company"
+          },
+          "access_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAccessReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Winning access reason for this viewer; null when no same-tenant access policy matches."
           },
           "agent_type": {
             "default": "openclaw",
@@ -37633,6 +37662,7 @@
       "AdmissionDecision",
       "AdmissionMethod",
       "AdmissionStatus",
+      "AgentAccessReason",
       "AgentActivityResponse",
       "AgentApprovalResolveRequest",
       "AgentConversationResponse",
@@ -37823,6 +37853,7 @@
       "AdmissionMethod",
       "AdmissionStatus",
       "AdmissionTenant",
+      "AgentAccessReason",
       "AgentActivityResponse",
       "AgentApprovalResolveRequest",
       "AgentBayLiveEvent",

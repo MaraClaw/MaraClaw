@@ -17,12 +17,25 @@ const task = {
   assignee: 'agent', created_by: id, created_at: createdAt, updated_at: createdAt,
 }
 
-for (const field of ['status', 'access_mode', 'company_access_level', 'access_level']) {
+for (const field of ['status', 'access_mode', 'company_access_level', 'access_level', 'access_reason']) {
   test(`agent HTTP parsing rejects an unknown ${field} instead of accepting a string`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json({ ...agent, [field]: 'unknown-contract-value' }))
     // When / Then
     await assert.rejects(getAgent(id), ZodError)
+  })
+}
+
+for (const access_reason of ['creator', 'administrator', 'company', 'direct', 'department', null]) {
+  test(`agent list and detail preserve the server-derived ${access_reason} explanation`, async (t) => {
+    // Given
+    const payload = { ...agent, access_reason }
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => Response.json(String(input).endsWith('/agents/') ? [payload] : payload))
+    // When
+    const [detail, list] = await Promise.all([getAgent(id), listAgents()])
+    // Then
+    assert.equal(detail.access_reason, access_reason)
+    assert.equal(list[0]?.access_reason, access_reason)
   })
 }
 
