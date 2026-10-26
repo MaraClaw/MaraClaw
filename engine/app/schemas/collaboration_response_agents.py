@@ -82,7 +82,6 @@ class AgentModelDump(TypedDict):
     openclaw_last_seen: datetime | None
     unread_count: int
     has_api_key: bool
-    api_key_hash: str | None
     onboarded_for_me: bool
     created_at: datetime
     last_active_at: datetime | None
@@ -137,7 +136,6 @@ def agent_model_dump(model: AgentOut) -> AgentModelDump:
         "openclaw_last_seen": model.openclaw_last_seen,
         "unread_count": model.unread_count,
         "has_api_key": model.has_api_key,
-        "api_key_hash": model.api_key_hash,
         "onboarded_for_me": model.onboarded_for_me,
         "created_at": model.created_at,
         "last_active_at": model.last_active_at,

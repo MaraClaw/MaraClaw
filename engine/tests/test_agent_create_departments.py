@@ -333,7 +333,7 @@ async def test_create_returns_one_time_key_without_running_setup_in_request(crea
     assert response.json()["status"] == "idle"
     assert response.json()["access_level"] == "manage"
     assert "setup_pending" not in response.json()
-    assert response.json()["api_key_hash"] == "test-hash"
+    assert "api_key_hash" not in response.json()
     assert store.events == ["begin", "agent", "participant", "company", "setup", "commit"]
     store.setup.assert_awaited_once()
     store.write_key.assert_not_called()
