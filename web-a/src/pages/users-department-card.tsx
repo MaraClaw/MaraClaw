@@ -14,14 +14,16 @@ import { useSessionCurrent } from '@/hooks/use-auth'
 import { previewDepartmentDeletion, type Department } from '@/lib/departments-api'
 import { ApiError } from '@/lib/http'
 import { useDeleteDepartment, useRenameDepartment } from './users-department-queries'
+import { DepartmentMerge } from './users-department-merge'
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Enter a department name').max(100, 'Use 100 characters or fewer'),
 })
 type FormValues = z.infer<typeof schema>
 
-export function DepartmentCard({ department, tenantId, onDeleted }: {
+export function DepartmentCard({ department, departments, tenantId, onDeleted }: {
   readonly department: Department
+  readonly departments: readonly Department[]
   readonly tenantId: string
   readonly onDeleted: () => void
 }) {
@@ -30,6 +32,7 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
   const rename = useRenameDepartment()
   const deletion = useDeleteDepartment()
   const [editing, setEditing] = useState(false)
+  const [merging, setMerging] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [previewAttempt, setPreviewAttempt] = useState(0)
   const preview = useQuery({
@@ -40,6 +43,8 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
   })
   const previewReady = preview.isSuccess && !preview.isFetching
   const editButton = useRef<HTMLButtonElement>(null)
+  const mergeButton = useRef<HTMLButtonElement>(null)
+  const wasMerging = useRef(false)
   const deleteButton = useRef<HTMLButtonElement>(null)
   const confirmHeading = useRef<HTMLHeadingElement>(null)
   const deleting = useRef(false)
@@ -55,6 +60,11 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
     else if (wasEditing.current) editButton.current?.focus()
     wasEditing.current = editing
   }, [editing, setFocus])
+
+  useEffect(() => {
+    if (!merging && wasMerging.current) mergeButton.current?.focus()
+    wasMerging.current = merging
+  }, [merging])
 
   useEffect(() => {
     if (confirming) confirmHeading.current?.focus()
@@ -112,7 +122,7 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
   return (
     <Card className="min-w-0 gap-3 rounded-xl py-4 shadow-none">
       <CardContent className="px-4">
-        {confirming ? (
+        {merging ? <DepartmentMerge department={department} departments={departments} tenantId={tenantId} onCancel={() => setMerging(false)} onMerged={onDeleted} /> : confirming ? (
           <fieldset
             aria-labelledby={`${formId}-delete-title`}
             aria-describedby={`${formId}-delete-consequence`}
@@ -229,6 +239,9 @@ export function DepartmentCard({ department, tenantId, onDeleted }: {
               }}
             >
               Edit name<span className="sr-only"> for {department.name}</span>
+            </Button>
+            <Button ref={mergeButton} type="button" variant="ghost" size="sm" className="h-11 sm:h-9" onClick={() => setMerging(true)}>
+              Merge<span className="sr-only"> {department.name}</span>
             </Button>
             <Button
               ref={deleteButton}

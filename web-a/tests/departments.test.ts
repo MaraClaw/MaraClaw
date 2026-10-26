@@ -4,7 +4,7 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { deleteDepartment, previewDepartmentDeletion, type DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { deleteDepartment, mergeDepartment, previewDepartmentDeletion, previewDepartmentMerge, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { deleteDepartmentOptions } from '../src/pages/users-department-mutations.ts'
@@ -20,6 +20,51 @@ const directory: DepartmentsResponse = {
     { tenant_id: input.tenantId, user_id: 'member-b', department_id: department.id },
     { tenant_id: input.tenantId, user_id: 'member-a', department_id: 'engineering' },
   ],
+}
+
+const mergeSelection = { tenantId: '86b8142b-31e6-44ab-a35e-e10998037030', sourceId: department.id, destinationId: '64c0b6ca-0312-42aa-996d-ff606043337a' }
+const mergeResult = {
+  source: { ...department, id: '10000000-0000-4000-8000-000000000001', tenant_id: mergeSelection.tenantId },
+  destination: { ...department, id: mergeSelection.destinationId, tenant_id: mergeSelection.tenantId, name: 'Engineering' },
+  source_membership_count: 2, destination_membership_count: 3, overlapping_membership_count: 1,
+  source_agent_grant_count: 4, destination_agent_grant_count: 5, overlapping_agent_grant_count: 2,
+}
+
+test('merge preview validates all association counts and forwards the scoped selection and cancellation', async (t) => {
+  // Given
+  const controller = new AbortController()
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(mergeResult))
+  // When
+  const result = await previewDepartmentMerge(mergeSelection, controller.signal)
+  // Then
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, `/api/departments/department%2Fa%20%2B%3F/merge-preview?tenant_id=${mergeSelection.tenantId}&destination_id=${mergeSelection.destinationId}`)
+  assert.equal(options?.signal, controller.signal)
+  assert.deepEqual(result, mergeResult)
+})
+
+test('merge applies with one atomic POST containing only the destination', async (t) => {
+  // Given
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(mergeResult))
+  // When
+  const result = await mergeDepartment(mergeSelection)
+  // Then
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, `/api/departments/department%2Fa%20%2B%3F/merge?tenant_id=${mergeSelection.tenantId}`)
+  assert.equal(options?.method, 'POST')
+  assert.deepEqual(JSON.parse(String(options?.body)), { destination_id: mergeSelection.destinationId })
+  assert.deepEqual(result, mergeResult)
+  assert.equal(fetch.mock.callCount(), 1)
+})
+
+for (const body of [{}, { ...mergeResult, source: null }, { ...mergeResult, destination: {} }, { ...mergeResult, source_membership_count: -1 }, { ...mergeResult, destination_membership_count: '3' }, { ...mergeResult, overlapping_membership_count: 0.5 }, { ...mergeResult, source_agent_grant_count: -1 }, { ...mergeResult, destination_agent_grant_count: null }, { ...mergeResult, overlapping_agent_grant_count: '2' }]) {
+  test(`merge endpoints reject malformed response ${JSON.stringify(body)}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    // When / Then
+    await assert.rejects(previewDepartmentMerge(mergeSelection), z.ZodError)
+    await assert.rejects(mergeDepartment(mergeSelection), z.ZodError)
+  })
 }
 
 test('deletion preview parses association counts and forwards encoded scope and cancellation', async (t) => {

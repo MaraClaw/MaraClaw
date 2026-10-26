@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { apiRequest } from './http.ts'
+import { DepartmentMergePreviewOutSchema } from './engine-contracts.generated.ts'
 
 const departmentSchema = z.object({
   id: z.string(),
@@ -38,6 +39,28 @@ const deletionPreviewSchema = z.object({
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
 export type Department = z.infer<typeof departmentSchema>
 export type UserDepartments = z.infer<typeof userDepartmentsSchema>
+export type DepartmentMergePreview = z.infer<typeof DepartmentMergePreviewOutSchema>
+export type DepartmentMergeSelection = {
+  readonly tenantId: string
+  readonly sourceId: string
+  readonly destinationId: string
+}
+
+export async function previewDepartmentMerge(selection: DepartmentMergeSelection, signal?: AbortSignal) {
+  const query = new URLSearchParams({ tenant_id: selection.tenantId, destination_id: selection.destinationId })
+  return apiRequest(`/api/departments/${encodeURIComponent(selection.sourceId)}/merge-preview?${query}`, {
+    schema: DepartmentMergePreviewOutSchema, signal,
+  })
+}
+
+export async function mergeDepartment(selection: DepartmentMergeSelection) {
+  const query = new URLSearchParams({ tenant_id: selection.tenantId })
+  return apiRequest(`/api/departments/${encodeURIComponent(selection.sourceId)}/merge?${query}`, {
+    schema: DepartmentMergePreviewOutSchema,
+    method: 'POST',
+    body: { destination_id: selection.destinationId },
+  })
+}
 
 export function groupDepartmentAssignments(assignments: DepartmentsResponse['assignments']): ReadonlyMap<string, readonly string[]> {
   const grouped = new Map<string, readonly string[]>()

@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 
-import { deleteDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+import { deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentMergePreview, type DepartmentMergeSelection, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
 
 type RenameDepartmentInput = {
   readonly tenantId: string
@@ -51,6 +51,38 @@ export function deleteDepartmentOptions(queryClient: QueryClient) {
             assignments: directory.assignments.filter((assignment) => assignment.department_id !== input.departmentId),
           }
         : undefined)
+      void queryClient.invalidateQueries({ queryKey, exact: true })
+      void queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId] })
+      for (const userId of affectedUsers) {
+        void queryClient.invalidateQueries({ queryKey: ['admin-user', userId], exact: true })
+      }
+    },
+  }
+}
+
+export function mergeDepartmentOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: (input: DepartmentMergeSelection) => mergeDepartment(input),
+    retry: false,
+    onSuccess: (merged: DepartmentMergePreview, input: DepartmentMergeSelection) => {
+      const queryKey = ['admin-departments', input.tenantId]
+      const current = queryClient.getQueryData<DepartmentsResponse>(queryKey)
+      const affectedUsers = new Set(current?.assignments
+        .filter((assignment) => assignment.department_id === input.sourceId || assignment.department_id === input.destinationId)
+        .map((assignment) => assignment.user_id))
+      queryClient.setQueryData<DepartmentsResponse>(queryKey, (directory) => {
+        if (!directory) return undefined
+        const destinations = new Set(directory.assignments
+          .filter((assignment) => assignment.department_id === input.destinationId)
+          .map((assignment) => assignment.user_id))
+        return {
+          departments: directory.departments.filter((department) => department.id !== input.sourceId)
+            .map((department) => department.id === input.destinationId ? merged.destination : department),
+          assignments: directory.assignments.flatMap((assignment) => assignment.department_id !== input.sourceId
+            ? [assignment]
+            : destinations.has(assignment.user_id) ? [] : [{ ...assignment, department_id: input.destinationId }]),
+        }
+      })
       void queryClient.invalidateQueries({ queryKey, exact: true })
       void queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId] })
       for (const userId of affectedUsers) {

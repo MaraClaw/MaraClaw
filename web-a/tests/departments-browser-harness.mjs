@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chromium, devices, expect } from '@playwright/test'
+import { devices, expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { launchDepartmentBrowser } from './departments-owned-browser.mjs'
 
 export const tenant = '86b8142b-31e6-44ab-a35e-e10998037030'
 export const otherTenant = '64c0b6ca-0312-42aa-996d-ff606043337a'
 export const departmentId = 'department/a +?'
+export const mergeSourceId = '10000000-0000-4000-8000-000000000001'
+export const mergeDestinationId = '10000000-0000-4000-8000-000000000002'
 export const admission = {
   id: '381bf275-fd20-4b0f-a79d-1f2c4519d258', status: 'withdrawn',
   source_tenant_id: otherTenant, source_tenant: { id: otherTenant, name: 'Source company' },
@@ -28,14 +31,15 @@ export async function createHarness() {
   await mkdir(output, { recursive: true })
   const cacheDir = join(output, 'vite-cache')
   const server = await createServer({ cacheDir, server: { host: '127.0.0.1', port: 0, watch: { ignored: (path) => path.startsWith(output) } } })
-  const receipt = { scenarios: [], screenshots: [], requests: [], cleanup: { browsersCreated: 0, browsersClosed: 0, contextsCreated: 0, contextsClosed: 0, viteClosed: false, cacheRemoved: false, syntheticAPIsOnly: true } }
+  const receipt = { engine: 'omowright.connectPipe; Playwright CDP assertions', scenarios: [], screenshots: [], requests: [], cleanup: { browsersCreated: 0, browsersClosed: 0, profilesRemoved: 0, contextsCreated: 0, contextsClosed: 0, viteClosed: false, cacheRemoved: false, syntheticAPIsOnly: true } }
   await server.listen()
   const base = server.resolvedUrls.local[0]
 
   async function scenario(options, exercise) {
-    const browser = await chromium.launch({ headless: true })
+    const owned = await launchDepartmentBrowser()
+    const browser = owned.browser
     receipt.cleanup.browsersCreated++
-    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], previewStatus: 200, preview: { membership_count: 1, agent_grant_count: 3 }, previewGate: null, previews: [], admission: { ...admission } }
+    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], previewStatus: 200, preview: { membership_count: 1, agent_grant_count: 3 }, previewGate: null, previews: [], admission: { ...admission }, mergeStatus: 200, mergePreviewStatus: 200, mergeGate: null, mergePreviewGate: null, mergePreviews: [], merges: [] }
     const errors = []
     const context = await browser.newContext({ ...(options.mobile ? devices['iPhone 14'] : { viewport: { width: options.width ?? 1440, height: 1000 } }), colorScheme: options.scheme ?? 'light', reducedMotion: 'reduce' })
     receipt.cleanup.contextsCreated++
@@ -63,6 +67,29 @@ export async function createHarness() {
         else if (path === '/api/admin/platform-admins') body = []
         else if (path === '/api/users/page') body = { items: [row('Member', selected)], next_cursor: null }
         else if (path === '/api/departments') body = state.directories[selected]
+        else if (path.endsWith('/merge-preview') || path.endsWith('/merge')) {
+          const apply = request.method() === 'POST'
+          const payload = apply ? request.postDataJSON() : null
+          const destinationId = payload?.destination_id ?? url.searchParams.get('destination_id')
+          const current = state.directories[selected]
+          const sourceId = decodeURIComponent(path.split('/')[3])
+          const source = current.departments.find((item) => item.id === sourceId)
+          const destination = current.departments.find((item) => item.id === destinationId)
+          status = apply ? state.mergeStatus : state.mergePreviewStatus
+          body = status === 200 ? {
+            source, destination, source_membership_count: 2, destination_membership_count: 2, overlapping_membership_count: 1,
+            source_agent_grant_count: 3, destination_agent_grant_count: 4, overlapping_agent_grant_count: 2,
+            ...state.mergeCounts,
+          } : { detail: apply ? 'Synthetic merge denied' : 'Synthetic merge preview unavailable' }
+          exchange = { gate: apply ? state.mergeGate : state.mergePreviewGate, delivered: Promise.withResolvers(), payload, ...call }
+          ;(apply ? state.merges : state.mergePreviews).push(exchange)
+          if (exchange.gate) await exchange.gate.promise
+          if (apply && status === 200) {
+            current.departments = current.departments.filter((item) => item.id !== sourceId)
+            const destinations = new Set(current.assignments.filter((item) => item.department_id === destinationId).map((item) => item.user_id))
+            current.assignments = current.assignments.flatMap((item) => item.department_id !== sourceId ? [item] : destinations.has(item.user_id) ? [] : [{ ...item, department_id: destinationId }])
+          }
+        }
         else if (path === `/api/departments/${encodeURIComponent(departmentId)}/deletion-preview` && request.method() === 'GET') {
           status = state.previewStatus
           body = status === 200 ? state.preview : { detail: 'Synthetic preview unavailable' }
@@ -99,12 +126,13 @@ export async function createHarness() {
       await page.screenshot({ path: join(output, 'failure.png') })
       throw error
     } finally {
-      for (const exchange of [...state.exchanges, ...state.previews]) exchange.gate?.resolve()
-      await Promise.all([...state.exchanges, ...state.previews].map((exchange) => exchange.delivered.promise))
+      for (const exchange of [...state.exchanges, ...state.previews, ...state.merges, ...state.mergePreviews]) exchange.gate?.resolve()
+      await Promise.all([...state.exchanges, ...state.previews, ...state.merges, ...state.mergePreviews].map((exchange) => exchange.delivered.promise))
       await context.close()
       receipt.cleanup.contextsClosed++
-      await browser.close()
+      await owned.close()
       receipt.cleanup.browsersClosed++
+      receipt.cleanup.profilesRemoved++
     }
   }
 
@@ -114,7 +142,10 @@ export async function createHarness() {
     assert.equal(await page.locator('main').evaluate((main) => main.scrollWidth <= main.clientWidth), true)
     const path = join(output, `${name}.png`)
     await page.screenshot({ path, animations: 'disabled' })
-    receipt.screenshots.push({ path, viewport: page.viewportSize() })
+    const scrollers = await page.evaluate(() => [...document.querySelectorAll('*')]
+      .filter((element) => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight)
+      .map((element) => ({ tag: element.tagName.toLowerCase(), className: element.className, top: element.scrollTop })))
+    receipt.screenshots.push({ path, viewport: page.viewportSize(), scrollers })
   }
 
   async function close(completed) {
