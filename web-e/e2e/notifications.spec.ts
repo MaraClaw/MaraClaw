@@ -9,10 +9,10 @@ test('category switching during a request never displays another category’s la
   await prepareNotifications(page, [notice('Tool event', NotificationKind.AutonomyL2), notice('Approval event', NotificationKind.ApprovalPending)])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/notifications?category=tool&**', async (route) => {
+  await page.route('**/api/notifications/page?category=tool&**', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Late tool event', NotificationKind.AutonomyL2)] })
+    await route.fulfill({ json: { items: [notice('Late tool event', NotificationKind.AutonomyL2)], next_cursor: null } })
   })
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
@@ -31,13 +31,14 @@ test('category switching during a request never displays another category’s la
   await expect(page.getByText('Late tool event', { exact: true })).toHaveCount(0)
 })
 
-test('load more uses real offsets beyond 200 and retains earlier notifications', async ({ page }) => {
+test('load more uses cursors beyond 200 and retains tied rows across an interleaved insert', async ({ page }) => {
   // Given
   const fixture = await prepareNotifications(page, Array.from({ length: 251 }, (_, index) => notice(`Tool ${index}`, NotificationKind.AutonomyL2, index < 250)))
   await page.goto(inboxPath)
   await page.getByLabel('Category', { exact: true }).selectOption('tool')
   const list = page.getByRole('list', { name: 'Notifications' })
   await expect(list.getByRole('listitem')).toHaveCount(50)
+  fixture.insert(notice('New arrival', NotificationKind.AutonomyL2))
   // When
   for (const count of [100, 150, 200, 250, 251]) {
     await page.getByRole('button', { name: 'Load more', exact: true }).click()
@@ -47,7 +48,8 @@ test('load more uses real offsets beyond 200 and retains earlier notifications',
   await expect(list.getByText('Tool 0', { exact: true })).toBeVisible()
   await expect(list.getByText('Tool 250', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0)
-  expect(fixture.requests.filter((request) => request.category === 'tool' && request.path === '/api/notifications').map((request) => request.offset)).toEqual([0, 50, 100, 150, 200, 250])
+  expect(fixture.requests.filter((request) => request.category === 'tool' && request.path === '/api/notifications/page').map((request) => request.cursor)).toEqual([null, 'Tool 49', 'Tool 99', 'Tool 149', 'Tool 199', 'Tool 249'])
+  await expect(list.getByText('New arrival', { exact: true })).toHaveCount(0)
 })
 
 test('bulk read includes unread rows beyond the page and preserves unrelated badge counts', async ({ page }) => {
@@ -139,13 +141,13 @@ test('notification links keep Plaza remapping and existing member destinations',
 
 test('late paginated rows cannot cross a retired session boundary', async ({ page }) => {
   // Given
-  await prepareNotifications(page, Array.from({ length: 50 }, (_, index) => notice(`Original ${index}`, NotificationKind.AutonomyL2)))
+  await prepareNotifications(page, Array.from({ length: 51 }, (_, index) => notice(`Original ${index}`, NotificationKind.AutonomyL2)))
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/notifications?category=all&limit=50&offset=50&view=active', async (route) => {
+  await page.route('**/api/notifications/page?**&cursor=Original+49', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Obsolete next page', NotificationKind.AutonomyL2)] })
+    await route.fulfill({ json: { items: [notice('Obsolete next page', NotificationKind.AutonomyL2)], next_cursor: null } })
   })
   await page.goto(inboxPath)
   await page.getByRole('button', { name: 'Load more', exact: true }).click()
@@ -211,7 +213,7 @@ test('view switches retain category and restart both previously loaded page sequ
   await page.getByRole('button', { name: 'Archived', exact: true }).click()
   await expect(rows).toHaveCount(50)
   await expect(rows.first()).toContainText('archived 0')
-  expect(fixture.requests.filter((request) => request.path === '/api/notifications' && request.category === 'tool').map(({ view, offset }) => [view, offset])).toEqual([['active', 0], ['active', 50], ['archived', 0], ['archived', 50], ['active', 0], ['archived', 0]])
+  expect(fixture.requests.filter((request) => request.path === '/api/notifications/page' && request.category === 'tool').map(({ view, cursor }) => [view, cursor])).toEqual([['active', null], ['active', 'active 49'], ['archived', null], ['archived', 'archived 49'], ['active', null], ['archived', null]])
 })
 
 for (const width of [390, 1440, 1920]) {

@@ -19,8 +19,8 @@ const admin = {
 await access(tmpdir())
 const output = await mkdtemp(join(tmpdir(), 'web-a-notifications-'))
 const receipt = { status: 'running', output, matrix, engine: 'omowright.connectPipe',
-  brief: 'Add advisory department associations and current-page selected notification reads using existing admin tokens and controls.',
-  layout: 'Preserve the centered inbox card stack and inline department fieldset; wrap selection controls at phone width.',
+  brief: 'Review notifications with cursor Previous/Next, selected read, archive and restore using the existing design system.',
+  layout: 'Layout: centered inbox card stack; shell main owns vertical scrolling; wrap selection and pagination controls on phones. No nested content scroller.',
   disclosure: 'Synthetic account and notifications; real Vite UI; backend proxy disabled.',
   scenarios: [], screenshots: [], requests: [], violations: [], cleanup: { tabsCreated: 0, tabsClosed: 0 } }
 let browser, server, work, active
@@ -47,11 +47,16 @@ try {
         let body, status = 200
         if (method === 'GET' && path === '/api/auth/me') body = admin
         else if (active && method === 'GET' && path === '/api/notifications/unread-count') body = { unread_count: active.items.filter((item) => !item.is_read && item.archived_at === null).length }
-        else if (active && method === 'GET' && path === '/api/notifications' && ['active', 'archived'].includes(url.searchParams.get('view')) && url.searchParams.get('limit') === '50') {
+        else if (active && method === 'GET' && path === '/api/notifications/page' && ['active', 'archived'].includes(url.searchParams.get('view')) && url.searchParams.get('limit') === '50') {
           if (active.listFailure) { status = 503; body = { detail: 'Unavailable' } }
+          else if (active.pageOverride !== undefined) body = active.pageOverride
           else {
-            const archived = url.searchParams.get('view') === 'archived', offset = Number(url.searchParams.get('offset'))
-            body = active.items.filter((item) => (item.archived_at !== null) === archived).slice(offset, offset + 50)
+            assert.equal(url.searchParams.has('offset'), false)
+            const archived = url.searchParams.get('view') === 'archived', cursor = url.searchParams.get('cursor')
+            const rows = active.items.filter((item) => (item.archived_at !== null) === archived)
+            const start = cursor === null ? 0 : rows.findIndex((item) => item.id === cursor) + 1
+            const items = rows.slice(start, start + 50)
+            body = { items, next_cursor: rows.length > start + 50 ? items.at(-1).id : null }
           }
         } else if (active && method === 'POST' && path === '/api/notifications/read-selected') {
           const owner = active, chunks = []

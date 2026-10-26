@@ -26,16 +26,17 @@ export async function prepareNotifications(page: Page, initial: readonly Notific
   let failWrites = false
   let failLists = false
   let failCounts = false
-  const requests: { readonly path: string; readonly method: string; readonly category: string; readonly view: string; readonly offset: number; readonly limit: number }[] = []
+  const requests: { readonly path: string; readonly method: string; readonly category: string; readonly view: string; readonly cursor: string | null; readonly limit: number }[] = []
   await page.route('**/api/notifications**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     const category = notificationCategories.find((value) => value === url.searchParams.get('category')) ?? 'all'
-    const offset = Number(url.searchParams.get('offset') ?? 0)
+    const cursor = url.searchParams.get('cursor')
     const limit = Number(url.searchParams.get('limit') ?? 50)
     const view = notificationViewSchema.parse(url.searchParams.get('view') ?? 'active')
     expect([`Bearer ${originalToken}`, `Bearer ${replacementToken}`]).toContain(request.headers().authorization)
-    requests.push({ path: url.pathname, method: request.method(), category, view, offset, limit })
+    expect(url.searchParams.has('offset')).toBe(false)
+    requests.push({ path: url.pathname, method: request.method(), category, view, cursor, limit })
     if (request.method() === 'POST') {
       if (failWrites) return route.fulfill({ status: 503, json: { detail: 'Unavailable' } })
       if (url.pathname.endsWith('/read-all')) {
@@ -69,15 +70,19 @@ export async function prepareNotifications(page: Page, initial: readonly Notific
       if (failCounts) return route.fulfill({ status: 503, json: { detail: 'Unavailable' } })
       return route.fulfill({ json: { count: filtered.filter((row) => row.archived_at === null && !row.is_read).length } })
     }
-    expect(url.pathname).toBe('/api/notifications')
+    expect(url.pathname).toBe('/api/notifications/page')
     expect(limit).toBeLessThanOrEqual(200)
     if (failLists) return route.fulfill({ status: 503, json: { detail: 'Unavailable' } })
-    return route.fulfill({ json: filtered.filter((row) => (row.archived_at === null) === (view === 'active')).slice(offset, offset + limit) })
+    const visible = filtered.filter((row) => (row.archived_at === null) === (view === 'active'))
+    const start = cursor === null ? 0 : visible.findIndex((row) => row.id === cursor) + 1
+    const items = visible.slice(start, start + limit)
+    return route.fulfill({ json: { items, next_cursor: visible.length > start + limit ? items.at(-1)?.id : null } })
   })
   return {
     requests,
     failWrites: (value: boolean) => { failWrites = value },
     failLists: (value: boolean) => { failLists = value },
     failCounts: (value: boolean) => { failCounts = value },
+    insert: (row: NotificationRow) => { rows = [row, ...rows] },
   }
 }

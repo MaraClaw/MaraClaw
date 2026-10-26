@@ -66,7 +66,7 @@ export async function exerciseNotifications(page, { active, receipt, output, rel
   await page.locator('button[aria-label="Archive notification: Earlier team notice"]').waitFor({ state: 'detached', timeout: 15_000 }); await count(1)
   assert.deepEqual(receipt.requests.filter((call) => call.scenario === active.name && call.method === 'POST' && call.path.endsWith('/read')).map((call) => call.path), [`/api/notifications/${original[0].id}/read`])
 
-  // Given page two, when changing views in either direction, then pagination restarts at zero.
+  // Given page two, when changing views in either direction, then pagination restarts without a cursor.
   active.items = Array.from({ length: 51 }, (_, index) => ({ ...original[1], id: `44444444-4444-4444-8444-${String(index + 1).padStart(12, '0')}`, title: `Paged notice ${index + 1}` })).concat(saved)
   await reload(); await visible(page.locator('button[aria-label="Archive notification: Paged notice 50"]'))
 
@@ -144,9 +144,40 @@ export async function exerciseNotifications(page, { active, receipt, output, rel
   } finally { active.hold.released.resolve(); active.hold = undefined }
 
   await page.snapshot(); await button('Next').click(); await visible(page.locator('button[aria-label="Archive notification: Paged notice 51"]'))
+  // Given a continuation, inserting a new head row must not shift its boundary or duplicate the previous last row.
+  await page.snapshot(); await button('Previous').click(); await visible(choose('Paged notice 1'))
+  const inserted = { ...original[1], id: '55555555-5555-4555-8555-555555555555', title: 'New arrival' }
+  active.items = [inserted, ...active.items]
+  await page.snapshot(); await button('Next').click(); await visible(choose('Paged notice 51'))
+  assert.equal(await choose('Paged notice 50').count(), 0)
+  assert.equal(await choose('New arrival').count(), 0)
+  assert.equal(await button('Next').evaluate((element) => element.disabled), true, 'short final page ends traversal')
+  await capture('cursor-final')
+
+  // Given a later page, a successful mutation restarts from the new live head.
+  await page.snapshot(); await page.locator('button[aria-label="Archive notification: Paged notice 51"]').click()
+  await visible(choose('New arrival'))
+  assert.equal(await button('Previous').evaluate((element) => element.disabled), true)
+  await capture('cursor-mutation-reset')
+  active.items = active.items.filter((item) => item.id !== inserted.id).map((item) => item.title === 'Paged notice 51' ? { ...item, archived_at: null } : item)
+
+  // Given a duplicate row in an envelope, visible controls and selection contain it only once.
+  active.pageOverride = { items: [original[1], original[1]], next_cursor: 'empty-final' }
+  await reload(); await visible(choose('Earlier team notice'))
+  assert.equal(await choose('Earlier team notice').count(), 1)
+  active.pageOverride = { items: [], next_cursor: null }
+  await page.snapshot(); await button('Next').click(); await visible(page.locator('h2').filter({ hasText: /^No more notifications$/u }))
+  assert.equal(await button('Next').evaluate((element) => element.disabled), true)
+  await capture('cursor-empty-final')
+  active.pageOverride = { items: [], next_cursor: 7 }
+  await reload(); await visible(page.locator('[role="alert"]').filter({ hasText: 'Unable to load notifications' }))
+  await capture('cursor-malformed')
+  active.pageOverride = undefined
+  await page.snapshot(); await button('Retry').click(); await visible(choose('Paged notice 1'))
+
   await view('Archived'); await visible(page.locator('button[aria-label="Restore notification: Saved: Operations update"]'))
-  assert.ok(receipt.requests.some((call) => call.scenario === active.name && call.query === '?limit=50&offset=0&view=archived'))
-  assert.ok(!receipt.requests.some((call) => call.scenario === active.name && call.query.includes('offset=50&view=archived')))
+  assert.ok(receipt.requests.some((call) => call.scenario === active.name && call.query === '?limit=50&view=archived'))
+  assert.ok(!receipt.requests.some((call) => call.scenario === active.name && call.query.includes('view=archived&cursor=')))
   await view('Active'); await visible(page.locator('button[aria-label="Archive notification: Paged notice 1"]'))
   active.listFailure = true
   await reload(); await visible(page.locator('[role="alert"]').filter({ hasText: 'Unable to load notifications' })); await capture('list-error')

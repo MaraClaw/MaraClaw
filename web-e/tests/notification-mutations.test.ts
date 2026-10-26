@@ -49,13 +49,13 @@ async function fixture(t: TestContext) {
       return new Response(null, { status: 204 })
     }
     const filtered = rows.filter((row) => matches(row, category))
-    return Response.json(url.pathname.endsWith('/unread-count') ? { count: filtered.filter((row) => row.archived_at === null && !row.is_read).length } : filtered.filter((row) => (row.archived_at === null) === (view === 'active')))
+    return Response.json(url.pathname.endsWith('/unread-count') ? { count: filtered.filter((row) => row.archived_at === null && !row.is_read).length } : { items: filtered.filter((row) => (row.archived_at === null) === (view === 'active')), next_cursor: null })
   })
   await Promise.all(notificationCategories.flatMap((category) => [
     ...notificationViews.map((view) => client.fetchInfiniteQuery(notificationListOptions(category, view))), client.fetchQuery(notificationUnreadOptions(category)),
   ]))
   const count = (category: NotificationCategory) => client.getQueryData(notificationKeys.unread(category))
-  const list = (category: NotificationCategory, view: NotificationView = 'active') => client.getQueryData<InfiniteData<readonly NotificationRow[]>>(notificationKeys.list(category, view))?.pages.flat()
+  const list = (category: NotificationCategory, view: NotificationView = 'active') => client.getQueryData<InfiniteData<{ readonly items: readonly NotificationRow[] }>>(notificationKeys.list(category, view))?.pages.flatMap((page) => page.items)
   return { client, scope, store, count, list, failWrites: () => { failWrites = true } }
 }
 

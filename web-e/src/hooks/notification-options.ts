@@ -1,24 +1,25 @@
-import type { QueryClient } from '@tanstack/react-query'
+import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 
 import {
   archiveNotification, listNotifications, markAllNotificationsRead, markNotificationRead, markSelectedNotificationsRead, restoreNotification, unreadNotificationCount,
-  type NotificationCategory, type NotificationRow, type NotificationView,
+  type NotificationCategory, type NotificationPage, type NotificationView,
 } from '../lib/notifications-api.ts'
 
 export const notificationKeys = {
   all: ['notifications'] as const,
-  list: (category: NotificationCategory, view: NotificationView = 'active') => ['notifications', 'list', category, view] as const,
+  lists: ['notifications', 'list'] as const,
+  list: (category: NotificationCategory, view: NotificationView = 'active', unreadOnly = false) => ['notifications', 'list', category, view, unreadOnly] as const,
   unread: (category: NotificationCategory) => ['notifications', 'unread', category] as const,
 }
 
 const pageSize = 50
 
-export function notificationListOptions(category: NotificationCategory, view: NotificationView = 'active') {
+export function notificationListOptions(category: NotificationCategory, view: NotificationView = 'active', unreadOnly = false) {
   return {
-    queryKey: notificationKeys.list(category, view),
-    initialPageParam: 0,
-    queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) => listNotifications({ category, view, limit: pageSize, offset: pageParam, signal }),
-    getNextPageParam: (lastPage: readonly NotificationRow[], _pages: readonly (readonly NotificationRow[])[], lastOffset: number) => lastPage.length === pageSize ? lastOffset + pageSize : undefined,
+    queryKey: notificationKeys.list(category, view, unreadOnly),
+    initialPageParam: null,
+    queryFn: ({ pageParam, signal }: { pageParam: string | null; signal: AbortSignal }) => listNotifications({ category, view, limit: pageSize, cursor: pageParam, unreadOnly, signal }),
+    getNextPageParam: (lastPage: NotificationPage) => lastPage.next_cursor ?? undefined,
   }
 }
 
@@ -34,6 +35,8 @@ function refreshNotifications(client: QueryClient) {
   // Cancellation happens synchronously before invalidation starts authoritative reads.
   // Refresh every category: broadcast rows also belong to social, and pages are incomplete.
   void client.cancelQueries({ queryKey: notificationKeys.all })
+  client.setQueriesData<InfiniteData<NotificationPage, string | null>>({ queryKey: notificationKeys.lists }, (data) =>
+    data && { pages: data.pages.slice(0, 1), pageParams: data.pageParams.slice(0, 1) })
   return client.invalidateQueries({ queryKey: notificationKeys.all, refetchType: 'all' })
 }
 

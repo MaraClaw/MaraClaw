@@ -40,10 +40,10 @@ async function fixture(t: TestContext) {
     const filtered = matches ? rows : []
     return Response.json(url.pathname.endsWith('/unread-count')
       ? { count: filtered.filter((row) => row.archived_at === null && !row.is_read).length }
-      : filtered.filter((row) => (row.archived_at !== null) === (url.searchParams.get('view') === 'archived')))
+      : { items: filtered.filter((row) => (row.archived_at !== null) === (url.searchParams.get('view') === 'archived')), next_cursor: null })
   })
   await Promise.all(notificationCategories.flatMap((category) => [client.fetchQuery(notificationUnreadOptions(category)), ...notificationViews.map((view) => client.fetchInfiniteQuery(notificationListOptions(category, view)))]))
-  const list = (category: NotificationCategory, view: NotificationView) => client.getQueryData<InfiniteData<readonly NotificationRow[]>>(notificationKeys.list(category, view))?.pages.flat()
+  const list = (category: NotificationCategory, view: NotificationView) => client.getQueryData<InfiniteData<{ readonly items: readonly NotificationRow[] }>>(notificationKeys.list(category, view))?.pages.flatMap((page) => page.items)
   return { client, scope, store, user, list, writes: () => writes, count: (category: NotificationCategory) => client.getQueryData(notificationKeys.unread(category)) }
 }
 

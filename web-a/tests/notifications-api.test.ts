@@ -13,6 +13,7 @@ const notification = {
   id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: NotificationKind.Broadcast, title: 'Maintenance', body: 'Details\nNext line',
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: '2026-10-20T12:00:00+00:00', archived_at: null,
 }
+const page = (items: readonly unknown[], next_cursor: string | null = null) => ({ items, next_cursor })
 
 test('notification list preserves every canonical kind as its original wire string', async (t) => {
   // Given
@@ -23,17 +24,17 @@ test('notification list preserves every canonical kind as its original wire stri
     'organization_welcome', 'system_alert', 'system', 'openclaw_update',
   ]
   const response = kinds.map((type) => ({ ...notification, type }))
-  t.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(page(response)))
   // When
   const rows = await fetchNotifications()
   // Then
-  assert.deepEqual(rows, response)
+  assert.deepEqual(rows.items, response)
 })
 
 for (const type of ['future_type', '', null, 17, undefined]) {
   test(`notification list rejects unknown, invalid or missing kind ${JSON.stringify(type)}`, async (t) => {
     // Given
-    t.mock.method(globalThis, 'fetch', async () => Response.json([{ ...notification, type }]))
+    t.mock.method(globalThis, 'fetch', async () => Response.json(page([{ ...notification, type }])))
     // When
     const result = fetchNotifications()
     // Then
@@ -43,44 +44,45 @@ for (const type of ['future_type', '', null, 17, undefined]) {
 
 test('notifications fetch the requested page and parse nullable fields without changing content', async (t) => {
   // Given
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([notification]))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(page([notification], 'older/+?=')))
   // When
-  const result = await fetchNotifications(50)
+  const result = await fetchNotifications('older/+?=')
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/notifications?limit=50&offset=50&view=active')
-  assert.deepEqual(result, [notification])
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/notifications/page?limit=50&view=active&cursor=older%2F%2B%3F%3D')
+  assert.deepEqual(result, page([notification], 'older/+?='))
   assert.equal(Object.isFrozen(result), true)
-  assert.equal(Object.isFrozen(result[0]), true)
+  assert.equal(Object.isFrozen(result.items), true)
+  assert.equal(Object.isFrozen(result.items[0]), true)
 })
 
-test('notifications start at offset zero and forward query cancellation', async (t) => {
+test('notifications start without a cursor and forward query cancellation', async (t) => {
   // Given
   const controller = new AbortController()
-  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json([]))
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(page([])))
   // When
   await fetchNotifications(undefined, controller.signal)
   controller.abort()
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
-  assert.equal(url, '/api/notifications?limit=50&offset=0&view=active')
+  assert.equal(url, '/api/notifications/page?limit=50&view=active')
   assert.equal(options?.signal?.aborted, true)
 })
 
-test('archived notifications preserve unread state and forward view, offset and cancellation', async (t) => {
+test('archived notifications preserve unread state and forward view, cursor and cancellation', async (t) => {
   // Given
   const archived = { ...notification, archived_at: '2026-10-24T01:00:00Z' }
   const controller = new AbortController()
-  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json([archived]))
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(page([archived])))
   // When
-  const result = await fetchNotifications(100, controller.signal, 'archived')
+  const result = await fetchNotifications('older', controller.signal, 'archived')
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
-  assert.equal(url, '/api/notifications?limit=50&offset=100&view=archived')
+  assert.equal(url, '/api/notifications/page?limit=50&view=archived&cursor=older')
   assert.equal(options?.signal, controller.signal)
-  assert.deepEqual(result, [archived])
+  assert.deepEqual(result, page([archived]))
 })
 
-for (const malformed of [null, {}, [{ ...notification, is_read: 'false' }], [{ ...notification, created_at: 'yesterday' }], [{ ...notification, archived_at: 'yesterday' }], [{ ...notification, archived_at: undefined }], [{ ...notification, id: '../read-all' }]]) {
+for (const malformed of [null, {}, [], { items: [] }, { items: [], next_cursor: 5 }, { items: [], next_cursor: '' }, page([{ ...notification, is_read: 'false' }]), page([{ ...notification, created_at: 'yesterday' }]), page([{ ...notification, archived_at: 'yesterday' }]), page([{ ...notification, archived_at: undefined }]), page([{ ...notification, id: '../read-all' }])]) {
   test(`notifications reject malformed data ${JSON.stringify(malformed)}`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json(malformed))

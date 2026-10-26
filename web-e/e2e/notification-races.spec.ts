@@ -32,7 +32,7 @@ test('bulk mutation retains its submitted category while the selected category c
   expect(fixture.requests.filter((request) => request.method === 'POST').map((request) => request.category)).toEqual(['tool'])
 })
 
-test('a failed next page retains loaded rows and retries the same offset', async ({ page }) => {
+test('a failed next page retains loaded rows and retries the same cursor', async ({ page }) => {
   // Given
   const fixture = await prepareNotifications(page, Array.from({ length: 51 }, (_, index) => notice(`Tool ${index}`, NotificationKind.AutonomyL2)))
   await page.goto(inboxPath)
@@ -40,6 +40,7 @@ test('a failed next page retains loaded rows and retries the same offset', async
   await expect(list.getByRole('listitem')).toHaveCount(50)
   fixture.failLists(true)
   // When
+  const beforeLoadMore = fixture.requests.length
   await page.getByRole('button', { name: 'Load more', exact: true }).click()
   // Then
   await expect(page.getByRole('alert')).toContainText('Unable to load more')
@@ -47,7 +48,9 @@ test('a failed next page retains loaded rows and retries the same offset', async
   fixture.failLists(false)
   await page.getByRole('button', { name: 'Retry load more', exact: true }).click()
   await expect(list.getByRole('listitem')).toHaveCount(51)
-  expect(fixture.requests.filter((request) => request.path === '/api/notifications').map((request) => request.offset)).toEqual([0, 50, 50, 50])
+  expect(fixture.requests.slice(beforeLoadMore)
+    .filter((request) => request.path === '/api/notifications/page' && request.cursor !== null)
+    .map((request) => request.cursor)).toEqual(['Tool 49', 'Tool 49', 'Tool 49'])
 })
 
 test('failed category counts expose a retry without enabling an unknown bulk scope', async ({ page }) => {
@@ -95,13 +98,13 @@ for (const status of [204, 503]) {
 
 test('a late Active next page cannot appear after switching to Archived', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [...Array.from({ length: 50 }, (_, index) => notice(`Active ${index}`, NotificationKind.AutonomyL2)), { ...notice('Archived tool', NotificationKind.AutonomyL2), archived_at: '2030-01-02T00:00:00Z' }])
+  await prepareNotifications(page, [...Array.from({ length: 51 }, (_, index) => notice(`Active ${index}`, NotificationKind.AutonomyL2)), { ...notice('Archived tool', NotificationKind.AutonomyL2), archived_at: '2030-01-02T00:00:00Z' }])
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  await page.route('**/api/notifications?category=tool&limit=50&offset=50&view=active', async (route) => {
+  await page.route('**/api/notifications/page?category=tool&**&cursor=Active+49', async (route) => {
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: [notice('Obsolete Active page', NotificationKind.AutonomyL2)] })
+    await route.fulfill({ json: { items: [notice('Obsolete Active page', NotificationKind.AutonomyL2)], next_cursor: null } })
   })
   try {
     await page.goto(inboxPath)

@@ -1,6 +1,6 @@
 import { formatDistanceToNowStrict } from 'date-fns'
 import { Archive, ArchiveRestore, ArrowRight, CheckCheck, Inbox } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
@@ -9,24 +9,27 @@ import { Card, CardContent } from '@/components/ui/card'
 import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifications'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { safeNotificationLink } from '@/lib/notification-links'
-import { NOTIFICATIONS_PAGE_SIZE, type NotificationId, type NotificationView } from '@/lib/notifications-api'
+import { type NotificationId, type NotificationView } from '@/lib/notifications-api'
 import { canReviewAgentDeletions } from '@/lib/types/auth'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function NotificationsPage() {
   const { user } = useAuth()
-  const [offset, setOffset] = useState(0)
+  const [cursors, setCursors] = useState<readonly (string | null)[]>([null])
   const [view, setView] = useState<NotificationView>('active')
   const [selected, setSelected] = useState<readonly NotificationId[]>([])
   const [selectedError, setSelectedError] = useState(false)
   const selectionOwner = useRef({})
   const heading = useRef<HTMLHeadingElement>(null)
   const isCurrent = useSessionCurrent()
-  const { notifications, markRead, markAllRead, markSelectedRead, archive, restore } = useNotifications(offset, view)
+  const { notifications, markRead, markAllRead, markSelectedRead, archive, restore, resetFirstPage } = useNotifications(cursors.at(-1) ?? null, view)
   const unread = useNotificationUnreadCount()
   const pending = markRead.isPending || markAllRead.isPending || markSelectedRead.isPending || archive.isPending || restore.isPending
-  const items = notifications.data ?? []
+  const items = [...new Map(notifications.data?.items.map((item) => [item.id, item])).values()]
+  useEffect(() => {
+    if (markRead.isSuccess || markAllRead.isSuccess || markSelectedRead.isSuccess || archive.isSuccess || restore.isSuccess) setCursors([null])
+  }, [markRead.isSuccess, markAllRead.isSuccess, markSelectedRead.isSuccess, archive.isSuccess, restore.isSuccess])
   const selectedIds = items.filter((item) => selected.includes(item.id)).slice(0, 200).map((item) => item.id)
   const hasUnread = (unread.data?.unread_count ?? 0) > 0 || items.some((item) => !item.is_read && item.archived_at === null)
   const mutationError = archive.isError ? 'Unable to archive this notification. Try again.'
@@ -47,10 +50,10 @@ export function NotificationsPage() {
     setSelected(ids)
   }
 
-  function changePage(nextOffset: number) {
+  function changePage(nextCursors: readonly (string | null)[]) {
     select([])
     resetErrors()
-    setOffset(nextOffset)
+    setCursors(nextCursors)
   }
 
   function readSelected() {
@@ -75,16 +78,19 @@ export function NotificationsPage() {
           <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus-visible:outline focus-visible:outline-ring">Inbox</h1>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Notifications for your admin account. Only active unread notifications count toward your badge.</p>
         </div>
-        {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAllRead.mutate() }}>
-          <CheckCheck className="size-4" aria-hidden />
-          {markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read'}
-        </Button> : null}
+        <div className="flex flex-wrap gap-3">
+          {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAllRead.mutate() }}>
+            <CheckCheck className="size-4" aria-hidden />
+            {markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read'}
+          </Button> : null}
+          <Button variant="outline" className={actionClass} disabled={notifications.isFetching || pending} onClick={() => { changePage([null]); void resetFirstPage() }}>Refresh Inbox</Button>
+        </div>
       </div>
 
       <fieldset className="flex flex-wrap gap-3">
         <legend className="sr-only">Inbox view</legend>
         {(['active', 'archived'] as const).map((value) => <Button key={value} variant={view === value ? 'secondary' : 'outline'} className={actionClass}
-          aria-pressed={view === value} onClick={() => { if (value !== view) { changePage(0); setView(value) } }}>
+          aria-pressed={view === value} onClick={() => { if (value !== view) { changePage([null]); void resetFirstPage(value); setView(value) } }}>
           {value === 'active' ? <Inbox className="size-4" aria-hidden /> : <Archive className="size-4" aria-hidden />}
           {value === 'active' ? 'Active' : 'Archived'}
         </Button>)}
@@ -117,8 +123,8 @@ export function NotificationsPage() {
 
       {notifications.isSuccess && items.length === 0 ? <Card><CardContent className="flex flex-col items-center gap-3 py-6 text-center">
         <Inbox className="size-8 text-muted-foreground" aria-hidden />
-        <h2 className="font-display text-lg font-semibold">{offset > 0 ? 'No more notifications' : view === 'active' ? 'No active notifications' : 'No archived notifications'}</h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">{offset > 0 ? 'Return to the previous page to see earlier updates.' : view === 'active' ? 'New updates will appear here. Check Archived for saved notifications.' : 'Archive an active notification to keep it here without changing its read state.'}</p>
+        <h2 className="font-display text-lg font-semibold">{cursors.length > 1 ? 'No more notifications' : view === 'active' ? 'No active notifications' : 'No archived notifications'}</h2>
+        <p className="text-sm leading-relaxed text-muted-foreground">{cursors.length > 1 ? 'Return to the previous page to see earlier updates.' : view === 'active' ? 'New updates will appear here. Check Archived for saved notifications.' : 'Archive an active notification to keep it here without changing its read state.'}</p>
       </CardContent></Card> : null}
 
       {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label="Notifications" aria-busy={pending}>
@@ -161,10 +167,10 @@ export function NotificationsPage() {
         })}
       </ul> : null}
 
-      {offset > 0 || items.length > 0 ? <nav aria-label="Inbox pages" className="flex flex-wrap items-center justify-between gap-3">
-        <Button variant="outline" className={actionClass} disabled={offset === 0 || notifications.isFetching} onClick={() => changePage(Math.max(0, offset - NOTIFICATIONS_PAGE_SIZE))}>Previous</Button>
-        <p role="status" className="text-xs text-muted-foreground">Page {offset / NOTIFICATIONS_PAGE_SIZE + 1}</p>
-        <Button variant="outline" className={actionClass} disabled={items.length < NOTIFICATIONS_PAGE_SIZE || notifications.isFetching || notifications.isError} onClick={() => changePage(offset + NOTIFICATIONS_PAGE_SIZE)}>Next</Button>
+      {cursors.length > 1 || items.length > 0 ? <nav aria-label="Inbox pages" className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" className={actionClass} disabled={cursors.length === 1 || notifications.isFetching} onClick={() => changePage(cursors.slice(0, -1))}>Previous</Button>
+        <p role="status" className="text-xs text-muted-foreground">Page {cursors.length}</p>
+        <Button variant="outline" className={actionClass} disabled={!notifications.data?.next_cursor || notifications.isFetching || notifications.isError} onClick={() => { if (notifications.data?.next_cursor) changePage([...cursors, notifications.data.next_cursor]) }}>Next</Button>
       </nav> : null}
     </div>
   )
