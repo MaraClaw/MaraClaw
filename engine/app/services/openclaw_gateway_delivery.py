@@ -17,6 +17,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.schemas.chat_wire import ChatEventType
+from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import normalize_channel_type
 from app.services.openclaw_update_gate import assert_work_allowed
 from app.services.shared_chat import shared_session_id
@@ -42,6 +43,7 @@ async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> li
     Raises ``OpenClawUpdateGateError`` before any requeue or claim.
     """
     await assert_work_allowed(agent_id)
+    _ = await load_agent_for_new_work(agent_id)
     at = now or _utcnow()
     shared_id = shared_session_id(agent_id)
     async with connection_ctx():

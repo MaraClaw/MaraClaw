@@ -88,7 +88,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     monkeypatch.setattr(submissions, "_authorize", AsyncMock(return_value=(agent, sender)))
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "reserve", AsyncMock(return_value=True))
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
-    monkeypatch.setattr(submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(submissions, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
     monkeypatch.setattr(submissions, "find_or_create_channel_session", AsyncMock(return_value=reply))
     monkeypatch.setattr(

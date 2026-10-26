@@ -382,6 +382,7 @@ def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
     monkeypatch.setattr(delivery, "assert_work_allowed", AsyncMock())
+    monkeypatch.setattr(delivery, "load_agent_for_new_work", AsyncMock())
     monkeypatch.setattr(delivery, "get_settings", lambda: SimpleNamespace(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=60))
     return store
 

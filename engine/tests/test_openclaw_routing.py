@@ -21,7 +21,12 @@ from app.core.security import encrypt_data
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
-from app.services import agent_manager as agent_manager_module, openclaw_routing, openclaw_update_exclusion as exclusion
+from app.services import (
+    agent_manager as agent_manager_module,
+    openclaw_enqueue,
+    openclaw_routing,
+    openclaw_update_exclusion as exclusion,
+)
 from app.services.agent_manager import AgentManager, guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.llm.turn import ModelBundle
@@ -40,9 +45,14 @@ def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     async def open_gate(agent_id: uuid.UUID) -> None:
         return None
 
+    async def eligible_agent(agent_id: uuid.UUID) -> AgentRecord:
+        return AgentRecord(id=agent_id, name="Guest", creator_id=uuid.uuid4())
+
     monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "get_for_agent", get_message)
     monkeypatch.setattr(openclaw_routing, "assert_work_allowed", open_gate)
+    monkeypatch.setattr(openclaw_routing, "load_agent_for_new_work", eligible_agent)
+    monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", eligible_agent)
     monkeypatch.setattr(exclusion, "assert_no_active_run", open_gate)
     monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
 
@@ -50,6 +60,7 @@ def legacy_database_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 @pytest.fixture
 def preparation_agent(monkeypatch: pytest.MonkeyPatch) -> AgentRecord:
     agent = AgentRecord(id=uuid.uuid4(), name="Guest", creator_id=uuid.uuid4())
+    monkeypatch.setattr(openclaw_routing, "load_agent_for_new_work", AsyncMock(return_value=agent))
     model = LLMModelRecord(uuid.uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
     monkeypatch.setattr(openclaw_routing, "ensure_agent_company_models", AsyncMock(return_value=agent))
     monkeypatch.setattr(openclaw_routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
@@ -271,8 +282,10 @@ def test_write_guest_config_rewrites_selected_model(tmp_path, monkeypatch: pytes
 async def test_enqueue_hi_selects_secondary_and_writes_guest_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     primary = _model(name="opus")
     secondary = _model(name="haiku")
-    agent: Any = SimpleNamespace(
+    agent = AgentRecord(
         id=uuid.uuid4(),
+        name="Guest",
+        creator_id=uuid.uuid4(),
         primary_model_id=primary.id,
         secondary_model_id=secondary.id,
         fallback_model_id=None,
@@ -303,6 +316,7 @@ async def test_enqueue_hi_selects_secondary_and_writes_guest_config(tmp_path, mo
         return tmp_path / "openclaw.json"
 
     monkeypatch.setattr(openclaw_routing, "load_agent_model_bundle", fake_load)
+    monkeypatch.setattr(openclaw_routing, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", fake_pending)
     monkeypatch.setattr(openclaw_routing.gateway_message_dao, "create", fake_create)
     monkeypatch.setattr(openclaw_routing.agent_manager, "write_guest_config", fake_write)

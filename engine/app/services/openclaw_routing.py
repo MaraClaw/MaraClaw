@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from functools import partial
 from uuid import UUID
 
+from fastapi import HTTPException
+
 from app.core.logging import logger
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.session import connection_ctx, get_connection
@@ -23,6 +25,7 @@ from app.records.llm import LLMModelRecord
 from app.runtime.tasks import AdmissionClosedError, TaskAdmission
 from app.services.agent_manager import agent_manager, guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
+from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
@@ -36,6 +39,7 @@ from app.services.openclaw_hot_cache import (
 )
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
+from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
 
 
@@ -115,6 +119,7 @@ async def prepare_openclaw_message(
     Raises ``OpenClawUpdateGateError`` before any config or model side effect.
     """
     await assert_work_allowed(agent.id)
+    agent = await load_agent_for_new_work(agent.id)
     if not recently_ensured(agent):
         agent = await ensure_agent_company_models(agent)
     bundle = get_cached_bundle(agent)
@@ -219,6 +224,10 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
         await assert_work_allowed(agent.id)
     except OpenClawUpdateGateError as gate:
         logger.info("[OpenClaw] inbox wake left pending for {}: {}", agent.id, gate.code)
+        return
+    try:
+        agent = await load_agent_for_new_work(agent.id)
+    except AgentExpired, HTTPException:
         return
     claimed: GatewayMessageRecord | None = None
     try:
