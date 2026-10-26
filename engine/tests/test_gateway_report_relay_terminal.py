@@ -8,6 +8,7 @@ import pytest
 from app.records.agent import AgentRecord
 from app.records.gateway_report_delivery import TerminalReason
 from app.services import gateway_report_relay as relay
+from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
 
 
@@ -16,6 +17,24 @@ def store(monkeypatch: pytest.MonkeyPatch) -> RelayStore:
     value = RelayStore()
     value.install(monkeypatch)
     return value
+
+
+@pytest.mark.parametrize("reason", ["whatsapp_window_unavailable", "whatsapp_window_expired"])
+async def test_reply_window_terminal_preserves_checkpoint_and_claim_fence(store, reason):
+    row = store.intent("im")
+    store.message.result = "a" * 4001
+    await relay.relay_batch(store.clock)
+    store.send_error = WhatsAppReplyWindowError(reason)
+    await relay.relay_batch(store.clock)
+    terminal = store.rows[row.id]
+    assert terminal.terminal_reason == reason
+    assert terminal.next_chunk == 1
+    assert terminal.delivered_at is None
+    assert terminal.claim_token is terminal.lease_expires_at is None
+    store.send_error = None
+    store.now += timedelta(days=1)
+    assert await relay.relay_batch(store.clock) == 0
+    assert store.sends == ["a" * 4000]
 
 
 def invalidate(store: RelayStore, reason: TerminalReason) -> None:

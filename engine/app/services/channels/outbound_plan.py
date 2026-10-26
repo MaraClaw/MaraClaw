@@ -35,6 +35,7 @@ _LIMITS: dict[OutboundProvider, int] = {
 class ConfiguredOutbound:
     target: OutboundTarget
     config: ChannelConfigRecord
+    tenant_id: UUID | None = None
 
 
 async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) -> ConfiguredOutbound:
@@ -110,7 +111,7 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
         endpoint=endpoint,
         enterprise_agent_id=enterprise_agent_id,
     )
-    return ConfiguredOutbound(target, config)
+    return ConfiguredOutbound(target, config, agent.tenant_id)
 
 
 def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, override
 from uuid import UUID
 
@@ -43,10 +44,29 @@ class ChannelEvent:
     sender_external_id: str = ""
     sender_open_id: str = ""
     group_session_owner: Literal["creator", "sender"] = "creator"
+    provider_timestamp: datetime | None = None
+    provider_account_id: str | None = None
+    provider_timestamp_source: str | None = None
 
     def fingerprint(self) -> str:
+        payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
+        if (
+            self.provider_account_id is not None
+            or self.provider_timestamp_source is not None
+            or self.provider_timestamp is not None
+        ):
+            payload.extend(
+                [
+                    self.provider_account_id,
+                    self.provider_timestamp_source
+                    if self.provider_timestamp_source is not None
+                    else self.provider_timestamp.isoformat()
+                    if self.provider_timestamp is not None
+                    else None,
+                ]
+            )
         canonical = json.dumps(
-            [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids],
+            payload,
             ensure_ascii=True,
             separators=(",", ":"),
         )
@@ -107,6 +127,9 @@ def _receipt(event: ChannelEvent, agent: AgentRecord) -> ChannelEventReceiptReco
         agent_id=agent.id,
         tenant_id=agent.tenant_id,
         fingerprint=event.fingerprint(),
+        provider_timestamp=event.provider_timestamp,
+        provider_account_id=event.provider_account_id,
+        conversation_id=event.conversation_id,
     )
 
 

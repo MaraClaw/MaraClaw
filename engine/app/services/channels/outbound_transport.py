@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import assert_never
 
@@ -8,6 +9,7 @@ from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services.channels.outbound_errors import ProviderDeliveryError, provider_deadline, response_body
 from app.services.channels.outbound_plan import ConfiguredOutbound
+from app.services.channels.whatsapp_window import require_reply_window, utcnow
 
 
 def require_ack(response: httpx.Response, provider: OutboundProvider, acknowledged: bool, code: str) -> None:
@@ -15,7 +17,9 @@ def require_ack(response: httpx.Response, provider: OutboundProvider, acknowledg
         raise ProviderDeliveryError(provider, code, provider_deadline(response, datetime.now(UTC)))
 
 
-async def send_chunk(outbound: ConfiguredOutbound, chunk: OutboundChunk) -> None:
+async def send_chunk(
+    outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] = utcnow
+) -> None:
     target, config = outbound.target, outbound.config
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -39,6 +43,7 @@ async def send_chunk(outbound: ConfiguredOutbound, chunk: OutboundChunk) -> None
             case "whatsapp":
                 if not app_id or not app_secret:
                     raise ValueError("WhatsApp credentials are unavailable")
+                await require_reply_window(outbound, clock)
                 response = await client.post(
                     f"https://graph.facebook.com/{target.endpoint}/{app_id}/messages",
                     headers={"Authorization": f"Bearer {app_secret}"},

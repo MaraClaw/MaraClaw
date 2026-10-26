@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -9,9 +11,14 @@ __all__ = ["receipt_db"]
 from app.api import background_tasks
 from app.core import access_cache
 from app.dao import channel_config_dao
+from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
+from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
+from app.db import session as db_session
 from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
+from app.records.channel_event_receipt import ChannelReplyScope
+from app.records.gateway_report_delivery import GatewayReportDeliveryRecord
 from app.services import openclaw_routing
 from app.services.channels import submissions
 from app.services.channels.submissions import ChannelEvent
@@ -80,5 +87,66 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
         sender_id="15550001",
         conversation_id="whatsapp_15550001",
         text="identical text",
+        provider_timestamp=datetime.now(UTC) - timedelta(hours=1),
+        provider_account_id="phone-account",
     )
     return ChannelDatabase(db, config, event, sender_id, tenant_id)
+
+
+@dataclass(slots=True)
+class Clock:
+    now: datetime
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def scope_for(fixture: ChannelDatabase) -> ChannelReplyScope:
+    return ChannelReplyScope(
+        fixture.config.id,
+        fixture.event.agent_id,
+        fixture.tenant_id,
+        "whatsapp",
+        "phone-account",
+        fixture.event.conversation_id,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WhatsAppRelayDatabase:
+    fixture: ChannelDatabase
+    intent: GatewayReportDeliveryRecord
+    clock: Clock
+
+
+@pytest.fixture
+async def whatsapp_relay_db(channel_db, monkeypatch, request):
+    fixture = channel_db
+    clock = Clock(datetime.now(UTC) + timedelta(seconds=2))
+    timestamp = clock.now - timedelta(hours=24) + timedelta(seconds=1)
+    if getattr(request, "param", None) == "missing":
+        timestamp = None
+    if getattr(request, "param", None) == "future":
+        timestamp = clock.now + timedelta(hours=1)
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield fixture.db.first.raw
+
+    monkeypatch.setattr(db_session, "get_pool", lambda: Pool())
+    async with transaction(fixture.db.first):
+        await submissions.accept_channel_event(replace(fixture.event, provider_timestamp=timestamp))
+        await fixture.db.first.execute(
+            "UPDATE gateway_messages SET status = 'completed', result = %(text)s", {"text": "a" * 4096 + "second chunk"}
+        )
+        row = await fixture.db.first.fetchone("SELECT id FROM gateway_report_deliveries")
+        assert row is not None
+        intent = await gateway_report_delivery_dao.get(row["id"])
+        assert intent is not None
+    return WhatsAppRelayDatabase(fixture, intent, clock)
+
+
+async def latest(fixture: ChannelDatabase):
+    async with transaction(fixture.db.first):
+        return await channel_event_receipt_dao.latest_eligible_timestamp(scope_for(fixture))

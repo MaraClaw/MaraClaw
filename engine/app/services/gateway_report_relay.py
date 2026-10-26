@@ -24,9 +24,10 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.gateway_report_delivery import GatewayReportDeliveryRecord, TerminalReason
 from app.services.channels.outbound_errors import ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_identity import preflight_outbound
-from app.services.channels.outbound_plan import ConfiguredOutbound, build_plan, configured_outbound
+from app.services.channels.outbound_plan import build_plan, configured_outbound
 from app.services.channels.outbound_transport import send_chunk
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
+from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 
 
@@ -188,7 +189,7 @@ async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], da
         current = await configured_outbound(agent, session)
         if prepared is None or current != prepared.snapshot:
             raise InvalidReportDestinationError("IM configuration or credentials changed during preflight")
-        outbound = ConfiguredOutbound(prepared.target, prepared.snapshot.config)
+        outbound = replace(prepared.snapshot, target=prepared.target)
         plan = claim.im_plan
         if plan is None:
             plan = build_plan(outbound.target, message.result or "", claim.id)
@@ -198,7 +199,10 @@ async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], da
             raise InvalidReportDestinationError("IM configuration or destination changed after planning")
         if not await gateway_report_delivery_dao.lock_claim(claim, now=clock()):
             raise LostClaimError
-    await send_chunk(outbound, plan.chunks[claim.next_chunk])
+    if outbound.target.provider == "whatsapp":
+        await send_chunk(outbound, plan.chunks[claim.next_chunk], clock=clock)
+    else:
+        await send_chunk(outbound, plan.chunks[claim.next_chunk])
     async with connection_ctx():
         if not await gateway_report_delivery_dao.checkpoint_chunk(claim, now=clock()):
             raise LostClaimError
@@ -217,6 +221,11 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
                     assert_never(unreachable)
     except LostClaimError:
         return
+    except WhatsAppReplyWindowError as error:
+        if claim.claim_token is not None:
+            _ = await gateway_report_delivery_dao.finish_terminal(
+                claim.id, claim.claim_token, error.reason, now=clock()
+            )
     except ProviderPayloadRejectedError:
         if claim.claim_token is not None:
             _ = await gateway_report_delivery_dao.finish_terminal(

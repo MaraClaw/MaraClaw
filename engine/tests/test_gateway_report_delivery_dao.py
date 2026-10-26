@@ -296,7 +296,8 @@ def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
         "terminal_reason TEXT CHECK (terminal_reason IN ( 'source_agent_unavailable', 'source_tenant_changed'," in table
     )
     assert "'destination_agent_unavailable', 'destination_tenant_changed'," in table
-    assert "'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected' ))" in table
+    assert "'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected'," in table
+    assert "'whatsapp_window_unavailable', 'whatsapp_window_expired' ))" in table
     assert "terminal_at TIMESTAMP WITH TIME ZONE," in table
     assert "CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL))" in table
     assert "CHECK (terminal_at IS NULL OR delivered_at IS NULL)" in table

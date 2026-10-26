@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import anyio
@@ -11,6 +12,7 @@ __all__ = ["channel_db", "receipt_db"]
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.db.connection import DbConnection
 from app.db.session import get_connection, transaction
+from app.records.channel_event_receipt import ChannelReplyScope
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import submissions
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError, accept_channel_event
@@ -107,6 +109,19 @@ async def test_enqueue_failure_rolls_back_receipt_quota_transcript_sessions_and_
     }
     async with transaction(fixture.db.first):
         assert await fixture.db.first.fetchval("SELECT count(*) FROM chat_sessions") == 1
+        assert (
+            await channel_event_receipt_dao.latest_eligible_timestamp(
+                ChannelReplyScope(
+                    fixture.config.id,
+                    fixture.event.agent_id,
+                    fixture.tenant_id,
+                    "whatsapp",
+                    "phone-account",
+                    fixture.event.conversation_id,
+                )
+            )
+            is None
+        )
 
 
 @pytest.mark.parametrize(("group", "owner"), [(False, "sender"), (True, "creator"), (True, "sender")])
@@ -169,7 +184,20 @@ async def test_replay_survives_completion_cleanup_quota_exhaustion_and_expiry(ch
     prepare.assert_not_awaited()
 
 
-@pytest.mark.parametrize("field", ["sender_id", "conversation_id", "text", "kind", "media_ids", "is_group"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "sender_id",
+        "conversation_id",
+        "text",
+        "kind",
+        "media_ids",
+        "is_group",
+        "provider_timestamp",
+        "provider_account_id",
+        "provider_timestamp_source",
+    ],
+)
 async def test_native_identity_reuse_with_changed_payload_conflicts(channel_db, field):
     # Given an accepted native identity.
     fixture = channel_db
@@ -182,6 +210,9 @@ async def test_native_identity_reuse_with_changed_payload_conflicts(channel_db, 
         "kind": "image",
         "media_ids": ("native-media",),
         "is_group": True,
+        "provider_timestamp": fixture.event.provider_timestamp - timedelta(hours=1),
+        "provider_account_id": "other-account",
+        "provider_timestamp_source": '"changed"',
     }
     if field == "sender_id":
         async with transaction(fixture.db.first):

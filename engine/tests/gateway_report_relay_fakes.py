@@ -234,7 +234,9 @@ class RelayStore:
         assert not self.transaction.get()
         return OutboundPreflight(deepcopy(outbound), outbound.target)
 
-    async def send_chunk(self, outbound: ConfiguredOutbound, chunk: OutboundChunk) -> None:
+    async def send_chunk(
+        self, outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] | None = None
+    ) -> None:
         await self.send(agent=self.source, session=self.session, content=chunk.text, strict=True)
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,16 @@ from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelReplyScope:
+    config_id: UUID
+    agent_id: UUID
+    tenant_id: UUID | None
+    provider: str
+    account_id: str
+    conversation_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ChannelEventReceiptRecord:
     config_id: UUID
     provider: str
@@ -17,6 +27,9 @@ class ChannelEventReceiptRecord:
     tenant_id: UUID | None
     fingerprint: str
     created_at: datetime | None = None
+    provider_timestamp: datetime | None = None
+    provider_account_id: str | None = None
+    conversation_id: str | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ChannelEventReceiptRecord:
@@ -28,4 +41,9 @@ class ChannelEventReceiptRecord:
             tenant_id=uuid_from_row(row["tenant_id"]) if row["tenant_id"] is not None else None,
             fingerprint=str_from_row(row["fingerprint"]),
             created_at=datetime_from_row(row["created_at"]),
+            provider_timestamp=datetime_from_row(row.get("provider_timestamp")),
+            provider_account_id=str_from_row(row["provider_account_id"])
+            if row.get("provider_account_id") is not None
+            else None,
+            conversation_id=str_from_row(row["conversation_id"]) if row.get("conversation_id") is not None else None,
         )

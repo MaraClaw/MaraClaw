@@ -127,20 +127,23 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False, na
                 request_for(payload, {"x-slack-request-timestamp": stamp, "x-slack-signature": f"v0={signature}"}),
             )
         case "whatsapp":
+            config.app_id = "phone-account"
             payload = {
                 "entry": [
                     {
                         "changes": [
                             {
                                 "value": {
+                                    "metadata": {"phone_number_id": "phone-account"},
                                     "messages": [
                                         {
                                             "id": native_id,
                                             "from": "15551234567",
                                             "type": "text",
+                                            "timestamp": str(int(time.time()) - 1),
                                             "text": {"body": "hello"},
                                         }
-                                    ]
+                                    ],
                                 }
                             }
                         ]
