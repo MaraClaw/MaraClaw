@@ -18,6 +18,7 @@ from app.schemas.department import (
     DepartmentAssignment,
     DepartmentAssignments,
     DepartmentCreate,
+    DepartmentDeletionPreviewOut,
     DepartmentMembersOut,
     DepartmentOptionOut,
     DepartmentOptionsOut,
@@ -31,6 +32,7 @@ from app.services.org_departments import (
     assign_departments,
     delete_department,
     list_department_members,
+    preview_department_deletion,
     rename_department,
 )
 
@@ -104,6 +106,16 @@ async def get_department_members(
     department_id: UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> DepartmentMembersOut:
     return await list_department_members(current_user, department_id)
+
+
+@router.get("/departments/{department_id}/deletion-preview", response_model=DepartmentDeletionPreviewOut)
+async def get_department_deletion_preview(
+    department_id: UUID,
+    tenant_id: UUID | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> DepartmentDeletionPreviewOut:
+    """Advisory association counts; deletion independently rechecks current state."""
+    return await preview_department_deletion(current_user, department_id, tenant_id)
 
 
 @router.delete("/departments/{department_id}", status_code=204)

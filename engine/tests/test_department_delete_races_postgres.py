@@ -8,7 +8,7 @@ from app.api import agents
 from app.core.acl_locks import lock_tenants
 from app.db.connection import DbConnection
 from app.db.session import transaction
-from app.services import org_departments
+from app.services import agent_provisioning, org_departments
 from department_delete_postgres_fixtures import DepartmentStore, department_store, request
 from test_bootstrap_postgres import schema_db
 
@@ -38,6 +38,7 @@ async def test_delete_serializes_with_department_writers(
 
         monkeypatch.setattr(org_departments, "lock_tenants", held_tenant_lock)
         monkeypatch.setattr(agents, "lock_tenants", held_tenant_lock)
+        monkeypatch.setattr(agent_provisioning, "lock_tenants", held_tenant_lock)
 
         async def run(name: str, operation: str, raw: AsyncConnection[DictRow]) -> None:
             async with transaction(DbConnection(raw)):

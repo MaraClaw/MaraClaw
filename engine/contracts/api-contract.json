@@ -5071,6 +5071,28 @@
         "title": "DepartmentCreate",
         "type": "object"
       },
+      "DepartmentDeletionPreviewOut": {
+        "properties": {
+          "agent_grant_count": {
+            "description": "Department-to-agent grant associations, not people losing effective access.",
+            "minimum": 0.0,
+            "title": "Agent Grant Count",
+            "type": "integer"
+          },
+          "membership_count": {
+            "description": "Department membership associations currently selected for removal.",
+            "minimum": 0.0,
+            "title": "Membership Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "membership_count",
+          "agent_grant_count"
+        ],
+        "title": "DepartmentDeletionPreviewOut",
+        "type": "object"
+      },
       "DepartmentMemberOut": {
         "properties": {
           "display_name": {
@@ -27430,6 +27452,72 @@
         ]
       }
     },
+    "/api/departments/{department_id}/deletion-preview": {
+      "get": {
+        "description": "Advisory association counts; deletion independently rechecks current state.",
+        "operationId": "get_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f64656c6574696f6e2d70726576696577",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "department_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Department Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentDeletionPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Department Deletion Preview",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
     "/api/departments/{department_id}/members": {
       "get": {
         "operationId": "get_2f6170692f6465706172746d656e74732f7b6465706172746d656e745f69647d2f6d656d62657273",
@@ -37565,6 +37653,8 @@
       "ApprovalAction",
       "ApprovalDecisionRequest",
       "ApprovalStatus",
+      "AssignmentOut",
+      "AssignmentsOut",
       "AuthUser",
       "BroadcastRequest",
       "BulkToolUpdateItem",
@@ -37595,6 +37685,14 @@
       "DeletionPage",
       "DeletionRequestCreate",
       "DeletionStatus",
+      "DepartmentAssignment",
+      "DepartmentAssignments",
+      "DepartmentCreate",
+      "DepartmentDeletionPreviewOut",
+      "DepartmentMembersOut",
+      "DepartmentOptionsOut",
+      "DepartmentOut",
+      "DepartmentsOut",
       "DingTalkChannelPayload",
       "DiscordChannelPayload",
       "DragRequest",
@@ -37749,6 +37847,8 @@
       "ApprovalStatus",
       "ArchivedSessionDetail",
       "ArchivedSessionErrorEvent",
+      "AssignmentOut",
+      "AssignmentsOut",
       "AtlassianTestResponse",
       "AtlassianTestSuccess",
       "AtlassianToolPreview",
@@ -37792,6 +37892,16 @@
       "DeletionStatus",
       "DeletionSummary",
       "DeletionViewer",
+      "DepartmentAssignment",
+      "DepartmentAssignments",
+      "DepartmentCreate",
+      "DepartmentDeletionPreviewOut",
+      "DepartmentMemberOut",
+      "DepartmentMembersOut",
+      "DepartmentOptionOut",
+      "DepartmentOptionsOut",
+      "DepartmentOut",
+      "DepartmentsOut",
       "DingTalkChannelPayload",
       "DingTalkExtraConfig",
       "DiscordChannelPayload",

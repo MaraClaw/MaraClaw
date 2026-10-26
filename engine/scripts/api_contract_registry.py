@@ -40,6 +40,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "auth",
         "member_auth",
         "company_admissions",
+        "departments",
         "focus",
         "notification",
         "okr",

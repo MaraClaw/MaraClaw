@@ -24,6 +24,16 @@ class DepartmentOut(BaseModel):
     created_at: datetime
 
 
+class DepartmentDeletionPreviewOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    membership_count: int = Field(
+        ge=0, description="Department membership associations currently selected for removal."
+    )
+    agent_grant_count: int = Field(
+        ge=0, description="Department-to-agent grant associations, not people losing effective access."
+    )
+
+
 class DepartmentOptionOut(BaseModel):
     id: UUID
     name: str

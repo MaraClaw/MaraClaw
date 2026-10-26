@@ -18,6 +18,7 @@ from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
+from app.services import agent_provisioning
 from test_bootstrap_postgres import schema_db
 
 __all__ = ["schema_db"]
@@ -115,10 +116,13 @@ async def department_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(access_cache, "read_acl_version", AsyncMock(return_value="0"))
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value=None))
     monkeypatch.setattr(access_cache, "set_cached_level", AsyncMock())
-    monkeypatch.setattr(agents, "check_agent_creation_quota", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", AsyncMock())
     monkeypatch.setattr(agents, "assert_models_in_tenant_pool", AsyncMock())
     monkeypatch.setattr(agents, "persist_agent_setup", AsyncMock())
     monkeypatch.setattr(agents, "ensure_access_granted_platform_relationships", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        agent_provisioning, "ensure_access_granted_platform_relationships", AsyncMock(return_value=False)
+    )
     try:
         yield DepartmentStore(
             schema_db, conninfo, actor, identity, tenant, foreign, selected, other, members, agent_ids, invalidated
