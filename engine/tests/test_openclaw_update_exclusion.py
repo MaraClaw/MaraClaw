@@ -242,6 +242,7 @@ def lifecycle(gate: Gate, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(exclusion.agent_dao, "get", AsyncMock(return_value=fresh))
     operation = AgentStartOperation(fresh.id, uuid.uuid4(), "pending")
     monkeypatch.setattr(start_store, "begin", AsyncMock(return_value=(operation, fresh)))
+    monkeypatch.setattr(start_store, "reserve", AsyncMock(return_value=True))
     monkeypatch.setattr(start_store, "publish", publish)
     monkeypatch.setattr(start_store, "cancel", AsyncMock())
     start, stop = AsyncMock(return_value="cid"), AsyncMock(return_value=True)

@@ -59,8 +59,8 @@ async def start_agent_guest(agent_id: UUID, _persist: RuntimePersistence = persi
             except GuestAdmissionError as exc:
                 logger.warning("Guest admission refused for agent {}: {}", agent_id, exc.code)
                 return LifecycleFailure(409, exc.code, exc.message)
-            except GuestStartPreflightError:
-                logger.warning("Guest start preparation failed for agent {}", agent_id)
+            except GuestStartPreflightError as exc:
+                logger.warning("Guest start preparation failed for agent {}: {}", agent_id, exc.code)
                 return LifecycleFailure(502, "guest_start_failed", "Guest start preparation failed")
             except GuestOwnershipError as exc:
                 logger.warning("Guest start ownership refused for agent {}: {}", agent_id, exc)

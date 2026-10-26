@@ -1,11 +1,13 @@
 from uuid import UUID, uuid4
 
+from app.dao.agent_start_retry_dao import START_RETRY_METADATA_DDL
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 
 # Parent integration copies this additive fresh-schema DDL into the shared baseline.
-START_OPERATIONS_DDL = """
+START_OPERATIONS_DDL = (
+    """
 CREATE TABLE IF NOT EXISTS agent_start_operations (
     agent_id uuid PRIMARY KEY,
     operation_id uuid NOT NULL UNIQUE,
@@ -21,6 +23,8 @@ CREATE TABLE IF NOT EXISTS agent_start_operations (
 CREATE INDEX IF NOT EXISTS agent_start_operations_pending_idx
     ON agent_start_operations(updated_at) WHERE state = 'pending';
 """
+    + START_RETRY_METADATA_DDL
+)
 
 ELIGIBLE_SQL = """
 NOT a.setup_pending AND NOT a.is_expired AND (a.expires_at IS NULL OR a.expires_at > now())
@@ -67,8 +71,12 @@ class AgentStartDAO:
 
     async def pending(self, db: DbConnection) -> list[AgentStartOperation]:
         rows = await db.fetchall(
-            "SELECT * FROM agent_start_operations WHERE state='pending' "
-            "OR (state='cancelled' AND NOT cleanup_complete) ORDER BY updated_at"
+            "(SELECT o.* FROM agent_start_operations o LEFT JOIN agent_start_retry_metadata r "
+            "ON r.operation_id=o.operation_id WHERE o.state='pending' "
+            "AND (r.operation_id IS NULL OR r.next_retry_at <= now()) "
+            "ORDER BY COALESCE(r.next_retry_at,o.updated_at),o.agent_id LIMIT 8) UNION ALL "
+            "(SELECT * FROM agent_start_operations WHERE state='cancelled' AND NOT cleanup_complete "
+            "ORDER BY updated_at,agent_id LIMIT 8)"
         )
         return [AgentStartOperation.from_row(row) for row in rows]
 

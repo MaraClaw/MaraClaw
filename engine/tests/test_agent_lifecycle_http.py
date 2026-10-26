@@ -66,6 +66,12 @@ def surface(monkeypatch, tmp_path):
     async def cancel(_id):
         return None
 
+    async def reserve(_operation, *, due_only=False):
+        return True
+
+    async def fail(_operation, _code):
+        return None
+
     async def publish(_operation, record):
         await runtime.update(db_obj=record, obj_in={})
         await runtime.commit()
@@ -74,6 +80,8 @@ def surface(monkeypatch, tmp_path):
     monkeypatch.setattr(lifecycle.start_store, "begin", begin)
     monkeypatch.setattr(lifecycle.start_store, "cancel", cancel)
     monkeypatch.setattr(lifecycle.start_store, "publish", publish)
+    monkeypatch.setattr(lifecycle.start_store, "reserve", reserve)
+    monkeypatch.setattr(lifecycle.start_store, "fail", fail)
 
     async def authorize(_user, _id):
         return replace(runtime.committed), "manage"
