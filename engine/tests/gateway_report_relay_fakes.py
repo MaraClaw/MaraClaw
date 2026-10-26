@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
@@ -240,6 +241,7 @@ class RelayStore:
         await self.send(agent=self.source, session=self.session, content=chunk.text, strict=True)
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(relay, "agent_work_blocking_codes", AsyncMock(return_value=()))
         monkeypatch.setattr(relay, "gateway_report_delivery_dao", self)
         monkeypatch.setattr(relay.gateway_message_dao, "get", self.get_message)
         monkeypatch.setattr(relay.agent_dao, "get", self.get_agent)

@@ -89,7 +89,8 @@ class FakeDocker:
         if found is not None:
             del self.containers[found.id]
 
-    def ready(self, reference: str) -> bool:
+    def ready(self, reference: str, timeout: float) -> bool:
+        assert timeout > 0
         if self.on_ready is not None:
             self.on_ready(reference)
         found = self._find(reference)

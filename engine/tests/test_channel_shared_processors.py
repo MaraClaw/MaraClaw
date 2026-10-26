@@ -63,7 +63,7 @@ def pipeline(context, monkeypatch):
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "reserve", AsyncMock(return_value=True))
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "find", AsyncMock(return_value=None))
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
-    monkeypatch.setattr(submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(submissions, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
     monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(chat_session_dao, "lock_for_agent", locked)

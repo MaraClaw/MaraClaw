@@ -735,6 +735,36 @@ CREATE TABLE IF NOT EXISTS agent_start_operations (
 CREATE INDEX IF NOT EXISTS agent_start_operations_pending_idx
     ON agent_start_operations(updated_at) WHERE state = 'pending';
 
+CREATE TABLE IF NOT EXISTS agent_start_retry_metadata (
+    operation_id uuid PRIMARY KEY,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_attempt_at timestamptz,
+    next_retry_at timestamptz,
+    last_failure_code text CHECK (last_failure_code IN (
+        'capacity_exceeded', 'configuration_failed', 'readiness_failed', 'ownership_conflict',
+        'runtime_failed', 'publication_failed', 'upgrade_in_progress'
+    )),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_start_retry_due_idx
+    ON agent_start_retry_metadata(next_retry_at) WHERE next_retry_at IS NOT NULL;
+CREATE OR REPLACE FUNCTION sync_agent_start_retry_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        DELETE FROM agent_start_retry_metadata WHERE operation_id = OLD.operation_id;
+    ELSIF OLD.operation_id <> NEW.operation_id THEN
+        DELETE FROM agent_start_retry_metadata WHERE operation_id = OLD.operation_id;
+    ELSIF NEW.state <> 'pending' THEN
+        UPDATE agent_start_retry_metadata SET next_retry_at = NULL, updated_at = now()
+            WHERE operation_id = NEW.operation_id;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE OR REPLACE TRIGGER agent_start_retry_state_changed
+    AFTER UPDATE OR DELETE ON agent_start_operations
+    FOR EACH ROW EXECUTE FUNCTION sync_agent_start_retry_metadata();
+
 CREATE TABLE IF NOT EXISTS agent_setups (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     inputs JSONB NOT NULL,
@@ -749,6 +779,28 @@ CREATE TABLE IF NOT EXISTS agent_setups (
 
 CREATE INDEX IF NOT EXISTS ix_agent_setups_claim ON agent_setups (created_at, agent_id)
 WHERE state IN ('pending', 'running');
+
+CREATE TABLE IF NOT EXISTS agent_setup_mcp_work (
+    agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    server_id text NOT NULL CHECK (length(server_id) BETWEEN 1 AND 512),
+    owner_id uuid NOT NULL,
+    tenant_id uuid,
+    requester_id uuid NOT NULL,
+    state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','succeeded','warning')),
+    warning_code text CHECK (warning_code IN ('missing_credentials','authorization_required',
+        'unsupported_remote_transport','connection_failed','tools_unverified','import_failed')),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    claim_token uuid,
+    claimed_at timestamptz,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (agent_id,server_id),
+    CHECK ((state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL)),
+    CHECK ((state = 'warning') = (warning_code IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS agent_setup_mcp_work_queue_idx
+    ON agent_setup_mcp_work(updated_at,agent_id,server_id) WHERE state IN ('pending','running');
 
 CREATE TABLE IF NOT EXISTS okr_progress_logs (
 	id UUID NOT NULL, 

@@ -103,12 +103,10 @@ async def test_creation_snapshots_resolved_files_skills_and_optional_servers(set
     monkeypatch.setattr(agent_setup.agent_manager, "_template_dir", lambda: template_dir)
     monkeypatch.setattr("app.services.agent_workspace.user_dao.get", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_setup.agent_template_dao, "get", AsyncMock(return_value=template))
-    monkeypatch.setattr(agent_setup.skill_dao, "list_default_ids", AsyncMock(return_value=set()))
-    monkeypatch.setattr(agent_setup.skill_dao, "list_ids_by_folder_names", AsyncMock(return_value={skill_id}))
-    monkeypatch.setattr(agent_setup.skill_dao, "list_with_files_by_ids", AsyncMock(return_value=[skill]))
+    monkeypatch.setattr(agent_setup, "resolve_setup_skills", AsyncMock(return_value=[skill]))
     monkeypatch.setattr(agent_setup.agent_setup_dao, "create", create)
-    optional = AsyncMock(side_effect=OSError("remote unavailable"))
-    monkeypatch.setattr(agent_setup, "import_mcp_from_smithery", optional)
+    optional = AsyncMock()
+    monkeypatch.setattr(agent_setup.agent_setup_mcp_dao, "seed", optional)
     await agent_setup.persist_agent_setup(
         store.agent, AgentCreate(name=store.agent.name, template_id=template.id), "oc-recovered"
     )
@@ -120,7 +118,8 @@ async def test_creation_snapshots_resolved_files_skills_and_optional_servers(set
     await agent_setup.run_agent_setup(store.claim)
     assert await storage.read_bytes(f"{store.agent.id}/settings.json") == b'{"revision":1}'
     assert await storage.read_bytes(f"{store.agent.id}/skills/frozen/settings.json") == b'{"skill":1}'
-    optional.assert_awaited_once_with(server_id="one", agent_id=store.agent.id, config={})
+    optional.assert_awaited_once_with(store.agent, ("one",))
+    assert snapshot.mcp_servers == ()
     assert store.terminal == [None]
 
 

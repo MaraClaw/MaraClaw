@@ -122,10 +122,8 @@ async def assistant_creation(creation, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(onboarding_api, "locked_fresh_agent", locked_agent)
     monkeypatch.setattr(agent_lifecycle, "locked_fresh_agent", locked_agent)
     monkeypatch.setattr(agent_lifecycle, "flush_request_transaction", store.flush)
-    monkeypatch.setattr(agent_lifecycle.start_store, "begin", starts.begin)
-    monkeypatch.setattr(agent_lifecycle.start_store, "publish", starts.publish)
-    monkeypatch.setattr(agent_lifecycle.start_store, "recover", starts.recover)
-    monkeypatch.setattr(agent_lifecycle.start_store, "observe", starts.observe)
+    for method in (starts.begin, starts.publish, starts.recover, starts.observe, starts.reserve, starts.fail):
+        monkeypatch.setattr(agent_lifecycle.start_store, method.__name__, method)
     monkeypatch.setattr("app.services.agent_start_reconciler.flush_request_transaction", store.flush)
     from app.api import relationships
 

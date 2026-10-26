@@ -56,7 +56,7 @@ class UpgradeDockerAdapter(Protocol):
     def rename(self, reference: str, name: str) -> None: ...
     def remove(self, reference: str) -> None: ...
     def start(self, reference: str) -> None: ...
-    def ready(self, reference: str) -> bool: ...
+    def ready(self, reference: str, timeout: float) -> bool: ...
 
 
 class UpgradeManager(Protocol):
@@ -251,13 +251,14 @@ class UpgradeExecutor:
         """Two consecutive in-guest ``/readyz`` passes within the bound."""
         deadline = anyio.current_time() + self.ready_timeout
         passes = 0
-        while True:
-            passes = passes + 1 if await to_thread.run_sync(self.docker.ready, reference) else 0
-            if passes >= READY_PASSES:
-                return True
+        while (remaining := deadline - anyio.current_time()) > 0:
+            passes = passes + 1 if await to_thread.run_sync(self.docker.ready, reference, remaining) else 0
             if anyio.current_time() >= deadline:
                 return False
-            await anyio.sleep(self.ready_interval)
+            if passes >= READY_PASSES:
+                return True
+            await anyio.sleep(min(self.ready_interval, max(0, deadline - anyio.current_time())))
+        return False
 
     async def _rollback(self, run: OpenClawUpdateRunRecord, agent_dir: Path, code: str) -> None:
         """Remove the new writer, restore state, bring the original back. Each step is repeatable."""

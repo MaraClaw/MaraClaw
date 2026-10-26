@@ -4,7 +4,6 @@ from dataclasses import replace
 from uuid import uuid4
 
 import pytest
-from python_on_whales.exceptions import DockerException
 
 import test_guest_start_safety as start_fixtures
 from app.services import guest_readiness, guest_start
@@ -21,16 +20,16 @@ def ready_guest(env, monkeypatch):
     docker.starts = []
     monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
 
-    def execute(reference, command):
+    def probe(_client, reference, timeout):
         docker.probes.append(reference)
-        assert "/readyz" in command[-1]
-        return ""
+        assert timeout > 0
+        return True
 
     def start(reference):
         docker.starts.append(reference)
         docker.inspect(reference).state.status = "running"
 
-    monkeypatch.setattr(docker, "execute", execute, raising=False)
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
     monkeypatch.setattr(docker, "start", start, raising=False)
 
 
@@ -129,17 +128,16 @@ async def test_absent_guest_is_created_with_replay_label(env):
 
 async def test_ready_passes_must_be_consecutive(env, monkeypatch):
     # Given a guest that briefly loses readiness between successful probes.
-    manager, docker, agent = env
+    manager, _docker, agent = env
     outcomes = iter((True, False, True, True))
     probes = []
 
-    def execute(reference, _command):
+    def probe(_client, reference, timeout):
         probes.append(reference)
-        if not next(outcomes):
-            raise DockerException(["docker", "exec"], 1)
-        return ""
+        assert timeout > 0
+        return next(outcomes)
 
-    monkeypatch.setattr(docker, "execute", execute)
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
     # When Start waits for readiness.
     result = await manager.start_container(agent)
     # Then the failure resets the consecutive-pass count.
@@ -160,9 +158,10 @@ async def test_unready_guest_is_preserved_and_new_writer_quiesced(env, monkeypat
 
     monkeypatch.setattr(guest_start, "guest_ready", unready)
     # When readiness fails.
-    with pytest.raises(GuestStartPreflightError):
+    with pytest.raises(GuestStartPreflightError) as failure:
         await manager.start_container(agent)
     # Then existing guests survive, while a newly created writer is stopped, never orphaned.
+    assert failure.value.code == "readiness_failed"
     reference = "old" if existing else "created-1"
     assert docker.guests[reference].state.status == ("running" if existing else "exited")
     assert docker.removed == []

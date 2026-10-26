@@ -3,11 +3,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from fastapi import HTTPException
+
 from app.core.logging import logger
 from app.dao.chat_dao import chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.records.gateway_message import GatewayMessageRecord
+from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
 from app.services.shared_chat import shared_session_id
 
@@ -24,7 +27,10 @@ async def insert_prepared_message(
     deduplicate: bool = True,
     reply_session_id: UUID | None = None,
 ) -> GatewayMessageRecord:
-    agent, content = prepared.agent, prepared.content
+    agent = await load_agent_for_new_work(prepared.agent.id)
+    if agent.tenant_id != prepared.agent.tenant_id:
+        raise HTTPException(403, "Agent tenant changed during preparation")
+    content = prepared.content
     shared = conversation_id == str(shared_session_id(agent.id))
     pending = (
         await gateway_message_dao.list_pending(agent.id)

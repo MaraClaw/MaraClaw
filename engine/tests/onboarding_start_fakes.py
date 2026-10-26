@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
+from app.records.agent_start_retry import StartFailureCode
 from test_agent_create_departments import CreationStore
 
 
@@ -12,6 +13,8 @@ class AssistantStartStore:
     operations: dict[UUID, AgentStartOperation] = field(default_factory=dict)
     expected: dict[UUID, AgentRecord] = field(default_factory=dict)
     candidates: dict[UUID, AgentRecord] = field(default_factory=dict)
+    attempts: dict[UUID, int] = field(default_factory=dict)
+    failures: dict[UUID, StartFailureCode] = field(default_factory=dict)
 
     def _agent(self, agent_id: UUID) -> AgentRecord | None:
         return next((replace(row) for row in self.store.agent_rows if row.id == agent_id), None)
@@ -42,6 +45,19 @@ class AssistantStartStore:
             self.operations[operation.agent_id] = replace(operation, state="cancelled")
             return None
         return agent
+
+    async def reserve(self, operation: AgentStartOperation, *, due_only: bool = False) -> bool:
+        assert not self.store.in_transaction
+        assert not due_only, "Assistant requests reserve interactive starts, not worker retries"
+        if await self.recover(operation) is None:
+            return False
+        self.attempts[operation.operation_id] = self.attempts.get(operation.operation_id, 0) + 1
+        return True
+
+    async def fail(self, operation: AgentStartOperation, code: StartFailureCode) -> None:
+        assert not self.store.in_transaction
+        if self.operations.get(operation.agent_id) == operation and operation.state == "pending":
+            self.failures[operation.operation_id] = code
 
     async def observe(self, operation_id: UUID, candidate: AgentRecord) -> bool:
         operation = self.operations.get(candidate.id)

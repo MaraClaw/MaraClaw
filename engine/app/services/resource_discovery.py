@@ -10,9 +10,7 @@ from app.core.json_types import (
     is_json_object,
     json_as_bool,
     json_as_int,
-    json_as_str,
     json_as_str_or,
-    json_loads_value,
     json_object_from,
     json_object_from_response,
 )
@@ -20,7 +18,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.services.mcp_installation import MCPInstallation, persist_mcp_installation
-from app.services.tool_config import decrypt_sensitive_fields, encrypt_sensitive_fields, get_tenant_tool_config
+from app.services.tool_config import decrypt_sensitive_fields, get_tenant_tool_config
 
 
 class ToolParameterSchema(TypedDict):
@@ -366,237 +364,10 @@ async def import_mcp_from_smithery(
     config: JsonObject | None = None,
     reauthorize: bool = False,
 ) -> str:
-    """Import an MCP server from Smithery into the platform.
+    from app.services.smithery_import import import_mcp_from_smithery_result
 
-    Uses the Smithery Registry detail API to get tool definitions,
-    and stores the deploymentUrl for runtime execution via Smithery Connect.
-    If config contains 'smithery_api_key', it's stored per-agent for future use.
-    """
-    del reauthorize
-    server_config: JsonObject = dict(config) if config is not None and config else {}  # mutable copy
-
-    # Extract smithery_api_key from config (user-provided) or fallback to stored
-    configured_api_key = server_config.pop("smithery_api_key", None)
-    api_key = (
-        configured_api_key
-        if isinstance(configured_api_key, str) and configured_api_key
-        else await _get_smithery_api_key(agent_id)
-    )
-    if not api_key:
-        return (
-            "❌ Smithery API key is required to import MCP servers.\n\n"
-            "Provide your Smithery API key. You can obtain one by:\n"
-            "1. Signing up for or logging in to https://smithery.ai\n"
-            "2. Creating an API key at https://smithery.ai/account/api-keys\n"
-            "3. Providing the key, for example:\n"
-            '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
-        )
-
-    # Write key back to discover_resources / import_mcp_server AgentTool configs
-    # so it shows up in the Config dialog
-    try:
-        for tool_name in ("discover_resources", "import_mcp_server"):
-            tool = await tool_dao.get_by_name(tool_name)
-            if not tool:
-                continue
-            _ = await agent_tool_dao.ensure_with_config(
-                agent_id,
-                tool.id,
-                config=encrypt_sensitive_fields(
-                    {"smithery_api_key": api_key},
-                    {"fields": [{"key": "smithery_api_key", "type": "password"}]},
-                ),
-                source="system",
-            )
-    except Exception:
-        logger.warning("Unable to persist Smithery API key configuration")
-
-    # Step 1: Search for server by ID
-    headers = {"Accept": "application/json"}
-
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(
-                f"{SMITHERY_API_BASE}/servers",
-                params={"q": server_id.lstrip("@"), "pageSize": 5},
-                headers=headers,
-            )
-            if resp.status_code != 200:
-                return f"❌ Server '{server_id}' not found on Smithery (HTTP {resp.status_code})"
-            data = json_object_from_response(resp)
-            servers_raw = data.get("servers", [])
-            servers = [item for item in servers_raw if is_json_object(item)] if isinstance(servers_raw, list) else []
-            server_info: JsonObject | None = None
-            clean_id = server_id.lstrip("@")
-            for s in servers:
-                qualified = s.get("qualifiedName")
-                if qualified in (clean_id, server_id):
-                    server_info = s
-                    break
-            if (server_info is None or not server_info) and servers:
-                server_info = servers[0]
-            if server_info is None or not server_info:
-                return f"❌ Server '{server_id}' not found on Smithery."
-    except Exception as e:
-        return f"❌ Failed to fetch server info: {str(e)[:200]}"
-
-    display_name = json_as_str_or(server_info.get("displayName"), server_id.split("/")[-1])
-    description = json_as_str_or(server_info.get("description"))
-    qualified_name = json_as_str_or(server_info.get("qualifiedName"), server_id.lstrip("@"))
-
-    # Check if server supports remote hosting
-    if (remote := server_info.get("remote")) is None or not remote:
-        return (
-            f"⚠️ **{display_name}** (`{qualified_name}`) does not support remote hosting via Smithery Connect.\n"
-            "This server requires local installation and cannot be imported automatically.\n"
-            f"🔗 {json_as_str_or(server_info.get('homepage'))}"
-        )
-
-    # Step 2: Get full server details including tools from registry API
-    tools_discovered: list[JsonObject] = []
-    deployment_url = None
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            detail_resp = await client.get(
-                f"{SMITHERY_API_BASE}/servers/{qualified_name}",
-                headers=headers,
-            )
-            if detail_resp.status_code == 200:
-                detail = json_object_from_response(detail_resp)
-                deployment_url = json_as_str(detail.get("deploymentUrl"))
-                raw_tools = detail.get("tools", [])
-                tools_discovered = [
-                    {
-                        "name": json_as_str_or(t.get("name")),
-                        "description": json_as_str_or(t.get("description")),
-                        "inputSchema": json_object_from(t.get("inputSchema")),
-                    }
-                    for t in (raw_tools if isinstance(raw_tools, list) else [])
-                    if is_json_object(t) and (name := t.get("name")) is not None and name
-                ]
-                logger.info(f"[ResourceDiscovery] Got {len(tools_discovered)} tools from registry for {qualified_name}")
-            else:
-                logger.warning(
-                    f"[ResourceDiscovery] Could not fetch detail for {qualified_name}: HTTP {detail_resp.status_code}"
-                )
-    except Exception as e:
-        logger.error(f"[ResourceDiscovery] Could not fetch server detail: {e}")
-
-    # Step 3: Determine the MCP server URL for runtime execution
-    base_mcp_url = deployment_url or f"https://{qualified_name}.run.tools"
-
-    # Step 3.5: Auto-create Smithery Connect namespace + connection
-    smithery_config: JsonObject = {}  # will be merged into every AgentTool.config
-    auth_message = ""
-    conn_result = await _ensure_smithery_connection(api_key, base_mcp_url, display_name)
-    conn_error = json_as_str(conn_result.get("error"))
-    if conn_error not in (None, ""):
-        auth_message = f"\n\n⚠️ Could not auto-create Smithery connection: {conn_error}"
-    else:
-        smithery_config = {
-            "smithery_namespace": json_as_str_or(conn_result.get("namespace")),
-            "smithery_connection_id": json_as_str_or(conn_result.get("connection_id")),
-        }
-        auth_url = json_as_str(conn_result.get("auth_url"))
-        if auth_url not in (None, ""):
-            auth_message = (
-                "\n\n🔐 **OAuth authorization required**: Open the following link in a browser to complete authorization:\n"
-                f"{auth_url}\n"
-                "The tool will be available after authorization is complete."
-            )
-
-    # Step 3.6: Override registry-advertised schema with the runtime server's
-    # actual tools/list. Smithery's registry detail can drift behind the live
-    # server (we hit this with shibui/finance: registry said `sql`, server
-    # required `user_prompt` + `query`). The truth is whatever tools/list
-    # returns at call time, so prefer it whenever available.
-    live_ready = False
-    if smithery_config:
-        ns_ = json_as_str_or(smithery_config["smithery_namespace"])
-        conn_ = json_as_str_or(smithery_config["smithery_connection_id"])
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                live_resp = await client.post(
-                    f"https://api.smithery.ai/connect/{ns_}/{conn_}/mcp",
-                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream",
-                    },
-                )
-            if live_resp.status_code == 200:
-                live_data: object = None
-                # Smithery Connect returns SSE; parse the first data: line.
-                for line in live_resp.text.split("\n"):
-                    line = line.strip()
-                    if line.startswith("data: "):
-                        try:
-                            live_data = json_loads_value(line[6:])
-                            break
-                        except ValueError:
-                            pass
-                if live_data is None:
-                    try:
-                        live_data = json_loads_value(live_resp.text)
-                    except ValueError:
-                        live_data = None
-                live_payload = live_data if is_json_object(live_data) else None
-                live_result = (
-                    json_object_from(live_payload.get("result")) if live_payload is not None and live_payload else {}
-                )
-                live_tools_raw = live_result.get("tools", [])
-                live_tools = (
-                    [item for item in live_tools_raw if is_json_object(item)]
-                    if isinstance(live_tools_raw, list)
-                    else []
-                )
-                # MCP servers also return prompts here; only treat actual tools.
-                live_tools_normalized: list[JsonObject] = [
-                    {
-                        "name": json_as_str_or(t.get("name")),
-                        "description": json_as_str_or(t.get("description")),
-                        "inputSchema": json_object_from(t.get("inputSchema")),
-                    }
-                    for t in live_tools
-                    if (name := t.get("name")) is not None and name and is_json_object(t.get("inputSchema"))
-                ]
-                if live_tools_normalized:
-                    logger.info(
-                        f"[ResourceDiscovery] Using live tools/list for {qualified_name}: "
-                        f"{len(live_tools_normalized)} tool(s) override registry's "
-                        f"{len(tools_discovered)}"
-                    )
-                    tools_discovered = live_tools_normalized
-                    live_ready = not auth_message
-        except Exception as e:
-            logger.warning(
-                f"[ResourceDiscovery] Live tools/list failed for {qualified_name}, falling back to registry schema: {e}"
-            )
-
-    normalized_tools = [tool for raw in tools_discovered if (tool := _normalize_discovered_mcp_tool(raw)) is not None]
-    imported_tools = await persist_mcp_installation(
-        agent_id,
-        MCPInstallation(
-            prefix=f"mcp_{server_id.replace('/', '_').replace('@', '')}",
-            display_name=display_name,
-            server_url=base_mcp_url,
-            description=description or f"MCP Server: {server_id}",
-            config={**smithery_config, **server_config},
-        ),
-        normalized_tools,
-    )
-
-    result = f"🔌 Imported MCP server: **{display_name}** (`{server_id}`)\n\n"
-    result += "\n".join(imported_tools)
-    result += f"\n\n📡 MCP Server URL: `{base_mcp_url}`"
-    if auth_message:
-        result += auth_message
-    elif live_ready and normalized_tools:
-        result += "\n\n💡 The imported tools are now available for use."
-    else:
-        result += "\n\n⚠️ Configuration saved, but the server is not ready: live tools/list was not verified. Retry after configuring or authorizing the server."
-    return result
+    result = await import_mcp_from_smithery_result(server_id, agent_id, config, reauthorize=reauthorize)
+    return result.text
 
 
 # ── Direct URL Import ───────────────────────────────────────────

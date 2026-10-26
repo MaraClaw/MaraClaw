@@ -23,6 +23,7 @@ from app.records.user import UserRecord
 from app.services import (
     chat_submissions,
     chat_tickets,
+    openclaw_enqueue,
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
 )
@@ -195,6 +196,10 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
     monkeypatch.setattr(ws_api, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(ws_api, "check_agent_expired", AsyncMock())
     monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[]))
+    monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent))
+    monkeypatch.setattr(
+        openclaw_enqueue, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent)
+    )
     monkeypatch.setattr(routing.gateway_message_dao, "create", create)
     monkeypatch.setattr(routing, "_run_inbox_wake", wake)
     yield state, raw

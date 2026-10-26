@@ -9,7 +9,7 @@ from app.api import background_tasks
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services import openclaw_routing as routing
+from app.services import openclaw_enqueue, openclaw_routing as routing
 from test_db_session import _FakePool, _FakeRawConnection
 
 
@@ -33,6 +33,7 @@ async def test_prepared_enqueue_defers_wake_until_commit(
 ) -> None:
     # Given
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
+    monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", AsyncMock(return_value=agent))
     sender = uuid4()
     prepared = routing.PreparedOpenClawMessage(agent, "relay payload", "primary", "openai/model", "complex", "rule")
     created = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content=prepared.content)
@@ -102,6 +103,7 @@ async def test_prepared_enqueue_suppresses_duplicate_user_message(
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
     sender = uuid4()
     prepared = routing.PreparedOpenClawMessage(agent, "hello", "secondary", "openai/cheap", "manageable", "rule")
+    monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", AsyncMock(return_value=agent))
     pending = GatewayMessageRecord(
         id=uuid4(), agent_id=agent.id, content="hello", sender_user_id=sender, conversation_id="thread"
     )

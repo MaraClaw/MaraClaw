@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { AgentOpenClawUpgrade } from '@/components/agent-openclaw-upgrade'
 import { AgentDeletionRequest } from '@/components/agent-deletion-request'
 import { AgentSetupStatus } from '@/components/agent-setup-status'
+import { AgentLifecycleStatus } from '@/components/agent-lifecycle-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,9 +15,13 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { useAgentSetup } from '@/hooks/use-agent-setup'
+import { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
+import { useAgentExpiry } from '@/hooks/use-agent-expiry'
+import { agentLifecycleKey } from '@/hooks/agent-lifecycle-options'
 import { agentUpdateKey } from '@/hooks/openclaw-update-options'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { getAgentMetrics, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
+import { canRequestAgentDeletion } from '@/lib/agent-lifecycle-policy'
 
 export function AgentSettingsPage() {
   const scope = useWorkspaceSession()
@@ -29,6 +34,8 @@ export function AgentSettingsPage() {
   const isOrgAdmin = user?.role === 'org_admin'
   const canManage = agent.access_level === 'manage' || isCreator
   const setup = useAgentSetup(agent.id, canManage)
+  const lifecycle = useAgentLifecycle(agent.id, canManage)
+  const expired = useAgentExpiry(agent)
   const [name, setName] = useState(agent.name)
   const [bio, setBio] = useState(agent.bio ?? '')
   const [welcome, setWelcome] = useState(agent.welcome_message ?? '')
@@ -47,6 +54,7 @@ export function AgentSettingsPage() {
     onSuccess() {
       void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
       void queryClient.invalidateQueries({ queryKey: agentUpdateKey(agent.id) })
+      void queryClient.invalidateQueries({ queryKey: agentLifecycleKey(agent.id), exact: true })
     },
     onError() {
       toast.error('Unable to start this agent')
@@ -56,6 +64,7 @@ export function AgentSettingsPage() {
     mutationFn: () => stopAgent(agent.id),
     onSuccess() {
       void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
+      void queryClient.invalidateQueries({ queryKey: agentLifecycleKey(agent.id), exact: true })
     },
     onError() {
       toast.error('Unable to stop this agent')
@@ -88,8 +97,8 @@ export function AgentSettingsPage() {
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
-          <Badge variant="soft">{agent.status}</Badge>
-          {agent.is_expired ? <Badge>Expired</Badge> : null}
+          <Badge variant="soft" aria-label="Recorded runtime status">{agent.status}</Badge>
+          {expired ? <Badge>Expired</Badge> : null}
           {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
         </div>
         {metrics.data ? (
@@ -106,12 +115,13 @@ export function AgentSettingsPage() {
         ) : null}
       </div>
       <AgentOpenClawUpgrade agentId={agent.id} status={agent.status} query={openclaw} />
-      {canManage ? <AgentSetupStatus query={setup} /> : null}
+      {canManage ? <AgentLifecycleStatus query={lifecycle} expired={expired} upgrading={upgrading} /> : null}
+      {canManage ? <AgentSetupStatus query={setup} retryAllowed={lifecycle.confirmed && Boolean(lifecycle.data?.availability.can_retry_setup) && !expired && !upgrading} /> : null}
       <div className="flex flex-wrap items-start gap-2">
         {canManage ? (
           <>
             {agent.status !== 'running' ? (
-              <Button size="sm" variant="outline" disabled={start.isPending || upgrading || !setup.ready} onClick={() => start.mutate()}>
+              <Button size="sm" variant="outline" disabled={start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start} onClick={() => start.mutate()}>
                 Start
               </Button>
             ) : null}
@@ -120,7 +130,7 @@ export function AgentSettingsPage() {
             </Button>
           </>
         ) : null}
-        {isCreator && !agent.is_system ? (
+        {canRequestAgentDeletion(agent, user) ? (
           <AgentDeletionRequest key={agent.id} agentId={agent.id} agentName={agent.name} upgrading={upgrading} />
         ) : null}
       </div>

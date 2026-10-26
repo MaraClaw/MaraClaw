@@ -4,11 +4,13 @@ from uuid import UUID
 
 from app.core.row_memo import memo_drop
 from app.dao.agent_start_dao import agent_start_dao
+from app.dao.agent_start_retry_dao import agent_start_retry_dao
 from app.db.connection import DbConnection
 from app.db.pool import get_pool
 from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
+from app.records.agent_start_retry import StartFailureCode
 
 
 @asynccontextmanager
@@ -30,6 +32,7 @@ class PostgresStartStore:
                 if active is not None:
                     return operation, active
             operation = await agent_start_dao.begin(db, agent)
+            await agent_start_retry_dao.initialize(db, operation)
         return operation, agent
 
     async def recover(self, operation: AgentStartOperation) -> AgentRecord | None:
@@ -45,6 +48,27 @@ class PostgresStartStore:
     async def outstanding(self) -> list[AgentStartOperation]:
         async with committed_start_connection() as db:
             return await agent_start_dao.pending(db)
+
+    async def reserve(self, operation: AgentStartOperation, *, due_only: bool = False) -> bool:
+        async with committed_start_connection() as db:
+            if await agent_start_dao.active_agent(db, operation) is None:
+                return False
+            return await agent_start_retry_dao.reserve(db, operation, due_only=due_only)
+
+    async def fail(self, operation: AgentStartOperation, code: StartFailureCode) -> None:
+        async with committed_start_connection() as db:
+            await agent_start_retry_dao.fail(db, operation, code)
+
+    async def defer(self, operation: AgentStartOperation, *, upgrade: bool = False) -> None:
+        async with committed_start_connection() as db:
+            await agent_start_retry_dao.defer(db, operation, upgrade=upgrade)
+
+    async def rotate_cleanup(self, operation: AgentStartOperation) -> None:
+        async with committed_start_connection() as db:
+            await db.execute(
+                "UPDATE agent_start_operations SET updated_at=now() WHERE operation_id=%(op)s AND state='cancelled'",
+                {"op": operation.operation_id},
+            )
 
     async def cancel(self, agent_id: UUID) -> None:
         async with committed_start_connection() as db:

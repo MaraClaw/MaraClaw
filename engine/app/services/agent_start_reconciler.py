@@ -1,5 +1,4 @@
 from anyio import sleep, to_thread
-from fastapi import HTTPException
 from psycopg import Error as PsycopgError
 from python_on_whales.exceptions import DockerException, NoSuchContainer
 from redis.exceptions import RedisError
@@ -11,15 +10,41 @@ from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.services.agent_manager import agent_manager
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name, inspect_guest_container
 from app.services.guest_start import start_operation_id
-from app.services.openclaw_update_exclusion import locked_fresh_agent
+from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
 
-async def execute_start(operation: AgentStartOperation, agent: AgentRecord) -> bool:
+async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, due_only: bool = False) -> bool:
+    if not await start_store.reserve(operation, due_only=due_only):
+        return False
+    try:
+        published = await _execute_start(operation, agent)
+    except GuestAdmissionError as exc:
+        code = "capacity_exceeded" if exc.code == "guest_memory_capacity_exceeded" else "configuration_failed"
+        await start_store.fail(operation, code)
+        raise
+    except GuestStartPreflightError as exc:
+        await start_store.fail(operation, exc.code)
+        raise
+    except GuestOwnershipError:
+        await start_store.fail(operation, "ownership_conflict")
+        raise
+    except DockerException, OSError:
+        await start_store.fail(operation, "runtime_failed")
+        raise
+    except DbError, PsycopgError, RedisError:
+        await start_store.fail(operation, "publication_failed")
+        raise
+    if not published:
+        await start_store.fail(operation, "publication_failed")
+    return published
+
+
+async def _execute_start(operation: AgentStartOperation, agent: AgentRecord) -> bool:
     token = start_operation_id.set(operation.operation_id)
     try:
         reference = await agent_manager.start_container(agent)
@@ -83,27 +108,36 @@ async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
         )
 
 
-async def reconcile_agent_start(operation: AgentStartOperation) -> None:
-    if operation.state == "cancelled":
-        async with setup_workspace_lock(agent_manager._agent_dir(operation.agent_id)):
-            await cleanup_cancelled_start(operation)
-        return
-    try:
-        async with locked_fresh_agent(operation.agent_id):
-            agent = await start_store.recover(operation)
-            if agent is not None:
-                await execute_start(operation, agent)
-            else:
+async def reconcile_agent_start(operation: AgentStartOperation, *, due_only: bool = False) -> None:
+    async def section() -> None:
+        try:
+            if operation.state != "cancelled":
+                await assert_no_active_run(operation.agent_id)
+            async with setup_workspace_lock(agent_manager._agent_dir(operation.agent_id), timeout_seconds=1):
+                if operation.state == "cancelled":
+                    await cleanup_cancelled_start(operation)
+                    return
+                await assert_no_active_run(operation.agent_id)
+                agent = await start_store.recover(operation)
+                if agent is not None:
+                    await execute_start(operation, agent, due_only=due_only)
+                    return
                 await cleanup_cancelled_start(operation)
-    except HTTPException as exc:
-        if exc.status_code in (404, 423):
-            await start_store.cancel(operation.agent_id)
+        except OpenClawUpdateInProgressError:
+            await start_store.defer(operation, upgrade=True)
+        except WorkspaceLockTimeoutError:
+            await start_store.defer(operation)
+        finally:
+            if operation.state == "cancelled":
+                await start_store.rotate_cleanup(operation)
+
+    await drain_on_cancel(section())
 
 
 async def reconcile_agent_starts_once() -> None:
     for operation in await start_store.outstanding():
         try:
-            await reconcile_agent_start(operation)
+            await reconcile_agent_start(operation, due_only=True)
         except (
             DbError,
             PsycopgError,

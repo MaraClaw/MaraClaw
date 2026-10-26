@@ -12,6 +12,32 @@ from app.services import agent_setup
 setup_case = test_agent_setup.setup_case
 
 
+@pytest.fixture(autouse=True)
+def optional_queue(monkeypatch):
+    monkeypatch.setattr(agent_setup.agent_setup_mcp_dao, "claim", AsyncMock(return_value=None))
+
+
+async def test_worker_services_required_and_optional_queues_fairly(monkeypatch):
+    required, optional = object(), object()
+    order = []
+
+    async def run_required(_claim):
+        order.append("required")
+
+    async def run_optional(_claim):
+        order.append("optional")
+
+    monkeypatch.setattr(
+        agent_setup.agent_setup_dao, "claim", AsyncMock(side_effect=[required, required, asyncio.CancelledError()])
+    )
+    monkeypatch.setattr(agent_setup.agent_setup_mcp_dao, "claim", AsyncMock(return_value=optional))
+    monkeypatch.setattr(agent_setup, "run_agent_setup", run_required)
+    monkeypatch.setattr(agent_setup, "run_agent_setup_mcp", run_optional)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_setup.start_agent_setup_worker()
+    assert order == ["required", "optional", "required", "optional"]
+
+
 @pytest.mark.parametrize("error", [DbError("offline", orig=OperationalError()), OSError(), PoolTimeout()])
 async def test_worker_survives_expected_claim_failure(monkeypatch, error):
     # Given a transient claim failure followed by an idle queue.

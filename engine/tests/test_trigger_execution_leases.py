@@ -350,9 +350,10 @@ async def test_partial_lease_loss_stops_invocation_and_fails_remaining_owned_row
 
 
 def fake_invoker(monkeypatch, trigger, llm):
+    from app.records.agent import AgentRecord
     from app.services import audit_logger, enterprise_llm, llm as llm_module
 
-    agent = SimpleNamespace(
+    agent = AgentRecord(
         id=trigger.agent_id,
         is_expired=False,
         primary_model_id=uuid4(),
@@ -377,7 +378,7 @@ def fake_invoker(monkeypatch, trigger, llm):
     async def nothing(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(invoker.agent_dao, "get", get_agent)
+    monkeypatch.setattr(invoker, "load_agent_for_new_work", get_agent)
     monkeypatch.setattr(invoker.llm_model_dao, "get", get_model)
     monkeypatch.setattr(enterprise_llm, "model_usable_in_tenant", lambda *_args: True)
     monkeypatch.setattr(invoker.participant_dao, "get_by_type_ref", participant)

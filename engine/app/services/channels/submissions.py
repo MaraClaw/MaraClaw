@@ -21,12 +21,13 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.user import UserRecord
+from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channels.binding import bind_channel_conversation, persist_channel_user_message, resolve_bound_sender
 from app.services.channels.types import normalize_channel_type
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
-from app.services.quota_guard import charge_conversation_quota, check_agent_expired
+from app.services.quota_guard import charge_conversation_quota
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +162,7 @@ async def accept_channel_event(
             if _matching(await channel_event_receipt_dao.find(candidate), candidate):
                 return AcceptedChannelEvent(replayed=True)
             raise ChannelEventConflictError(event.config_id, event.provider, event.event_key)
-        await check_agent_expired(agent.id)
+        agent = await load_agent_for_new_work(agent.id)
         await channel_event_receipt_dao.lock_conversation(candidate, event.conversation_id)
         reply = await find_or_create_channel_session(
             agent_id=agent.id,

@@ -22,6 +22,7 @@ from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.gateway_report_delivery import GatewayReportDeliveryRecord, TerminalReason
+from app.services.agent_work_eligibility import agent_work_blocking_codes
 from app.services.channels.outbound_errors import ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_identity import preflight_outbound
 from app.services.channels.outbound_plan import build_plan, configured_outbound
@@ -100,6 +101,9 @@ async def _source(claim: GatewayReportDeliveryRecord) -> tuple[GatewayMessageRec
         raise _IdentityError("source_agent_unavailable")
     if agent.tenant_id != claim.tenant_id:
         raise _IdentityError("source_tenant_changed")
+    codes = await agent_work_blocking_codes(agent)
+    if codes:
+        raise InvalidReportDestinationError("Source agent work blocked: " + ",".join(codes))
     return message, agent
 
 
@@ -111,6 +115,9 @@ async def _agent_destination(claim: GatewayReportDeliveryRecord, message: Gatewa
         raise _IdentityError("destination_tenant_changed")
     if message.sender_agent_id != agent.id:
         raise _IdentityError("destination_relationship_changed")
+    codes = await agent_work_blocking_codes(agent)
+    if codes:
+        raise InvalidReportDestinationError("Destination agent work blocked: " + ",".join(codes))
     return agent
 
 

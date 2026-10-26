@@ -15,7 +15,8 @@ from app.core.logging import logger, new_trace_id
 from app.core.permissions import check_agent_access
 from app.core.row_memo import clear_row_memo
 from app.core.security import decrypt_data, encrypt_data, load_user_principal
-from app.dao import agent_dao, agent_setup_dao, agent_template_dao, skill_dao
+from app.dao import agent_dao, agent_setup_dao, agent_template_dao
+from app.dao.agent_setup_mcp_dao import agent_setup_mcp_dao
 from app.db.connection import DbConnection
 from app.db.errors import DbError
 from app.db.session import connection_ctx, flush_request_transaction
@@ -25,12 +26,13 @@ from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
+from app.services.agent_setup_mcp_worker import run_agent_setup_mcp
+from app.services.agent_setup_skills import resolve_setup_skills
 from app.services.agent_workspace import render_agent_files, write_missing_agent_files
 from app.services.gogcli_runtime import gogcli_skill_folder_names
 from app.services.okr_agent_hook import hook_new_agent
 from app.services.openclaw_keys import write_gateway_api_key
 from app.services.openclaw_update_exclusion import locked_fresh_agent
-from app.services.resource_discovery import import_mcp_from_smithery
 
 _WORKER_IO_ERRORS = (DbError, OperationalError, PoolTimeout, OSError)
 
@@ -99,20 +101,15 @@ async def persist_agent_setup(agent: AgentRecord, data: AgentCreate, raw_key: st
             servers = tuple(template.default_mcp_servers)
     if data.gogcli_enabled:
         folders.extend(gogcli_skill_folder_names())
-    skill_ids = (
-        set(data.skill_ids or [])
-        | await skill_dao.list_default_ids()
-        | await skill_dao.list_ids_by_folder_names(folders)
-    )
-    for skill in await skill_dao.list_with_files_by_ids(sorted(skill_ids)) if skill_ids else []:
+    for skill in await resolve_setup_skills(agent.tenant_id, data.skill_ids or [], folders):
         for file in skill.files:
             files[f"skills/{skill.folder_name}/{file.path}"] = file.content.encode()
     inputs = AgentSetupInputs(
         files={path: base64.b64encode(content).decode("ascii") for path, content in files.items()},
         gateway_key_encrypted=encrypt_data(raw_key, get_settings().SECRET_KEY),
-        mcp_servers=servers,
     )
     _ = await agent_setup_dao.create(obj_in={"agent_id": agent.id, "inputs": inputs.model_dump(mode="json")})
+    await agent_setup_mcp_dao.seed(agent, servers)
 
 
 async def _execute(claim: AgentSetupRecord) -> None:
@@ -126,15 +123,6 @@ async def _execute(claim: AgentSetupRecord) -> None:
         await write_missing_agent_files(
             agent.id, {path: base64.b64decode(content) for path, content in claim.inputs.files.items()}
         )
-        for server in claim.inputs.mcp_servers:
-            if not await agent_setup_dao.owns(claim):
-                return
-            try:
-                result = await import_mcp_from_smithery(server_id=server, agent_id=agent.id, config={})
-                if result.startswith("❌"):
-                    logger.warning("Agent setup optional MCP import failed agent_id={} server={}", agent.id, server)
-            except Exception:
-                logger.warning("Agent setup optional MCP import raised agent_id={} server={}", agent.id, server)
         if agent.tenant_id and await agent_setup_dao.owns(claim):
             await hook_new_agent(agent.id, agent.tenant_id)
 
@@ -197,13 +185,16 @@ async def start_agent_setup_worker() -> None:
         clear_row_memo()
         try:
             claim = await agent_setup_dao.claim()
+            if claim is not None:
+                await run_agent_setup(claim)
+            optional = await agent_setup_mcp_dao.claim()
+            if optional is not None:
+                await run_agent_setup_mcp(optional)
         except _WORKER_IO_ERRORS as exc:
             if not _expected_worker_io(exc):
                 raise
             logger.warning("Agent setup claim unavailable error_type={}", type(exc).__name__)
             await anyio.sleep(1)
             continue
-        if claim is None:
+        if claim is None and optional is None:
             await anyio.sleep(1)
-        else:
-            await run_agent_setup(claim)

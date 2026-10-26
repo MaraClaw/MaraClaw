@@ -10,7 +10,6 @@ from typing import TypedDict
 
 from app.core.json_types import json_as_str, json_as_str_or, json_object_from, mapping_from_row
 from app.core.logging import logger
-from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.participant_dao import participant_dao
@@ -18,6 +17,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.trigger import AgentTriggerRecord
 from app.schemas.chat_wire import ChatEventType
+from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
@@ -131,9 +131,7 @@ async def _run_trigger_invocation(
     from app.services.llm import call_llm
 
     try:
-        agent = await agent_dao.get(agent_id)
-        if not agent or agent.is_expired:
-            return "Agent not found or is expired"
+        agent = await load_agent_for_new_work(agent_id)
 
         if not agent.primary_model_id:
             logger.warning(f"Agent {agent.name} has no LLM model, skipping trigger invocation")
@@ -278,6 +276,7 @@ async def _run_trigger_invocation(
                 from_agent_name = candidate_name
                 break
 
+        agent = await load_agent_for_new_work(agent_id)
         reply = await call_llm(
             model=model,
             messages=messages,
@@ -295,6 +294,7 @@ async def _run_trigger_invocation(
 
         await hold.confirm()
         hold.ensure_held()
+        agent = await load_agent_for_new_work(agent_id)
         final_reply = reply or "".join(collected_content)
         is_a2a_internal = all(t.name == "a2a_wake" for t in triggers)
         notify_owner_user_id: str | None = None
