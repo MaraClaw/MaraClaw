@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -13,7 +14,7 @@ from app.config import get_settings
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services.agent_start_store import start_store
-from app.services.guest_admission import GuestStartPreflightError
+from app.services.guest_admission import GuestStartPreflightError, guest_admission
 from app.services.guest_identity import inspect_guest_container, owned_guest_containers
 from app.services.guest_readiness import guest_ready
 
@@ -42,17 +43,32 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
             inspected = await to_thread.run_sync(inspect_guest_container, client, guest.id)
             if inspected.state.status not in ("running", "exited", "created"):
                 raise GuestStartPreflightError("Guest is not in a resumable state")
-            agent.container_id = guest.id
-            port = next(
-                (int(host) for port, host in guest.port_bindings if port == f"{settings.OPENCLAW_GATEWAY_PORT}/tcp"),
-                None,
-            )
-            agent.container_port = port or agent.container_port
-            operation = start_operation_id.get()
-            if operation is not None and not await start_store.observe(operation, agent):
-                raise GuestStartPreflightError("Guest start was superseded")
-            if inspected.state.status in ("exited", "created"):
-                await to_thread.run_sync(client.container.start, guest.id)
+            resume = inspected.state.status in ("exited", "created")
+            async with AsyncExitStack() as stack:
+                if resume:
+                    await stack.enter_async_context(
+                        guest_admission(
+                            client,
+                            agent,
+                            manager._agent_dir(agent.id).parent,
+                            memory_limit=inspected.host_config.memory or 0,
+                        )
+                    )
+                agent.container_id = guest.id
+                port = next(
+                    (
+                        int(host)
+                        for port, host in guest.port_bindings
+                        if port == f"{settings.OPENCLAW_GATEWAY_PORT}/tcp"
+                    ),
+                    None,
+                )
+                agent.container_port = port or agent.container_port
+                operation = start_operation_id.get()
+                if operation is not None and not await start_store.observe(operation, agent):
+                    raise GuestStartPreflightError("Guest start was superseded")
+                if resume:
+                    await to_thread.run_sync(client.container.start, guest.id)
         else:
             reference = await manager.replace_container(agent, create_only=True, operation_id=start_operation_id.get())
             if reference is None:
@@ -65,9 +81,11 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                 # A failed new writer is quiesced; its durable operation retains discovery ownership.
                 await to_thread.run_sync(client.container.stop, reference)
             agent.status = AgentStatus.ERROR
-            raise GuestStartPreflightError("Guest did not become ready")
+            raise GuestStartPreflightError("Guest did not become ready", code="readiness_failed")
         agent.status = AgentStatus.RUNNING
         agent.last_active_at = datetime.now(UTC)
         return reference
-    except (ClientNotFoundError, DockerException) as exc:
+    except DockerException as exc:
+        raise GuestStartPreflightError("Guest start inspection or readiness failed", code="runtime_failed") from exc
+    except ClientNotFoundError as exc:
         raise GuestStartPreflightError("Guest start inspection or readiness failed") from exc

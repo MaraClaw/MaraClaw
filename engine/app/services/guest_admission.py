@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Literal, override
 
 from anyio import to_thread
 from python_on_whales import ClientNotFoundError, DockerClient
@@ -19,6 +19,7 @@ settings = get_settings()
 @dataclass(eq=False, slots=True)
 class GuestStartPreflightError(RuntimeError):
     reason: str
+    code: Literal["configuration_failed", "readiness_failed", "runtime_failed"] = "configuration_failed"
 
     @override
     def __str__(self) -> str:
@@ -27,7 +28,7 @@ class GuestStartPreflightError(RuntimeError):
 
 @dataclass(eq=False, slots=True)
 class GuestAdmissionError(RuntimeError):
-    code: str
+    code: Literal["guest_memory_unbounded", "guest_memory_capacity_exceeded"]
     message: str
 
     @override
@@ -35,7 +36,10 @@ class GuestAdmissionError(RuntimeError):
         return self.message
 
 
-def _check_capacity(client: DockerClient, agent: AgentRecord) -> None:
+def _check_capacity(client: DockerClient, agent: AgentRecord, memory_limit: int | None = None) -> None:
+    requested = settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES if memory_limit is None else memory_limit
+    if requested <= 0:
+        raise GuestAdmissionError("guest_memory_unbounded", "Guest has no hard memory limit")
     guests = client.container.list(
         all=True,
         filters=[
@@ -53,20 +57,24 @@ def _check_capacity(client: DockerClient, agent: AgentRecord) -> None:
         if memory <= 0:
             raise GuestAdmissionError("guest_memory_unbounded", "Another running guest has no hard memory limit")
         used += memory
-    if used + settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES > settings.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES:
+    if used + requested > settings.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES:
         raise GuestAdmissionError("guest_memory_capacity_exceeded", "Guest aggregate memory capacity is exhausted")
 
 
 @asynccontextmanager
-async def guest_admission(client: DockerClient, agent: AgentRecord, agents_root: Path) -> AsyncGenerator[None]:
+async def guest_admission(
+    client: DockerClient, agent: AgentRecord, agents_root: Path, *, memory_limit: int | None = None
+) -> AsyncGenerator[None]:
     if settings.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES == 0:
         yield
         return
-    # Callers hold the per-agent workspace lock first; this lock spans check, replacement and Docker run.
+    # Callers hold the per-agent lock first; this lock spans the check and Docker run or resume.
     async with AsyncExitStack() as stack:
         try:
             await stack.enter_async_context(setup_workspace_lock(agents_root / "_guest_admission"))
-            await to_thread.run_sync(_check_capacity, client, agent)
-        except (OSError, ClientNotFoundError, DockerException) as exc:
+            await to_thread.run_sync(_check_capacity, client, agent, memory_limit)
+        except DockerException as exc:
+            raise GuestStartPreflightError("Could not establish guest memory capacity", code="runtime_failed") from exc
+        except (OSError, ClientNotFoundError) as exc:
             raise GuestStartPreflightError("Could not establish guest memory capacity") from exc
         yield

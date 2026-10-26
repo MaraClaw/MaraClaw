@@ -119,15 +119,14 @@ def guest_surface(start_db, tmp_path, monkeypatch):
     docker = Docker()
     probes = []
 
-    def execute(reference, command):
-        assert "/readyz" in command[-1]
+    def probe(_client, reference, _timeout):
         probes.append(reference)
-        return ""
+        return True
 
     def resume(reference):
         docker.inspect(reference).state.status = "running"
 
-    monkeypatch.setattr(docker, "execute", execute, raising=False)
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
     monkeypatch.setattr(docker, "start", resume, raising=False)
     monkeypatch.setattr(manager, "docker_client", docker)
     monkeypatch.setattr(manager, "_agent_dir", lambda identifier: tmp_path / str(identifier))

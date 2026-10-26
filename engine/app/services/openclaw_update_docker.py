@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from python_on_whales import DockerClient
 from python_on_whales.exceptions import NoSuchContainer, NoSuchImage
 
-from app.config import get_settings
 from app.services.guest_identity import AGENT_LABEL
+from app.services.guest_probe import probe_guest
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,13 +32,6 @@ def _repository(reference: str) -> str:
     """The reference without its tag (a colon followed by a slash belongs to a registry port)."""
     head, separator, tail = reference.rpartition(":")
     return head if separator and "/" not in tail else reference
-
-
-def _readiness_script(port: int) -> str:
-    return (
-        f"fetch('http://127.0.0.1:{port}/readyz',{{signal:AbortSignal.timeout(5000)}})"
-        ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
-    )
 
 
 class UpgradeDocker:
@@ -112,12 +105,6 @@ class UpgradeDocker:
             # ty misbinds ContainerCLI.remove through DockerClient.container; call the descriptor explicitly.
             type(self.client.container).remove(self.client.container, [reference], force=True)
 
-    def ready(self, reference: str) -> bool:
+    def ready(self, reference: str, timeout: float) -> bool:
         """One in-guest ``/readyz`` probe; Docker liveness and engine-side HTTP prove nothing here."""
-        try:
-            _ = self.client.container.execute(
-                reference, ["node", "-e", _readiness_script(get_settings().OPENCLAW_GATEWAY_PORT)]
-            )
-        except Exception:
-            return False
-        return True
+        return probe_guest(self.client, reference, timeout)
