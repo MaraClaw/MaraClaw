@@ -13,6 +13,7 @@ from app.api.agentbay_control import _perform_drag
 from app.core.json_types import JsonObject, json_object_from_response
 from app.records.user import UserRecord
 from app.services import agentbay_client, agentbay_shared_sessions, take_control_state as state
+from app.services.agent_credential_capture import agent_credential_dao
 from take_control_fakes import SharedRedis
 from take_control_sdk_fakes import SDKStore, install
 
@@ -85,8 +86,8 @@ async def surface(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ControlSurfa
 
     monkeypatch.setattr(control, "check_agent_access", access)
     monkeypatch.setattr(control, "_get_client", get_client)
-    monkeypatch.setattr(control.agent_credential_dao, "list_for_agent", list_credentials)
-    monkeypatch.setattr(control.agent_credential_dao, "create", create_credential)
+    monkeypatch.setattr(agent_credential_dao, "list_for_agent", list_credentials)
+    monkeypatch.setattr(agent_credential_dao, "create", create_credential)
     monkeypatch.setattr(control, "_tc_interaction_locks", {})
     app = FastAPI()
     app.include_router(control.router)
@@ -102,7 +103,7 @@ async def surface(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ControlSurfa
 
 CALLS: list[tuple[str, JsonObject]] = [
     ("lock", {}),
-    ("unlock", {"platform_hint": "portal.example"}),
+    ("unlock", {"platform_hint": "portal.example", "capture": {"mode": "create"}}),
     ("click", {"x": 10, "y": 20}),
     ("type", {"text": "hello"}),
     ("press_keys", {"keys": ["Enter"]}),

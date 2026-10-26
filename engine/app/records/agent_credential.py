@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.core.json_types import datetime_from_row, str_from_row, uuid_from_row
+from app.core.json_types import datetime_from_row, int_from_row, str_from_row, uuid_from_row
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialRevision:
+    credential_id: UUID
+    agent_id: UUID
+    revision: int
 
 
 @dataclass(slots=True)
@@ -17,6 +24,7 @@ class AgentCredentialRecord:
     id: UUID
     agent_id: UUID
     platform: str
+    revision: int = 1
     credential_type: str = "website"
     display_name: str = ""
     cookies_json: str | None = None
@@ -33,6 +41,7 @@ class AgentCredentialRecord:
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
             platform=str_from_row(row["platform"]),
+            revision=int_from_row(row["revision"]),
             credential_type=str_from_row(row.get("credential_type"), "website") or "website",
             display_name=str_from_row(row.get("display_name")),
             cookies_json=str_from_row(row["cookies_json"]) or None,

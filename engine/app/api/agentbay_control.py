@@ -5,28 +5,27 @@ AgentBay session and managing the Take Control lock. When locked,
 the agent's automatic browser/computer tool execution is paused to
 prevent human-agent input collisions.
 
-Cookie export occurs automatically when the Take Control session ends.
+Cookie export requires explicit creation or revision-bound replacement intent.
 """
 
 import asyncio
-import json
 import uuid
 from collections.abc import AsyncIterator, Mapping
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
-from app.config import get_settings
+from app.api.agent_credential_validation import CredentialSafeRoute
 from app.core.domain.control import ControlEnvironment, ControlStatus
-from app.core.json_types import json_loads_value
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
-from app.core.security import encrypt_data, get_current_user
-from app.dao.agent_credential_dao import agent_credential_dao
+from app.core.security import get_current_user
+from app.dao.agent_credential_dao import CredentialRevisionConflictError, revision_conflict_detail
 from app.records.user import UserRecord
+from app.schemas.agent_credential import CredentialCapture
 from app.services import take_control_state as control_state
+from app.services.agent_credential_capture import CapturePlan, CaptureTargetMissingError, bind_capture, capture_cookies
 
 if TYPE_CHECKING:
     from app.services.agentbay_client import AgentBayClient
@@ -48,7 +47,10 @@ async def _state_errors() -> AsyncIterator[None]:
 
 
 router = APIRouter(
-    prefix="/agents/{agent_id}/control", tags=["agentbay-control"], dependencies=[Depends(_state_errors)]
+    prefix="/agents/{agent_id}/control",
+    tags=["agentbay-control"],
+    dependencies=[Depends(_state_errors)],
+    route_class=CredentialSafeRoute,
 )
 
 type AgentBaySessionKey = tuple[uuid.UUID, str, str]
@@ -168,6 +170,13 @@ class UnlockRequest(ControlRequest):
     session_id: str
     export_cookies: bool = True  # whether to export cookies on exit
     platform_hint: str | None = None  # domain to associate cookies with
+    capture: CredentialCapture | None = None
+
+    @model_validator(mode="after")
+    def require_capture_intent(self) -> UnlockRequest:
+        if self.export_cookies and self.platform_hint not in (None, "") and self.capture is None:
+            raise ValueError("Cookie export requires an explicit capture intent")
+        return self
 
 
 # ── Helpers ──
@@ -776,165 +785,41 @@ async def control_unlock(
 
     exported = False
     export_count = 0
+    capture_error: HTTPException | None = None
 
     try:
-        # Export cookies if requested (non-critical - lock is released regardless)
-        if data.export_cookies and data.platform_hint not in (None, ""):
+        if (
+            data.export_cookies
+            and data.platform_hint is not None
+            and data.platform_hint != ""
+            and data.capture is not None
+        ):
             try:
+                target = await bind_capture(agent_id, data.capture)
                 client = await _get_client(agent_id, data.session_id, env_type=lease.image_type)
-                export_count = await _export_cookies_from_session(client, agent_id, data.platform_hint)
-                exported = True
-                logger.info(
-                    f"[TakeControl] Cookies exported: agent={agent_id}, "
-                    f"platform={data.platform_hint}, count={export_count}"
-                )
+                export_count = await capture_cookies(client, CapturePlan(agent_id, data.platform_hint, target))
+                exported = export_count > 0
+                logger.info("[TakeControl] Cookie capture completed: agent={}, count={}", agent_id, export_count)
+            except CredentialRevisionConflictError:
+                capture_error = HTTPException(status_code=409, detail=revision_conflict_detail())
+            except CaptureTargetMissingError:
+                capture_error = HTTPException(status_code=404, detail="Credential not found")
             except control_state.TakeControlLostError, control_state.TakeControlUnavailableError:
                 raise
-            except Exception as e:
-                logger.warning(f"[TakeControl] Cookie export failed (non-fatal): {e}")
+            except Exception as error:
+                logger.warning("[TakeControl] Cookie capture failed: error_type={}", type(error).__name__)
     finally:
-        await control_state.release(key, str(current_user.id), data.owner_token)
+        try:
+            await control_state.release(key, str(current_user.id), data.owner_token)
+        except control_state.TakeControlLostError, control_state.TakeControlUnavailableError:
+            if capture_error is None:
+                raise
+
+    if capture_error is not None:
+        raise capture_error
 
     return {
         "status": ControlStatus.UNLOCKED,
         "cookies_exported": exported,
         "cookie_count": export_count,
     }
-
-
-async def _export_cookies_from_session(client: AgentBayClient, agent_id: uuid.UUID, platform_hint: str) -> int:
-    """Export cookies from the current browser session via CDP and store encrypted.
-
-    Uses Playwright's connectOverCDP to read all browser cookies, then upserts
-    into the agent_credentials table for the matching platform.
-
-    Returns the number of cookies exported.
-    """
-    # Build and execute a Node.js script to export ALL cookies via CDP.
-    #
-    # Key design decisions:
-    # 1. We call context.cookies() WITHOUT a URL filter, which returns every cookie
-    #    in the browser profile regardless of which page is currently open.
-    # 2. We sanitize each cookie object before exporting:
-    #    - Normalize 'sameSite' to the exact casing Playwright addCookies() expects
-    #      ('Strict' | 'Lax' | 'None'). CDP returns lowercase; Playwright wants title-case.
-    #    - Strip 'expires: -1' (session cookies) - Playwright will reject negative expiry.
-    #    - Ensure 'domain' does NOT have a leading dot for addCookies() compatibility.
-    #      (Playwright's addCookies prefers 'example.com' not '.example.com'.)
-    import base64
-
-    export_script = r"""
-const { chromium } = require('/usr/local/lib/node_modules/playwright');
-let browser;
-(async () => {
-    let ok = false;
-    try {
-        browser = await chromium.connectOverCDP('http://localhost:9222');
-        const context = browser.contexts()[0];
-        // Fetch ALL cookies from the browser profile (no URL filter = full export)
-        const rawCookies = await context.cookies();
-
-        // Sanitize cookies so they can be re-injected by Playwright's addCookies()
-        const sameSiteMap = { none: 'None', lax: 'Lax', strict: 'Strict' };
-        const cookies = rawCookies.map(c => {
-            const out = { ...c };
-            // Normalize sameSite casing
-            if (out.sameSite != null) {
-                out.sameSite = sameSiteMap[String(out.sameSite).toLowerCase()] || 'Lax';
-            }
-            // Remove negative or zero expires (session cookies) - addCookies rejects them
-            if (out.expires != null && out.expires <= 0) {
-                delete out.expires;
-            }
-            // Ensure domain has leading dot so it matches subdomains.
-            // Playwright's context.cookies() strips the leading dot from
-            // domain cookies, turning them into host-only. Chrome's CDP
-            // Network.setCookie needs the dot to match subdomains (e.g.,
-            // ".xiaohongshu.com" matches www.xiaohongshu.com).
-            if (out.domain && !out.domain.startsWith('.')) {
-                out.domain = '.' + out.domain;
-            }
-            return out;
-        });
-
-        console.log('COOKIES_EXPORT:' + JSON.stringify(cookies));
-        ok = true;
-    } catch (e) {
-        console.error('EXPORT_FAIL:' + e.message);
-    } finally {
-        if (browser) await browser.close().catch(() => {});
-    }
-    process.exit(ok ? 0 : 1);
-})();
-"""
-    # Use base64 encoding to write script to current directory (not /tmp, which may lack write perms)
-    script_b64 = base64.b64encode(export_script.encode("utf-8")).decode("ascii")
-    script_path = f"tc_export_cookies_{uuid.uuid4().hex}.js"
-    write_result = _command_mapping(
-        await client.command_exec(f"echo '{script_b64}' | /usr/bin/base64 -d > {script_path}")
-    )
-    logger.info(
-        f"[TakeControl] Cookie export script write: success={write_result.get('success')}, stderr={str(write_result.get('stderr', ''))[:100]}"
-    )
-
-    result = _command_mapping(
-        await client.command_exec(f"node {script_path}; result=$?; rm -f {script_path}; exit $result", timeout_ms=15000)
-    )
-    stdout = str(result.get("stdout", "") or "")
-    stderr = str(result.get("stderr", "") or "")
-    logger.info(
-        f"[TakeControl] Cookie export script exec: success={result.get('success')}, stdout_len={len(stdout)}, stderr={stderr[:200]}"
-    )
-
-    if "COOKIES_EXPORT:" not in stdout:
-        logger.warning(f"[TakeControl] Cookie export script failed: {stdout}")
-        return 0
-
-    # Parse the exported cookies JSON
-    cookies_line: list[str] = [line for line in stdout.split("\n") if "COOKIES_EXPORT:" in line]
-    if not cookies_line:
-        return 0
-
-    cookies_json_str: str = cookies_line[0].split("COOKIES_EXPORT:", 1)[1].strip()
-    try:
-        cookies_raw = json_loads_value(cookies_json_str)
-    except json.JSONDecodeError:
-        logger.warning("[TakeControl] Failed to parse exported cookies JSON")
-        return 0
-
-    if not isinstance(cookies_raw, list) or not cookies_raw:
-        return 0
-
-    # Encrypt and store
-    settings = get_settings()
-    encrypted_cookies = encrypt_data(cookies_json_str, settings.SECRET_KEY)
-
-    creds = await agent_credential_dao.list_for_agent(agent_id)
-    existing = next((c for c in creds if c.platform == platform_hint), None)
-    now = datetime.now(UTC)
-
-    if existing:
-        _ = await agent_credential_dao.update(
-            db_obj=existing,
-            obj_in={
-                "cookies_json": encrypted_cookies,
-                "cookies_updated_at": now,
-                "last_login_at": now,
-                "status": "active",
-            },
-        )
-    else:
-        _ = await agent_credential_dao.create(
-            obj_in={
-                "agent_id": agent_id,
-                "credential_type": "website",
-                "platform": platform_hint,
-                "display_name": platform_hint,
-                "cookies_json": encrypted_cookies,
-                "cookies_updated_at": now,
-                "last_login_at": now,
-                "status": "active",
-            },
-        )
-
-    return len(cookies_raw)
