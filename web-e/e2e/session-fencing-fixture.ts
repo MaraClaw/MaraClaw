@@ -5,6 +5,7 @@ import type { TenantChoice, UserOut, userOutSchema } from '../src/lib/types/auth
 import type { AgentOutSchema } from '../src/lib/engine-contracts.generated'
 import type { OnboardingStatus } from '../src/lib/onboarding-api'
 import type { AgentOut } from '../src/lib/workspace-api'
+import { lifecycleReady } from './agent-lifecycle-data'
 
 export const tokenKey = 'maraclaw-enduser-token'
 export const originalToken = 'fencing-original-session'
@@ -122,6 +123,13 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         expect(request.method()).toBe('GET')
         expect(request.headers().authorization).toBe(`Bearer ${replacing ? switchToken : originalToken}`)
         await route.fulfill({ json: { setup_pending: false, state: null, failure_code: null, retryable: false } })
+        return
+      case `/api/agents/${originalAgent.id}/lifecycle`:
+      case `/api/agents/${replacementAgent.id}/lifecycle`:
+      case `/api/agents/${delayedAgent.id}/lifecycle`:
+        expect(request.method()).toBe('GET')
+        expect(request.headers().authorization).toBe(`Bearer ${replacing ? switchToken : originalToken}`)
+        await route.fulfill({ json: lifecycleReady })
         return
       case `/api/agents/${delayedAgent.id}/sessions`:
         await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })
