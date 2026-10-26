@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import JsonValue, TypeAdapter
 
+from app.api.agent_credentials import AgentCredentialPayload
 from app.core.domain.activity import ActivityAction
 from app.core.domain.agents import (
     AgentAccessReason,
@@ -34,6 +35,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "activity",
         "admin_search_analytics",
         "advanced",
+        "agent_credentials",
         "agent_deletion_requests",
         "agent_lifecycle",
         "agent_ownership_transfers",
@@ -113,6 +115,9 @@ def explicit_schemas() -> dict[str, JsonValue]:
         for enum_type in ENUM_TYPES
     }
     schemas["ChatServerEvent"] = CHAT_SERVER_EVENT_ADAPTER.json_schema(ref_template="#/components/schemas/{model}")
+    schemas["AgentCredentialPayload"] = TypeAdapter(AgentCredentialPayload).json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
     schemas["ApprovalDecisionRequest"] = ApprovalDecisionRequest.model_json_schema(
         ref_template="#/components/schemas/{model}"
     )

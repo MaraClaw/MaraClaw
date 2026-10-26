@@ -80,6 +80,15 @@ export type AgentPermissionScope = z.infer<typeof AgentPermissionScopeSchema>;
 export const AgentCreateSchema = z.looseObject({ ["agent_type"]: z.string().regex(new RegExp("^openclaw$", "u")).optional(), ["autonomy_policy"]: z.union([JsonInputObjectSchema, z.null()]).optional(), ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["bio"]: z.union([z.string(), z.null()]).optional(), ["boundaries"]: z.string().optional(), ["department_ids"]: z.array(z.guid()).optional(), ["fallback_model_id"]: z.union([z.guid(), z.null()]).optional(), ["gogcli_enabled"]: z.boolean().optional(), ["max_tokens_per_day"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["max_tokens_per_month"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["name"]: z.string().refine(value => [...value].length >= 2).refine(value => [...value].length <= 100), ["permission_access_level"]: PermissionAccessLevelSchema.optional(), ["permission_scope_ids"]: z.array(z.guid()).optional(), ["permission_scope_type"]: AgentPermissionScopeSchema.optional(), ["personality"]: z.string().optional(), ["primary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["role_description"]: z.string().refine(value => [...value].length <= 500).optional(), ["secondary_model_id"]: z.union([z.guid(), z.null()]).optional(), ["skill_ids"]: z.array(z.guid()).optional(), ["template_id"]: z.union([z.guid(), z.null()]).optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["welcome_message"]: z.union([z.string(), z.null()]).optional() });
 export type AgentCreate = z.infer<typeof AgentCreateSchema>;
 
+export const AgentCredentialCreateSchema = z.looseObject({ ["cookies_json"]: z.union([z.string(), z.null()]).optional(), ["credential_type"]: z.string().optional(), ["display_name"]: z.string().optional(), ["platform"]: z.string() });
+export type AgentCredentialCreate = z.infer<typeof AgentCredentialCreateSchema>;
+
+export const AgentCredentialPayloadSchema = z.looseObject({ ["agent_id"]: z.guid(), ["cookies_updated_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["credential_type"]: z.string(), ["display_name"]: z.string(), ["has_cookies"]: z.boolean(), ["id"]: z.guid(), ["last_injected_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["last_login_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["platform"]: z.string(), ["revision"]: z.number().refine(Number.isInteger), ["status"]: z.string(), ["updated_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]) });
+export type AgentCredentialPayload = z.infer<typeof AgentCredentialPayloadSchema>;
+
+export const AgentCredentialUpdateSchema = z.looseObject({ ["cookies_json"]: z.union([z.string(), z.null()]).optional(), ["credential_type"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["expected_revision"]: z.number().gt(0).refine(Number.isInteger), ["platform"]: z.union([z.string(), z.null()]).optional(), ["status"]: z.union([z.string(), z.null()]).optional() });
+export type AgentCredentialUpdate = z.infer<typeof AgentCredentialUpdateSchema>;
+
 export const AgentInstalledToolResponseSchema = z.looseObject({ ["agent_id"]: z.string(), ["agent_tool_id"]: z.string(), ["category"]: z.string(), ["configured"]: z.boolean(), ["description"]: z.string(), ["enabled"]: z.boolean(), ["installed_at"]: z.union([z.string(), z.null()]), ["installed_by_agent_id"]: z.union([z.string(), z.null()]), ["installed_by_agent_name"]: z.union([z.string(), z.null()]), ["mcp_server_name"]: z.union([z.string(), z.null()]), ["mcp_server_url"]: z.union([z.string(), z.null()]), ["mcp_tool_name"]: z.union([z.string(), z.null()]), ["source"]: z.string(), ["tool_display_name"]: z.string(), ["tool_id"]: z.string(), ["tool_name"]: z.string(), ["type"]: z.string() });
 export type AgentInstalledToolResponse = z.infer<typeof AgentInstalledToolResponseSchema>;
 
@@ -417,14 +426,20 @@ export type DepartmentMemberOut = z.infer<typeof DepartmentMemberOutSchema>;
 export const DepartmentMembersOutSchema = z.looseObject({ ["members"]: z.array(DepartmentMemberOutSchema) });
 export type DepartmentMembersOut = z.infer<typeof DepartmentMembersOutSchema>;
 
+export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
+export type DepartmentOut = z.infer<typeof DepartmentOutSchema>;
+
+export const DepartmentMergePreviewOutSchema = z.looseObject({ ["destination"]: DepartmentOutSchema, ["destination_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["destination_membership_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_membership_count"]: z.number().min(0).refine(Number.isInteger), ["source"]: DepartmentOutSchema, ["source_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["source_membership_count"]: z.number().min(0).refine(Number.isInteger) });
+export type DepartmentMergePreviewOut = z.infer<typeof DepartmentMergePreviewOutSchema>;
+
+export const DepartmentMergeRequestSchema = z.strictObject({ ["destination_id"]: z.guid() });
+export type DepartmentMergeRequest = z.infer<typeof DepartmentMergeRequestSchema>;
+
 export const DepartmentOptionOutSchema = z.looseObject({ ["id"]: z.guid(), ["name"]: z.string() });
 export type DepartmentOptionOut = z.infer<typeof DepartmentOptionOutSchema>;
 
 export const DepartmentOptionsOutSchema = z.looseObject({ ["departments"]: z.array(DepartmentOptionOutSchema) });
 export type DepartmentOptionsOut = z.infer<typeof DepartmentOptionsOutSchema>;
-
-export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
-export type DepartmentOut = z.infer<typeof DepartmentOutSchema>;
 
 export const DepartmentsOutSchema = z.looseObject({ ["assignments"]: z.array(AssignmentOutSchema), ["departments"]: z.array(DepartmentOutSchema) });
 export type DepartmentsOut = z.infer<typeof DepartmentsOutSchema>;
@@ -569,11 +584,14 @@ export const NotificationKind = { MENTION: "mention", PLAZA_REPLY: "plaza_reply"
 export const NotificationKindSchema = z.intersection(z.union([z.literal("mention"), z.literal("plaza_reply"), z.literal("plaza_comment"), z.literal("broadcast"), z.literal("approval_pending"), z.literal("approval_resolved"), z.literal("autonomy_l2"), z.literal("company_admission_pending"), z.literal("company_admission_resolved"), z.literal("company_admission_created"), z.literal("agent_deletion_requested"), z.literal("agent_deletion_resolved"), z.literal("agent_ownership_transferred"), z.literal("organization_welcome"), z.literal("system_alert"), z.literal("system"), z.literal("openclaw_update")]), z.string());
 export type NotificationKind = z.infer<typeof NotificationKindSchema>;
 
-export const NotificationReadResponseSchema = z.looseObject({ ["ok"]: z.boolean() });
-export type NotificationReadResponse = z.infer<typeof NotificationReadResponseSchema>;
-
 export const NotificationResponseSchema = z.looseObject({ ["archived_at"]: z.union([z.string(), z.null()]), ["body"]: z.string(), ["created_at"]: z.union([z.string(), z.null()]), ["id"]: z.string(), ["is_read"]: z.boolean(), ["link"]: z.union([z.string(), z.null()]), ["ref_id"]: z.union([z.string(), z.null()]), ["sender_name"]: z.union([z.string(), z.null()]), ["title"]: z.string(), ["type"]: NotificationKindSchema });
 export type NotificationResponse = z.infer<typeof NotificationResponseSchema>;
+
+export const NotificationPageResponseSchema = z.looseObject({ ["items"]: z.array(NotificationResponseSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type NotificationPageResponse = z.infer<typeof NotificationPageResponseSchema>;
+
+export const NotificationReadResponseSchema = z.looseObject({ ["ok"]: z.boolean() });
+export type NotificationReadResponse = z.infer<typeof NotificationReadResponseSchema>;
 
 export const NotificationUnreadCountResponseSchema = z.looseObject({ ["unread_count"]: z.number().refine(Number.isInteger) });
 export type NotificationUnreadCountResponse = z.infer<typeof NotificationUnreadCountResponseSchema>;
@@ -793,7 +811,16 @@ export type TriggerUpdate = z.infer<typeof TriggerUpdateSchema>;
 export const TypeRequestSchema = z.looseObject({ ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string(), ["text"]: z.string() });
 export type TypeRequest = z.infer<typeof TypeRequestSchema>;
 
-export const UnlockRequestSchema = z.looseObject({ ["export_cookies"]: z.boolean().optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["platform_hint"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
+export const CredentialCaptureCreateSchema = z.strictObject({ ["mode"]: z.intersection(z.literal("create"), z.string()) });
+export type CredentialCaptureCreate = z.infer<typeof CredentialCaptureCreateSchema>;
+
+export const CredentialCaptureReplaceSchema = z.strictObject({ ["credential_id"]: z.guid(), ["expected_revision"]: z.number().gt(0).refine(Number.isInteger), ["mode"]: z.intersection(z.literal("replace"), z.string()) });
+export type CredentialCaptureReplace = z.infer<typeof CredentialCaptureReplaceSchema>;
+
+export const CredentialCaptureSchema = z.union([CredentialCaptureCreateSchema, CredentialCaptureReplaceSchema]).refine(value => [CredentialCaptureCreateSchema, CredentialCaptureReplaceSchema].filter(schema => schema.safeParse(value).success).length === 1);
+export type CredentialCapture = z.infer<typeof CredentialCaptureSchema>;
+
+export const UnlockRequestSchema = z.looseObject({ ["capture"]: z.union([CredentialCaptureSchema, z.null()]).optional(), ["export_cookies"]: z.boolean().optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["platform_hint"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type UnlockRequest = z.infer<typeof UnlockRequestSchema>;
 
 export const UserActiveUpdateSchema = z.looseObject({ ["is_active"]: z.boolean() });
