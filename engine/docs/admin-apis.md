@@ -128,7 +128,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/platform-admins` | - | Platform admin list with `is_genesis` / `is_active` |
 | `PATCH` | `/api/admin/platform-admins/{user_id}/active` | `{ is_active }` | Genesis PA only. Cannot target self or genesis. Deactivating the last active PA is blocked. |
 | `GET` | `/api/admin/audit-logs` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100` | Admin action trail: actor, action, time, `changes` before/after |
-| `GET` | `/api/admin/audit-logs/page` | Query: `tenant_id?`, `actor_id?`, `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; deterministic older-event seek pagination. Page size clamped to 1-500. |
+| `GET` | `/api/admin/audit-logs/page` | Query: `tenant_id?`, `actor_id?`, `action?`, `start_at?`, `end_at?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; deterministic older-event seek pagination. Page size clamped to 1-500. |
 | `GET` | `/api/admin/platform-settings` | - | `{ invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
 | `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
@@ -260,7 +260,7 @@ does not include an existing-database migration.
 | `GET` | `/api/users/org-admins` | org_admin | - | Org admins in the caller's company (`is_genesis`, `is_active`) |
 | `PATCH` | `/api/users/org-admins/{user_id}/active` | genesis org_admin | `{ is_active }` | Other org admins in own company only. Cannot target self or genesis. |
 | `GET` | `/api/users/admin-audit-logs` | org_admin | Query: `action?`, `limit=100` | Company-scoped admin action trail |
-| `GET` | `/api/users/admin-audit-logs/page` | org_admin | Query: `action?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; tenant comes only from the authenticated principal. Page size clamped to 1-500. |
+| `GET` | `/api/users/admin-audit-logs/page` | org_admin | Query: `action?`, `start_at?`, `end_at?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; tenant comes only from the authenticated principal. Page size clamped to 1-500. |
 | `PATCH` | `/api/users/{user_id}/role` | platform / org | `{ role }` | **Genesis** org admin may set `org_admin` \| `member`. **Genesis** platform admin may set `platform_admin` \| `member`. Other admins may only set `member`. Genesis rows cannot change role. Blocks demoting the last *active* admin. |
 
 #### Audit page navigation
@@ -272,6 +272,13 @@ role, tenant and filters. Malformed or mismatched cursors return **400** after a
 the existing force-password-change gate still applies. Changing filters requires a fresh
 root request without a cursor. These pages are not a snapshot: refresh from the root to
 include new inserts or late commits. The existing array endpoints remain unchanged.
+
+Optional `start_at` and `end_at` are textual RFC 3339 timestamps with an explicit
+offset, normalized to UTC. The start is inclusive and the end exclusive. Numeric,
+malformed or offset-free values and equal or reversed bounds return **422**.
+Each cursor binds both normalized bounds, including their absence; equivalent
+offsets describe the same window, but reusing a cursor for another window returns
+**400**. Keep the applied bounds on every older-page request.
 
 #### `AdminUserSummary` (users router)
 
@@ -290,10 +297,17 @@ quota_max_agents, quota_agent_ttl_hours, agents_count, created_at, source
 | `GET` | `/api/departments` | Query: `tenant_id?` | `{ departments, assignments }`; assignments retain one `{ user_id, tenant_id, department_id }` row per membership, ordered by user then department UUID. |
 | `POST` | `/api/departments` | `{ name }` | **201** department. Names are trimmed; duplicate case-insensitive name → **409**. |
 | `PATCH` | `/api/departments/{department_id}` | `{ name }` | Rename without changing membership rows. |
+| `GET` | `/api/departments/{department_id}/merge-preview` | Query: `destination_id`, `tenant_id?` | Source/destination, membership and eligible custom-agent `use` grant counts, and an opaque `confirmation_token`. |
+| `POST` | `/api/departments/{department_id}/merge` | `{ destination_id, confirmation_token }`; query: `tenant_id?` | Confirms the reviewed preview under the apply transaction's locks. Missing or malformed confirmation returns **422**; changed names, memberships or eligible grants return **409** with `detail.code=department_merge_preview_changed`, before merge effects. |
 | `PUT` | `/api/users/{user_id}/departments` | `{ department_ids: UUID[] }` | Full-set replacement for `member` / `agent_admin`. Returns `{ user_id, tenant_id, department_ids }` with unique UUIDs in ascending order. `[]` clears all; missing/null/non-array input → **422**. Any missing or foreign department rejects the complete set with **422**, without changing memberships. |
 | `PUT` | `/api/users/{user_id}/department` | `{ department_id: UUID \| null }` | Existing singular contract: replace with one membership or clear all. Returns `{ user_id, tenant_id, department_id }`. |
 
 Members may belong to multiple org departments. Department agent grants are the union of memberships and confer only `use`, never `manage`; direct agent permissions are unchanged. Replacement freshly authorizes the actor and subject under tenant-first locks, then invalidates every agent affected by either the old or new set in the same transaction. Tenant transfer and promotion out of end-user roles clear all org department memberships; user deletion cascades membership removal.
+
+Merge confirmation checks current canonical identities, not just the displayed
+counts, and is bound to the tenant and selected source/destination. A conflict
+requires fetching a fresh preview and obtaining fresh consent; do not retry the
+mutation automatically. No persistent preview or change history is created.
 
 ### B3. Org user profile - `/api/org/*`
 
