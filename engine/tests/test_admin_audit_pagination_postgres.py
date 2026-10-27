@@ -46,20 +46,23 @@ async def seed_audit(scenario: AdmissionScenario, positions: list[tuple[int, dat
         )
 
 
-async def test_postgres_seek_walks_tied_microsecond_rows_once_and_exhausts_exact_full_page(
-    admission_scenario: AdmissionScenario, audit_client: AsyncClient
+@pytest.mark.parametrize("path", [_PLATFORM, _ORG])
+async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page(
+    admission_scenario: AdmissionScenario, audit_client: AsyncClient, path: str
 ):
     # Given six matching rows, including three UUID ties and adjacent microseconds.
     scenario = admission_scenario
     await seed_audit(
         scenario,
         [
+            (10, _NOW - timedelta(microseconds=3)),
             (1, _NOW - timedelta(microseconds=2)),
             (9, _NOW - timedelta(microseconds=1)),
             (3, _NOW),
             (5, _NOW),
             (7, _NOW),
             (8, _NOW + timedelta(microseconds=1)),
+            (11, _NOW + timedelta(microseconds=2)),
         ],
     )
     for number, different in enumerate(
@@ -81,13 +84,16 @@ async def test_postgres_seek_walks_tied_microsecond_rows_once_and_exhausts_exact
         "tenant_id": str(scenario.target_id),
         "actor_id": str(scenario.outsider.id),
         "action": "fixture.audit",
+        "start_at": "2026-10-24T14:00:00.123454+02:00",
+        "end_at": "2026-10-24T07:00:00.123458-05:00",
         "limit": 2,
     }
     observed: list[UUID] = []
     pages: list[AdminAuditPageOut] = []
     # When the authenticated platform administrator follows every continuation.
     for _ in range(4):
-        response = await audit_client.get(_PLATFORM, params=params, headers=scenario.headers(scenario.outsider))
+        user = scenario.outsider if path == _PLATFORM else scenario.genesis
+        response = await audit_client.get(path, params=params, headers=scenario.headers(user))
         assert response.status_code == 200, response.text
         page = AdminAuditPageOut.model_validate_json(response.content)
         pages.append(page)
@@ -95,6 +101,8 @@ async def test_postgres_seek_walks_tied_microsecond_rows_once_and_exhausts_exact
         if page.next_cursor is None:
             break
         params["cursor"] = page.next_cursor
+        params["start_at"] = (_NOW - timedelta(microseconds=2)).isoformat()
+        params["end_at"] = (_NOW + timedelta(microseconds=2)).isoformat()
     # Then no ties, microsecond neighbors or filters are lost, duplicated or leaked.
     assert observed == [UUID(int=number) for number in (8, 7, 5, 3, 9, 1)]
     assert len(pages) == 3
@@ -129,7 +137,7 @@ async def test_postgres_org_scope_ignores_client_tenant_and_actor(admission_scen
     assert page.next_cursor is None
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "action", "role", "principal_tenant"])
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "action", "role", "principal_tenant", "start_at", "end_at"])
 async def test_postgres_cursor_rejects_scope_changes(admission_scenario, audit_client, field):
     # Given an actual cursor from a two-row company trail.
     scenario = admission_scenario
@@ -153,6 +161,8 @@ async def test_postgres_cursor_rejects_scope_changes(admission_scenario, audit_c
             path, user = _ORG, scenario.genesis
         case "principal_tenant":
             await user_dao.update(db_obj=user, obj_in={"tenant_id": scenario.source_id})
+        case "start_at" | "end_at":
+            params[field] = _NOW.isoformat()
     # When role, filters or the current principal's tenant no longer match.
     response = await audit_client.get(path, params=params, headers=scenario.headers(user))
     # Then neither a cursor nor a query parameter can supply authority.
@@ -204,3 +214,28 @@ async def test_postgres_empty_filtered_page_is_exhausted(admission_scenario, aud
     # Then there is no synthetic continuation.
     assert response.status_code == 200, response.text
     assert response.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.parametrize("path", [_PLATFORM, _ORG])
+async def test_postgres_window_continuation_remains_nonsnapshot(admission_scenario, audit_client, path):
+    # Given a window with two rows and an already issued continuation.
+    scenario = admission_scenario
+    user = scenario.outsider if path == _PLATFORM else scenario.genesis
+    await seed_audit(scenario, [(2, _NOW), (4, _NOW)])
+    params = {
+        "start_at": (_NOW - timedelta(seconds=1)).isoformat(),
+        "end_at": (_NOW + timedelta(seconds=1)).isoformat(),
+        "limit": "1",
+    }
+    first = await audit_client.get(path, params=params, headers=scenario.headers(user))
+    assert first.status_code == 200, first.text
+    cursor = AdminAuditPageOut.model_validate_json(first.content).next_cursor
+    assert cursor is not None
+    await seed_audit(scenario, [(3, _NOW), (5, _NOW)])
+    # When continuing after intervening inserts inside the same window.
+    response = await audit_client.get(path, params={**params, "cursor": cursor}, headers=scenario.headers(user))
+    # Then a late lower seek key appears, while a higher key requires a root refresh.
+    assert response.status_code == 200, response.text
+    page = AdminAuditPageOut.model_validate_json(response.content)
+    assert [item.id for item in page.items] == [UUID(int=3)]
+    assert page.next_cursor is not None

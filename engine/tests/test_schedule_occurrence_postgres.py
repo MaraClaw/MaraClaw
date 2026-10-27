@@ -53,7 +53,7 @@ async def live_schedule() -> AsyncIterator[AgentScheduleRecord]:
             await db.execute(
                 "INSERT INTO agents (id, name, role_description, creator_id, max_triggers, min_poll_interval_min, "
                 "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
-                "VALUES (%(id)s, 'Schedule agent', 'QA', %(creator)s, 10, 5, 10, 'private', 'none', 30)",
+                "VALUES (%(id)s, 'Schedule agent', 'QA', %(creator)s, 10, 5, 10, 'private', 'use', 30)",
                 {"id": row.agent_id, "creator": row.created_by},
             )
             await init_pool(conninfo=make_conninfo(conninfo, options=f"-csearch_path={schema}"), min_size=1, max_size=4)
@@ -121,12 +121,20 @@ async def test_live_competing_claim_skips_locked_row(live_schedule: AgentSchedul
     assert first.lease_expires_at == NOW + timedelta(minutes=5)
 
 
-async def test_live_reclaim_preserves_edits_and_counts_once(live_schedule: AgentScheduleRecord) -> None:
+@pytest.mark.parametrize("notify", [False, True])
+async def test_live_reclaim_preserves_edits_and_counts_once(live_schedule: AgentScheduleRecord, notify: bool) -> None:
+    _ = await agent_schedule_dao.update(db_obj=live_schedule, obj_in={"notify_on_failure": notify})
     (first,) = await agent_schedule_dao.claim_due(NOW, _next_run)
     assert first.lease_token is not None
     assert await agent_schedule_dao.start_occurrence(first.id, first.lease_token, NOW)
     edited = await agent_schedule_dao.update(
-        db_obj=live_schedule, obj_in={"instruction": "Future", "cron_expr": "invalid", "timezone": "Not/A_Zone"}
+        db_obj=live_schedule,
+        obj_in={
+            "instruction": "Future",
+            "cron_expr": "invalid",
+            "timezone": "Not/A_Zone",
+            "notify_on_failure": not notify,
+        },
     )
     compute = Mock(side_effect=AssertionError("Reclaims must not recompute"))
     (reclaimed,) = await agent_schedule_dao.claim_due(NOW + timedelta(minutes=5), compute)
@@ -134,6 +142,8 @@ async def test_live_reclaim_preserves_edits_and_counts_once(live_schedule: Agent
     assert reclaimed.lease_token != first.lease_token
     assert reclaimed == replace(edited, lease_token=reclaimed.lease_token, lease_expires_at=NOW + timedelta(minutes=10))
     assert reclaimed.pending_instruction == live_schedule.instruction
+    assert first.pending_notify_on_failure is notify
+    assert reclaimed.pending_notify_on_failure is notify
     assert reclaimed.pending_due_at == live_schedule.next_run_at
     outcomes = await asyncio.gather(
         *(
@@ -246,7 +256,7 @@ async def test_live_bulk_disable_revokes_pending_lease(live_schedule: AgentSched
     assert not await agent_schedule_dao.finish_occurrence(claim.id, claim.lease_token, NOW)
 
 
-@pytest.mark.parametrize("field", SLOT_COLUMNS[:4])
+@pytest.mark.parametrize("field", [column for column in SLOT_COLUMNS if column != "pending_started_at"])
 async def test_live_schema_rejects_partial_occurrence(live_schedule: AgentScheduleRecord, field: str) -> None:
     (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
     assert claim.lease_token is not None

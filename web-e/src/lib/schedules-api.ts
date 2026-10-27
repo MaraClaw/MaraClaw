@@ -4,12 +4,14 @@ import { apiRequest } from './http.ts'
 
 const scheduleFields = z.object({
   name: z.string(), instruction: z.string(), cron_expr: z.string(),
-  timezone: z.string(), is_enabled: z.boolean(),
+  timezone: z.string(), is_enabled: z.boolean(), notify_on_failure: z.boolean(),
 })
 const scheduleSchema = scheduleFields.extend({
   id: z.string(), next_run_at: z.string().nullable().optional(), last_run_at: z.string().nullable().optional(),
 }).readonly()
-const createSchema = scheduleFields.extend({ timezone: z.string().default('UTC'), is_enabled: z.boolean().optional() })
+const createSchema = scheduleFields.extend({
+  timezone: z.string().default('UTC'), is_enabled: z.boolean().optional(), notify_on_failure: z.boolean().default(false),
+})
 const patchSchema = scheduleFields.partial()
 const historyItemSchema = z.object({
   id: z.string(), created_at: z.string().nullable().optional(),

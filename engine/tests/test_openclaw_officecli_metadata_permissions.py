@@ -12,7 +12,9 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "docker/openclaw/bootstrap-o
 def test_metadata_mode_controls_acceptance_when_mount_reports_executable(tmp_path: Path, mode: int) -> None:
     # Given: Docker Desktop can report X_OK even for metadata with mode 0600.
     metadata = tmp_path / "metadata"
-    metadata.write_text(f"tag=v1.0.144\nbinary_sha256={'a' * 64}\nskill_sha256={'b' * 64}\n", encoding="utf-8")
+    metadata.write_text(
+        f"tag=v1.0.144\nplatform=linux/arm64\nbinary_sha256={'a' * 64}\nskill_sha256={'b' * 64}\n", encoding="utf-8"
+    )
     metadata.chmod(mode)
     definitions = SCRIPT_PATH.read_text(encoding="utf-8").split("\nSTATE_DIR=", 1)[0].replace("[ ", "mount_test ")
     probe = tmp_path / "probe.sh"

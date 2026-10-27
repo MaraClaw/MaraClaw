@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
 import { confirmation, createHarness, departmentId, directory, openUsers, otherTenant, tenant } from './departments-browser-harness.mjs'
 import { runMergeCases } from './departments-merge.browser.mjs'
+import { runMergeConfirmationCases } from './departments-merge-confirmation.browser.mjs'
 
 const harness = await createHarness()
 let completed = false
@@ -192,5 +193,6 @@ try {
     })
   }
   await runMergeCases(harness)
+  await runMergeConfirmationCases(harness)
   completed = true
 } finally { await harness.close(completed) }

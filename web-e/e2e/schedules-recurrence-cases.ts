@@ -27,7 +27,7 @@ export function registerScheduleRecurrenceTests() {
 
       await expect.poll(() => fixture.creations).toEqual([{
         name: savedSchedule.name, instruction: savedSchedule.instruction,
-        cron_expr: preset.cron, timezone: 'Etc/GMT-8', is_enabled: true,
+        cron_expr: preset.cron, timezone: 'Etc/GMT-8', is_enabled: true, notify_on_failure: false,
       }])
       const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
       await expect(row).toContainText(`${preset.summary} · GMT +8`)
@@ -92,7 +92,7 @@ export function registerScheduleRecurrenceTests() {
 
     await expect.poll(() => fixture.creations).toEqual([{
       name: savedSchedule.name, instruction: savedSchedule.instruction,
-      cron_expr: '0 9 * * 1-5', timezone: 'Etc/GMT-8', is_enabled: true,
+      cron_expr: '0 9 * * 1-5', timezone: 'Etc/GMT-8', is_enabled: true, notify_on_failure: false,
     }])
   })
 

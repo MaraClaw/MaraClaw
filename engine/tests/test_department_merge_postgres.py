@@ -5,10 +5,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import access_cache
+from app.core.json_types import json_object_from_response
 from app.core.permissions import check_agent_access
 from app.dao.org_department_dao import org_department_dao
 from app.db.session import transaction
 from app.records.user import UserRecord
+from app.schemas.department import DepartmentMembersOut, DepartmentMergePreviewOut
 from app.services import org_departments
 from department_merge_postgres_fixtures import (
     department_store,
@@ -50,6 +52,15 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
     renamed = await merge_request(store, "destination_rename")
     assert renamed.status_code == 200
 
+    changed = await merge_state(store)
+    rejected = await merge_request(
+        store,
+        "merge",
+        confirmation_token=DepartmentMergePreviewOut.model_validate_json(preview.content).confirmation_token,
+    )
+    assert rejected.status_code == 409
+    assert await merge_state(store) == changed
+    assert store.invalidated == []
     response = await merge_request(store, "merge")
 
     assert response.status_code == 200, response.text
@@ -80,7 +91,9 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
         "actor_id": store.actor.id,
         "target_id": store.selected,
         "tenant_id": store.tenant,
-        "details": response.json(),
+        "details": {
+            key: value for key, value in json_object_from_response(response).items() if key != "confirmation_token"
+        },
     }
     assert (await check_agent_access(UserRecord(id=store.members[0]), destination_agent, fresh=True))[1] == "use"
     assert (await check_agent_access(UserRecord(id=store.members[2]), store.agents[1], fresh=True))[1] == "use"
@@ -88,9 +101,14 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
     async with merge_client(member_store) as client:
         roster = await client.get(f"/api/departments/{store.other}/members")
         retired = await client.get(f"/api/departments/{store.selected}/members")
-        forbidden = await client.post(f"/api/departments/{unrelated}/merge", json={"destination_id": str(store.other)})
+        forbidden = await client.post(
+            f"/api/departments/{unrelated}/merge",
+            json={"destination_id": str(store.other), "confirmation_token": preview.json()["confirmation_token"]},
+        )
     assert roster.status_code == 200
-    assert {row["membership_id"] for row in roster.json()["members"]} == {str(member) for member in store.members}
+    assert {member.membership_id for member in DepartmentMembersOut.model_validate_json(roster.content).members} == set(
+        store.members
+    )
     assert retired.status_code == 404
     assert forbidden.status_code == 403
 
@@ -167,6 +185,7 @@ async def test_merge_real_insert_error_preserves_all_prior_associations(merge_st
 @pytest.mark.parametrize("change", ["role", "tenant", "membership", "identity", "password"])
 async def test_merge_http_rejects_stale_persisted_administrator(merge_store, change):
     store, _, _ = merge_store
+    reviewed = await merge_request(store, "preview")
     match change:
         case "role":
             await store.db.execute("UPDATE users SET role = 'member' WHERE id = %(id)s", {"id": store.actor.id})
@@ -184,7 +203,11 @@ async def test_merge_http_rejects_stale_persisted_administrator(merge_store, cha
                 "UPDATE identities SET must_change_password = true WHERE id = %(id)s", {"id": store.identity}
             )
     before = await merge_state(store)
-    response = await merge_request(store, "merge")
+    response = await merge_request(
+        store,
+        "merge",
+        confirmation_token=DepartmentMergePreviewOut.model_validate_json(reviewed.content).confirmation_token,
+    )
     assert response.status_code == (409 if change == "tenant" else 403)
     assert await merge_state(store) == before
     assert store.invalidated == []
@@ -202,7 +225,8 @@ async def test_merge_rejects_foreign_destination_without_cross_tenant_writes(mer
     async with merge_client(store) as client:
         response = (
             await client.post(
-                f"/api/departments/{store.selected}/merge", json={"destination_id": str(foreign_department)}
+                f"/api/departments/{store.selected}/merge",
+                json={"destination_id": str(foreign_department), "confirmation_token": "v1:" + "0" * 64},
             )
             if apply
             else await client.get(

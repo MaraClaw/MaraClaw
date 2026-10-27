@@ -1,5 +1,6 @@
 """Org department directory administration and membership assignment."""
 
+import re
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -154,17 +155,17 @@ async def delete_department(actor: UserRecord, department_id: UUID, tenant_id: U
 
 
 async def merge_departments(
-    actor: UserRecord, selection: DepartmentMergeSelection, *, apply: bool
+    actor: UserRecord, selection: DepartmentMergeSelection, *, apply: bool, confirmation_token: str | None = None
 ) -> DepartmentMergePreviewOut:
+    if apply and (confirmation_token is None or re.fullmatch(r"v1:[0-9a-f]{64}", confirmation_token) is None):
+        raise HTTPException(422, "A valid merge confirmation token is required")
     tenant = admin_tenant(actor, selection.tenant_id)
     async with connection_ctx() as db:
         await lock_tenants(db, (tenant, actor.tenant_id))
         await lock_user(db, actor.id, actor.tenant_id)
         fresh_actor = await user_dao.get_with_identity(actor.id, fresh=True)
-        if (
-            fresh_actor is None
-            or not fresh_actor.is_active
-            or (fresh_actor.identity is not None and not fresh_actor.identity.is_active)
+        if fresh_actor is None or not (
+            fresh_actor.is_active and (fresh_actor.identity is None or fresh_actor.identity.is_active)
         ):
             raise HTTPException(403, "Administrator is inactive")
         raise_if_password_change_required(fresh_actor)
@@ -188,8 +189,10 @@ async def merge_departments(
             affected.update(await org_department_dao.grant_agents_for_department(destination))
             for agent_id in sorted(affected):
                 await lock_agent(db, agent_id, tenant)
-        preview = await org_department_dao.merge_preview(source, destination)
+        preview = (await org_department_dao.merge_preview(source, destination)).preview()
         if apply:
+            if confirmation_token != preview.confirmation_token:
+                raise HTTPException(409, {"code": "department_merge_preview_changed"})
             await org_department_dao.merge_departments(source, destination)
             for agent_id in sorted(affected):
                 await bump_agent_acl_version(agent_id)
@@ -203,7 +206,7 @@ async def merge_departments(
                     "name": field_change(preview.source.name, None),
                     "destination_id": field_change(None, str(destination.id)),
                 },
-                details=preview.model_dump(mode="json"),
+                details=preview.model_dump(mode="json", exclude={"confirmation_token"}),
             )
         return preview
 

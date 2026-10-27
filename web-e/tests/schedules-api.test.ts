@@ -6,7 +6,7 @@ import { listScheduleHistory, listScheduleHistoryPage } from '../src/lib/schedul
 
 const saved = {
   id: 'schedule', name: 'Morning report', instruction: 'Summarize updates',
-  cron_expr: '0 9 * * *', is_enabled: true, timezone: 'Asia/Shanghai',
+  cron_expr: '0 9 * * *', is_enabled: true, timezone: 'Asia/Shanghai', notify_on_failure: false,
   next_run_at: '2026-01-15T01:00:00Z', last_run_at: null,
 }
 
@@ -17,7 +17,7 @@ test('schedule creation sends UTC when timezone is omitted', async (context) => 
     return Response.json({ ...saved, timezone: 'UTC' })
   })
   await createSchedule('agent', { name: saved.name, instruction: saved.instruction, cron_expr: saved.cron_expr })
-  assert.deepEqual(bodies, [{ name: saved.name, instruction: saved.instruction, cron_expr: saved.cron_expr, timezone: 'UTC' }])
+  assert.deepEqual(bodies, [{ name: saved.name, instruction: saved.instruction, cron_expr: saved.cron_expr, timezone: 'UTC', notify_on_failure: false }])
 })
 
 test('explicit timezone survives schedule creation and reload', async (context) => {
@@ -54,6 +54,57 @@ test('timezone-only patch returns the server-recomputed next run', async (contex
   const patched = await updateSchedule('agent', saved.id, patch)
   assert.deepEqual(patched, { ...saved, ...patch, next_run_at: '2026-01-15T14:00:00Z' })
 })
+
+for (const notify_on_failure of [true, false]) {
+  test(`creation and read preserve an explicit ${notify_on_failure} failure alert preference`, async (context) => {
+    const schedule = { ...saved, notify_on_failure }
+    context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+      if (init.method === 'POST') {
+        assert.equal(JSON.parse(String(init.body)).notify_on_failure, notify_on_failure)
+        return Response.json(schedule)
+      }
+      return Response.json([schedule])
+    })
+
+    const created = await createSchedule('agent', schedule)
+    const reloaded = await listSchedules('agent')
+
+    assert.deepEqual(created, schedule)
+    assert.deepEqual(reloaded, [schedule])
+  })
+
+  test(`failure alert patch sends explicit ${notify_on_failure} without unrelated fields`, async (context) => {
+    const patch = { notify_on_failure }
+    context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+      assert.deepEqual(JSON.parse(String(init.body)), patch)
+      return Response.json({ ...saved, ...patch })
+    })
+
+    const patched = await updateSchedule('agent', saved.id, patch)
+
+    assert.deepEqual(patched, { ...saved, ...patch })
+  })
+}
+
+test('patch omission preserves an enabled failure alert preference', async (context) => {
+  const schedule = { ...saved, notify_on_failure: true }
+  context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+    assert.deepEqual(JSON.parse(String(init.body)), { name: 'Renamed' })
+    return Response.json({ ...schedule, name: 'Renamed' })
+  })
+
+  const patched = await updateSchedule('agent', saved.id, { name: 'Renamed' })
+
+  assert.deepEqual(patched, { ...schedule, name: 'Renamed' })
+})
+
+for (const notify_on_failure of [null, 'false', 0]) {
+  test(`read rejects a nonboolean failure alert preference: ${JSON.stringify(notify_on_failure)}`, async (context) => {
+    context.mock.method(globalThis, 'fetch', async () => Response.json([{ ...saved, notify_on_failure }]))
+
+    await assert.rejects(() => listSchedules('agent'))
+  })
+}
 
 test('paged history preserves terminal outcomes, output, and the opaque cursor', async (context) => {
   const items = ['success', 'failure', 'cancelled', 'unknown'].map((status) => ({

@@ -1,13 +1,15 @@
 import json
 from base64 import b64decode, urlsafe_b64encode
+from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 
+from app.core.json_types import json_loads_object
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.records.audit import AdminAuditLogRecord
 from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page
@@ -119,7 +121,7 @@ async def test_cursor_is_bound_to_effective_role_tenant_actor_and_action(monkeyp
     ("field", "value"),
     [
         ("version", 0),
-        ("version", 2),
+        ("version", 1),
         ("version", True),
         ("version", "1"),
         ("created_at", "2026-10-24T12:00:00.123456"),
@@ -134,7 +136,8 @@ async def test_cursor_schema_is_strict_and_versioned(monkeypatch, rows, field, v
     monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
     page = await list_admin_audit_page(_SCOPE, limit=2)
     assert page.next_cursor is not None
-    payload = json.loads(b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_"))
+    payload = json_loads_object(b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_"))
+    assert payload["version"] == 2
     payload[field] = value
     cursor = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     query.reset_mock()
@@ -154,3 +157,52 @@ async def test_absent_and_empty_action_have_the_same_effective_scope(monkeypatch
     result = await list_admin_audit_page(replace(_SCOPE, action=""), cursor=page.next_cursor, limit=3)
     # Then the cursor remains valid and page size is not a scope filter.
     assert len(result.items) == 3
+
+
+@pytest.mark.parametrize("field", ["start_at", "end_at"])
+@pytest.mark.parametrize("transition", ["add", "remove", "change"])
+async def test_cursor_rejects_changed_or_absent_window_bounds(monkeypatch, rows, field, transition):
+    # Given a cursor with an explicit bounded or unbounded interval.
+    start, end = _NOW - timedelta(days=1), _NOW + timedelta(days=1)
+    scope = replace(_SCOPE, start_at=start, end_at=end)
+    if transition == "add":
+        scope = replace(scope, **{field: None})
+    query = AsyncMock(return_value=rows)
+    monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
+    page = await list_admin_audit_page(scope, limit=2)
+    changed = None if transition == "remove" else _NOW
+    query.reset_mock()
+    # When either bound changes, including its presence.
+    with pytest.raises(HTTPException) as exc:
+        await list_admin_audit_page(replace(scope, **{field: changed}), cursor=page.next_cursor)
+    # Then the cursor cannot silently switch windows.
+    assert exc.value.status_code == 400
+    query.assert_not_awaited()
+
+
+@pytest.mark.parametrize("start_at", [None, _NOW - timedelta(days=1)])
+@pytest.mark.parametrize("end_at", [None, _NOW + timedelta(days=1)])
+async def test_dao_parameterizes_present_inclusive_start_and_exclusive_end(monkeypatch, start_at, end_at):
+    # Given a connection seam that captures the actual DAO statement.
+    queries: list[tuple[str, dict[str, object]]] = []
+
+    class Database:
+        async def fetchall(self, sql: str, params: dict[str, object]) -> list[dict[str, object]]:
+            queries.append((sql, params))
+            return []
+
+    @asynccontextmanager
+    async def session():
+        yield Database()
+
+    monkeypatch.setattr(admin_audit_log_dao, "session", session)
+    # When any combination of optional bounds is queried.
+    await admin_audit_log_dao.list_page(start_at=start_at, end_at=end_at)
+    # Then date values are parameters, not SQL literals, with half-open semantics.
+    [(sql, params)] = queries
+    assert ("created_at >= %(start_at)s" in sql) == (start_at is not None)
+    assert ("created_at < %(end_at)s" in sql) == (end_at is not None)
+    assert params.get("start_at") == start_at
+    assert params.get("end_at") == end_at
+    assert "ORDER BY created_at DESC, id DESC" in sql
+    assert "OFFSET" not in sql

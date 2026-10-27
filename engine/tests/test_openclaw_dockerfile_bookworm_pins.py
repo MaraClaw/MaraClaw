@@ -1,5 +1,8 @@
+import subprocess
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 DOCKERFILE: Final = REPO_ROOT / "Dockerfile.openclaw"
@@ -62,7 +65,7 @@ def _bookworm_pin_errors(source: str) -> tuple[str, ...]:
     return tuple(errors)
 
 
-def test_openclaw_dockerfile_uses_approved_bookworm_arm64_package_pins() -> None:
+def test_openclaw_dockerfile_uses_approved_bookworm_package_pins() -> None:
     # Given
     source = DOCKERFILE.read_text(encoding="utf-8")
 
@@ -92,3 +95,36 @@ def test_bookworm_pin_contract_rejects_stale_or_unpinned_package_changes() -> No
 
         # Then
         assert any(expected_error in error for error in errors)
+
+
+@pytest.mark.parametrize("target", ["linux/amd64", "linux/arm64", "linux/386", "darwin/arm64"])
+def test_dockerfile_target_selection_uses_buildkit_arguments_not_host_architecture(target: str) -> None:
+    # Given
+    source = DOCKERFILE.read_text()
+    stage = source.split("FROM ${OPENCLAW_BASE_IMAGE}", 1)[1]
+    assert "ARG TARGETOS\n" in stage
+    assert "ARG TARGETARCH\n" in stage
+    selection = source.split("RUN case ", 1)[1].split("esac", 1)[0]
+    operating_system, architecture = target.split("/")
+    arguments = _argument_values(source)
+
+    # When
+    result = subprocess.run(  # noqa: S603 - execute only the target selection, never the download/build.
+        ["/bin/sh", "-c", f"case {selection}esac\nprintf '%s' \"$GOGCLI_SHA256\""],
+        env={"TARGETOS": operating_system, "TARGETARCH": architecture, **arguments},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    # Then
+    if target in {"linux/amd64", "linux/arm64"}:
+        expected = {
+            "amd64": "sha256:279bc3a03c1919d774e268ef229949f45b753a0e21257f9fb315b05be7a40ea9",
+            "arm64": "sha256:c677ac6abf5e187e987a87fe1b588f454b002a7d7019de81b9e8db02e9e902b6",
+        }
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == expected[architecture]
+    else:
+        assert result.returncode != 0
+        assert "unsupported guest target" in result.stderr

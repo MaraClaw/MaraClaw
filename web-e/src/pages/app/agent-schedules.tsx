@@ -138,6 +138,15 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               <Label htmlFor="schedule-instruction">Instruction</Label>
               <Textarea id="schedule-instruction" value={draft.instruction} onChange={scope.effect((event) => setDraft({ ...draft, instruction: event.target.value }))} />
             </div>
+            <div className="grid gap-2">
+              <Label className="flex min-h-11 items-center gap-2 leading-normal">
+                <input id="schedule-notify-on-failure" name="notify_on_failure" type="checkbox" className="size-5 shrink-0 accent-primary"
+                  checked={draft.notify_on_failure} aria-describedby="schedule-notify-on-failure-help"
+                  onChange={scope.effect((event) => setDraft({ ...draft, notify_on_failure: event.target.checked }))} />
+                Notify me when a scheduled run fails
+              </Label>
+              <p id="schedule-notify-on-failure-help" className="text-xs text-muted-foreground">When on, sends you an in-app alert if a periodic scheduled run fails. Does not apply to manual runs.</p>
+            </div>
             <div className="flex gap-2">
               <Button type="submit">{save.isPending ? 'Saving...' : editing ? 'Save schedule' : 'Add schedule'}</Button>
               {editing ? <Button type="button" variant="outline" onClick={scope.effect(() => {
@@ -151,7 +160,12 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
       ) : (
         <p className="text-sm text-muted-foreground">Only the agent creator can add or run schedules.</p>
       )}
-      {schedules.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading schedules...</p> : null}
+      <p role="status" className={save.isPending ? 'max-w-xl text-sm text-muted-foreground' : 'sr-only'}>
+        {save.isPaused ? 'Waiting for connection to save schedule. Your draft is kept here.' : save.isPending ? 'Saving schedule...' : ''}
+      </p>
+      <p role="status" className={schedules.isPending || schedules.fetchStatus === 'paused' ? 'text-sm text-muted-foreground' : 'sr-only'}>
+        {schedules.fetchStatus === 'paused' ? 'Waiting for connection to load schedules.' : schedules.isPending ? 'Loading schedules...' : ''}
+      </p>
       {schedules.isError ? <div className="space-y-2">
         <p role="status" className="text-sm text-destructive">{userFacingRequestError(schedules.error, 'Unable to load schedules. Try again.')}</p>
         <Button variant="outline" disabled={schedules.isFetching} onClick={scope.effect(() => { void schedules.refetch() })}>Retry</Button>
@@ -184,7 +198,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                     if (!scope.isCurrent()) return
                     setEditing(item)
                     setEditorVersion((version) => version + 1)
-                    setDraft({ name: item.name, cron_expr: item.cron_expr, instruction: item.instruction, timezone: item.timezone })
+                    setDraft({ name: item.name, cron_expr: item.cron_expr, instruction: item.instruction, timezone: item.timezone, notify_on_failure: item.notify_on_failure })
                     setTimezoneError(null)
                     setSaveError(null)
                   }}

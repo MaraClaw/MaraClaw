@@ -17,7 +17,7 @@ test('creation persists an explicit timezone across reload and displays saved-zo
 
   await expect.poll(() => fixture.creations).toEqual([{
     name: savedSchedule.name, instruction: savedSchedule.instruction,
-    cron_expr: savedSchedule.cron_expr, timezone: 'Etc/GMT-8', is_enabled: true,
+    cron_expr: savedSchedule.cron_expr, timezone: 'Etc/GMT-8', is_enabled: true, notify_on_failure: false,
   }])
   await page.reload()
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
@@ -111,15 +111,18 @@ for (const status of [422, 503]) {
     await page.goto(schedulesPath)
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Timezone').selectOption('Etc/GMT+5')
+    await page.getByRole('checkbox', { name: 'Notify me when a scheduled run fails' }).check()
 
     await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
     await requested.promise
     await expect(page.getByLabel('Timezone')).toBeDisabled()
+    await expect(page.getByRole('checkbox', { name: 'Notify me when a scheduled run fails' })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Saving...', exact: true })).toBeDisabled()
     release.resolve()
 
     await expect(page.getByRole('button', { name: 'Save schedule', exact: true })).toBeEnabled()
     await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
+    await expect(page.getByRole('checkbox', { name: 'Notify me when a scheduled run fails' })).toBeChecked()
     await expect(page.getByRole('status').filter({ hasText: /timezone/i })).toBeVisible()
     await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue(savedSchedule.instruction)
   })
@@ -132,6 +135,7 @@ test('manage access without creator ownership keeps schedules read-only', async 
   await expect(page.getByRole('listitem', { name: savedSchedule.name, exact: true })).toContainText('Asia/Shanghai')
 
   await expect(page.getByLabel('Timezone')).toHaveCount(0)
+  await expect(page.getByRole('checkbox', { name: 'Notify me when a scheduled run fails' })).toHaveCount(0)
   for (const name of ['Add schedule', 'Run', 'Edit', 'History', 'Delete']) {
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }

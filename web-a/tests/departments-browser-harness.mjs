@@ -11,6 +11,7 @@ export const otherTenant = '64c0b6ca-0312-42aa-996d-ff606043337a'
 export const departmentId = 'department/a +?'
 export const mergeSourceId = '10000000-0000-4000-8000-000000000001'
 export const mergeDestinationId = '10000000-0000-4000-8000-000000000002'
+export const mergeConfirmationToken = `v1:${'1'.repeat(64)}`
 export const admission = {
   id: '381bf275-fd20-4b0f-a79d-1f2c4519d258', status: 'withdrawn',
   source_tenant_id: otherTenant, source_tenant: { id: otherTenant, name: 'Source company' },
@@ -31,15 +32,18 @@ export async function createHarness() {
   await mkdir(output, { recursive: true })
   const cacheDir = join(output, 'vite-cache')
   const server = await createServer({ cacheDir, server: { host: '127.0.0.1', port: 0, watch: { ignored: (path) => path.startsWith(output) } } })
-  const receipt = { engine: 'omowright.connectPipe; Playwright CDP assertions', scenarios: [], screenshots: [], requests: [], cleanup: { browsersCreated: 0, browsersClosed: 0, profilesRemoved: 0, contextsCreated: 0, contextsClosed: 0, viteClosed: false, cacheRemoved: false, syntheticAPIsOnly: true } }
+  const receipt = { engine: 'omowright.connectPipe; Playwright CDP assertions', scenarios: [], screenshots: [], requests: [], resources: { temporaryRoot: tmpdir(), cacheDir, browsers: [] }, cleanup: { browsersCreated: 0, browsersClosed: 0, profilesRemoved: 0, contextsCreated: 0, contextsClosed: 0, viteClosed: false, cacheRemoved: false, syntheticAPIsOnly: true } }
   await server.listen()
   const base = server.resolvedUrls.local[0]
+  receipt.resources.vite = { pid: process.pid, url: base }
 
   async function scenario(options, exercise) {
     const owned = await launchDepartmentBrowser()
+    const resource = { scenario: options.name, ...owned.resources, closed: false }
+    receipt.resources.browsers.push(resource)
     const browser = owned.browser
     receipt.cleanup.browsersCreated++
-    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], previewStatus: 200, preview: { membership_count: 1, agent_grant_count: 3 }, previewGate: null, previews: [], admission: { ...admission }, mergeStatus: 200, mergePreviewStatus: 200, mergeGate: null, mergePreviewGate: null, mergePreviews: [], merges: [] }
+    const state = { role: options.role ?? 'platform_admin', directories: { [tenant]: directory(), [otherTenant]: directory('Beta operations', otherTenant) }, calls: [], deleteStatus: 204, gate: null, exchanges: [], previewStatus: 200, preview: { membership_count: 1, agent_grant_count: 3 }, previewGate: null, previews: [], admission: { ...admission }, mergeStatus: 200, mergePreviewStatus: 200, mergeGate: null, mergePreviewGate: null, mergePreviews: [], merges: [], mergeToken: mergeConfirmationToken }
     const errors = []
     const context = await browser.newContext({ ...(options.mobile ? devices['iPhone 14'] : { viewport: { width: options.width ?? 1440, height: 1000 } }), colorScheme: options.scheme ?? 'light', reducedMotion: 'reduce' })
     receipt.cleanup.contextsCreated++
@@ -77,10 +81,11 @@ export async function createHarness() {
           const destination = current.departments.find((item) => item.id === destinationId)
           status = apply ? state.mergeStatus : state.mergePreviewStatus
           body = status === 200 ? {
+            confirmation_token: state.mergeToken,
             source, destination, source_membership_count: 2, destination_membership_count: 2, overlapping_membership_count: 1,
             source_agent_grant_count: 3, destination_agent_grant_count: 4, overlapping_agent_grant_count: 2,
             ...state.mergeCounts,
-          } : { detail: apply ? 'Synthetic merge denied' : 'Synthetic merge preview unavailable' }
+          } : { detail: apply ? state.mergeDetail ?? 'Synthetic merge denied' : 'Synthetic merge preview unavailable' }
           exchange = { gate: apply ? state.mergeGate : state.mergePreviewGate, delivered: Promise.withResolvers(), payload, ...call }
           ;(apply ? state.merges : state.mergePreviews).push(exchange)
           if (exchange.gate) await exchange.gate.promise
@@ -131,6 +136,7 @@ export async function createHarness() {
       await context.close()
       receipt.cleanup.contextsClosed++
       await owned.close()
+      resource.closed = true
       receipt.cleanup.browsersClosed++
       receipt.cleanup.profilesRemoved++
     }

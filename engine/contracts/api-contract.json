@@ -5596,9 +5596,16 @@
         "title": "DepartmentMembersOut",
         "type": "object"
       },
+      "DepartmentMergeConfirmation": {
+        "pattern": "^v1:[0-9a-f]{64}$",
+        "type": "string"
+      },
       "DepartmentMergePreviewOut": {
-        "description": "Advisory associations before merge, recomputed by apply under its locks.",
+        "description": "Reviewed associations whose confirmation is checked by apply under its locks.",
         "properties": {
+          "confirmation_token": {
+            "$ref": "#/components/schemas/DepartmentMergeConfirmation"
+          },
           "destination": {
             "$ref": "#/components/schemas/DepartmentOut"
           },
@@ -5641,6 +5648,7 @@
         "required": [
           "source",
           "destination",
+          "confirmation_token",
           "source_membership_count",
           "destination_membership_count",
           "overlapping_membership_count",
@@ -5654,6 +5662,9 @@
       "DepartmentMergeRequest": {
         "additionalProperties": false,
         "properties": {
+          "confirmation_token": {
+            "$ref": "#/components/schemas/DepartmentMergeConfirmation"
+          },
           "destination_id": {
             "format": "uuid",
             "title": "Destination Id",
@@ -5661,7 +5672,8 @@
           }
         },
         "required": [
-          "destination_id"
+          "destination_id",
+          "confirmation_token"
         ],
         "title": "DepartmentMergeRequest",
         "type": "object"
@@ -11823,6 +11835,11 @@
             "title": "Name",
             "type": "string"
           },
+          "notify_on_failure": {
+            "default": false,
+            "title": "Notify On Failure",
+            "type": "boolean"
+          },
           "timezone": {
             "default": "UTC",
             "title": "Timezone",
@@ -12083,6 +12100,10 @@
             ],
             "title": "Next Run At"
           },
+          "notify_on_failure": {
+            "title": "Notify On Failure",
+            "type": "boolean"
+          },
           "run_count": {
             "title": "Run Count",
             "type": "integer"
@@ -12100,6 +12121,7 @@
           "cron_expr",
           "timezone",
           "is_enabled",
+          "notify_on_failure",
           "run_count"
         ],
         "title": "ScheduleOut",
@@ -12150,6 +12172,11 @@
               }
             ],
             "title": "Name"
+          },
+          "notify_on_failure": {
+            "default": false,
+            "title": "Notify On Failure",
+            "type": "boolean"
           },
           "timezone": {
             "default": "UTC",
@@ -16249,6 +16276,38 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start At"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End At"
             }
           }
         ],
@@ -37858,6 +37917,38 @@
               ],
               "title": "Cursor"
             }
+          },
+          {
+            "in": "query",
+            "name": "start_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start At"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End At"
+            }
           }
         ],
         "responses": {
@@ -38950,6 +39041,7 @@
       "DepartmentDeletionPreviewOut",
       "DepartmentMemberOut",
       "DepartmentMembersOut",
+      "DepartmentMergeConfirmation",
       "DepartmentMergePreviewOut",
       "DepartmentMergeRequest",
       "DepartmentOptionOut",

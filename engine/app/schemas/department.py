@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar
+from typing import Annotated, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -35,9 +35,13 @@ class DepartmentDeletionPreviewOut(BaseModel):
     )
 
 
+type DepartmentMergeConfirmation = Annotated[str, Field(pattern=r"^v1:[0-9a-f]{64}$", strict=True)]
+
+
 class DepartmentMergeRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     destination_id: UUID
+    confirmation_token: DepartmentMergeConfirmation
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,11 +52,12 @@ class DepartmentMergeSelection:
 
 
 class DepartmentMergePreviewOut(BaseModel):
-    """Advisory associations before merge, recomputed by apply under its locks."""
+    """Reviewed associations whose confirmation is checked by apply under its locks."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
     source: DepartmentOut
     destination: DepartmentOut
+    confirmation_token: DepartmentMergeConfirmation
     source_membership_count: int = Field(ge=0)
     destination_membership_count: int = Field(ge=0)
     overlapping_membership_count: int = Field(ge=0)

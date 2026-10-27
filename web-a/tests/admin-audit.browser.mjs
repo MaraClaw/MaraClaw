@@ -3,6 +3,7 @@ import { expect as playwrightExpect } from '@playwright/test'
 
 import { actorId, createHarness, event, flush, nullableEvent, signInReplacement, tenantId } from './admin-audit-browser-harness.mjs'
 import { runPagingScenarios } from './admin-audit-paging.browser.mjs'
+import { runWindowScenarios } from './admin-audit-window.browser.mjs'
 
 const expect = playwrightExpect.configure({ timeout: 15_000 })
 const harness = await createHarness()
@@ -21,7 +22,7 @@ try {
         await expect(page.getByRole('link', { name: 'Search', exact: true })).toHaveCount(role === 'platform_admin' ? 1 : 0)
         await expect(page.getByLabel('Tenant ID', { exact: true })).toHaveCount(role === 'platform_admin' ? 1 : 0)
         await expect(page.getByLabel('Actor ID', { exact: true })).toHaveCount(role === 'platform_admin' ? 1 : 0)
-        await expect(page.getByText('Time unavailable', { exact: true })).toBeVisible()
+        await expect(page.getByText('Actor unavailable', { exact: false })).toBeVisible()
         await capture(page, `${name}-results`)
         const detail = page.locator('summary').first()
         await detail.focus()
@@ -115,6 +116,8 @@ try {
   for (const sameToken of [true, false]) for (const status of [200, 401, 403]) await scenario({ name: `late older-page ${status} after ${sameToken ? 'same' : 'different'} token session replacement`, nextCursor: 'retired-owner-page-2', user: { role: 'platform_admin', is_platform_admin: true } }, async (page, state) => {
     await expect(page.getByRole('heading', { name: '2 recent events' })).toBeVisible()
     await page.getByLabel('Action', { exact: true }).fill('retired.owner.filter')
+    await page.getByLabel('Start time', { exact: true }).fill('2026-10-21T08:00:00+08:00')
+    await page.getByLabel('End time', { exact: true }).fill('2026-10-22T00:00:00Z')
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
     await expect.poll(() => state.exchanges.at(-1)?.params.action).toBe('retired.owner.filter')
     await expect(page.getByRole('button', { name: 'Older', exact: true })).toBeEnabled()
@@ -125,6 +128,8 @@ try {
     await expect.poll(() => state.exchanges.length).toBe(initialCount + 1)
     const pending = state.exchanges.at(-1)
     assert.equal(pending.params.cursor, 'retired-owner-page-2')
+    assert.equal(pending.params.start_at, '2026-10-21T00:00:00.000000Z')
+    assert.equal(pending.params.end_at, '2026-10-22T00:00:00.000000Z')
     state.user = { ...state.user, id: tenantId, tenant_id: actorId, role: 'org_admin', is_platform_admin: false }
     if (!sameToken) state.token = 'synthetic-replacement-token'
     state.gate = null; state.status = 200; state.nextCursor = null
@@ -142,6 +147,7 @@ try {
   })
 
   await runPagingScenarios(harness)
+  await runWindowScenarios(harness)
 
   for (const mobile of [false, true]) await scenario({ name: `${mobile ? 'phone' : 'desktop'} password requirement locks direct route and navigation`, mobile, user: { must_change_password: true } }, async (page, state) => {
     await expect(page).toHaveURL(`${base}account`)

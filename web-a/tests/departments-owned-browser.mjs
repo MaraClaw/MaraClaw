@@ -21,6 +21,7 @@ export async function launchDepartmentBrowser() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
     return {
       browser,
+      resources: { profile, cdpPort: Number(port) },
       async close() {
         try { await browser.close() }
         finally {

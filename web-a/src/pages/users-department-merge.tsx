@@ -10,6 +10,12 @@ import { previewDepartmentMerge, type Department } from '@/lib/departments-api'
 import { ApiError } from '@/lib/http'
 import { useMergeDepartment } from './users-department-queries'
 
+function isMergePreviewChanged(error: unknown) {
+  return error instanceof ApiError && error.status === 409
+    && typeof error.detail === 'object' && error.detail !== null
+    && 'code' in error.detail && error.detail.code === 'department_merge_preview_changed'
+}
+
 export function DepartmentMerge({ department, departments, tenantId, onCancel, onMerged }: {
   readonly department: Department
   readonly departments: readonly Department[]
@@ -23,7 +29,7 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
   const isCurrent = useSessionCurrent()
   const merge = useMergeDepartment()
   const [destinationId, setDestinationId] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
+  const [confirmedToken, setConfirmedToken] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const destinations = departments.filter((item) => item.id !== department.id && item.tenant_id === tenantId)
   const destination = destinations.find((item) => item.id === destinationId)
@@ -36,20 +42,28 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
     refetchOnWindowFocus: false,
   })
   const ready = !!destination && preview.isSuccess && !preview.isFetching
+  const confirmed = ready && confirmedToken === preview.data?.confirmation_token
 
-  useEffect(() => { heading.current?.focus() }, [])
+  useEffect(() => { if (isCurrent()) heading.current?.focus() }, [isCurrent])
   useEffect(() => {
-    if (merge.isError) heading.current?.focus()
-  }, [merge.isError])
+    if (merge.isError && isCurrent()) heading.current?.focus()
+  }, [merge.isError, isCurrent])
 
   function apply() {
-    if (applying.current || !confirmed || !ready || !isCurrent()) return
+    if (applying.current || !confirmed || !ready || !preview.data || !isCurrent()) return
     applying.current = true
-    merge.mutate(selection, {
+    merge.mutate({ ...selection, confirmationToken: preview.data.confirmation_token }, {
       onSuccess: (result) => {
         if (!isCurrent()) return
         onMerged()
         toast.success(`Merged “${result.source.name}” into “${result.destination.name}”`)
+      },
+      onError: (error) => {
+        if (!isCurrent()) return
+        if (isMergePreviewChanged(error)) {
+          setConfirmedToken(null)
+          setAttempt((value) => value + 1)
+        }
       },
       onSettled: () => { applying.current = false },
     })
@@ -78,7 +92,7 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
         <Select id={`${id}-destination`} name="destination_id" value={destinationId} disabled={merge.isPending || destinations.length === 0}
           onChange={(event) => {
             setDestinationId(event.target.value)
-            setConfirmed(false)
+            setConfirmedToken(null)
             setAttempt((value) => value + 1)
             merge.reset()
           }}>
@@ -87,11 +101,13 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
         </Select>
       </div>
       {destinations.length === 0 ? <p className="text-sm text-muted-foreground">Create another department before merging.</p> : null}
-      <p role="status" className={preview.isFetching ? 'text-sm text-muted-foreground' : 'sr-only'}>{preview.isFetching ? 'Loading merge preview…' : ''}</p>
+      <p role="status" className={preview.isFetching || preview.fetchStatus === 'paused' ? 'text-sm text-muted-foreground' : 'sr-only'}>
+        {preview.fetchStatus === 'paused' ? 'Waiting for connection to load merge preview.' : preview.isFetching ? 'Loading merge preview…' : ''}
+      </p>
       {preview.isError ? (
         <div className="space-y-2">
           <p role="alert" className="text-sm text-destructive wrap-anywhere">{preview.error instanceof ApiError ? preview.error.message : 'Could not load merge preview. Check your connection and try again.'}</p>
-          <Button type="button" variant="outline" className="h-11" onClick={() => { heading.current?.focus(); setConfirmed(false); void preview.refetch() }}>Retry preview</Button>
+          <Button type="button" variant="outline" className="h-11" onClick={() => { if (!isCurrent()) return; heading.current?.focus(); setConfirmedToken(null); setAttempt((value) => value + 1) }}>Retry preview</Button>
         </div>
       ) : null}
       {ready && preview.data ? (
@@ -106,14 +122,14 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
             <dt>Overlapping agent grants</dt><dd className="tabular-nums">{preview.data.overlapping_agent_grant_count}</dd>
           </dl>
           <p className="text-muted-foreground">These are associations, not people losing access. Members joining the destination also gain its department-based agent access. Other memberships and access remain unchanged.</p>
-          <p className="text-muted-foreground">Preview only: counts may change. Applying the merge rechecks current state and combines everything in one transaction.</p>
+          <p className="text-muted-foreground">Your confirmation applies to this preview. If names, memberships or eligible grants change, review a fresh preview and confirm again.</p>
           <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg py-2">
-            <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary" checked={confirmed} disabled={merge.isPending} onChange={(event) => setConfirmed(event.target.checked)} />
+            <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary" checked={confirmed} disabled={merge.isPending} onChange={(event) => setConfirmedToken(event.target.checked ? preview.data.confirmation_token : null)} />
             <span className="min-w-0 wrap-anywhere">I understand that “{preview.data.source.name}” will be permanently merged into “{preview.data.destination.name}”.</span>
           </label>
         </div>
       ) : null}
-      {merge.isError ? <p role="alert" className="text-sm text-destructive wrap-anywhere">{merge.error instanceof ApiError ? merge.error.message : 'Could not merge departments. Check your connection and try again.'}</p> : null}
+      {merge.isError ? <p role="alert" className="text-sm text-destructive wrap-anywhere">{isMergePreviewChanged(merge.error) ? 'The merge preview changed. Review the refreshed preview and confirm again.' : merge.error instanceof ApiError ? merge.error.message : 'Could not merge departments. Check your connection and try again.'}</p> : null}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="ghost" className="h-11" disabled={merge.isPending} onClick={onCancel}>Cancel</Button>
         <Button type="button" variant="destructive" className="h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100" disabled={merge.isPending || !ready || !confirmed} onClick={apply}>Merge departments</Button>

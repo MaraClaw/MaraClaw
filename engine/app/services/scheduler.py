@@ -10,6 +10,8 @@ import uuid
 from datetime import UTC, datetime
 from functools import partial
 
+from fastapi import HTTPException
+
 from app.core.domain.activity import ActivityAction
 from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
@@ -88,13 +90,16 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
 async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
     """Run the claimed occurrence snapshot, leaving interrupted work recoverable."""
     new_trace_id()
-    from app.core.permissions import is_agent_expired
+    from app.core.notification_kinds import NotificationKind
+    from app.core.permissions import check_agent_access, is_agent_expired
+    from app.core.security import load_user_principal
     from app.dao.activity_log_dao import agent_activity_log_dao
     from app.dao.agent_dao import agent_dao
     from app.dao.schedule_dao import agent_schedule_dao
     from app.services.agent_context import build_agent_context
     from app.services.llm import call_agent_llm_with_tools
     from app.services.llm.background_guard import ScheduleLeaseLostError
+    from app.services.notification_service import send_notification
     from app.services.schedule_lease import ScheduleLeaseHold, in_fresh_schedule_context
 
     token, instruction, due_at = schedule.lease_token, schedule.pending_instruction, schedule.pending_due_at
@@ -162,6 +167,31 @@ async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
                     }
                 )
                 hold.ensure_held()
+                if schedule.pending_notify_on_failure is True and detail["status"] == "failure":
+                    try:
+                        creator = await load_user_principal(schedule.created_by, fresh=True)
+                        authorized_agent, _ = await check_agent_access(creator, schedule.agent_id, fresh=True)
+                    except HTTPException:
+                        recipient = None
+                    else:
+                        recipient = (
+                            creator.id
+                            if creator.identity is not None
+                            and creator.tenant_id is not None
+                            and creator.tenant_id == authorized_agent.tenant_id
+                            else None
+                        )
+                    hold.ensure_held()
+                    if recipient is not None:
+                        _ = await send_notification(
+                            user_id=recipient,
+                            notification_kind=NotificationKind.SYSTEM_ALERT,
+                            title="Scheduled run failed",
+                            body="A scheduled run failed. Open schedule history to review the run.",
+                            link=f"/app/agents/{schedule.agent_id}/schedules",
+                            ref_id=schedule.id,
+                        )
+                    hold.ensure_held()
 
         await in_fresh_schedule_context(finish())
     except ScheduleLeaseLostError as exc:

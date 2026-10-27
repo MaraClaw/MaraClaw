@@ -941,10 +941,12 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	cron_expr VARCHAR(100) NOT NULL, 
 	timezone TEXT NOT NULL DEFAULT 'UTC',
 	is_enabled BOOLEAN NOT NULL DEFAULT true, 
+	notify_on_failure BOOLEAN NOT NULL DEFAULT false,
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
 	pending_due_at TIMESTAMP WITH TIME ZONE,
 	pending_instruction TEXT,
+	pending_notify_on_failure BOOLEAN,
 	lease_token UUID,
 	lease_expires_at TIMESTAMP WITH TIME ZONE,
 	pending_started_at TIMESTAMP WITH TIME ZONE,
@@ -956,9 +958,10 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	FOREIGN KEY(created_by) REFERENCES users (id),
 	CONSTRAINT ck_agent_schedules_pending_occurrence CHECK (
 		(pending_due_at IS NULL AND pending_instruction IS NULL AND lease_token IS NULL
-		 AND lease_expires_at IS NULL AND pending_started_at IS NULL)
+		 AND lease_expires_at IS NULL AND pending_started_at IS NULL AND pending_notify_on_failure IS NULL)
 		OR (pending_due_at IS NOT NULL AND pending_instruction IS NOT NULL
-		 AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND is_enabled IS TRUE)
+		 AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND is_enabled IS TRUE
+		 AND pending_notify_on_failure IS NOT NULL)
 	)
 );
 

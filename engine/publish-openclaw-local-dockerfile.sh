@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Build Dockerfile.openclaw and push a version-tagged image to Docker Hub.
 #
-# This wraps build-openclaw-local-dockerfile.sh to build MARACLAW_OPENCLAW_IMAGE
-# (default: openclaw:local), then tags and pushes:
+# Build and push linux/amd64 and linux/arm64 together as a manifest:
 #   ${DOCKERHUB_NAMESPACE}/openclaw:${IMAGE_TAG}
 #
 # Usage:
@@ -11,12 +10,11 @@
 #   PUSH_LATEST=1 DOCKERHUB_NAMESPACE=youruser ./publish-openclaw-local-dockerfile.sh
 #
 # Environment (set in .env or on the command line):
-#   MARACLAW_OPENCLAW_IMAGE local build/tag source   (default: openclaw:local)
 #   DOCKERHUB_NAMESPACE     Docker Hub user or org (required unless OPENCLAW_PUBLISH_IMAGE is set)
 #   OPENCLAW_PUBLISH_IMAGE  full repo name          (default: ${DOCKERHUB_NAMESPACE}/openclaw)
 #   IMAGE_TAG               Hub tag                 (default: $OPENCLAW_VERSION)
 #   PUSH_LATEST=1           also tag and push :latest
-#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_*, DOCKER_PLATFORM
+#   OPENCLAW_VERSION, OPENCLAW_SHA256, GOGCLI_VERSION, GOGCLI_{AMD64,ARM64}_SHA256
 #                           same pins as the local build script
 #
 # Requires an existing `docker login` to Docker Hub. This script does not store credentials.
@@ -35,9 +33,11 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-LOCAL_IMAGE="${MARACLAW_OPENCLAW_IMAGE:-openclaw:local}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.10.7}"
-DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64}"
+OPENCLAW_SHA256="${OPENCLAW_SHA256:-sha256:45dc6dadab3ca4e5286262226d6b61554309435a5e83b5d25c803a3a12ef2f81}"
+GOGCLI_VERSION="${GOGCLI_VERSION:-0.47.1}"
+GOGCLI_AMD64_SHA256="${GOGCLI_AMD64_SHA256:-sha256:279bc3a03c1919d774e268ef229949f45b753a0e21257f9fb315b05be7a40ea9}"
+GOGCLI_ARM64_SHA256="${GOGCLI_ARM64_SHA256:-sha256:c677ac6abf5e187e987a87fe1b588f454b002a7d7019de81b9e8db02e9e902b6}"
 IMAGE_TAG="${IMAGE_TAG:-$OPENCLAW_VERSION}"
 
 if [ -n "${OPENCLAW_PUBLISH_IMAGE:-}" ]; then
@@ -67,25 +67,25 @@ if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]*$'; then
     exit 2
 fi
 
-if [ "$DOCKER_PLATFORM" != "linux/arm64" ]; then
-    echo "[openclaw-publish] gogcli is pinned to the linux/arm64 release; set DOCKER_PLATFORM=linux/arm64 or add per-arch gogcli artifacts before building $DOCKER_PLATFORM." >&2
-    exit 2
-fi
-
 VERSIONED_REF="${PUBLISH_IMAGE}:${IMAGE_TAG}"
-echo "[openclaw-publish] Building $LOCAL_IMAGE and pushing $VERSIONED_REF"
-
-"$SCRIPT_DIR/build-openclaw-local-dockerfile.sh"
-
-docker tag "$LOCAL_IMAGE" "$VERSIONED_REF"
-echo "[openclaw-publish] Pushing $VERSIONED_REF"
-docker push "$VERSIONED_REF"
+echo "[openclaw-publish] Building linux/amd64,linux/arm64 and pushing $VERSIONED_REF"
+TAGS=(-t "$VERSIONED_REF")
 
 if [ "${PUSH_LATEST:-0}" = "1" ]; then
     LATEST_REF="${PUBLISH_IMAGE}:latest"
-    docker tag "$LOCAL_IMAGE" "$LATEST_REF"
-    echo "[openclaw-publish] Pushing $LATEST_REF"
-    docker push "$LATEST_REF"
+    TAGS+=(-t "$LATEST_REF")
 fi
+
+docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    -f Dockerfile.openclaw \
+    --build-arg OPENCLAW_VERSION="$OPENCLAW_VERSION" \
+    --build-arg OPENCLAW_SHA256="$OPENCLAW_SHA256" \
+    --build-arg GOGCLI_VERSION="$GOGCLI_VERSION" \
+    --build-arg GOGCLI_AMD64_SHA256="$GOGCLI_AMD64_SHA256" \
+    --build-arg GOGCLI_ARM64_SHA256="$GOGCLI_ARM64_SHA256" \
+    "${TAGS[@]}" \
+    --push \
+    .
 
 echo "[openclaw-publish] Published $VERSIONED_REF"

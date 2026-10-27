@@ -11,6 +11,7 @@ from app.db.session import transaction
 from app.services import agent_provisioning, org_departments
 from department_merge_postgres_fixtures import (
     department_store,
+    merge_client,
     merge_request,
     merge_state,
     merge_store,
@@ -28,6 +29,8 @@ __all__ = ["department_store", "merge_store", "schema_db"]
         "delete",
         "destination_delete",
         "assign",
+        "membership_swap",
+        "grant_swap",
         "permission",
         "create",
         "reverse_merge",
@@ -36,6 +39,13 @@ __all__ = ["department_store", "merge_store", "schema_db"]
 @pytest.mark.parametrize("merge_first", [True, False])
 async def test_merge_serializes_with_department_and_permission_writers(merge_store, monkeypatch, mutation, merge_first):
     store, _, unrelated = merge_store
+    reviewed = await merge_request(store, "preview")
+    tokens = {"merge": reviewed.json()["confirmation_token"]}
+    if mutation == "reverse_merge":
+        async with merge_client(store) as client:
+            reverse = await client.get(f"/api/departments/{store.other}/merge-preview?destination_id={store.selected}")
+        assert reverse.status_code == 200
+        tokens["reverse_merge"] = reverse.json()["confirmation_token"]
     first_operation, second_operation = ("merge", mutation) if merge_first else (mutation, "merge")
     locked, release = anyio.Event(), anyio.Event()
     responses: dict[str, Response] = {}
@@ -56,7 +66,7 @@ async def test_merge_serializes_with_department_and_permission_writers(merge_sto
 
         async def run(name: str, operation: str, raw: AsyncConnection[DictRow]):
             async with transaction(DbConnection(raw)):
-                responses[name] = await merge_request(store, operation)
+                responses[name] = await merge_request(store, operation, confirmation_token=tokens.get(operation))
 
         with anyio.fail_after(15):
             async with anyio.create_task_group() as group:
@@ -82,6 +92,8 @@ async def test_merge_serializes_with_department_and_permission_writers(merge_sto
             "delete": 204,
             "destination_delete": 204,
             "assign": 200,
+            "membership_swap": 200,
+            "grant_swap": 200,
             "permission": 200,
             "create": 201,
             "reverse_merge": 200,
@@ -92,13 +104,17 @@ async def test_merge_serializes_with_department_and_permission_writers(merge_sto
             match mutation:
                 case "rename" | "delete" | "reverse_merge":
                     expected = 404
-                case "assign" | "permission" | "create":
+                case "assign" | "permission" | "create" | "membership_swap" | "grant_swap":
                     expected = 422
                 case "destination_delete":
                     expected = 204
         elif mutation in {"delete", "destination_delete", "reverse_merge"}:
             expected = 404
+        elif mutation in {"rename", "destination_rename", "assign", "create", "membership_swap", "grant_swap"}:
+            expected = 409
         assert responses["second"].status_code == expected, responses["second"].text
+        if expected == 409:
+            assert responses["second"].json()["detail"]["code"] == "department_merge_preview_changed"
 
     state = await merge_state(store)
     department_ids = {row["id"] for row in state[0]}
@@ -107,10 +123,11 @@ async def test_merge_serializes_with_department_and_permission_writers(merge_sto
     assert all(row["scope_id"] in department_ids for row in state[2] if row["scope_type"] == "department")
     if mutation == "destination_rename":
         assert next(row["name"] for row in state[0] if row["id"] == store.other) == "Renamed"
-        if not merge_first:
-            assert responses["second"].json()["destination"]["name"] == "Renamed"
     if mutation == "assign" and not merge_first:
-        assert {row["department_id"] for row in state[1] if row["user_id"] == store.members[0]} == {store.other}
+        assert {row["department_id"] for row in state[1] if row["user_id"] == store.members[0]} == {
+            store.selected,
+            store.other,
+        }
     events = await store.db.fetchall("SELECT action FROM admin_audit_logs WHERE action = 'department.merge'")
-    expected_merges = int(merge_first or mutation not in {"delete", "destination_delete"})
+    expected_merges = int(merge_first or mutation in {"permission", "reverse_merge"})
     assert len(events) == expected_merges

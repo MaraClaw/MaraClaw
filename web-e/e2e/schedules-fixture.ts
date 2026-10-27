@@ -2,11 +2,11 @@ import { expect, type Page } from '@playwright/test'
 import { z } from 'zod'
 
 import type { ScheduleOut } from '../src/lib/schedules-api'
-import { originalAgent, originalToken, prepareWorkspace, replacementToken } from './session-fencing-fixture'
+import { originalAgent, originalToken, prepareWorkspace, replacementToken, replacementUser } from './session-fencing-fixture'
 
 export const savedSchedule: ScheduleOut = {
   id: 'timezone-schedule', name: 'Morning report', instruction: 'Summarize updates',
-  cron_expr: '0 9 * * *', timezone: 'Asia/Shanghai', is_enabled: true,
+  cron_expr: '0 9 * * *', timezone: 'Asia/Shanghai', is_enabled: true, notify_on_failure: false,
   next_run_at: '2026-01-15T01:00:00Z', last_run_at: null,
 }
 export const schedulesPath = `/app/agents/${originalAgent.id}/schedules`
@@ -14,7 +14,7 @@ export const schedulesApiPath = `/api/agents/${originalAgent.id}/schedules/`
 
 const createSchema = z.object({
   name: z.string(), instruction: z.string(), cron_expr: z.string(),
-  timezone: z.string(), is_enabled: z.boolean(),
+  timezone: z.string(), is_enabled: z.boolean(), notify_on_failure: z.boolean(),
 }).strict()
 const patchSchema = createSchema.partial()
 const scheduleSchema = createSchema.extend({
@@ -29,7 +29,7 @@ const nextRuns = new Map([
 
 export async function prepareSchedules(page: Page, initial: readonly ScheduleOut[] = [], creator = true) {
   await prepareWorkspace(page)
-  const agent = { ...originalAgent, creator_id: creator ? originalAgent.creator_id : 'another-creator' }
+  const agent = { ...originalAgent, creator_id: creator ? originalAgent.creator_id : replacementUser.id }
   await page.route(`**/api/agents/${agent.id}`, (route) => route.fulfill({ json: agent }))
   await page.route(`**/api/agents/${agent.id}/metrics`, (route) => route.fulfill({ json: {} }))
   let schedules = [...initial]

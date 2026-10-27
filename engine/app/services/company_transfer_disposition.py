@@ -65,7 +65,8 @@ async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> 
         # Old automation leases cannot deliver into the destination with source-org context.
         await db.execute(
             "UPDATE agent_schedules SET is_enabled=false,pending_due_at=NULL,pending_instruction=NULL, "
-            "lease_token=NULL,lease_expires_at=NULL,pending_started_at=NULL WHERE agent_id=%(agent)s",
+            "pending_notify_on_failure=NULL,lease_token=NULL,lease_expires_at=NULL,pending_started_at=NULL "
+            "WHERE agent_id=%(agent)s",
             params,
         )
         await db.execute("UPDATE agent_triggers SET is_enabled=false WHERE agent_id=%(agent)s", params)

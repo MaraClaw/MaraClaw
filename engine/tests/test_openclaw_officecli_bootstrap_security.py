@@ -24,7 +24,7 @@ def configure_fake_gnu_mv_log(fixture: BootstrapFixture, monkeypatch: pytest.Mon
 def prepare_lkg(fixture: BootstrapFixture) -> tuple[bytes, bytes, bytes, str]:
     fixture.configure_release("v1.2.3", "lkg")
     assert fixture.run("sh", "-c", ":").returncode == 0
-    release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
+    release = fixture.release("v1.2.3")
     return (
         release.joinpath("officecli").read_bytes(),
         release.joinpath("skill", "SKILL.md").read_bytes(),
@@ -36,7 +36,7 @@ def prepare_lkg(fixture: BootstrapFixture) -> tuple[bytes, bytes, bytes, str]:
 def assert_lkg_execution(
     fixture: BootstrapFixture, result: CompletedProcess[str], snapshot: tuple[bytes, bytes, bytes, str]
 ) -> None:
-    release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
+    release = fixture.release("v1.2.3")
     assert result.returncode == 0, result.stderr
     assert fixture.child_sentinel.read_text(encoding="utf-8") == "lkg"
     assert release.joinpath("officecli").read_bytes() == snapshot[0]
@@ -85,7 +85,7 @@ def test_staging_failures_preserve_lkg_and_reach_downstream(tmp_path: Path, mode
 
     # Then
     assert_lkg_execution(fixture, result, snapshot)
-    assert not (fixture.state_dir / ".officecli" / "releases" / "v1.2.4").exists()
+    assert not fixture.release("v1.2.4").exists()
 
 
 @pytest.mark.parametrize(
@@ -221,7 +221,7 @@ def test_corrupt_lkg_is_not_used_but_gateway_still_starts(tmp_path: Path, corrup
     fixture = create_fake_network_fixture(tmp_path)
     prepare_lkg(fixture)
     root = fixture.state_dir / ".officecli"
-    release = root / "releases" / "v1.2.3"
+    release = fixture.release("v1.2.3")
     binary = release / "officecli"
     skill = release / "skill" / "SKILL.md"
     metadata = release / "metadata"
@@ -324,7 +324,7 @@ def test_same_tag_drift_retains_existing_immutable_release(tmp_path: Path) -> No
     fixture = create_fake_network_fixture(tmp_path)
     fixture.configure_release("v1.2.3", "original")
     assert fixture.run("sh", "-c", ":").returncode == 0
-    release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
+    release = fixture.release("v1.2.3")
     original_binary = release.joinpath("officecli").read_bytes()
     original_metadata = release.joinpath("metadata").read_bytes()
     fixture.configure_release("v1.2.3", "drifted")
@@ -352,5 +352,5 @@ def test_activation_replaces_current_with_gnu_atomic_rename(tmp_path: Path, monk
     current = fixture.state_dir / ".officecli" / "current"
     assert result.returncode == 0, result.stderr
     assert any(line.startswith("-Tf\0--\0") for line in mv_log.read_text(encoding="utf-8").splitlines())
-    assert str(current.readlink()) == "releases/v1.2.3"
+    assert str(current.readlink()) == "releases/v1.2.3-linux-arm64"
     assert not list((fixture.state_dir / ".officecli" / "releases").rglob(".current.*"))

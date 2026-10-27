@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
-import { mergeDestinationId, mergeSourceId, otherTenant, tenant } from './departments-browser-harness.mjs'
+import { mergeConfirmationToken, mergeDestinationId, mergeSourceId, otherTenant, tenant } from './departments-browser-harness.mjs'
 
 const panel = (page, name = 'Operations') => page.getByRole('group', { name: `Merge “${name}”`, exact: true })
 const apply = (page) => panel(page).getByRole('button', { name: 'Merge departments', exact: true })
 const checkbox = (page) => panel(page).getByRole('checkbox')
-function seed(state) {
+export function seed(state) {
   for (const [tenantId, directory] of Object.entries(state.directories)) {
     directory.departments[0].id = mergeSourceId
     directory.departments[1].id = mergeDestinationId
@@ -63,7 +63,7 @@ export async function runMergeCases(harness) {
     await page.keyboard.press('Enter')
     await page.keyboard.press('Escape')
     assert.equal(state.merges.length, 1)
-    assert.deepEqual(state.merges[0].payload, { destination_id: mergeDestinationId })
+    assert.deepEqual(state.merges[0].payload, { destination_id: mergeDestinationId, confirmation_token: mergeConfirmationToken })
     assert.deepEqual(state.merges[0].params, { tenant_id: tenant })
     assert.equal(state.calls.filter((call) => call.method === 'DELETE' || call.method === 'PUT').length, 0)
     await harness.capture(page, 'merge-pending')
@@ -108,9 +108,10 @@ export async function runMergeCases(harness) {
     assert.equal(state.merges.length, 2)
   })
 
-  for (const status of [200, 403]) for (const transition of ['tenant', 'session']) {
+  for (const status of [200, 403, 409]) for (const transition of ['tenant', 'session']) {
     await harness.scenario({ name: `late merge ${status} leaves replacement ${transition} untouched` }, async (page, state, base) => {
       state.mergeStatus = status
+      if (status === 409) state.mergeDetail = { code: 'department_merge_preview_changed' }
       state.mergeGate = Promise.withResolvers()
       await open(page, state, base)
       await select(page)
@@ -129,6 +130,7 @@ export async function runMergeCases(harness) {
       const name = transition === 'tenant' ? 'Beta operations' : 'Operations'
       await expect(page.getByRole('button', { name: `Merge ${name}`, exact: true })).toBeVisible()
       const before = state.calls.filter((call) => call.path === '/api/departments' && call.params.tenant_id === (transition === 'tenant' ? otherTenant : tenant)).length
+      const previewsBefore = state.mergePreviews.length
       state.mergeGate.resolve()
       await state.merges[0].delivered.promise
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -136,6 +138,7 @@ export async function runMergeCases(harness) {
       await expect(page.getByText('Synthetic merge denied', { exact: true })).toHaveCount(0)
       await expect(page.getByText('Merged “Operations” into “Engineering”', { exact: true })).toHaveCount(0)
       assert.equal(state.calls.filter((call) => call.path === '/api/departments' && call.params.tenant_id === (transition === 'tenant' ? otherTenant : tenant)).length, before)
+      assert.equal(state.mergePreviews.length, previewsBefore)
     })
   }
 

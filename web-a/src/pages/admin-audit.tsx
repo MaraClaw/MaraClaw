@@ -10,14 +10,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { adminAuditPageOptions } from '@/hooks/admin-audit-options'
 import { useAuth } from '@/hooks/use-auth'
-import { ADMIN_AUDIT_DEFAULT_LIMIT, type AdminAuditScope } from '@/lib/admin-audit-api'
+import { ADMIN_AUDIT_DEFAULT_LIMIT, type AdminAuditPageScope } from '@/lib/admin-audit-api'
+import { adminAuditWindowSchema } from '@/lib/admin-audit-window'
 import { ApiError } from '@/lib/http'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 
 const filterId = z.string().trim().pipe(z.union([z.literal(''), z.uuid('Enter a valid UUID or leave this blank.')]))
-const filterSchema = z.object({ action: z.string().trim(), tenant_id: filterId, actor_id: filterId })
+const filterSchema = adminAuditWindowSchema.safeExtend({ action: z.string().trim(), tenant_id: filterId, actor_id: filterId })
 type Filters = z.infer<typeof filterSchema>
-const emptyFilters: Filters = { action: '', tenant_id: '', actor_id: '' }
+const emptyFilters = { action: '', tenant_id: '', actor_id: '', start_at: '', end_at: '' }
 const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 const buttonClass = 'h-auto min-h-11 max-w-full whitespace-normal'
 const pageButtonClass = `${buttonClass} aria-disabled:pointer-events-none aria-disabled:opacity-50`
@@ -26,13 +27,13 @@ export function AdminAuditPage() {
   const id = useId()
   const { user } = useAuth()
   const platformAdmin = isPlatformAdminUser(user)
-  const [filters, setFilters] = useState(emptyFilters)
+  const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [cursors, setCursors] = useState<readonly string[]>([])
   const [refresh, setRefresh] = useState(0)
-  const form = useForm<Filters>({ resolver: zodResolver(filterSchema), defaultValues: emptyFilters })
-  const scope: AdminAuditScope = platformAdmin
+  const form = useForm<z.input<typeof filterSchema>, unknown, Filters>({ resolver: zodResolver(filterSchema), defaultValues: emptyFilters })
+  const scope: AdminAuditPageScope = platformAdmin
     ? { role: 'platform_admin', ...filters }
-    : { role: 'org_admin', action: filters.action }
+    : { role: 'org_admin', action: filters.action, start_at: filters.start_at, end_at: filters.end_at }
   const activity = useQuery(adminAuditPageOptions({ ...scope, cursor: cursors.at(-1) }, refresh))
   const hasFilters = Object.values(filters).some(Boolean)
 
@@ -76,6 +77,19 @@ export function AdminAuditPage() {
                 </div>
               )) : null}
             </div>
+            <fieldset className="flex min-w-0 flex-col gap-3">
+              <legend className="mb-2 text-sm font-medium">Time window (optional)</legend>
+              <p id={`${id}-window-help`} className="text-sm text-muted-foreground">Use RFC 3339 with an offset, such as 2026-10-21T12:30:00Z or 2026-10-21T20:30:00+08:00. Start is inclusive; end is exclusive. Leave either blank for an open bound.</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {(['start_at', 'end_at'] as const).map((field) => (
+                  <div key={field} className="flex min-w-0 flex-col gap-2">
+                    <Label htmlFor={`${id}-${field}`}>{field === 'start_at' ? 'Start time' : 'End time'}</Label>
+                    <Input id={`${id}-${field}`} type="text" autoComplete="off" spellCheck={false} placeholder="2026-10-21T12:30:00Z" aria-invalid={Boolean(form.formState.errors[field])} aria-describedby={`${id}-window-help${form.formState.errors[field] ? ` ${id}-${field}-error` : ''}`} {...form.register(field)} />
+                    {form.formState.errors[field] ? <p id={`${id}-${field}-error`} role="alert" className="text-sm text-destructive">{form.formState.errors[field]?.message}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </fieldset>
             <div className="flex flex-wrap gap-3">
               <Button type="submit" className={buttonClass}>Apply filters</Button>
               <Button type="button" variant="outline" className={buttonClass} onClick={clearFilters}>Clear filters</Button>
@@ -90,6 +104,7 @@ export function AdminAuditPage() {
           <Button type="button" variant="outline" className={buttonClass} onClick={refreshActivity}>Refresh activity</Button>
         </div>
         <p role="status" className="text-sm text-muted-foreground">Page {cursors.length + 1}{activity.isSuccess && activity.data.next_cursor === null ? ' · End of available history' : ''}</p>
+        {filters.start_at || filters.end_at ? <p className="text-sm text-muted-foreground">Applied UTC window: {filters.start_at ?? 'Any start'} (inclusive) to {filters.end_at ?? 'Any end'} (exclusive).</p> : null}
         {activity.isPending ? <Card><CardContent role="status">{activity.isPaused ? 'Waiting for a connection. Activity will load when you are back online.' : 'Loading recent activity...'}</CardContent></Card> : activity.isError ? (
           <Card><CardContent role="alert" className="flex flex-col gap-3">
             <p className="font-medium">Could not load recent activity.</p>

@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 from app.core.security import get_current_user
+from app.dao.org_department_dao import DepartmentMergeState
 from app.records.identity import IdentityRecord
-from app.schemas.department import DepartmentMergePreviewOut
 from app.services import org_departments
 from test_department_api import directory
 
@@ -26,15 +26,13 @@ def merge_directory(directory, monkeypatch):
     async def preview(first, second):
         first_members = {user for user, ids in memberships.items() if first.id in ids}
         second_members = {user for user, ids in memberships.items() if second.id in ids}
-        return DepartmentMergePreviewOut(
+        return DepartmentMergeState(
             source=first,
             destination=second,
-            source_membership_count=len(first_members),
-            destination_membership_count=len(second_members),
-            overlapping_membership_count=len(first_members & second_members),
-            source_agent_grant_count=len(grants[first.id]),
-            destination_agent_grant_count=len(grants[second.id]),
-            overlapping_agent_grant_count=len(grants[first.id] & grants[second.id]),
+            source_members=frozenset(first_members),
+            destination_members=frozenset(second_members),
+            source_grants=frozenset(grants[first.id]),
+            destination_grants=frozenset(grants[second.id]),
         )
 
     async def persist(first, second):
@@ -79,7 +77,11 @@ def test_preview_is_read_only_and_reports_overlap(merge_directory):
     client, actor, _, source, destination, *_ = directory
     response = client.get(f"/api/departments/{source.id}/merge-preview?destination_id={destination.id}")
     assert response.status_code == 200
-    assert {key: value for key, value in response.json().items() if key not in {"source", "destination"}} == {
+    assert {
+        key: value
+        for key, value in response.json().items()
+        if key not in {"source", "destination", "confirmation_token"}
+    } == {
         "source_membership_count": 2,
         "destination_membership_count": 2,
         "overlapping_membership_count": 1,
@@ -101,7 +103,12 @@ def test_apply_locks_subjects_and_union_agents_then_audits(merge_directory):
     subjects = sorted(memberships)
     affected = sorted(set.union(*grants.values()))
     unrelated = memberships[subject.id] - {source.id}
-    response = client.post(f"/api/departments/{source.id}/merge", json={"destination_id": str(destination.id)})
+    reviewed = client.get(f"/api/departments/{source.id}/merge-preview?destination_id={destination.id}").json()
+    events.clear()
+    response = client.post(
+        f"/api/departments/{source.id}/merge",
+        json={"destination_id": str(destination.id), "confirmation_token": reviewed["confirmation_token"]},
+    )
     assert response.status_code == 200
     assert response.json()["source_membership_count"] == 2
     assert source.id not in rows
@@ -111,7 +118,9 @@ def test_apply_locks_subjects_and_union_agents_then_audits(merge_directory):
     assert [call.args[0] for call in bumped.await_args_list] == affected
     mutation.assert_awaited_once_with(source, destination)
     assert audit.await_args.kwargs["action"] == "department.merge"
-    assert audit.await_args.kwargs["details"] == response.json()
+    assert audit.await_args.kwargs["details"] == {
+        key: value for key, value in response.json().items() if key != "confirmation_token"
+    }
 
 
 @pytest.mark.parametrize("apply", [False, True])
@@ -150,7 +159,8 @@ def test_invalid_merge_pair_or_authority_cannot_mutate(merge_directory, case, st
     query = "" if tenant is None else f"&tenant_id={tenant}"
     response = (
         client.post(
-            f"/api/departments/{source_id}/merge?{query.lstrip('&')}", json={"destination_id": str(destination_id)}
+            f"/api/departments/{source_id}/merge?{query.lstrip('&')}",
+            json={"destination_id": str(destination_id), "confirmation_token": "v1:" + "0" * 64},
         )
         if apply
         else client.get(f"/api/departments/{source_id}/merge-preview?destination_id={destination_id}{query}")
@@ -183,7 +193,10 @@ def test_merge_rechecks_fresh_administrator(merge_directory, monkeypatch, change
     read = AsyncMock(return_value=fresh)
     monkeypatch.setattr(org_departments.user_dao, "get_with_identity", read)
     response = (
-        client.post(f"/api/departments/{source.id}/merge", json={"destination_id": str(destination.id)})
+        client.post(
+            f"/api/departments/{source.id}/merge",
+            json={"destination_id": str(destination.id), "confirmation_token": "v1:" + "0" * 64},
+        )
         if apply
         else client.get(f"/api/departments/{source.id}/merge-preview?destination_id={destination.id}")
     )
@@ -199,8 +212,12 @@ def test_platform_administrator_requires_and_honors_explicit_selection(merge_dir
     platform = replace(actor, role="platform_admin", tenant_id=uuid4())
     client.app.dependency_overrides[get_current_user] = lambda: platform
     monkeypatch.setattr(org_departments.user_dao, "get_with_identity", AsyncMock(return_value=platform))
+    reviewed = client.get(
+        f"/api/departments/{source.id}/merge-preview?destination_id={destination.id}&tenant_id={source.tenant_id}"
+    ).json()
     response = client.post(
-        f"/api/departments/{source.id}/merge?tenant_id={source.tenant_id}", json={"destination_id": str(destination.id)}
+        f"/api/departments/{source.id}/merge?tenant_id={source.tenant_id}",
+        json={"destination_id": str(destination.id), "confirmation_token": reviewed["confirmation_token"]},
     )
     assert response.status_code == 200
     mutation.assert_awaited_once()
