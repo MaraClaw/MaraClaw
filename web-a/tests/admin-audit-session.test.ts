@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { QueryObserver, isCancelledError } from '@tanstack/react-query'
+import { QueryObserver, hashKey, isCancelledError } from '@tanstack/react-query'
 
 import { adminAuditOptions, adminAuditPageOptions } from '../src/hooks/admin-audit-options.ts'
 import { createSessionQueryScope, ownQueryClient } from '../src/hooks/session-query-client.ts'
@@ -108,6 +108,8 @@ test('page identity separates role, filters, limit, opaque cursor and refreshed 
     { role: 'platform_admin', tenant_id: tenantId }, { role: 'platform_admin', actor_id: actorId },
     { role: 'platform_admin', action: 'user.activate' }, { role: 'platform_admin', limit: 500 },
     { role: 'org_admin', cursor: 'opaque-a' }, { role: 'org_admin', cursor: 'opaque-b' },
+    { role: 'org_admin', start_at: '2026-10-21T00:00:00Z' }, { role: 'org_admin', end_at: '2026-10-22T00:00:00Z' },
+    { role: 'platform_admin', start_at: '2026-10-21T00:00:00Z' }, { role: 'platform_admin', end_at: '2026-10-22T00:00:00Z' },
   ]
   // When
   const identities = scopes.map((scope) => JSON.stringify(adminAuditPageOptions(scope).queryKey))
@@ -117,9 +119,12 @@ test('page identity separates role, filters, limit, opaque cursor and refreshed 
     adminAuditPageOptions({ role: 'platform_admin', action: 'user.activate', limit: 100 }).queryKey)
   assert.notDeepEqual(adminAuditPageOptions({ role: 'org_admin' }, 1).queryKey, adminAuditPageOptions({ role: 'org_admin' }).queryKey)
   assert.notEqual(adminAuditPageOptions({ role: 'org_admin' }).queryKey[0], adminAuditOptions({ role: 'org_admin' }).queryKey[0])
+  assert.deepEqual(adminAuditPageOptions({ role: 'org_admin', start_at: '2026-10-21T08:00:00+08:00', end_at: '2026-10-22T00:00:00.1234560Z' }).queryKey,
+    adminAuditPageOptions({ role: 'org_admin', start_at: '2026-10-21T00:00:00Z', end_at: '2026-10-21T19:00:00.123456-05:00' }).queryKey)
+  assert.equal(hashKey(adminAuditPageOptions({ role: 'org_admin', start_at: '', end_at: ' ' }).queryKey), hashKey(adminAuditPageOptions({ role: 'org_admin' }).queryKey))
 })
 
-for (const next of ['filter', 'back', 'refresh'] as const) {
+for (const role of ['platform_admin', 'org_admin'] as const) for (const next of ['filter', 'window', 'back', 'refresh'] as const) {
   test(`${next} abandons an in-flight older page without leaking its records or continuation`, async (context) => {
     // Given
     const session = ownAuditSession(context)
@@ -131,11 +136,11 @@ for (const next of ['filter', 'back', 'refresh'] as const) {
       if (String(url).includes('cursor=old')) { signal = options?.signal; return response.promise }
       return Promise.resolve(Response.json({ items: [{ ...pageEvent, action: 'current.page' }], next_cursor: 'current-next' }))
     })
-    const old = adminAuditPageOptions({ role: 'org_admin', cursor: 'old' })
+    const old = adminAuditPageOptions({ role, cursor: 'old', start_at: '2026-10-21T00:00:00Z', end_at: '2026-10-22T00:00:00Z' })
     const observer = new QueryObserver(client, old)
     context.after(observer.subscribe(() => undefined))
     // When
-    observer.setOptions(adminAuditPageOptions({ role: 'org_admin', ...(next === 'filter' ? { action: 'new.filter' } : {}) }, next === 'refresh' ? 1 : 0))
+    observer.setOptions(adminAuditPageOptions({ role, start_at: next === 'window' ? '2026-10-21T12:00:00Z' : '2026-10-21T00:00:00Z', end_at: '2026-10-22T00:00:00Z', ...(next === 'filter' ? { action: 'new.filter' } : {}) }, next === 'refresh' ? 1 : 0))
     assert.equal(observer.getCurrentResult().data, undefined)
     const result = await observer.refetch()
     response.resolve(Response.json({ items: [pageEvent], next_cursor: 'retired-next' }))
@@ -157,7 +162,7 @@ for (const transition of ['logout', 'same-token', 'different-token'] as const) f
     const body = Promise.withResolvers<string>()
     const response = new DeferredBodyResponse(status, body.promise)
     context.mock.method(globalThis, 'fetch', async () => response)
-    const options = adminAuditPageOptions({ role: 'org_admin', cursor: 'old-owner' })
+    const options = adminAuditPageOptions({ role: 'org_admin', cursor: 'old-owner', start_at: '2026-10-21T00:00:00Z', end_at: '2026-10-22T00:00:00Z' })
     const pending = previous.client.fetchQuery(options)
     const rejected = assert.rejects(pending, isCancelledError)
     await response.bodyStarted.promise

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { z } from 'zod'
 
-import { ADMIN_AUDIT_MAX_CURSOR_LENGTH, fetchAdminAudit, fetchAdminAuditPage } from '../src/lib/admin-audit-api.ts'
+import { ADMIN_AUDIT_MAX_CURSOR_LENGTH, adminAuditPageScopeSchema, fetchAdminAudit, fetchAdminAuditPage } from '../src/lib/admin-audit-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { actorId, auditEvent, ownAuditSession, tenantId } from './admin-audit-fixtures.ts'
 
@@ -201,4 +201,60 @@ test('invalid server cursor remains a recoverable API error in the current sessi
   // When / Then
   await assert.rejects(fetchAdminAuditPage({ role: 'org_admin', cursor: 'stale' }), (error) => error instanceof ApiError && error.status === 400)
   assert.equal(session.isCurrent(owner), true)
+})
+
+for (const role of ['platform_admin', 'org_admin'] as const) {
+  for (const bounds of [
+    { start_at: ' 2026-10-21T12:30:00.123456+08:00 ', end_at: '2026-10-21t00:30:00.123457-05:00' },
+    { start_at: '2026-10-21T04:30:00.123456Z', end_at: '2026-10-21T05:30:00.123457Z' },
+  ]) test(`${role} transmits the same UTC window for ${bounds.start_at}`, async (context) => {
+    // Given
+    const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+    // When
+    await fetchAdminAuditPage({ role, ...bounds, cursor: 'window-page-2' })
+    // Then
+    const url = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
+    assert.equal(url.pathname, role === 'platform_admin' ? '/api/admin/audit-logs/page' : '/api/users/admin-audit-logs/page')
+    assert.deepEqual(Object.fromEntries(url.searchParams), { limit: '100', cursor: 'window-page-2', start_at: '2026-10-21T04:30:00.123456Z', end_at: '2026-10-21T05:30:00.123457Z' })
+  })
+
+  for (const bounds of [{ start_at: '2026-10-21T00:00:00Z' }, { end_at: '2026-10-22T00:00:00Z' }, { start_at: ' ', end_at: '' }]) {
+    test(`${role} supports optional window bounds ${JSON.stringify(bounds)}`, async (context) => {
+      // Given
+      const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+      // When
+      await fetchAdminAuditPage({ role, ...bounds })
+      // Then
+      const url = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
+      assert.equal(url.searchParams.get('start_at'), bounds.start_at?.trim() ? '2026-10-21T00:00:00.000000Z' : null)
+      assert.equal(url.searchParams.get('end_at'), bounds.end_at ? '2026-10-22T00:00:00.000000Z' : null)
+    })
+  }
+
+  for (const value of ['1700000000', 'yesterday', '2026-10-21T00:00:00', '2026-02-30T00:00:00Z', '2026-10-21T00:00Z', '2026-10-21T00:00:00+24:00', '0001-01-01T00:00:00+01:00']) {
+    test(`${role} rejects invalid bound ${value} before transport`, async (context) => {
+      // Given
+      const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+      // When / Then
+      for (const field of ['start_at', 'end_at']) await assert.rejects(fetchAdminAuditPage({ role, [field]: value }), z.ZodError)
+      assert.equal(fetch.mock.callCount(), 0)
+    })
+  }
+
+  for (const end_at of ['2026-10-21T08:00:00+08:00', '2026-10-20T23:59:59Z', '2026-10-21T00:00:00.0000009Z']) {
+    test(`${role} rejects equal or reversed normalized bounds ending ${end_at}`, async (context) => {
+      // Given
+      const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+      // When / Then
+      await assert.rejects(fetchAdminAuditPage({ role, start_at: '2026-10-21T00:00:00Z', end_at }), z.ZodError)
+      assert.equal(fetch.mock.callCount(), 0)
+    })
+  }
+}
+
+test('numeric and null window bounds are rejected without datetime coercion', () => {
+  // Given / When / Then
+  for (const value of [1700000000, null]) for (const field of ['start_at', 'end_at']) {
+    assert.throws(() => adminAuditPageScopeSchema.parse({ role: 'org_admin', [field]: value }), z.ZodError)
+  }
 })

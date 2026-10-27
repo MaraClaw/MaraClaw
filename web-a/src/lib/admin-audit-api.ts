@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { apiRequest } from './http.ts'
 import { AdminAuditLogOutSchema, AdminAuditPageItemSchema, AdminAuditPageOutSchema } from './engine-contracts.generated.ts'
+import { adminAuditWindowSchema } from './admin-audit-window.ts'
 
 export const ADMIN_AUDIT_DEFAULT_LIMIT = 100
 export const ADMIN_AUDIT_MAX_LIMIT = 500
@@ -19,8 +20,8 @@ export const adminAuditScopeSchema = z.discriminatedUnion('role', [
 
 const cursor = z.string().min(1).max(ADMIN_AUDIT_MAX_CURSOR_LENGTH)
 export const adminAuditPageScopeSchema = z.discriminatedUnion('role', [
-  z.strictObject({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, limit, cursor: cursor.optional() }).readonly(),
-  z.strictObject({ role: z.literal('org_admin'), action, limit, cursor: cursor.optional() }).readonly(),
+  adminAuditWindowSchema.safeExtend({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, limit, cursor: cursor.optional() }).strict().readonly(),
+  adminAuditWindowSchema.safeExtend({ role: z.literal('org_admin'), action, limit, cursor: cursor.optional() }).strict().readonly(),
 ])
 
 export const adminAuditLogSchema = AdminAuditLogOutSchema.strip().extend({
@@ -71,6 +72,8 @@ export async function fetchAdminAuditPage(scope: AdminAuditPageScope, signal?: A
   const params = new URLSearchParams({ limit: String(parsed.limit) })
   if (parsed.action) params.set('action', parsed.action)
   if (parsed.cursor !== undefined) params.set('cursor', parsed.cursor)
+  if (parsed.start_at !== undefined) params.set('start_at', parsed.start_at)
+  if (parsed.end_at !== undefined) params.set('end_at', parsed.end_at)
   switch (parsed.role) {
     case 'platform_admin':
       if (parsed.tenant_id) params.set('tenant_id', parsed.tenant_id)
