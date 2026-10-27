@@ -24,7 +24,6 @@ SEEDS = (
     "tool_seeder.get_atlassian_api_key",
     "template_seeder.seed_agent_templates",
     "skill_seeder.seed_skills",
-    "linkup_runtime.seed_linkup_skills",
     "skill_seeder.push_default_skills_to_existing_agents",
     "agent_seeder.seed_default_agents",
     "agent_seeder.seed_okr_agent",
