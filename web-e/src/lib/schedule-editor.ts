@@ -1,9 +1,9 @@
 import type { ScheduleOut, SchedulePatch } from './schedules-api.ts'
 
-export type ScheduleDraft = Pick<ScheduleOut, 'name' | 'cron_expr' | 'instruction' | 'timezone'>
+export type ScheduleDraft = Pick<ScheduleOut, 'name' | 'cron_expr' | 'instruction' | 'timezone' | 'notify_on_failure'>
 
 export function createScheduleDraft(timezone?: string | null): ScheduleDraft {
-  return { name: '', cron_expr: '0 9 * * 1-5', instruction: '', timezone: timezone ?? 'UTC' }
+  return { name: '', cron_expr: '0 9 * * 1-5', instruction: '', timezone: timezone ?? 'UTC', notify_on_failure: false }
 }
 
 export function scheduleChanges(original: ScheduleDraft, draft: ScheduleDraft): SchedulePatch {
@@ -12,5 +12,6 @@ export function scheduleChanges(original: ScheduleDraft, draft: ScheduleDraft): 
     ...(original.cron_expr === draft.cron_expr ? {} : { cron_expr: draft.cron_expr }),
     ...(original.instruction === draft.instruction ? {} : { instruction: draft.instruction }),
     ...(original.timezone === draft.timezone ? {} : { timezone: draft.timezone }),
+    ...(original.notify_on_failure === draft.notify_on_failure ? {} : { notify_on_failure: draft.notify_on_failure }),
   }
 }

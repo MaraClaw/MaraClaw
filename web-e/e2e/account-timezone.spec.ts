@@ -35,7 +35,7 @@ test('Settings timezone persists across reload and seeds a new schedule with an 
   await page.getByLabel('Timezone', { exact: true }).selectOption({ label: 'GMT -5' })
   await page.getByRole('button', { name: 'Add schedule', exact: true }).click()
   await expect.poll(() => fixture.creations).toEqual([{
-    name: 'Preference override', cron_expr: '0 9 * * 1-5', instruction: '', timezone: 'Etc/GMT+5', is_enabled: true,
+    name: 'Preference override', cron_expr: '0 9 * * 1-5', instruction: '', timezone: 'Etc/GMT+5', is_enabled: true, notify_on_failure: false,
   }])
   await expect(page.getByLabel('Timezone', { exact: true })).toHaveValue('Etc/GMT-7')
 })
