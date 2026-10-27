@@ -1,5 +1,4 @@
-from collections.abc import AsyncGenerator, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from typing import NotRequired, Protocol, TypedDict, TypeIs, Unpack
 
 from app.services.storage_runtime.base import StorageBackend
@@ -48,34 +47,14 @@ class S3Client(Protocol):
 
     def generate_presigned_url(self, **kwargs: Unpack[S3PresignArguments]) -> str: ...
 
+    def put_object(self, **kwargs: Unpack[S3PutArguments]) -> Mapping[str, object]: ...
 
-class AsyncS3Client(Protocol):
-    async def put_object(self, **kwargs: Unpack[S3PutArguments]) -> Mapping[str, object]: ...
+    def delete_object(self, **kwargs: Unpack[S3ObjectArguments]) -> object: ...
 
-    async def delete_object(self, **kwargs: Unpack[S3ObjectArguments]) -> object: ...
-
-    async def delete_objects(self, **kwargs: Unpack[S3DeleteArguments]) -> object: ...
-
-
-class AsyncS3ClientCM(Protocol):
-    async def __aenter__(self) -> AsyncS3Client: ...
-
-    async def __aexit__(self, *args: object) -> bool | None: ...
-
-
-class AioBoto3Session(Protocol):
-    def client(self, service_name: str, **kwargs: object) -> AsyncS3ClientCM: ...
+    def delete_objects(self, **kwargs: Unpack[S3DeleteArguments]) -> object: ...
 
 
 def _is_s3_client(value: object) -> TypeIs[S3Client]:
-    return value is not None
-
-
-def _is_aioboto3_session(value: object) -> TypeIs[AioBoto3Session]:
-    return value is not None
-
-
-def _is_async_s3_cm(value: object) -> TypeIs[AsyncS3ClientCM]:
     return value is not None
 
 
@@ -103,7 +82,6 @@ class S3Connection(StorageBackend):
         self.presign_ttl_seconds: int = presign_ttl_seconds
         self.max_pool_connections: int = max_pool_connections
         self._client: S3Client | None = None
-        self._aioboto3_session: AioBoto3Session | None = None
 
     def _object_key(self, key: str) -> str:
         normalized = normalize_storage_key(key)
@@ -140,7 +118,7 @@ class S3Connection(StorageBackend):
                 import boto3
             except ImportError as exc:
                 raise RuntimeError("boto3 is required for S3 storage backend") from exc
-            client = boto3.client(
+            client = boto3.Session().client(
                 "s3",
                 endpoint_url=self.endpoint_url,
                 aws_access_key_id=self.access_key_id,
@@ -151,28 +129,3 @@ class S3Connection(StorageBackend):
                 raise RuntimeError("boto3 S3 client is missing required methods")
             self._client = client
         return self._client
-
-    @asynccontextmanager
-    async def _async_client(self) -> AsyncGenerator[AsyncS3Client]:
-        try:
-            import aioboto3
-        except ImportError as exc:
-            raise RuntimeError("aioboto3 is required for async S3 writes") from exc
-        session = self._aioboto3_session
-        if session is None:
-            raw_session = aioboto3.Session()
-            if not _is_aioboto3_session(raw_session):
-                raise RuntimeError("aioboto3 session is missing client()")
-            session = raw_session
-            self._aioboto3_session = session
-        client_cm_raw = session.client(
-            "s3",
-            endpoint_url=self.endpoint_url,
-            aws_access_key_id=self.access_key_id,
-            aws_secret_access_key=self.secret_access_key,
-            config=self._boto_config(),
-        )
-        if not _is_async_s3_cm(client_cm_raw):
-            raise RuntimeError("aioboto3 S3 client context manager is missing")
-        async with client_cm_raw as client:
-            yield client
