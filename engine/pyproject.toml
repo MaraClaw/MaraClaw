@@ -93,8 +93,6 @@ extend-exclude = [
     "agent_template",
     "agent_templates",
     "app/services/skill_creator_files",
-    "app/services/clawsec_skill_files",
-    "app/services/gogcli_skill_files",
     "app/services/linkup_skill_files",
 ]
 
@@ -224,8 +222,6 @@ exclude = [
     "agent_templates/**",
     "app/services/skill_creator_files/**",
     "app/services/linkup_skill_files/**",
-    "app/services/clawsec_skill_files/**",
-    "app/services/gogcli_skill_files/**",
 ]
 
 [tool.pytest.ini_options]
@@ -244,8 +240,6 @@ filterwarnings = [
 branch = true
 omit = [
     "app/services/skill_creator_files/*",
-    "app/services/gogcli_skill_files/*",
-    "app/services/clawsec_skill_files/*",
     "app/templates/*",
 ]
 
