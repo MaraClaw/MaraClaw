@@ -152,7 +152,10 @@ async def apply_department_merge(
     current_user: UserRecord = Depends(get_current_user),
 ) -> DepartmentMergePreviewOut:
     return await merge_departments(
-        current_user, DepartmentMergeSelection(department_id, data.destination_id, tenant_id), apply=True
+        current_user,
+        DepartmentMergeSelection(department_id, data.destination_id, tenant_id),
+        apply=True,
+        confirmation_token=data.confirmation_token,
     )
 
 

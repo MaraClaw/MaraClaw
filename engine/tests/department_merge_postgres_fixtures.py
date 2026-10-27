@@ -6,9 +6,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
-from app.api import departments
+from app.api import agents, departments
 from app.core.security import get_current_user
 from app.db.connection import Row
+from app.db.session import connection_ctx
+from app.schemas.department import DepartmentMergePreviewOut
 from department_delete_postgres_fixtures import DepartmentStore, department_store, request
 from test_bootstrap_postgres import schema_db
 
@@ -54,6 +56,7 @@ async def merge_store(department_store: DepartmentStore) -> tuple[DepartmentStor
 async def merge_client(store: DepartmentStore) -> AsyncGenerator[AsyncClient]:
     app = FastAPI()
     app.include_router(departments.router, prefix="/api")
+    app.include_router(agents.router, prefix="/api")
     app.dependency_overrides[get_current_user] = lambda: store.actor
     try:
         async with AsyncClient(
@@ -64,13 +67,52 @@ async def merge_client(store: DepartmentStore) -> AsyncGenerator[AsyncClient]:
         app.dependency_overrides.clear()
 
 
-async def merge_request(store: DepartmentStore, operation: str) -> Response:
+async def merge_request(store: DepartmentStore, operation: str, *, confirmation_token: str | None = None) -> Response:
     async with merge_client(store) as client:
         match operation:
-            case "merge":
+            case "membership_swap":
+                first = await client.put(
+                    f"/api/users/{store.members[0]}/departments?tenant_id={store.tenant}",
+                    json={"department_ids": [str(store.other)]},
+                )
+                if first.status_code != 200:
+                    return first
+                return await client.put(
+                    f"/api/users/{store.members[2]}/departments?tenant_id={store.tenant}",
+                    json={"department_ids": [str(store.selected)]},
+                )
+            case "grant_swap":
+                async with connection_ctx() as db:
+                    row = await db.fetchone(
+                        "SELECT a.id FROM agents a WHERE a.name = 'Destination only' AND a.tenant_id = %(tenant)s",
+                        {"tenant": store.tenant},
+                    )
+                assert row is not None
+                first = await client.put(
+                    f"/api/agents/{store.agents[1]}/permissions",
+                    json={"scope_type": "custom", "department_ids": [str(store.other)]},
+                )
+                if first.status_code != 200:
+                    return first
+                return await client.put(
+                    f"/api/agents/{row['id']}/permissions",
+                    json={"scope_type": "custom", "department_ids": [str(store.selected)]},
+                )
+            case "merge" | "reverse_merge":
+                source, destination = (
+                    (store.selected, store.other) if operation == "merge" else (store.other, store.selected)
+                )
+                if confirmation_token is None:
+                    reviewed = await client.get(
+                        f"/api/departments/{source}/merge-preview?tenant_id={store.tenant}&destination_id={destination}"
+                    )
+                    assert reviewed.status_code == 200, reviewed.text
+                    confirmation_token = DepartmentMergePreviewOut.model_validate_json(
+                        reviewed.content
+                    ).confirmation_token
                 return await client.post(
-                    f"/api/departments/{store.selected}/merge?tenant_id={store.tenant}",
-                    json={"destination_id": str(store.other)},
+                    f"/api/departments/{source}/merge?tenant_id={store.tenant}",
+                    json={"destination_id": str(destination), "confirmation_token": confirmation_token},
                 )
             case "preview":
                 return await client.get(
@@ -82,10 +124,6 @@ async def merge_request(store: DepartmentStore, operation: str) -> Response:
                 return await client.patch(f"/api/departments/{selected}", json={"name": "Renamed"})
             case "destination_delete":
                 return await client.delete(f"/api/departments/{store.other}")
-            case "reverse_merge":
-                return await client.post(
-                    f"/api/departments/{store.other}/merge", json={"destination_id": str(store.selected)}
-                )
             case _:
                 return await request(store, operation)
 

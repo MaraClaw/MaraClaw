@@ -8,8 +8,9 @@ import pytest
 from app.records.identity import IdentityRecord
 from app.services import admin_audit, org_departments
 from test_department_api import directory
+from test_department_merge import merge_directory
 
-__all__ = ["directory"]
+__all__ = ["directory", "merge_directory"]
 
 
 @pytest.fixture
@@ -17,6 +18,30 @@ def audit_sink(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     sink = AsyncMock()
     monkeypatch.setattr(admin_audit.admin_audit_log_dao, "create", sink)
     return sink
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_merge_audits_only_success_without_confirmation_or_identity_sets(
+    merge_directory, monkeypatch, audit_sink, stale
+):
+    directory, _, _, _, grants = merge_directory
+    monkeypatch.setattr(org_departments, "write_admin_audit", admin_audit.write_admin_audit)
+    client, _, _, source, destination, *_ = directory
+    reviewed = client.get(f"/api/departments/{source.id}/merge-preview?destination_id={destination.id}").json()
+    if stale:
+        grants[source.id].add(uuid4())
+    response = client.post(
+        f"/api/departments/{source.id}/merge",
+        json={"destination_id": str(destination.id), "confirmation_token": reviewed["confirmation_token"]},
+    )
+    assert response.status_code == (409 if stale else 200)
+    if stale:
+        audit_sink.assert_not_awaited()
+    else:
+        audit_sink.assert_awaited_once()
+        assert audit_sink.await_args.kwargs["obj_in"]["details"] == {
+            key: value for key, value in reviewed.items() if key != "confirmation_token"
+        }
 
 
 def test_creation_records_fresh_actor_and_trimmed_allowlisted_name(directory, monkeypatch, audit_sink):

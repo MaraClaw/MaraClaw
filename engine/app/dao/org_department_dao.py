@@ -1,5 +1,8 @@
 """Persistence and dynamic access joins for the org department directory."""
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import ClassVar, final
 from uuid import UUID
 
@@ -12,7 +15,41 @@ from app.schemas.department import (
     DepartmentDeletionPreviewOut,
     DepartmentMemberOut,
     DepartmentMergePreviewOut,
+    DepartmentOut,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DepartmentMergeState:
+    source: OrgDepartmentRecord
+    destination: OrgDepartmentRecord
+    source_members: frozenset[UUID]
+    destination_members: frozenset[UUID]
+    source_grants: frozenset[UUID]
+    destination_grants: frozenset[UUID]
+
+    def preview(self) -> DepartmentMergePreviewOut:
+        identities = (self.source_members, self.destination_members, self.source_grants, self.destination_grants)
+        canonical = json.dumps(
+            [
+                str(self.source.tenant_id),
+                [str(self.source.id), self.source.name],
+                [str(self.destination.id), self.destination.name],
+                *[[str(identity) for identity in sorted(group)] for group in identities],
+            ],
+            separators=(",", ":"),
+        )
+        return DepartmentMergePreviewOut(
+            source=DepartmentOut.model_validate(self.source),
+            destination=DepartmentOut.model_validate(self.destination),
+            confirmation_token=f"v1:{hashlib.sha256(canonical.encode()).hexdigest()}",
+            source_membership_count=len(self.source_members),
+            destination_membership_count=len(self.destination_members),
+            overlapping_membership_count=len(self.source_members & self.destination_members),
+            source_agent_grant_count=len(self.source_grants),
+            destination_agent_grant_count=len(self.destination_grants),
+            overlapping_agent_grant_count=len(self.source_grants & self.destination_grants),
+        )
 
 
 @final
@@ -133,7 +170,7 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
 
     async def merge_preview(
         self, source: OrgDepartmentRecord, destination: OrgDepartmentRecord
-    ) -> DepartmentMergePreviewOut:
+    ) -> DepartmentMergeState:
         async with self.session() as db:
             rows = await db.fetchall(
                 "WITH members AS (SELECT user_id, bool_or(department_id = %(source)s) AS source, "
@@ -144,15 +181,26 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
                 "JOIN agents a ON a.id = p.agent_id WHERE a.tenant_id = %(tenant)s AND a.access_mode = 'custom' "
                 "AND p.scope_type = 'department' AND p.access_level = 'use' "
                 "AND p.scope_id IN (%(source)s, %(destination)s) GROUP BY a.id) "
-                "SELECT (SELECT count(*) FROM members WHERE source) AS source_membership_count, "
-                "(SELECT count(*) FROM members WHERE destination) AS destination_membership_count, "
-                "(SELECT count(*) FROM members WHERE source AND destination) AS overlapping_membership_count, "
-                "(SELECT count(*) FROM grants WHERE source) AS source_agent_grant_count, "
-                "(SELECT count(*) FROM grants WHERE destination) AS destination_agent_grant_count, "
-                "(SELECT count(*) FROM grants WHERE source AND destination) AS overlapping_agent_grant_count",
+                "SELECT user_id AS id, source, destination, true AS membership FROM members "
+                "UNION ALL SELECT id, source, destination, false AS membership FROM grants",
                 {"tenant": source.tenant_id, "source": source.id, "destination": destination.id},
             )
-            return DepartmentMergePreviewOut.model_validate({**rows[0], "source": source, "destination": destination})
+            return DepartmentMergeState(
+                source=source,
+                destination=destination,
+                source_members=frozenset(
+                    uuid_from_row(row["id"]) for row in rows if row["membership"] and row["source"]
+                ),
+                destination_members=frozenset(
+                    uuid_from_row(row["id"]) for row in rows if row["membership"] and row["destination"]
+                ),
+                source_grants=frozenset(
+                    uuid_from_row(row["id"]) for row in rows if not row["membership"] and row["source"]
+                ),
+                destination_grants=frozenset(
+                    uuid_from_row(row["id"]) for row in rows if not row["membership"] and row["destination"]
+                ),
+            )
 
     async def merge_departments(self, source: OrgDepartmentRecord, destination: OrgDepartmentRecord) -> None:
         async with self.session() as db:
