@@ -1,6 +1,6 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
-# Linux docker CLI for python-on-whales (host binaries are the wrong OS).
+# Linux docker CLI for pywhales (host binaries are the wrong OS).
 FROM docker:29.9.2-cli AS dockercli
 
 FROM python:3.14.8-slim-trixie AS deps
