@@ -21,7 +21,7 @@ Owns per-lifespan process resources, background work and readiness. `app/main.py
 - `lifespan` validates roles before allocating `Runtime`, exposes `app.state.readiness`, and owns cleanup even after partial startup. Routers remain mounted for every role; bootstrap-only processes never become ready.
 - Startup reopens route/schedule and trigger/heartbeat/inbox-wake admission, configures logging/interception, runs warn-only diagnostics, then opens the pool for every valid role. Bootstrap runs only when enabled; API/worker/connector roles then initialize Redis.
 - API starts the realtime subscriber. Worker starts required loops: trigger daemon, agent setup, durable start recovery (`agent_start_reconciler`), broadcast email, web-search export, agent scheduler, gateway-report relay, OpenClaw upgrade worker (`openclaw_update`). Wire these in `lifecycle.py`, not the task-ownership primitives in `tasks.py`. Connector starts proxy/manager setup. Set `initialized` last; this alone does not mean setup tasks finished or the process is ready.
-- Seed order: system orgs, platform admin, built-in tools/orphan MCP cleanup, optional Atlassian config/tools, role templates, skills (including gogcli/ClawSec/Linkup and existing-agent push), default/OKR agents. `SystemOrgSeedError` and all PA seed failures propagate; optional block failures warn and allow later blocks.
+- Seed order: system orgs, platform admin, built-in tools/orphan MCP cleanup, optional Atlassian config/tools, role templates, skills (including Linkup and existing-agent push), default/OKR agents. `SystemOrgSeedError` and all PA seed failures propagate; optional block failures warn and allow later blocks.
 
 ## Owned Tasks And Readiness
 

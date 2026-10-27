@@ -66,8 +66,5 @@ Operator policy and limitations: [guest containers](../../docs/guest-containers.
 
 ## Bundled Skill Files
 
-- `skill_creator_files/`, `gogcli_skill_files/`, and `clawsec_skill_files/` are bundled payload directories, not backend service modules.
-- `gogcli_skill_files/` is read by `gogcli_runtime.py`; `gogcli_skill_folder_names()` and `seed_gogcli_skill()` only expose/seed these skills when `GOGCLI_ENABLED` is active.
-- Each `gogcli_skill_files/<tool>/SKILL.md` frontmatter drives the seeded skill name/description. Do not rename subdirectories or rewrite generated skill text without updating the gogcli packaging/serving path.
-- `clawsec_skill_files/` is the vendored ClawSec OpenClaw security suite (AGPL-3.0). It is multi-file (scripts/hooks/advisories) and seeded by `clawsec_runtime.seed_clawsec_skills()` when `CLAWSEC_SKILLS_ENABLED` is active (default true). See `clawsec_skill_files/AGENTS.md` and `NOTICE`.
+- `skill_creator_files/` and `linkup_skill_files/` are bundled payload directories, not backend service modules.
 - Do not apply cosmetic Ruff or type-cleaning to bundled payload content just to satisfy backend checks.

@@ -164,4 +164,4 @@ Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 |---------|---------|
 | Google Chat **channel** (this doc) | Bot HTTP app on MaraClaw |
 | `google_workspace` SSO | Login/identity binding, not Chat messaging; provider directory sync is retired |
-| gogcli `gog chat` skill | User OAuth CLI inside agent workspace |
+| gogcli `gog chat` CLI | User OAuth CLI inside agent workspace |

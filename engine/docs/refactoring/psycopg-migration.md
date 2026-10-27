@@ -56,7 +56,7 @@ Program plan: `.omgb/plans/psycopg-db-migration-20260812.md`.
 
 ## Phase 3 seeders + tools catalog (landed)
 
-- Skill/tool/template seeders, ClawSec/gogcli skill seed via DAOs
+- Skill/tool/template seeders via DAOs
 - LLM tool catalog assembly + tenant tool config pure-psycopg
 - Agent template list endpoint via `agent_template_dao`
 

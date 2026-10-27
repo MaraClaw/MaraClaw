@@ -10,7 +10,7 @@ This packet turns the largest maintainability hotspots into module-by-module ref
 
 ## Methodology
 
-The scan covered 252 non-generated Python files under `app/**/*.py`. The analysis excluded Alembic migrations, tests, `app/services/skill_creator_files/`, `app/services/gogcli_skill_files/`, and pure/static tool-definition tables such as `app/services/tool_definitions/builtin.py` and `app/services/agent_tools_definitions.py`.
+The scan covered 252 non-generated Python files under `app/**/*.py`. The analysis excluded Alembic migrations, tests, bundled skill payloads, and pure/static tool-definition tables such as `app/services/tool_definitions/builtin.py` and `app/services/agent_tools_definitions.py`.
 
 Ranking used two signals:
 
