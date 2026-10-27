@@ -51,7 +51,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 |--------|---------|-----------|
 | REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
-| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup is `linkup/` + `linkup_skill_files/` (not a function-calling tool) |
+| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup proxy is `linkup/`; bundled skills live in sibling Photon (not a function-calling tool) |
 | Inbound office parse (PDF/DOCX/XLSX/PPTX) | `engine` | `app/services/document_parser/` (`firecrawl-anydoc`). Not `document_conversion/` |
 | Landing copy / channels list | `web-e` | `web-e/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |

@@ -54,7 +54,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 - Seed MaraClaw (`maraclaw`) and OpenClaw (`openclaw`, default for unmatched end-user registration); do not rename/reuse `default` slug. System orgs cannot be disabled; system/default-end-user orgs cannot be deleted.
 - Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users have at most one tenant; transfer needs password confirmation. Domain join/transfer needs verified email and `get_current_user` (active + force-change gate).
 - Reset/verify links use `app/services/frontend_origin.py` `resolve_frontend_base_url`: CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`; never an unlisted request host.
-- Bundled `skill_creator_files/` and `linkup_skill_files/` are not normal service code.
+- Bundled `skill_creator_files/` is not normal service code; Photon owns the image-bundled Linkup skills.
 
 ## Commands (From `engine/`)
 

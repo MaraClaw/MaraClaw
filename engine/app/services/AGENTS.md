@@ -14,7 +14,7 @@ This is the main business layer. It is intentionally mixed: flat service modules
 - New OKR behavior should use focused `okr_*.py` modules. Dashboard period math is `okr_periods.py` (UTC). HTTP models are `app/schemas/okr.py`. Do not grow `okr_reporting.py`. Gap/outreach still lives in `app/api/okr.py`.
 - Provider organization department/people sync and its adapter/coordinator package are retired. Shared `org_members` identity/contact/profile data and agent relationships remain; do not recreate the sync subsystem.
 - Org departments belong in `org_departments.py` (multiple departments per end user). Set replacement validates every department before writing, locks via `acl_locks`, and transactionally bumps agent ACL versions for the union of old/new `scope_type=department` grants. Singular assignment delegates to replace-with-one or clear.
-- New tool execution handlers belong in `agent_tool_exec/` (`@register`). Seed rows go in `tool_definitions/` (composer `builtin.py`). OpenAI catalog shapes go in `agent_tools_definitions/` (package). Runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Page-read lives in `agent_tool_exec/web_read.py` (`read_webpage`). Web search/fetch/research/extract are official Linkup skills (`linkup_skill_files/` + `linkup_runtime.py` seeder); engine HTTP is `linkup/` key-ring/proxy — not a function-calling tool.
+- New tool execution handlers belong in `agent_tool_exec/` (`@register`). Seed rows go in `tool_definitions/` (composer `builtin.py`). OpenAI catalog shapes go in `agent_tools_definitions/` (package). Runtime visibility/config in `tool_runtime/`. Keep `agent_tools.py` and `tool_seeder.py` as compatibility/orchestration surfaces. Page-read lives in `agent_tool_exec/web_read.py` (`read_webpage`). Web search/fetch are Photon image-bundled Linkup skills; `linkup_runtime.py` supplies config keys and engine HTTP is `linkup/` key-ring/proxy — not a function-calling tool.
 
 - `tool_config.py` owns tenant-scoped tool settings (`tenant_settings`) and sensitive-field encryption/decryption/masking helpers. Distinct from `tool_runtime/tool_config.py`, which loads, merges, and caches per-agent runtime config.
 
@@ -66,5 +66,5 @@ Operator policy and limitations: [guest containers](../../docs/guest-containers.
 
 ## Bundled Skill Files
 
-- `skill_creator_files/` and `linkup_skill_files/` are bundled payload directories, not backend service modules.
+- `skill_creator_files/` is a bundled payload directory, not a backend service module.
 - Do not apply cosmetic Ruff or type-cleaning to bundled payload content just to satisfy backend checks.
