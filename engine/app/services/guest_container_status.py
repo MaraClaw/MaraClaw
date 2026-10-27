@@ -2,8 +2,8 @@
 
 from typing import NotRequired, TypedDict
 
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.json_types import JsonObject, json_object_from
@@ -39,9 +39,9 @@ class GuestPortDrift(TypedDict):
 
 class ObservedGuestStatus(InspectedContainerStatus):
     ownership: GuestOwnership
-    name: str
+    name: str | None
     expected_name: str
-    restart_count: int
+    restart_count: int | None
     health: NotRequired[GuestHealth]
     oom_killed: bool | None
     limits: GuestHardLimits
@@ -81,29 +81,31 @@ def get_guest_container_status(manager: AgentManager, agent: AgentRecord) -> Con
     try:
         container = client.container.inspect(agent.container_id)
         state = container.state
-        owner = (container.config.labels or {}).get("maraclaw.agent_id")
+        config = container.config
+        owner = (config.labels or {}).get("maraclaw.agent_id") if config is not None else None
         limits = container.host_config
-        raw_ports = container.network_settings.ports
+        network = container.network_settings
+        raw_ports = network.ports if network is not None else None
         ports = None if raw_ports is None else json_object_from(raw_ports)
         published_ports = _published_gateway_ports(ports)
         result: ObservedGuestStatus = {
-            "running": bool(state.running),
-            "status": state.status or agent.status,
+            "running": bool(state.running) if state is not None else False,
+            "status": (state.status or agent.status) if state is not None else agent.status,
             "ports": ports,
             "created": container.created,
             "ownership": {"agent_id": owner, "matches": owner == str(agent.id)},
             "name": container.name,
             "expected_name": f"maraclaw-agent-{agent.id}",
             "restart_count": container.restart_count,
-            "oom_killed": state.oom_killed,
+            "oom_killed": state.oom_killed if state is not None else None,
             "limits": {
-                "memory_bytes": limits.memory,
-                "memory_swap_bytes": limits.memory_swap,
-                "nano_cpus": limits.nano_cpus,
-                "cpu_quota": limits.cpu_quota,
-                "cpu_period": limits.cpu_period,
-                "cpuset_cpus": limits.cpuset_cpus,
-                "pids_limit": limits.pids_limit,
+                "memory_bytes": limits.memory if limits is not None else None,
+                "memory_swap_bytes": limits.memory_swap if limits is not None else None,
+                "nano_cpus": limits.nano_cpus if limits is not None else None,
+                "cpu_quota": limits.cpu_quota if limits is not None else None,
+                "cpu_period": limits.cpu_period if limits is not None else None,
+                "cpuset_cpus": limits.cpuset_cpus if limits is not None else None,
+                "pids_limit": limits.pids_limit if limits is not None else None,
             },
             "port_drift": {
                 "persisted_port": agent.container_port,
@@ -113,7 +115,7 @@ def get_guest_container_status(manager: AgentManager, agent: AgentRecord) -> Con
                 else published_ports != [agent.container_port],
             },
         }
-        if state.health is not None:
+        if state is not None and state.health is not None:
             result["health"] = {"status": state.health.status, "failing_streak": state.health.failing_streak}
         return result
     except NoSuchContainer:

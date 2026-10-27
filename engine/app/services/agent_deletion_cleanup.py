@@ -2,8 +2,8 @@ import shutil
 from uuid import UUID
 
 from anyio import to_thread
-from python_on_whales import ClientNotFoundError, DockerClient
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError, DockerClient
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.core.logging import logger
 from app.dao.agent_deletion_cleanup_dao import agent_deletion_cleanup_dao as cleanup
@@ -18,7 +18,8 @@ def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
     for listed in client.container.list(all=True, filters={"label": f"{AGENT_LABEL}={agent_id}"}):
         try:
             guest = client.container.inspect(listed.id)
-            require_guest_owner(agent_id, listed.id, (guest.config.labels or {}).get(AGENT_LABEL))
+            config = guest.config
+            require_guest_owner(agent_id, listed.id, (config.labels or {}).get(AGENT_LABEL) if config else None)
             client.container.stop(guest.id, time=10)
             type(client.container).remove(client.container, [guest.id])
         except NoSuchContainer:

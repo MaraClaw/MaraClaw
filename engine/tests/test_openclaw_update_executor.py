@@ -13,7 +13,7 @@ from typing import override
 
 import pytest
 from anyio import Event, create_task_group, fail_after
-from python_on_whales.exceptions import DockerException
+from pywhales.exceptions import DockerException
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord

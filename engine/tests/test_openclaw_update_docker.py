@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
-from python_on_whales import DockerClient, Image
-from python_on_whales.exceptions import DockerException, NoSuchImage
+from pywhales import DockerClient, Image
+from pywhales.exceptions import DockerException, NoSuchImage
 
 from app.services.openclaw_update_docker import UpgradeDocker, _repository
 
@@ -52,7 +52,7 @@ def _docker(monkeypatch: pytest.MonkeyPatch, *pull_lines: str, cached: bool = Tr
     def pull(reference: str, *, stream_logs: bool) -> Iterator[tuple[str, bytes]]:
         assert stream_logs
         daemon.pulled.append(reference)
-        return iter([(reference, line.encode()) for line in daemon.pull_lines])
+        yield from ((reference, line.encode()) for line in daemon.pull_lines)
 
     def inspect(reference: str) -> Image:
         daemon.inspected.append(reference)

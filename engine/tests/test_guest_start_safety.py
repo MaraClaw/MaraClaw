@@ -9,13 +9,13 @@ from typing import Unpack
 from uuid import uuid4
 
 import pytest
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager
-from app.services.guest_admission import GuestStartPreflightError
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
 from builtin_keyword_fakes import IncludeAllKeyword
 
@@ -113,6 +113,17 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     # Then no runtime reference or old guest was destroyed.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == []
+
+
+@pytest.mark.parametrize("missing", ["state", "host_config"])
+async def test_resume_refuses_incomplete_inspection(env, missing):
+    manager, docker, agent = env
+    docker.guests["old"].state.status = "exited"
+    setattr(docker.guests["old"], missing, None)
+    with pytest.raises(GuestStartPreflightError if missing == "state" else GuestAdmissionError):
+        await manager.start_container(agent)
+    assert docker.removed == docker.runs == []
+    assert agent.container_id == "old"
 
 
 async def test_new_guest_gets_limits_and_preferred_port(env):

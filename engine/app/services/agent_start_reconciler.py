@@ -1,6 +1,6 @@
 from anyio import sleep, to_thread
 from psycopg import Error as PsycopgError
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales.exceptions import DockerException, NoSuchContainer
 from redis.exceptions import RedisError
 
 from app.core.logging import logger
@@ -96,7 +96,8 @@ async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
         except NoSuchContainer:
             continue
     if guest is not None:
-        labels = guest.config.labels or {}
+        config = guest.config
+        labels = (config.labels or {}) if config is not None else {}
         if labels.get(AGENT_LABEL) != str(operation.agent_id):
             return
         if guest.id == candidate or labels.get("maraclaw.start_operation") == str(operation.operation_id):

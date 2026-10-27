@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from typing import override
 from uuid import UUID
 
-from python_on_whales import Container, DockerClient
-from python_on_whales.exceptions import NoSuchContainer
+from pywhales import Container, DockerClient
+from pywhales.exceptions import NoSuchContainer
 
 from app.records.agent import AgentRecord
 
@@ -47,14 +47,17 @@ def _inspect(client: DockerClient, reference: str) -> GuestIdentity | None:
         container = inspect_guest_container(client, reference)
     except NoSuchContainer:
         return None
-    bindings = container.host_config.port_bindings or {}
+    host_config = container.host_config
+    config = container.config
+    bindings = (host_config.port_bindings or {}) if host_config is not None else {}
     published = tuple(
         (port, binding.host_port)
         for port, values in bindings.items()
         for binding in values or []
         if binding.host_port is not None
     )
-    return GuestIdentity(container.id, container.name, (container.config.labels or {}).get(AGENT_LABEL), published)
+    owner = (config.labels or {}).get(AGENT_LABEL) if config is not None else None
+    return GuestIdentity(container.id, container.name or reference, owner, published)
 
 
 def owned_guest_containers(client: DockerClient, agent: AgentRecord) -> tuple[GuestIdentity, ...]:

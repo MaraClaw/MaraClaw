@@ -5,8 +5,8 @@ from typing import ClassVar, Final, Protocol
 
 from anyio.to_thread import run_sync
 from pydantic import BaseModel, ConfigDict
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.services.gogcli_runtime import GogcliAuthStatus, extract_gogcli_auth_url, parse_gogcli_auth_status
 

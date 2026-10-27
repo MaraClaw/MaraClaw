@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from python_on_whales import DockerClient
+from pywhales import DockerClient
 
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
 from app.services.agent_deletion_archive import publish_deletion_archive

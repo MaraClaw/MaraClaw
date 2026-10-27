@@ -2,8 +2,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException
+from pywhales import ClientNotFoundError
+from pywhales.exceptions import DockerException
 
 from app.api.background_tasks import schedule_background_task
 from app.core.logging import logger

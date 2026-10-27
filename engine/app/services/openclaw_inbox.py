@@ -13,6 +13,7 @@ from uuid import UUID
 
 import httpx
 from anyio.to_thread import run_sync
+from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.core.json_types import JsonObject
@@ -252,12 +253,16 @@ def _docker_execute(agent: AgentRecord, argv: list[str]) -> str | None:
     container = _container_ref(agent)
     if docker_client is None or container in (None, ""):
         return "docker client or container missing"
-    # python-on-whales: execute lives on DockerClient.container, same as gogcli.
+    # pywhales: execute lives on DockerClient.container, same as gogcli.
     api = docker_client.container if isinstance(docker_client, _DockerContainerClient) else docker_client
     if not isinstance(api, _DockerExecutor):
         return "docker execute API missing"
     try:
         api.execute(container, argv, stream=False)
+    except DockerException as exc:
+        if _hooks_unreachable(f"{exc.stdout or ''}\n{exc.stderr or ''}"):
+            return "ECONNREFUSED"
+        return str(exc)
     except Exception as exc:
         return str(exc)
     return None

@@ -12,9 +12,9 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter
-from python_on_whales import ClientNotFoundError, DockerClient
-from python_on_whales.components.container import cli_wrapper
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError, DockerClient
+from pywhales.components.container import cli_wrapper
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.api import advanced
 from app.core.domain.agents import AgentStatus
@@ -183,6 +183,23 @@ def test_optional_health_and_unlimited_values_when_inspect_has_no_healthcheck(
         "cpuset_cpus": None,
         "pids_limit": -1,
     }
+
+
+def test_missing_inspect_metadata_remains_unknown(
+    agent: AgentRecord, manager: AgentManager, inspect_payload: JsonObject
+) -> None:
+    for key in ("State", "Config", "HostConfig", "NetworkSettings", "Name", "Created", "RestartCount"):
+        inspect_payload[key] = None
+    result = get_guest_container_status(manager, agent)
+    assert result["running"] is False
+    assert result.get("ownership") == {"agent_id": None, "matches": False}
+    assert result.get("name") is None
+    assert result.get("restart_count") is None
+    assert result.get("oom_killed") is None
+    assert result.get("ports") is None
+    assert result.get("limits") == dict.fromkeys(
+        ("memory_bytes", "memory_swap_bytes", "nano_cpus", "cpu_quota", "cpu_period", "cpuset_cpus", "pids_limit")
+    )
 
 
 @pytest.mark.parametrize(

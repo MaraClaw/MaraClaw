@@ -6,8 +6,8 @@ from typing import Unpack
 from uuid import uuid4
 
 import pytest
-from python_on_whales.components.container.models import ContainerConfig, ContainerHostConfig, ContainerState
-from python_on_whales.exceptions import DockerException
+from pywhales.components.container.models import ContainerConfig, ContainerHostConfig, ContainerState
+from pywhales.exceptions import DockerException
 
 import test_agent_start_postgres as fixtures
 from app.dao.agent_start_dao import agent_start_dao

@@ -49,9 +49,9 @@ class FakeContainerApi:
             raise self.wait_error
         return self.wait_result
 
-    def logs(self, container: FakeContainer, stream: bool = False) -> Iterable[tuple[str, bytes]]:
+    def logs(self, container: FakeContainer, stream: bool = False) -> Iterator[tuple[str, bytes]]:
         self.logs_calls.append((container, stream))
-        return [("stdout", b"stdout text"), ("stderr", b"stderr text")]
+        yield from [("stdout", b"stdout text"), ("stderr", b"stderr text")]
 
     def remove(self, container: FakeContainer, force: bool = True) -> None:
         self.remove_calls.append((container, force))
@@ -102,7 +102,7 @@ def make_backend(
     return backend
 
 
-async def test_execute_runs_python_container_with_python_on_whales_kwargs():
+async def test_execute_runs_python_container_with_pywhales_kwargs():
     # Given
     client = FakeDockerClient(wait_result=0)
     backend = make_backend(client, allow_network=True)

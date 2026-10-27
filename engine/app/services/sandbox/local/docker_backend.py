@@ -1,7 +1,8 @@
 """Local docker-based sandbox backend."""
 
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import closing
 from typing import Protocol, TypeIs, override
 
 from anyio import fail_after
@@ -18,10 +19,16 @@ class DockerImageApi(Protocol):
     def pull(self, image: str) -> object: ...
 
 
+class DockerLogStream(Protocol):
+    def __iter__(self) -> Iterator[tuple[str, bytes]]: ...
+
+    def close(self) -> None: ...
+
+
 class DockerContainerApi(Protocol):
     def wait(self, container: object) -> object: ...
 
-    def logs(self, container: object, stream: bool = False) -> Iterable[tuple[str, bytes]]: ...
+    def logs(self, container: object, stream: bool = False) -> DockerLogStream: ...
 
     def remove(self, container: object, force: bool = True) -> None: ...
 
@@ -54,22 +61,22 @@ def _is_docker_factory(value: object) -> TypeIs[DockerClientFactory]:
     return callable(value)
 
 
-# Lazy import python-on-whales to make it optional
+# Lazy import pywhales to make it optional
 _docker_client_cls: DockerClientFactory | None = None
 
 
 def _get_docker() -> DockerClientFactory:
-    """Lazy load python-on-whales Docker client."""
+    """Lazy load pywhales Docker client."""
     global _docker_client_cls
     if _docker_client_cls is None:
         try:
-            from python_on_whales import DockerClient
+            from pywhales import DockerClient
         except ImportError as exc:
             raise ImportError(
-                "python-on-whales package is required for docker backend. Install it with: uv add python-on-whales"
+                "pywhales package is required for docker backend. Install it with: uv add pywhales"
             ) from exc
         if not _is_docker_factory(DockerClient):
-            raise ImportError("python-on-whales DockerClient is not callable")
+            raise ImportError("pywhales DockerClient is not callable")
         _docker_client_cls = DockerClient
     return _docker_client_cls
 
@@ -93,7 +100,7 @@ class DockerBackend(BaseSandboxBackend):
     """Docker-based sandbox backend.
 
     This backend executes code inside Docker containers for better isolation.
-    It requires python-on-whales to be installed and docker daemon to be running.
+    It requires pywhales to be installed and docker daemon to be running.
     """
 
     @property
@@ -258,7 +265,8 @@ class DockerBackend(BaseSandboxBackend):
                     logger.warning(f"[Docker] Failed to remove container after execution: {cleanup_error}")
 
     def _collect_logs(self, container: object) -> tuple[str, str]:
-        return _collect_logs(self.client.container.logs(container, stream=True), self.config)
+        with closing(self.client.container.logs(container, stream=True)) as logs:
+            return _collect_logs(logs, self.config)
 
 
 def _collect_logs(logs: Iterable[tuple[str, bytes]], config: SandboxConfig) -> tuple[str, str]:

@@ -10,9 +10,9 @@ from uuid import uuid4
 import anyio
 import pytest
 from pydantic import ValidationError
-from python_on_whales import DockerClient
-from python_on_whales.components.container import cli_wrapper as container_cli
-from python_on_whales.exceptions import DockerException
+from pywhales import DockerClient
+from pywhales.components.container import cli_wrapper as container_cli
+from pywhales.exceptions import DockerException
 from tests.test_guest_start_safety import Docker, env
 
 __all__ = ["env"]
@@ -85,6 +85,18 @@ async def test_replacement_excludes_same_agent_and_counts_actual_limits(env, mon
     # Then only the other running guest's actual hard limit consumes capacity.
     assert result == "created-1"
     assert "other" in docker.guests
+
+
+@pytest.mark.parametrize("missing", ["config", "host_config"])
+async def test_capacity_refuses_unknown_guest_limits(env, monkeypatch, missing):
+    manager, docker, agent = env
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)
+    other = docker.add(replace(agent, id=uuid4(), container_id="other"), memory=0)
+    setattr(other, missing, None)
+    with pytest.raises(GuestAdmissionError) as error:
+        await manager.replace_container(agent)
+    assert error.value.code == "guest_memory_unbounded"
+    assert docker.removed == docker.runs == []
 
 
 @pytest.mark.parametrize("aggregate", [-1, 19])

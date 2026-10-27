@@ -15,8 +15,8 @@ from typing import TypedDict
 from anyio import to_thread
 from fastapi import HTTPException
 from httpx import HTTPError
-from python_on_whales import ClientNotFoundError, Container, DockerClient
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError, Container, DockerClient
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
