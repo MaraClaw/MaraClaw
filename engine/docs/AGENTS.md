@@ -11,7 +11,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | AgentBay | `agentbay.md` | Env vars, API-key lookup order, diagnostics endpoint and CLI |
 | gogcli keyring | `gogcli-keyring-password.md` | Password file path, permissions, rotation and security notes |
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
-| OpenClaw image helpers | `../docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
+| OpenClaw image helpers | Photon project `docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
 | OpenClaw upgrades | `openclaw-updates.md` | Global notices, per-agent worker cutover/rollback, work and write gates, HTTP contract |
 | ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
@@ -23,7 +23,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.
 - Search-analytics docs should track `app/services/linkup/`, `app/api/admin_search_analytics.py`, `app/api/linkup_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
-- gogcli credential docs should track `app/services/gogcli_runtime.py`, `Dockerfile.openclaw`, and `docker/openclaw/` scripts.
+- gogcli credential docs should track `app/services/gogcli_runtime.py` and the Photon project's `Dockerfile.openclaw` and `docker/openclaw/` scripts.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.
 
 ## Rules
