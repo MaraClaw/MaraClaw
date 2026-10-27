@@ -68,6 +68,8 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         action: str | None = None,
         limit: int = 100,
         before: tuple[datetime, UUID] | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
     ) -> Sequence[AdminAuditLogRecord]:
         """Fetch a bounded seek page plus one lookahead row; never use an offset."""
         params: dict[str, object] = {"limit": min(max(limit, 1), 500) + 1}
@@ -84,6 +86,12 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         if before is not None:
             clauses.append("(created_at, id) < (%(before_created_at)s, %(before_id)s)")
             params["before_created_at"], params["before_id"] = before
+        if start_at is not None:
+            clauses.append("created_at >= %(start_at)s")
+            params["start_at"] = start_at
+        if end_at is not None:
+            clauses.append("created_at < %(end_at)s")
+            params["end_at"] = end_at
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.session() as db:
             rows = await db.fetchall(

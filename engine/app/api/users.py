@@ -19,7 +19,7 @@ from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.channel_response_contracts import UserRoleResponse
 from app.services.admin_audit import field_change, write_admin_audit
-from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page
+from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
 from app.services.admin_provisioning import (
     AdminActivationError,
     AdminGuardError,
@@ -460,13 +460,21 @@ async def list_org_admin_audit_logs_page(
     action: str | None = None,
     limit: int = 100,
     cursor: str | None = None,
+    start_at: str | None = None,
+    end_at: str | None = None,
     current_user: UserRecord = Depends(require_role("org_admin")),
 ) -> AdminAuditPageOut:
     """Seek only the current principal's company trail, never cursor-supplied scope."""
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
     return await list_admin_audit_page(
-        AdminAuditScope(role="org_admin", tenant_id=current_user.tenant_id, action=action),
+        AdminAuditScope(
+            role="org_admin",
+            tenant_id=current_user.tenant_id,
+            action=action,
+            start_at=parse_admin_audit_bound(start_at),
+            end_at=parse_admin_audit_bound(end_at),
+        ),
         cursor=cursor,
         limit=limit,
     )

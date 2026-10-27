@@ -44,7 +44,7 @@ from app.schemas.admin_metrics import (
     AdminToolCategoryEntry,
 )
 from app.services.admin_audit import field_change, write_admin_audit
-from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page
+from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
 from app.services.admin_provisioning import (
     AdminActivationError,
     create_additional_platform_admin,
@@ -365,12 +365,21 @@ async def list_admin_audit_logs_page(
     action: str | None = None,
     limit: int = 100,
     cursor: str | None = None,
+    start_at: str | None = None,
+    end_at: str | None = None,
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ) -> AdminAuditPageOut:
     """Seek older events; refresh without a cursor to include newly committed events."""
     _ = current_user
     return await list_admin_audit_page(
-        AdminAuditScope(role="platform_admin", tenant_id=tenant_id, actor_id=actor_id, action=action),
+        AdminAuditScope(
+            role="platform_admin",
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            start_at=parse_admin_audit_bound(start_at),
+            end_at=parse_admin_audit_bound(end_at),
+        ),
         cursor=cursor,
         limit=limit,
     )
