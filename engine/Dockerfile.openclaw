@@ -1,6 +1,8 @@
 ARG OPENCLAW_BASE_IMAGE=node:26.12.1-bookworm-slim
 FROM ${OPENCLAW_BASE_IMAGE}
 
+ARG TARGETOS
+ARG TARGETARCH
 ARG OPENCLAW_VERSION=2026.10.7
 ARG OPENCLAW_SHA256=sha256:45dc6dadab3ca4e5286262226d6b61554309435a5e83b5d25c803a3a12ef2f81
 ARG TINI_VERSION=0.19.0-1+b3
@@ -10,7 +12,8 @@ ARG LIBCURL4_VERSION=7.88.1-10+deb12u15
 ARG BASH_VERSION=5.2.15-2+b13
 ARG LIBICU72_VERSION=72.1-3+deb12u1
 ARG GOGCLI_VERSION=0.47.0
-ARG GOGCLI_SHA256=sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2
+ARG GOGCLI_AMD64_SHA256=sha256:c3ed94efca90c754cdda300e3c7f8cc2f3d7df86d3fdc5d11f996c7518a09c24
+ARG GOGCLI_ARM64_SHA256=sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2
 
 USER root
 RUN apt-get update \
@@ -30,16 +33,22 @@ RUN apt-get update \
     && sha256sum -c /tmp/openclaw.tgz.sha256 \
     && npm install -g --allow-scripts="$OPENCLAW_TARBALL" "$OPENCLAW_TARBALL" \
     && rm -f "$OPENCLAW_TARBALL" /tmp/openclaw.tgz.sha256 \
+    && rm -rf /root/.npm
+
+RUN case "$TARGETOS/$TARGETARCH" in \
+        linux/amd64) GOGCLI_SHA256="$GOGCLI_AMD64_SHA256" ;; \
+        linux/arm64) GOGCLI_SHA256="$GOGCLI_ARM64_SHA256" ;; \
+        *) printf 'unsupported guest target: %s/%s\n' "$TARGETOS" "$TARGETARCH" >&2; exit 2 ;; \
+    esac \
     && curl -fsSL \
-    "https://github.com/openclaw/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_arm64.tar.gz" \
+    "https://github.com/openclaw/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
     -o /tmp/gogcli.tar.gz \
     && printf '%s  %s\n' "${GOGCLI_SHA256#sha256:}" /tmp/gogcli.tar.gz > /tmp/gogcli.tar.gz.sha256 \
     && sha256sum -c /tmp/gogcli.tar.gz.sha256 \
     && tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin ./gog \
     && chmod 0755 /usr/local/bin/gog \
     && rm -f /tmp/gogcli.tar.gz /tmp/gogcli.tar.gz.sha256 \
-    && gog --version \
-    && rm -rf /root/.npm
+    && gog --version
 
 COPY --chown=node:node docker/openclaw/bootstrap-officecli.sh /usr/local/bin/bootstrap-officecli.sh
 COPY --chown=node:node docker/openclaw/validate-gogcli.sh /usr/local/bin/validate-gogcli.sh

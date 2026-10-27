@@ -35,8 +35,10 @@ test "$(id -u)" -ne 0
 test -w "$OPENCLAW_STATE_DIR"
 test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
 test "$(node --version)" = "v26.12.1"
-test "$(node -p 'process.arch')" = "arm64"
-gog --version
+test "$(node -p 'process.arch')" = "$EXPECTED_NODE_ARCH"
+printf 'executed node=%s arch=%s kernel=%s\n' "$(node --version)" "$(node -p 'process.arch')" "$(uname -m)"
+gog --version | grep '0.47.0'
+openclaw --version | grep '2026.10.7'
 """
 
 PROBE: Final = (
@@ -48,6 +50,9 @@ test "$OFFICECLI_NO_AUTO_RESIDENT" = 1
 test -f "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md" && test ! -L "$OPENCLAW_STATE_DIR/.officecli/current/skill/SKILL.md"
 officecli_version="$(officecli --version)"
 printf '%s\n' "$officecli_version" | grep -Eq '(^|[^0-9])v?1\\.0\\.158([^0-9]|$)'
+printf 'executed %s\n' "$officecli_version"
+officecli --help > /tmp/officecli-help.txt
+test -s /tmp/officecli-help.txt
 openclaw skills info officecli --json | node -e '
 const fs = require("node:fs");
 const skill = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -63,6 +68,15 @@ document="/tmp/officecli-smoke-$$.docx"
 officecli create "$document"
 officecli validate "$document"
 test -s "$document"
+touch "$OPENCLAW_STATE_DIR/{CHILD_MARKER}"
+"""
+)
+
+INCOMPATIBLE_OFFLINE_PROBE: Final = (
+    MANDATORY_PROBE
+    + f"""
+! command -v officecli
+test -L "$OPENCLAW_STATE_DIR/.officecli/current"
 touch "$OPENCLAW_STATE_DIR/{CHILD_MARKER}"
 """
 )

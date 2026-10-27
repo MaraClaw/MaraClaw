@@ -3,8 +3,9 @@ set -eu
 
 OFFICECLI_TAG="v1.0.158"
 OFFICECLI_ARM64_SHA256="b1d5e74d93a8471a47b037cc7774ac29c559940e226f99b9fdf788966cc395b8"
+OFFICECLI_AMD64_SHA256="9ee41d5558caea7bcd5aab1b3e76b2bd70f0535f09cf65dda3668130510cc719"
 OFFICECLI_SKILL_SHA256="c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
-readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_SKILL_SHA256
+readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_AMD64_SHA256 OFFICECLI_SKILL_SHA256
 
 fail() {
     printf '%s\n' "[officecli-bootstrap] $1" >&2
@@ -30,6 +31,7 @@ hash_file() {
 parse_metadata() {
     metadata_file="$1"
     METADATA_TAG=""
+    METADATA_PLATFORM=""
     METADATA_BINARY_DIGEST=""
     METADATA_SKILL_DIGEST=""
     metadata_count=0
@@ -46,6 +48,10 @@ parse_metadata() {
                 [ -z "$METADATA_TAG" ] || return 1
                 METADATA_TAG="${metadata_line#tag=}"
                 ;;
+            platform=*)
+                [ -z "$METADATA_PLATFORM" ] || return 1
+                METADATA_PLATFORM="${metadata_line#platform=}"
+                ;;
             binary_sha256=*)
                 [ -z "$METADATA_BINARY_DIGEST" ] || return 1
                 METADATA_BINARY_DIGEST="${metadata_line#binary_sha256=}"
@@ -60,7 +66,8 @@ parse_metadata() {
         esac
     done < "$metadata_file"
 
-    [ "$metadata_count" -eq 3 ] || return 1
+    [ "$metadata_count" -eq 4 ] || return 1
+    case "$METADATA_PLATFORM" in linux/amd64|linux/arm64) ;; *) return 1 ;; esac
     is_valid_tag "$METADATA_TAG" || return 1
     is_sha256 "$METADATA_BINARY_DIGEST" || return 1
     is_sha256 "$METADATA_SKILL_DIGEST" || return 1
@@ -80,6 +87,7 @@ validate_release() {
     is_regular_file "$skill_file" && [ -s "$skill_file" ] || return 1
     parse_metadata "$metadata_file" || return 1
     [ "$METADATA_TAG" = "$expected_tag" ] || return 1
+    [ "$METADATA_PLATFORM" = "linux/$OFFICECLI_ARCH" ] || return 1
     [ "$(hash_file "$binary_file")" = "$METADATA_BINARY_DIGEST" ] || return 1
     [ "$(hash_file "$skill_file")" = "$METADATA_SKILL_DIGEST" ]
 }
@@ -94,15 +102,16 @@ validate_current_release() {
     current_target="$(readlink "$CURRENT_LINK")" || return 1
     case "$current_target" in
         releases/*)
-            current_tag="${current_target#releases/}"
+            current_identity="${current_target#releases/}"
+            current_tag="${current_identity%-linux-$OFFICECLI_ARCH}"
             ;;
         *)
             return 1
             ;;
     esac
-    [ "$current_target" = "releases/$current_tag" ] || return 1
+    [ "$current_target" = "releases/$current_tag-linux-$OFFICECLI_ARCH" ] || return 1
     is_valid_tag "$current_tag" || return 1
-    validate_release "$RELEASES_DIR/$current_tag" "$current_tag" || return 1
+    validate_release "$RELEASES_DIR/$current_identity" "$current_tag" || return 1
     validate_skill_link
 }
 
@@ -136,8 +145,7 @@ curl_safe() {
 }
 
 parse_manifest() {
-    MANIFEST_DIGEST="$(awk '
-        BEGIN { target = "officecli-linux-arm64" }
+    MANIFEST_DIGEST="$(awk -v target="$OFFICECLI_ASSET" '
         {
             filename = $2
             if (NF == 2 && (filename == target || filename == "*" target)) {
@@ -162,13 +170,13 @@ stage_release() {
     mkdir "$STAGE_DIR/skill" || return 1
     DOWNLOAD_ROOT="https://github.com/iOfficeAI/OfficeCLI/releases/download/$OFFICECLI_TAG"
     SKILL_URL="https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/$OFFICECLI_TAG/SKILL.md"
-    curl_safe -o "$STAGE_DIR/officecli" "$DOWNLOAD_ROOT/officecli-linux-arm64" || return 1
+    curl_safe -o "$STAGE_DIR/officecli" "$DOWNLOAD_ROOT/$OFFICECLI_ASSET" || return 1
     curl_safe -o "$STAGE_DIR/SHA256SUMS" "$DOWNLOAD_ROOT/SHA256SUMS" || return 1
     curl_safe -o "$STAGE_DIR/skill/SKILL.md" "$SKILL_URL" || return 1
     is_regular_file "$STAGE_DIR/SHA256SUMS" || return 1
     parse_manifest || return 1
-    [ "$MANIFEST_DIGEST" = "$OFFICECLI_ARM64_SHA256" ] || return 1
-    printf '%s  %s\n' "$OFFICECLI_ARM64_SHA256" "$STAGE_DIR/officecli" > "$STAGE_DIR/checksum" || return 1
+    [ "$MANIFEST_DIGEST" = "$OFFICECLI_SHA256" ] || return 1
+    printf '%s  %s\n' "$OFFICECLI_SHA256" "$STAGE_DIR/officecli" > "$STAGE_DIR/checksum" || return 1
     sha256sum -c "$STAGE_DIR/checksum" >/dev/null 2>&1 || return 1
     rm -f -- "$STAGE_DIR/checksum" || return 1
     chmod 0700 "$STAGE_DIR/officecli" || return 1
@@ -177,7 +185,8 @@ stage_release() {
     [ "$SKILL_DIGEST" = "$OFFICECLI_SKILL_SHA256" ] || return 1
     {
         printf 'tag=%s\n' "$TAG"
-        printf 'binary_sha256=%s\n' "$OFFICECLI_ARM64_SHA256"
+        printf 'platform=linux/%s\n' "$OFFICECLI_ARCH"
+        printf 'binary_sha256=%s\n' "$OFFICECLI_SHA256"
         printf 'skill_sha256=%s\n' "$SKILL_DIGEST"
     } > "$STAGE_DIR/metadata" || return 1
     chmod 0600 "$STAGE_DIR/metadata" || return 1
@@ -186,7 +195,7 @@ stage_release() {
 }
 
 publish_release() {
-    RELEASE_DIR="$RELEASES_DIR/$TAG"
+    RELEASE_DIR="$RELEASES_DIR/$TAG-linux-$OFFICECLI_ARCH"
     if [ -e "$RELEASE_DIR" ] || [ -L "$RELEASE_DIR" ]; then
         validate_release "$RELEASE_DIR" "$TAG" || return 1
         cmp -s "$STAGE_DIR/officecli" "$RELEASE_DIR/officecli" || return 1
@@ -213,7 +222,7 @@ activate_release() {
     fi
     TEMPORARY_CURRENT_LINK="$(mktemp "$OFFICECLI_ROOT/.current.XXXXXX")" || return 1
     rm -f -- "$TEMPORARY_CURRENT_LINK" || return 1
-    ln -s "releases/$TAG" "$TEMPORARY_CURRENT_LINK" || return 1
+    ln -s "releases/$TAG-linux-$OFFICECLI_ARCH" "$TEMPORARY_CURRENT_LINK" || return 1
     mv -Tf -- "$TEMPORARY_CURRENT_LINK" "$CURRENT_LINK" || return 1
     TEMPORARY_CURRENT_LINK=""
 }
@@ -226,6 +235,12 @@ refresh_and_activate() {
 }
 
 STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.openclaw}"
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64) OFFICECLI_ARCH=amd64; OFFICECLI_ASSET=officecli-linux-x64; OFFICECLI_SHA256="$OFFICECLI_AMD64_SHA256" ;;
+    Linux/aarch64|Linux/arm64) OFFICECLI_ARCH=arm64; OFFICECLI_ASSET=officecli-linux-arm64; OFFICECLI_SHA256="$OFFICECLI_ARM64_SHA256" ;;
+    *) fail "unsupported OfficeCLI target: $(uname -s)/$(uname -m)" ;;
+esac
+readonly OFFICECLI_ARCH OFFICECLI_ASSET OFFICECLI_SHA256
 OFFICECLI_ROOT="$STATE_DIR/.officecli"
 RELEASES_DIR="$OFFICECLI_ROOT/releases"
 CURRENT_LINK="$OFFICECLI_ROOT/current"

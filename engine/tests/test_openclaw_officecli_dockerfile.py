@@ -83,7 +83,7 @@ REGRESSION_CASES: Final = (
         "malformed shell tokenization",
     ),
     ("docker/openclaw/validate-gogcli.sh", "docker/openclaw/validate-other.sh", "Gogcli validator COPY"),
-    ("ARG GOGCLI_SHA256=", "ARG GOGCLI_SHA256_BROKEN=", "Gogcli checksum"),
+    ("ARG GOGCLI_ARM64_SHA256=", "ARG GOGCLI_ARM64_SHA256_BROKEN=", "Gogcli checksum"),
     ("ARG OPENCLAW_VERSION=", "ARG OFFICECLI_VERSION=1.2.3\nARG OPENCLAW_VERSION=", "OfficeCLI ARG pins"),
     (
         "RUN chmod 0755",
@@ -208,7 +208,8 @@ def _contract_errors(source: str) -> tuple[str, ...]:
 
     for label, fragment in (
         ("Gogcli asset", "ARG GOGCLI_VERSION="),
-        ("Gogcli checksum", "ARG GOGCLI_SHA256="),
+        ("Gogcli checksum", "ARG GOGCLI_ARM64_SHA256="),
+        ("Gogcli checksum", "ARG GOGCLI_AMD64_SHA256="),
         ("Gogcli binary", "/usr/local/bin/gog"),
     ):
         if fragment not in source:

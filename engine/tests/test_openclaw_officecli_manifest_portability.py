@@ -35,7 +35,7 @@ os.execv({real_awk!r}, [{real_awk!r}, *sys.argv[1:]])
 
 
 def _metadata(*, tag: str = VALID_TAG, binary_digest: str = VALID_DIGEST, skill_digest: str = VALID_DIGEST) -> str:
-    return f"tag={tag}\nbinary_sha256={binary_digest}\nskill_sha256={skill_digest}\n"
+    return f"tag={tag}\nplatform=linux/arm64\nbinary_sha256={binary_digest}\nskill_sha256={skill_digest}\n"
 
 
 def _run_parse_metadata(tmp_path: Path, metadata: str) -> subprocess.CompletedProcess[str]:

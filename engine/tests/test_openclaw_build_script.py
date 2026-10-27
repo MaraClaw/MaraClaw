@@ -12,7 +12,8 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 OPENCLAW_VERSION = "2026.10.7"
 OPENCLAW_SHA256 = "sha256:45dc6dadab3ca4e5286262226d6b61554309435a5e83b5d25c803a3a12ef2f81"
 GOGCLI_VERSION = "0.47.0"
-GOGCLI_SHA256 = "sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2"
+GOGCLI_ARM64_SHA256 = "sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2"
+GOGCLI_AMD64_SHA256 = "sha256:c3ed94efca90c754cdda300e3c7f8cc2f3d7df86d3fdc5d11f996c7518a09c24"
 
 
 def install_fake_docker(root: Path) -> tuple[Path, Path]:
@@ -21,7 +22,7 @@ def install_fake_docker(root: Path) -> tuple[Path, Path]:
     log_path = root / "docker.log"
     docker_path = bin_dir / "docker"
     docker_path.write_text(
-        '#!/usr/bin/env sh\nprintf \'%s\\n\' "$*" >> "$DOCKER_FAKE_LOG"\n',
+        '#!/usr/bin/env sh\nprintf \'%s\\n\' "$*" >> "$DOCKER_FAKE_LOG"\nexit "${DOCKER_FAKE_EXIT:-0}"\n',
         encoding="utf-8",
     )
     docker_path.chmod(docker_path.stat().st_mode | stat.S_IXUSR)
@@ -34,6 +35,7 @@ def build_env(bin_dir: Path, log_path: Path, missing_env_file: Path) -> dict[str
     env["DOCKER_FAKE_LOG"] = str(log_path)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env.pop("MARACLAW_OPENCLAW_IMAGE", None)
+    env.pop("DOCKER_PLATFORM", None)
     return env
 
 
@@ -117,10 +119,12 @@ def test_openclaw_build_script_passes_default_openclaw_version_and_sha(tmp_path:
     assert f"--build-arg OPENCLAW_SHA256={OPENCLAW_SHA256}" in command
 
 
-def test_openclaw_build_script_passes_default_gogcli_version_and_sha(tmp_path: Path) -> None:
+@pytest.mark.parametrize("platform", ["linux/amd64", "linux/arm64"])
+def test_openclaw_build_script_loads_one_target_with_per_arch_pins(tmp_path: Path, platform: str) -> None:
     # Given
     bin_dir, log_path = install_fake_docker(tmp_path)
     env = build_env(bin_dir, log_path, tmp_path / "missing.env")
+    env["DOCKER_PLATFORM"] = platform
 
     # When
     result = run_build_script(env)
@@ -129,7 +133,12 @@ def test_openclaw_build_script_passes_default_gogcli_version_and_sha(tmp_path: P
     command = log_path.read_text(encoding="utf-8")
     assert result.returncode == 0, result.stderr
     assert f"--build-arg GOGCLI_VERSION={GOGCLI_VERSION}" in command
-    assert f"--build-arg GOGCLI_SHA256={GOGCLI_SHA256}" in command
+    assert f"--build-arg GOGCLI_AMD64_SHA256={GOGCLI_AMD64_SHA256}" in command
+    assert f"--build-arg GOGCLI_ARM64_SHA256={GOGCLI_ARM64_SHA256}" in command
+    assert command.count("--platform") == 1
+    assert f"--platform {platform}" in command
+    assert "--load" in command
+    assert "--push" not in command
 
 
 def test_environment_example_pins_openclaw_and_gogcli_releases() -> None:
@@ -138,7 +147,6 @@ def test_environment_example_pins_openclaw_and_gogcli_releases() -> None:
         "OPENCLAW_VERSION": OPENCLAW_VERSION,
         "OPENCLAW_SHA256": OPENCLAW_SHA256,
         "GOGCLI_VERSION": GOGCLI_VERSION,
-        "GOGCLI_SHA256": GOGCLI_SHA256,
     }
     content = ENV_EXAMPLE.read_text(encoding="utf-8")
 
@@ -171,12 +179,13 @@ def test_openclaw_build_script_passes_configured_openclaw_version_and_sha(tmp_pa
     assert "--build-arg OPENCLAW_SHA256=sha256:configured" in command
 
 
-def test_openclaw_build_script_passes_configured_gogcli_version_and_sha(tmp_path: Path) -> None:
+def test_openclaw_build_script_passes_configured_gogcli_version_and_per_arch_sha(tmp_path: Path) -> None:
     # Given
     bin_dir, log_path = install_fake_docker(tmp_path)
     env = build_env(bin_dir, log_path, tmp_path / "missing.env")
     env["GOGCLI_VERSION"] = "0.99.0"
-    env["GOGCLI_SHA256"] = "configured-gogcli-sha"
+    env["GOGCLI_AMD64_SHA256"] = "configured-amd64-sha"
+    env["GOGCLI_ARM64_SHA256"] = "configured-arm64-sha"
 
     # When
     result = run_build_script(env)
@@ -185,21 +194,23 @@ def test_openclaw_build_script_passes_configured_gogcli_version_and_sha(tmp_path
     command = log_path.read_text(encoding="utf-8")
     assert result.returncode == 0, result.stderr
     assert "--build-arg GOGCLI_VERSION=0.99.0" in command
-    assert "--build-arg GOGCLI_SHA256=configured-gogcli-sha" in command
+    assert "--build-arg GOGCLI_AMD64_SHA256=configured-amd64-sha" in command
+    assert "--build-arg GOGCLI_ARM64_SHA256=configured-arm64-sha" in command
 
 
-def test_openclaw_build_script_rejects_non_arm64_platform(tmp_path: Path) -> None:
+@pytest.mark.parametrize("platform", ["linux/386", "darwin/arm64", "linux/amd64,linux/arm64"])
+def test_openclaw_build_script_rejects_unsupported_or_multiple_platforms(tmp_path: Path, platform: str) -> None:
     # Given
     bin_dir, log_path = install_fake_docker(tmp_path)
     env = build_env(bin_dir, log_path, tmp_path / "missing.env")
-    env["DOCKER_PLATFORM"] = "linux/amd64"
+    env["DOCKER_PLATFORM"] = platform
 
     # When
     result = run_build_script(env)
 
     # Then
     assert result.returncode == 2
-    assert "gogcli is pinned to the linux/arm64 release" in result.stderr
+    assert "exactly one supported target" in result.stderr
     assert not log_path.exists()
 
 
@@ -273,9 +284,10 @@ def test_openclaw_dockerfile_pins_and_verifies_gogcli_release_archive() -> None:
 
     # Then
     assert f"GOGCLI_VERSION={GOGCLI_VERSION}" in content
-    assert f"GOGCLI_SHA256={GOGCLI_SHA256}" in content
+    assert f"GOGCLI_ARM64_SHA256={GOGCLI_ARM64_SHA256}" in content
+    assert f"GOGCLI_AMD64_SHA256={GOGCLI_AMD64_SHA256}" in content
     assert (
-        '"https://github.com/openclaw/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_arm64.tar.gz"'
+        '"https://github.com/openclaw/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz"'
         in gogcli_block
     )
     assert "printf '%s  %s\\n' \"${GOGCLI_SHA256#sha256:}\" /tmp/gogcli.tar.gz" in gogcli_block

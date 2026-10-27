@@ -12,14 +12,14 @@ USER: node
 
 | File | When | Role |
 |---|---|---|
-| `bootstrap-officecli.sh` | entrypoint | Download pinned OfficeCLI (arm64 + SHA256); if that fails with no last-known-good release, continue without OfficeCLI; exec the supplied command unchanged |
+| `bootstrap-officecli.sh` | entrypoint | Download pinned OfficeCLI for the running amd64/arm64 target and verify SHA256; if that fails with no valid same-architecture release, continue without OfficeCLI; exec the supplied command unchanged |
 | `validate-gogcli.sh` | CMD | If `GOG_KEYRING_PASSWORD_FILE` set, load into process env and exec |
 
 ## Pins
 
 - Base: `node:26.12.1-bookworm-slim`. Backend image is `python:3.14.8-slim-trixie`. Sandbox Node image is `node:26.12.1-slim`.
-- gogcli **linux/arm64 only**. `build-openclaw-local-dockerfile.sh` and `publish-openclaw-local-dockerfile.sh` use **docker buildx** and exit if `DOCKER_PLATFORM` is anything else.
-- Publish requires `DOCKERHUB_NAMESPACE` or `OPENCLAW_PUBLISH_IMAGE` and an existing `docker login`. It tags `openclaw:local` then pushes `${repo}:${OPENCLAW_VERSION}` (and `:latest` when `PUSH_LATEST=1`).
+- gogcli supports **linux/amd64 and linux/arm64**, each with its own pinned digest. `build-openclaw-local-dockerfile.sh` uses **docker buildx --load** for one `DOCKER_PLATFORM` (default `linux/arm64`); other targets fail explicitly.
+- Publish requires `DOCKERHUB_NAMESPACE` or `OPENCLAW_PUBLISH_IMAGE` and an existing `docker login`. It builds both platforms with **docker buildx --push** under `${repo}:${IMAGE_TAG}` (default `OPENCLAW_VERSION`), adding `:latest` only when `PUSH_LATEST=1`. It does not load or retag a local image.
 - OfficeCLI is **runtime** download, never baked into the Dockerfile.
 - OpenClaw is installed from its checksum-verified pinned npm archive without local memory-provider patches.
 

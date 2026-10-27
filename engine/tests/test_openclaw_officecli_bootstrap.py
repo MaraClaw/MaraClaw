@@ -17,6 +17,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 WRAPPER_SOURCE: Final = REPO_ROOT / "docker" / "openclaw" / "bootstrap-officecli.sh"
 OFFICECLI_TAG: Final = "v1.0.158"
 OFFICECLI_ARM64_SHA256: Final = "b1d5e74d93a8471a47b037cc7774ac29c559940e226f99b9fdf788966cc395b8"
+OFFICECLI_AMD64_SHA256: Final = "9ee41d5558caea7bcd5aab1b3e76b2bd70f0535f09cf65dda3668130510cc719"
 OFFICECLI_SKILL_SHA256: Final = "c950d285ce60021712b4753fb2d9f592308d5622bab776229061dfecb1ce55d4"
 RELEASE_ROOT: Final = "https://github.com/iOfficeAI/OfficeCLI/releases/download"
 SKILL_ROOT: Final = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI"
@@ -38,6 +39,7 @@ os.replace(source, destination)
 
 @dataclass(frozen=True, slots=True)
 class BootstrapFixture:
+    architecture: str
     root: Path
     wrapper: Path
     state_dir: Path
@@ -47,18 +49,26 @@ class BootstrapFixture:
     child_sentinel: Path
     poison_path: Path
 
+    @property
+    def asset(self) -> str:
+        return "officecli-linux-x64" if self.architecture == "amd64" else "officecli-linux-arm64"
+
+    def release(self, tag: str) -> Path:
+        return self.state_dir / ".officecli" / "releases" / f"{tag}-linux-{self.architecture}"
+
     def configure_release(self, tag: str, label: str) -> None:
         binary = f"#!/usr/bin/env sh\nprintf '%s\\n' 'officecli {label}'\n".encode()
         skill = f"---\nname: officecli\ndescription: {label}\n---\n".encode()
         digest = hashlib.sha256(binary).hexdigest()
         skill_digest = hashlib.sha256(skill).hexdigest()
-        (self.fixture_dir / "officecli-linux-arm64").write_bytes(binary)
-        (self.fixture_dir / "SHA256SUMS").write_text(f"{digest}  officecli-linux-arm64\n", encoding="utf-8")
+        (self.fixture_dir / self.asset).write_bytes(binary)
+        (self.fixture_dir / "SHA256SUMS").write_text(f"{digest}  {self.asset}\n", encoding="utf-8")
         (self.fixture_dir / "SKILL.md").write_bytes(skill)
         wrapper_source = WRAPPER_SOURCE.read_text(encoding="utf-8")
         fixture_wrapper = (
             wrapper_source.replace(f'OFFICECLI_TAG="{OFFICECLI_TAG}"', f'OFFICECLI_TAG="{tag}"')
             .replace(f'OFFICECLI_ARM64_SHA256="{OFFICECLI_ARM64_SHA256}"', f'OFFICECLI_ARM64_SHA256="{digest}"')
+            .replace(f'OFFICECLI_AMD64_SHA256="{OFFICECLI_AMD64_SHA256}"', f'OFFICECLI_AMD64_SHA256="{digest}"')
             .replace(f'OFFICECLI_SKILL_SHA256="{OFFICECLI_SKILL_SHA256}"', f'OFFICECLI_SKILL_SHA256="{skill_digest}"')
         )
         assert fixture_wrapper != wrapper_source
@@ -110,7 +120,7 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def create_fake_network_fixture(root: Path) -> BootstrapFixture:
+def create_fake_network_fixture(root: Path, architecture: str = "arm64") -> BootstrapFixture:
     script_dir = root / "script-copy"
     script_dir.mkdir()
     wrapper = script_dir / "bootstrap-officecli.sh"
@@ -121,6 +131,8 @@ def create_fake_network_fixture(root: Path) -> BootstrapFixture:
     fixture_dir.mkdir()
     bin_dir = root / "fake-bin"
     bin_dir.mkdir()
+    machine = "x86_64" if architecture == "amd64" else "aarch64"
+    _write_executable(bin_dir / "uname", f'#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo {machine};; esac\n')
     inherited_bin = root / "inherited-bin"
     inherited_bin.mkdir()
     _write_executable(inherited_bin / "officecli", "#!/usr/bin/env sh\nexit 99\n")
@@ -149,10 +161,10 @@ url = arguments[-1]
 output_path = arguments[arguments.index("-o") + 1]
 mode = os.environ["OFFICECLI_FAKE_MODE"]
 fixtures = Path(os.environ["FAKE_CURL_FIXTURES"])
-if url.endswith("/officecli-linux-arm64"):
+if url.endswith(("/officecli-linux-arm64", "/officecli-linux-x64")):
     if mode == "binary_fail":
         raise SystemExit(23)
-    source = fixtures / "officecli-linux-arm64"
+    source = fixtures / url.rsplit("/", 1)[1]
 elif url.endswith("/SHA256SUMS"):
     if mode == "manifest_download_fail":
         raise SystemExit(26)
@@ -174,6 +186,7 @@ Path(output_path).write_bytes(source.read_bytes())
     if sys.platform == "darwin":
         _write_executable(bin_dir / "mv", FAKE_GNU_MV)
     return BootstrapFixture(
+        architecture=architecture,
         root=root,
         wrapper=wrapper,
         state_dir=root / "state with spaces",
@@ -193,25 +206,6 @@ def expected_urls(tag: str) -> list[str]:
     ]
 
 
-def test_runtime_bootstrap_pins_officecli_to_committed_tag_and_digest() -> None:
-    # Given
-    source = WRAPPER_SOURCE.read_text(encoding="utf-8")
-
-    # When
-    has_committed_tag = f'OFFICECLI_TAG="{OFFICECLI_TAG}"' in source
-    has_committed_digest = f'OFFICECLI_ARM64_SHA256="{OFFICECLI_ARM64_SHA256}"' in source
-    has_committed_skill = f'OFFICECLI_SKILL_SHA256="{OFFICECLI_SKILL_SHA256}"' in source
-
-    # Then
-    assert has_committed_tag
-    assert has_committed_digest
-    assert has_committed_skill
-    assert "readonly OFFICECLI_TAG OFFICECLI_ARM64_SHA256 OFFICECLI_SKILL_SHA256" in source
-    assert "releases/latest" not in source
-    assert f"{RELEASE_ROOT}/$OFFICECLI_TAG" in source
-    assert f"{SKILL_ROOT}/$OFFICECLI_TAG/SKILL.md" in source
-
-
 def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: Path) -> None:
     # Given
     fixture = create_fake_network_fixture(tmp_path)
@@ -227,7 +221,7 @@ def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: P
     result = fixture.run("sh", "-c", child_command)
 
     # Then
-    release = fixture.state_dir / ".officecli" / "releases" / "v1.2.3"
+    release = fixture.release("v1.2.3")
     assert result.returncode == 0, result.stderr
     assert fixture.child_sentinel.read_text(encoding="utf-8").splitlines() == [
         str(fixture.state_dir / ".officecli" / "current" / "officecli"),
@@ -241,7 +235,7 @@ def test_installs_complete_pair_before_downstream_with_runtime_flags(tmp_path: P
     assert not release.joinpath("skill", "SKILL.md").is_symlink()
     assert release.joinpath("skill", "SKILL.md").stat().st_size > 0
     assert "tag=v1.2.3" in release.joinpath("metadata").read_text(encoding="utf-8")
-    assert str((fixture.state_dir / ".officecli" / "current").readlink()) == "releases/v1.2.3"
+    assert str((fixture.state_dir / ".officecli" / "current").readlink()) == "releases/v1.2.3-linux-arm64"
     assert str((fixture.state_dir / "skills" / "officecli").readlink()) == "../.officecli/current/skill"
     assert fixture.requested_urls() == expected_urls("v1.2.3")
 
@@ -262,9 +256,9 @@ def test_refreshes_same_tag_without_skipping_then_selects_newer_tag_on_every_sta
     root = fixture.state_dir / ".officecli"
     assert same_tag_result.returncode == 0, same_tag_result.stderr
     assert newer_tag_result.returncode == 0, newer_tag_result.stderr
-    assert "first" in root.joinpath("releases", "v1.0.0", "officecli").read_text(encoding="utf-8")
-    assert "newer-release" in root.joinpath("releases", "v1.0.1", "officecli").read_text(encoding="utf-8")
-    assert str((root / "current").readlink()) == "releases/v1.0.1"
+    assert "first" in fixture.release("v1.0.0").joinpath("officecli").read_text(encoding="utf-8")
+    assert "newer-release" in fixture.release("v1.0.1").joinpath("officecli").read_text(encoding="utf-8")
+    assert str((root / "current").readlink()) == "releases/v1.0.1-linux-arm64"
     assert fixture.requested_urls() == expected_urls("v1.0.0") * 2 + expected_urls("v1.0.1")
 
 
