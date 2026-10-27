@@ -30,7 +30,7 @@ ARG MARACLAW_PIP_TRUSTED_HOST
 RUN set -eu; set --; \
     if [ -n "${MARACLAW_PIP_INDEX_URL:-}" ]; then set -- "$@" --index-url "$MARACLAW_PIP_INDEX_URL"; fi; \
     if [ -n "${MARACLAW_PIP_TRUSTED_HOST:-}" ]; then set -- "$@" --trusted-host "$MARACLAW_PIP_TRUSTED_HOST"; fi; \
-    pip install --no-cache-dir "$@" uv==0.13.5 && \
+    pip install --no-cache-dir "$@" uv==0.13.6 && \
     uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file /tmp/requirements.txt && \
     uv pip install --system --no-cache --require-hashes "$@" -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt

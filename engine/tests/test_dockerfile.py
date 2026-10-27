@@ -134,7 +134,7 @@ def _assert_locked_dependencies(source: str) -> None:
     ]
     bootstrap, export, install, cleanup = commands
     assert bootstrap[:2] == ["pip", "install"]
-    assert {"--no-cache-dir", "uv==0.13.5"} <= set(bootstrap)
+    assert {"--no-cache-dir", "uv==0.13.6"} <= set(bootstrap)
     assert export[:2] == ["uv", "export"]
     assert {"--locked", "--no-dev", "--no-emit-project"} <= set(export)
     assert export[export.index("--format") + 1] == "requirements.txt"
@@ -179,7 +179,7 @@ def _assert_locked_dependencies(source: str) -> None:
         expected = (["--index-url", index] if index not in (None, "") else []) + (
             ["--trusted-host", host] if host not in (None, "") else []
         )
-        assert observed[0] == ["pip", "install", "--no-cache-dir", *expected, "uv==0.13.5"]
+        assert observed[0] == ["pip", "install", "--no-cache-dir", *expected, "uv==0.13.6"]
         assert observed[1] == export
         assert observed[2] == [
             "uv",
@@ -236,7 +236,7 @@ def test_dependencies_are_locked_system_installs() -> None:
         ("--no-dev", "--only-dev"),
         ("--no-dev", "--no-dev --extra dev"),
         ("--no-dev", "--no-dev --all-extras"),
-        ("uv==0.13.5", "uv"),
+        ("uv==0.13.6", "uv"),
         ("--require-hashes", ""),
         ('--no-cache-dir "$@"', "--no-cache-dir"),
         ('--require-hashes "$@"', "--require-hashes"),
