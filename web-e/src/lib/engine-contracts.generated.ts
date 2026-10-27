@@ -426,13 +426,16 @@ export type DepartmentMemberOut = z.infer<typeof DepartmentMemberOutSchema>;
 export const DepartmentMembersOutSchema = z.looseObject({ ["members"]: z.array(DepartmentMemberOutSchema) });
 export type DepartmentMembersOut = z.infer<typeof DepartmentMembersOutSchema>;
 
+export const DepartmentMergeConfirmationSchema = z.string().regex(new RegExp("^v1:[0-9a-f]{64}$", "u"));
+export type DepartmentMergeConfirmation = z.infer<typeof DepartmentMergeConfirmationSchema>;
+
 export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
 export type DepartmentOut = z.infer<typeof DepartmentOutSchema>;
 
-export const DepartmentMergePreviewOutSchema = z.looseObject({ ["destination"]: DepartmentOutSchema, ["destination_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["destination_membership_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_membership_count"]: z.number().min(0).refine(Number.isInteger), ["source"]: DepartmentOutSchema, ["source_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["source_membership_count"]: z.number().min(0).refine(Number.isInteger) });
+export const DepartmentMergePreviewOutSchema = z.looseObject({ ["confirmation_token"]: DepartmentMergeConfirmationSchema, ["destination"]: DepartmentOutSchema, ["destination_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["destination_membership_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_membership_count"]: z.number().min(0).refine(Number.isInteger), ["source"]: DepartmentOutSchema, ["source_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["source_membership_count"]: z.number().min(0).refine(Number.isInteger) });
 export type DepartmentMergePreviewOut = z.infer<typeof DepartmentMergePreviewOutSchema>;
 
-export const DepartmentMergeRequestSchema = z.strictObject({ ["destination_id"]: z.guid() });
+export const DepartmentMergeRequestSchema = z.strictObject({ ["confirmation_token"]: DepartmentMergeConfirmationSchema, ["destination_id"]: z.guid() });
 export type DepartmentMergeRequest = z.infer<typeof DepartmentMergeRequestSchema>;
 
 export const DepartmentOptionOutSchema = z.looseObject({ ["id"]: z.guid(), ["name"]: z.string() });
