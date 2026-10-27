@@ -146,4 +146,6 @@ jobs:
           tests/test_agent_ownership_transfers_postgres.py
           tests/test_guest_config_transaction_postgres.py
           tests/test_agent_start_postgres.py
+          tests/test_linkup_proxy_tokens_postgres.py
+          tests/test_linkup_proxy_revocation.py
           -q

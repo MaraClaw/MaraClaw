@@ -62,6 +62,25 @@ async def test_stopped_guest_resumes_same_id(env):
     assert docker.runs == docker.removed == []
 
 
+@pytest.mark.parametrize("status", ["running", "exited"])
+async def test_existing_guest_registers_before_reuse(env, status):
+    manager, docker, agent = env
+    docker.guests["old"].state.status = status
+    await manager.start_container(agent)
+    manager._prepare_linkup_proxy_token.assert_awaited_once_with(agent.id)
+    assert docker.runs == docker.removed == []
+
+
+@pytest.mark.parametrize("status", ["running", "exited"])
+async def test_existing_guest_is_not_reused_when_registration_fails(env, status):
+    manager, docker, agent = env
+    docker.guests["old"].state.status = status
+    manager._prepare_linkup_proxy_token.side_effect = RuntimeError("registration failed")
+    with pytest.raises(RuntimeError, match="registration failed"):
+        await manager.start_container(agent)
+    assert docker.starts == docker.probes == docker.runs == docker.removed == []
+
+
 async def test_stale_record_adopts_canonical_guest(env):
     # Given Docker created a guest before its reference was committed.
     manager, docker, agent = env

@@ -1,11 +1,18 @@
 import uuid
 from types import SimpleNamespace
 from typing import Any, override
+from unittest.mock import AsyncMock
 
+import pytest
 from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.services import agent_manager as agent_manager_module, gogcli_oauth, gogcli_runtime
 from app.services.agent_manager import AgentManager
+
+
+@pytest.fixture(autouse=True)
+def fake_token_preparation(monkeypatch):
+    monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", AsyncMock())
 
 
 class _RecordingContainerAPI:

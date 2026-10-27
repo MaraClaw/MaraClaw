@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api import linkup_proxy
 from app.dao.agent_dao import agent_dao
-from app.services.linkup.tokens import make_proxy_token
+from app.services.linkup.tokens import _proxy_token, make_proxy_token
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from company_transfer_blocker_fixtures import isolated_transfer_runtime, sealed_transfer, submit_free, transfer_scenario
 from test_company_transfer_retention_postgres import seed_retained_data
@@ -16,12 +16,12 @@ from test_company_transfer_retention_postgres import seed_retained_data
 __all__ = ["admission_scenario", "isolated_transfer_runtime", "sealed_transfer", "transfer_scenario"]
 
 
-async def search(agent_id: UUID):
+async def search(token: str):
     app = FastAPI()
     app.include_router(linkup_proxy.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy.test") as client:
         return await client.post(
-            "/api/linkup/v1/search", headers={"Authorization": f"Bearer {make_proxy_token(agent_id)}"}, json={"q": "qa"}
+            "/api/linkup/v1/search", headers={"Authorization": f"Bearer {token}"}, json={"q": "qa"}
         )
 
 
@@ -49,7 +49,8 @@ async def test_proxy_checks_current_agent_before_forwarding(
     upstream = AsyncMock(return_value=(200, '{"results":[]}', {}))
     monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
     # When a guest presents the token.
-    response = await search(agent_id)
+    token = _proxy_token(agent_id) if state == "missing" else await make_proxy_token(agent_id)
+    response = await search(token)
     # Then only live, unexpired agents can spend an upstream key.
     expected = 200 if state in {"active", "future"} else 401
     assert response.status_code == expected, response.text
@@ -64,7 +65,8 @@ async def test_free_approval_revokes_previously_usable_copied_proxy_token(
     agent_id = await seed_retained_data(scenario)
     upstream = AsyncMock(return_value=(200, "{}", {}))
     monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
-    assert (await search(agent_id)).status_code == 200
+    token = await make_proxy_token(agent_id)
+    assert (await search(token)).status_code == 200
     upstream.reset_mock()
     admission_id = await submit_free(scenario)
     approved = await scenario.client.post(
@@ -74,7 +76,7 @@ async def test_free_approval_revokes_previously_usable_copied_proxy_token(
     )
     assert approved.status_code == 200, approved.text
     # When the copied token is replayed after committed final approval.
-    response = await search(agent_id)
+    response = await search(token)
     # Then it is revoked without an upstream request.
     assert response.status_code == 401, response.text
     upstream.assert_not_awaited()
@@ -89,7 +91,8 @@ async def test_retention_ledger_seals_proxy_even_if_expiry_flag_is_cleared(
     upstream = AsyncMock(return_value=(200, "{}", {}))
     monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
     # When the old token is presented.
-    response = await search(agent_id)
+    token = await make_proxy_token(agent_id)
+    response = await search(token)
     # Then the durable retention ledger still revokes access.
     assert response.status_code == 401, response.text
     upstream.assert_not_awaited()

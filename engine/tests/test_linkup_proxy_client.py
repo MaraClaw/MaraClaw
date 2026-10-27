@@ -12,7 +12,7 @@ from app.records.linkup_api_key import LinkupApiKeyRecord
 from app.services.linkup.client import LinkupProxyError, allowed_upstream_path, proxy_linkup
 from app.services.linkup.jobs import LinkupJobKeyRemovedError, bind_job, key_for_job
 from app.services.linkup.keys import add_key
-from app.services.linkup.tokens import make_proxy_token, parse_proxy_token
+from app.services.linkup.tokens import _proxy_token, parse_proxy_token
 
 
 class MemoryKeyDao:
@@ -250,7 +250,7 @@ def test_path_allowlist_and_proxy_token() -> None:
     assert allowed_upstream_path("research/abc") is True
     assert allowed_upstream_path("admin") is False
     agent_id = uuid4()
-    token = make_proxy_token(agent_id, secret="s")
+    token = _proxy_token(agent_id, secret="s")
     assert parse_proxy_token(token, secret="s") == agent_id
     assert parse_proxy_token(token, secret="other") is None
     assert parse_proxy_token("not-a-token", secret="s") is None

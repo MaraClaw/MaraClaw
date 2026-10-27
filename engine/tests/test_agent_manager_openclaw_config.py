@@ -3,7 +3,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
+import pytest
 from pywhales.exceptions import NoSuchContainer
 
 from app.config import Settings
@@ -15,6 +17,12 @@ from app.services.agent_manager import (
     XAI_OAUTH_PROFILE_ID,
     AgentManager,
 )
+from app.services.linkup.tokens import parse_proxy_token
+
+
+@pytest.fixture(autouse=True)
+def fake_token_preparation(monkeypatch):
+    monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", AsyncMock())
 
 
 class RecordingContainerApi:
@@ -333,9 +341,24 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     assert legacy["openai"]["accountId"] == "acct-from-row"
 
 
-async def test_start_container_writes_openclaw_config_at_state_root_and_passes_env(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("enabled", "proxy_base", "expected_base"),
+    [
+        (True, " https://proxy.example/linkup/// ", "https://proxy.example/linkup"),
+        (True, " ", "http://maraclaw-engine:8000/api/linkup"),
+        (False, "https://proxy.example/linkup", None),
+    ],
+)
+async def test_start_container_writes_openclaw_config_at_state_root_and_passes_env(
+    monkeypatch, tmp_path, enabled, proxy_base, expected_base
+):
     # Given
+    monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "creation-test-secret")
+    monkeypatch.setattr(agent_manager_module.settings, "OPENCLAW_ENGINE_BASE_URL", "http://maraclaw-engine:8000")
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", enabled)
+    monkeypatch.setattr(settings, "LINKUP_PROXY_BASE_URL", proxy_base)
+    monkeypatch.setattr(settings, "LINKUP_API_KEY", "lk_upstream_secret_must_not_leak")
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
@@ -381,16 +404,9 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs is not None
     assert docker_client.run_args == (
         settings.MARACLAW_OPENCLAW_IMAGE,
-        [
-            "-s",
-            "--",
-            "/usr/local/bin/bootstrap-officecli.sh",
-            "/usr/local/bin/validate-gogcli.sh",
-            "openclaw",
-            "gateway",
-        ],
+        ["openclaw", "gateway"],
     )
-    assert run_kwargs["entrypoint"] == "tini"
+    assert "entrypoint" not in run_kwargs
     assert docker_client.container.stop_calls
     assert docker_client.container.remove_calls
     assert run_kwargs["detach"] is True
@@ -401,6 +417,19 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
     assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
+    envs = run_kwargs["envs"]
+    assert "LINKUP_API_KEY" not in envs
+    assert "lk_upstream_secret_must_not_leak" not in envs.values()
+    if enabled:
+        assert envs["LINKUP_API_BASE"] == expected_base
+        assert parse_proxy_token(envs["LINKUP_PROXY_TOKEN"], secret="creation-test-secret") == agent_id
+        assert config["skills"]["entries"]["linkup-search"]["env"] == {
+            "LINKUP_API_BASE": envs["LINKUP_API_BASE"],
+            "LINKUP_PROXY_TOKEN": envs["LINKUP_PROXY_TOKEN"],
+        }
+    else:
+        assert "LINKUP_API_BASE" not in envs
+        assert "LINKUP_PROXY_TOKEN" not in envs
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
     assert run_kwargs["publish"] == [(f"127.0.0.1:{agent.container_port}", settings.OPENCLAW_GATEWAY_PORT)]
     assert run_kwargs["restart"] == "unless-stopped"
