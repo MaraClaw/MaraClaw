@@ -45,6 +45,9 @@ export type DepartmentMergeSelection = {
   readonly sourceId: string
   readonly destinationId: string
 }
+export type DepartmentMergeApply = DepartmentMergeSelection & {
+  readonly confirmationToken: DepartmentMergePreview['confirmation_token']
+}
 
 export async function previewDepartmentMerge(selection: DepartmentMergeSelection, signal?: AbortSignal) {
   const query = new URLSearchParams({ tenant_id: selection.tenantId, destination_id: selection.destinationId })
@@ -53,12 +56,12 @@ export async function previewDepartmentMerge(selection: DepartmentMergeSelection
   })
 }
 
-export async function mergeDepartment(selection: DepartmentMergeSelection) {
+export async function mergeDepartment(selection: DepartmentMergeApply) {
   const query = new URLSearchParams({ tenant_id: selection.tenantId })
   return apiRequest(`/api/departments/${encodeURIComponent(selection.sourceId)}/merge?${query}`, {
     schema: DepartmentMergePreviewOutSchema,
     method: 'POST',
-    body: { destination_id: selection.destinationId },
+    body: { destination_id: selection.destinationId, confirmation_token: selection.confirmationToken },
   })
 }
 

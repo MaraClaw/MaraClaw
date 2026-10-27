@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 
-import { deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentMergePreview, type DepartmentMergeSelection, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+import { deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentMergeApply, type DepartmentMergePreview, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
 
 type RenameDepartmentInput = {
   readonly tenantId: string
@@ -62,9 +62,9 @@ export function deleteDepartmentOptions(queryClient: QueryClient) {
 
 export function mergeDepartmentOptions(queryClient: QueryClient) {
   return {
-    mutationFn: (input: DepartmentMergeSelection) => mergeDepartment(input),
+    mutationFn: (input: DepartmentMergeApply) => mergeDepartment(input),
     retry: false,
-    onSuccess: (merged: DepartmentMergePreview, input: DepartmentMergeSelection) => {
+    onSuccess: (merged: DepartmentMergePreview, input: DepartmentMergeApply) => {
       const queryKey = ['admin-departments', input.tenantId]
       const current = queryClient.getQueryData<DepartmentsResponse>(queryKey)
       const affectedUsers = new Set(current?.assignments

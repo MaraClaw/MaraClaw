@@ -24,6 +24,7 @@ const directory: DepartmentsResponse = {
 
 const mergeSelection = { tenantId: '86b8142b-31e6-44ab-a35e-e10998037030', sourceId: department.id, destinationId: '64c0b6ca-0312-42aa-996d-ff606043337a' }
 const mergeResult = {
+  confirmation_token: `v1:${'a'.repeat(64)}`,
   source: { ...department, id: '10000000-0000-4000-8000-000000000001', tenant_id: mergeSelection.tenantId },
   destination: { ...department, id: mergeSelection.destinationId, tenant_id: mergeSelection.tenantId, name: 'Engineering' },
   source_membership_count: 2, destination_membership_count: 3, overlapping_membership_count: 1,
@@ -43,16 +44,16 @@ test('merge preview validates all association counts and forwards the scoped sel
   assert.deepEqual(result, mergeResult)
 })
 
-test('merge applies with one atomic POST containing only the destination', async (t) => {
+test('merge applies with one atomic POST containing the destination and reviewed confirmation', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(mergeResult))
   // When
-  const result = await mergeDepartment(mergeSelection)
+  const result = await mergeDepartment({ ...mergeSelection, confirmationToken: mergeResult.confirmation_token })
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, `/api/departments/department%2Fa%20%2B%3F/merge?tenant_id=${mergeSelection.tenantId}`)
   assert.equal(options?.method, 'POST')
-  assert.deepEqual(JSON.parse(String(options?.body)), { destination_id: mergeSelection.destinationId })
+  assert.deepEqual(JSON.parse(String(options?.body)), { destination_id: mergeSelection.destinationId, confirmation_token: mergeResult.confirmation_token })
   assert.deepEqual(result, mergeResult)
   assert.equal(fetch.mock.callCount(), 1)
 })
@@ -63,7 +64,7 @@ for (const body of [{}, { ...mergeResult, source: null }, { ...mergeResult, dest
     t.mock.method(globalThis, 'fetch', async () => Response.json(body))
     // When / Then
     await assert.rejects(previewDepartmentMerge(mergeSelection), z.ZodError)
-    await assert.rejects(mergeDepartment(mergeSelection), z.ZodError)
+    await assert.rejects(mergeDepartment({ ...mergeSelection, confirmationToken: mergeResult.confirmation_token }), z.ZodError)
   })
 }
 

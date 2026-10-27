@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-query'
+import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import type { DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { mergeDepartment, previewDepartmentMerge, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { mergeDepartmentOptions } from '../src/pages/users-department-mutations.ts'
@@ -12,7 +13,8 @@ import { createFixture } from './helpers.ts'
 const source = { id: '10000000-0000-4000-8000-000000000001', tenant_id: '20000000-0000-4000-8000-000000000001', name: 'Operations', created_at: '2026-10-18T00:00:00Z' }
 const destination = { ...source, id: '10000000-0000-4000-8000-000000000002', name: 'Engineering' }
 const other = { ...source, id: '10000000-0000-4000-8000-000000000003', name: 'Finance' }
-const input = { tenantId: source.tenant_id, sourceId: source.id, destinationId: destination.id }
+const confirmationToken = `v1:${'6'.repeat(64)}`
+const input = { tenantId: source.tenant_id, sourceId: source.id, destinationId: destination.id, confirmationToken }
 const queryKey = ['admin-departments', input.tenantId]
 const assignment = (user_id: string, department_id: string) => ({ user_id, department_id, tenant_id: source.tenant_id })
 const directory: DepartmentsResponse = {
@@ -20,9 +22,35 @@ const directory: DepartmentsResponse = {
   assignments: [assignment('overlap', source.id), assignment('overlap', destination.id), assignment('source-only', source.id), assignment('destination-only', destination.id), assignment('source-only', other.id), assignment('unrelated', other.id)],
 }
 const result = {
+  confirmation_token: confirmationToken,
   source, destination: { ...destination, name: 'Current engineering' },
   source_membership_count: 2, destination_membership_count: 2, overlapping_membership_count: 1,
   source_agent_grant_count: 3, destination_agent_grant_count: 4, overlapping_agent_grant_count: 2,
+}
+
+test('confirmed merge sends the exact reviewed token in its single write', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(result))
+  const observer = new MutationObserver(client, mergeDepartmentOptions(client))
+  // When
+  await observer.mutate(input)
+  // Then
+  const [, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.deepEqual(JSON.parse(String(options?.body)), { destination_id: destination.id, confirmation_token: confirmationToken })
+  assert.equal(fetch.mock.callCount(), 1)
+})
+
+for (const confirmation_token of [undefined, null, 'v1:short', `v1:${'A'.repeat(64)}`, `v2:${'1'.repeat(64)}`]) {
+  for (const endpoint of [previewDepartmentMerge, mergeDepartment]) {
+    test(`${endpoint.name} rejects a missing or malformed preview confirmation ${confirmation_token}`, async (t) => {
+      // Given
+      t.mock.method(globalThis, 'fetch', async () => Response.json({ ...result, confirmation_token }))
+      // When / Then
+      await assert.rejects(endpoint(input), z.ZodError)
+    })
+  }
 }
 
 test('merge unions overlapping memberships and refreshes source and destination members without touching another tenant', async (t) => {
@@ -85,7 +113,7 @@ for (const status of [403, 404, 409, 422, 503]) {
   })
 }
 
-for (const status of [200, 403]) {
+for (const status of [200, 403, 409]) {
   test(`late merge ${status} cannot affect a same-token replacement session`, async (t) => {
     // Given
     const { policy } = createFixture()
@@ -101,7 +129,7 @@ for (const status of [200, 403]) {
     await started.promise
     // When
     policy.replace('token-a')
-    response.resolve(Response.json(status === 200 ? result : { detail: 'Denied' }, { status }))
+    response.resolve(Response.json(status === 200 ? result : { detail: status === 409 ? { code: 'department_merge_preview_changed' } : 'Denied' }, { status }))
     // Then
     await rejected
     for (const key of keys) {
