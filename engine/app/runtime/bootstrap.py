@@ -51,14 +51,10 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.warning("[startup] Agent templates seed failed: {}", exc)
     try:
-        from app.services.clawsec_runtime import seed_clawsec_skills
-        from app.services.gogcli_runtime import seed_gogcli_skill
         from app.services.linkup_runtime import seed_linkup_skills
         from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
 
         _ = await seed_skills()
-        _ = await seed_gogcli_skill()
-        _ = await seed_clawsec_skills()
         _ = await seed_linkup_skills()
         _ = await push_default_skills_to_existing_agents()
     except Exception as exc:
