@@ -139,7 +139,7 @@ Then the backend executes this argv list inside the running container:
 gog auth add user@example.com --services all-user --remote --step 1 --plain --no-input
 ```
 
-This is run through Docker exec via python-on-whales. It is not a shell string.
+This is run through Docker exec via pywhales. It is not a shell string.
 
 ### 5. Return only the Google OAuth URL
 
