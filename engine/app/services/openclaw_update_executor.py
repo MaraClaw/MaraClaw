@@ -17,8 +17,8 @@ from uuid import UUID
 
 import anyio
 from anyio import to_thread
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException
+from pywhales import ClientNotFoundError
+from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.core.logging import logger

@@ -138,7 +138,7 @@ if ! "$ENGINE" network inspect "$DOCKER_NETWORK" >/dev/null 2>&1; then
     "$ENGINE" network create "$DOCKER_NETWORK" >/dev/null
 fi
 
-# Host docker socket so python-on-whales can start OpenClaw agent containers.
+# Host docker socket so pywhales can start OpenClaw agent containers.
 # Docker Desktop exposes a symlink at /var/run/docker.sock; mount the target.
 DOCKER_SOCK=""
 if [ -L /var/run/docker.sock ]; then
@@ -187,7 +187,7 @@ RUN_ARGS=(
 )
 
 # Host `docker` is often macOS Mach-O and cannot run in the Linux engine.
-# Mount a Linux CLI so python-on-whales works even on an older engine image.
+# Mount a Linux CLI so pywhales works even on an older engine image.
 DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:29.9.2-cli}"
 DOCKER_CLI_HOST="$DATA_DIR/.bin/docker"
 if [ ! -x "$DOCKER_CLI_HOST" ]; then

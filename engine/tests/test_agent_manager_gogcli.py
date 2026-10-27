@@ -2,7 +2,7 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, override
 
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.services import agent_manager as agent_manager_module, gogcli_oauth, gogcli_runtime
 from app.services.agent_manager import AgentManager

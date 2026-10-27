@@ -6,7 +6,8 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
-from python_on_whales.exceptions import NoSuchContainer
+import pytest
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.services import openclaw_inbox
 from app.services.openclaw_inbox import (
@@ -186,11 +187,11 @@ async def test_wake_starts_guest_gateway_then_hooks(tmp_path, monkeypatch) -> No
             if "18789" in joined and "fetch" in joined:
                 if started:
                     return ""
-                raise RuntimeError("ECONNREFUSED 18789")
+                raise DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789")
             if argv and argv[0] == "node":
                 if started:
                     return ""
-                raise RuntimeError("ECONNREFUSED 18789")
+                raise DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789")
             return ""
 
     async def http_down(*_args, **_kwargs):
@@ -323,6 +324,10 @@ async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> N
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
     execute_calls: list[list[str]] = []
+    warnings: list[str] = []
+    denial = DockerException(
+        ["docker", "exec", "command-secret"], 1, stdout=b"HTTP 401 stdout-secret", stderr=b"ECONNREFUSED stderr-secret"
+    )
 
     class FakeDocker(OwnedGuestInspect):
         def __init__(self) -> None:
@@ -331,7 +336,7 @@ async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> N
 
         def execute(self, container, argv, stream=False):
             execute_calls.append(list(argv))
-            raise RuntimeError("http://127.0.0.1:18789/hooks/agent: HTTP 401")
+            raise denial
 
     async def http_down(*_args, **_kwargs):
         return "http://maraclaw-agent-deadbeef:18789/hooks/agent: HTTP 401"
@@ -341,11 +346,40 @@ async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> N
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
     monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
     monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr(openclaw_inbox.logger, "warning", lambda message, *args: warnings.append(message.format(*args)))
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
     assert woke is False
     assert execute_calls[0][0] == "node"
     assert not any("nohup openclaw gateway" in " ".join(call) for call in execute_calls)
+    assert len(execute_calls) == 1
+    assert len(warnings) == 1
+    assert str(denial) in warnings[0]
+    assert "secret" not in warnings[0]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [(b"stdout-secret", b"ECONNREFUSED stderr-secret"), (b"ECONNREFUSED stdout-secret", b"stderr-secret")],
+)
+def test_docker_execute_redacts_captured_connection_failure(monkeypatch, stdout: bytes, stderr: bytes) -> None:
+    agent_id = uuid.uuid4()
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc")
+
+    class FakeDocker(OwnedGuestInspect):
+        def __init__(self) -> None:
+            super().__init__(agent_id)
+            self.container = self
+
+        def execute(self, container, argv, stream=False):
+            raise DockerException(["docker", "exec", "command-secret"], 1, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
+
+    error = openclaw_inbox._docker_execute(agent, ["node"])
+    assert error is not None
+    assert openclaw_inbox._hooks_unreachable(error)
+    assert "secret" not in error
 
 
 def test_wake_body_includes_message_id_for_direct_report() -> None:

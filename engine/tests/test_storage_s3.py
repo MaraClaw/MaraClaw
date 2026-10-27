@@ -1,22 +1,19 @@
 import asyncio
-from contextlib import asynccontextmanager
-from importlib.metadata import version
 from io import BytesIO
-from threading import Event, get_ident
+from threading import Event, Lock, get_ident
 from typing import TypedDict, Unpack, override
 
 import anyio
 import botocore.loaders
 import pytest
-from aiobotocore.stub import AioStubber
 from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.stub import Stubber
 
 from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageConditionalRaceError,
     StorageReadLimitExceededError,
-    StorageVersion,
     WriteCondition,
 )
 from app.services.storage_runtime.s3 import S3StorageBackend
@@ -45,7 +42,7 @@ def test_s3_backend_passes_max_pool_connections(monkeypatch):
     class FakeS3Client:
         pass
 
-    class FakeBoto3:
+    class FakeSession:
         def client(
             self,
             service_name: str,
@@ -61,6 +58,9 @@ def test_s3_backend_passes_max_pool_connections(monkeypatch):
             assert aws_secret_access_key == "secret"
             client_calls.append(config)
             return FakeS3Client()
+
+    class FakeBoto3:
+        Session = FakeSession
 
     class FakeBotocoreConfigModule:
         Config = FakeConfig
@@ -99,37 +99,21 @@ def test_s3_backend_passes_max_pool_connections(monkeypatch):
 async def test_s3_absence_condition_has_one_winner_when_writers_race(monkeypatch):
     backend = S3StorageBackend(bucket="bucket")
     objects: dict[str, bytes] = {}
-    observed = 0
-    ready = anyio.Event()
+    lock = Lock()
     results: list[ConditionalWriteResult] = []
 
-    async def version(key: str) -> StorageVersion:
-        nonlocal observed
-        snapshot = StorageVersion(key=key, exists=key in objects, is_dir=False)
-        observed += 1
-        if observed <= 2:
-            if observed == 2:
-                ready.set()
-            await ready.wait()
-        return snapshot
-
     class ConditionalClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def put_object(self, **kwargs):
-            if kwargs.get("IfNoneMatch") == "*" and kwargs["Key"] in objects:
-                raise ClientError(
-                    {"Error": {"Code": "PreconditionFailed"}, "ResponseMetadata": {"HTTPStatusCode": 412}}, "PutObject"
-                )
-            objects[kwargs["Key"]] = kwargs["Body"]
+        def put_object(self, **kwargs):
+            with lock:
+                if kwargs.get("IfNoneMatch") == "*" and kwargs["Key"] in objects:
+                    raise ClientError(
+                        {"Error": {"Code": "PreconditionFailed"}, "ResponseMetadata": {"HTTPStatusCode": 412}},
+                        "PutObject",
+                    )
+                objects[kwargs["Key"]] = kwargs["Body"]
             return {"ETag": '"etag"'}
 
-    monkeypatch.setattr(backend, "get_version", version)
-    monkeypatch.setattr(backend, "_async_client", ConditionalClient)
+    monkeypatch.setattr(backend, "_client_or_raise", ConditionalClient)
 
     async def create(data: bytes) -> None:
         results.append(
@@ -145,18 +129,12 @@ async def test_s3_absence_condition_has_one_winner_when_writers_race(monkeypatch
 
 
 @pytest.fixture
-async def conditional_s3(monkeypatch):
+def conditional_s3():
     backend = S3StorageBackend(bucket="bucket", prefix="tenant", access_key_id="key", secret_access_key="secret")
-    async with backend._async_client() as client:
-        with AioStubber(client) as stubber:
-
-            @asynccontextmanager
-            async def client_context():
-                yield client
-
-            monkeypatch.setattr(backend, "_async_client", client_context)
-            yield backend, stubber
-            stubber.assert_no_pending_responses()
+    client = backend._client_or_raise()
+    with Stubber(client) as stubber:
+        yield backend, stubber
+        stubber.assert_no_pending_responses()
 
 
 def conditional_params(content_type: str = "text/plain") -> dict[str, object]:
@@ -169,9 +147,7 @@ def conditional_params(content_type: str = "text/plain") -> dict[str, object]:
     }
 
 
-def test_locked_s3_model_supports_native_creation_header():
-    packages = ("aioboto3", "aiobotocore", "botocore")
-    assert tuple(version(package) for package in packages) == ("15.5.0", "2.25.1", "1.40.61")
+def test_s3_model_supports_native_creation_header():
     model = botocore.loaders.Loader().load_service_model("s3", "service-2")
     member = model["shapes"]["PutObjectRequest"]["members"]["IfNoneMatch"]
     assert member["location"] == "header"
@@ -306,15 +282,10 @@ async def test_s3_transport_errors_are_not_absence_or_conflict(operation, monkey
         def head_object(self, **kwargs):
             raise EndpointConnectionError(endpoint_url="https://offline.invalid")
 
-        async def put_object(self, **kwargs):
+        def put_object(self, **kwargs):
             raise EndpointConnectionError(endpoint_url="https://offline.invalid")
 
-    @asynccontextmanager
-    async def client_context():
-        yield OfflineClient()
-
     monkeypatch.setattr(backend, "_client_or_raise", OfflineClient)
-    monkeypatch.setattr(backend, "_async_client", client_context)
 
     if operation == "get_version":
         with pytest.raises(EndpointConnectionError):

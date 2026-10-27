@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from python_on_whales.exceptions import DockerException
+from pywhales.exceptions import DockerException
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
@@ -97,6 +97,43 @@ async def test_destructive_manager_operations_reject_foreign_or_unlabeled_ids(
     assert result is False
     assert docker.container.calls == []
     assert docker.container.guests["recorded"].owner == owner
+    assert (record.status, record.container_id, record.container_port) == ("running", "recorded", 19876)
+
+
+@pytest.mark.parametrize("operation", ["stop_container", "remove_container"])
+async def test_destructive_operations_refuse_missing_config(monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
+    docker = Docker(Guest("recorded", "deployed-name", str(FIRST)))
+    original = docker.container.inspect
+
+    def missing_config(reference: str) -> SimpleNamespace:
+        container = original(reference)
+        container.config = None
+        return container
+
+    monkeypatch.setattr(docker.container, "inspect", missing_config)
+    record = agent("recorded")
+    record.status = AgentStatus.RUNNING
+    subject = manager(monkeypatch, docker)
+    assert await getattr(subject, operation)(record) is False
+    assert docker.container.calls == []
+    assert (record.status, record.container_id, record.container_port) == ("running", "recorded", 19876)
+
+
+@pytest.mark.parametrize("operation", ["stop_container", "remove_container"])
+async def test_destructive_operations_return_false_on_inspect_failure(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    docker = Docker()
+
+    def unavailable(_reference: str) -> SimpleNamespace:
+        raise DockerException(["docker", "inspect"], 1)
+
+    monkeypatch.setattr(docker.container, "inspect", unavailable)
+    record = agent("recorded")
+    record.status = AgentStatus.RUNNING
+    subject = manager(monkeypatch, docker)
+    assert await getattr(subject, operation)(record) is False
+    assert docker.container.calls == []
     assert (record.status, record.container_id, record.container_port) == ("running", "recorded", 19876)
 
 

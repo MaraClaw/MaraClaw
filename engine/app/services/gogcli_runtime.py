@@ -8,7 +8,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.config import get_settings
-from app.dao import skill_dao
 
 settings = get_settings()
 
@@ -18,7 +17,6 @@ GOG_KEYRING_BACKEND = "file"
 GOGCLI_SECRET_MOUNT_PATH = "/run/secrets/gogcli_keyring_password"  # noqa: S105 - path, not a password
 _SECRET_ROOT_NAME = "_gogcli_secrets"  # noqa: S105 - directory name, not a secret value
 _SECRET_FILE_NAME = "keyring_password"  # noqa: S105 - file name, not a password
-_GOGCLI_SKILL_ROOT = Path(__file__).with_name("gogcli_skill_files")
 _GOOGLE_OAUTH_URL_RE: Final[re.Pattern[str]] = re.compile(
     r"https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s\])>'\"]+"
 )
@@ -101,48 +99,3 @@ def gogcli_docker_extras(agent: GogcliAgent, agent_dir: Path) -> tuple[dict[str,
 
     envs["GOG_KEYRING_PASSWORD_FILE"] = GOGCLI_SECRET_MOUNT_PATH
     return envs, [(str(secret_file), GOGCLI_SECRET_MOUNT_PATH, "ro")]
-
-
-def _frontmatter_value(content: str, key: str, default: str) -> str:
-    prefix = f"{key}:"
-    for line in content.splitlines()[1:]:
-        if line == "---":
-            break
-        if line.startswith(prefix):
-            return line[len(prefix) :].strip().strip('"')
-    return default
-
-
-def _skill_files() -> list[tuple[str, Path]]:
-    if not _GOGCLI_SKILL_ROOT.exists():
-        return []
-    return [(path.parent.name, path) for path in sorted(_GOGCLI_SKILL_ROOT.glob("*/SKILL.md"))]
-
-
-def gogcli_skill_folder_names() -> list[str]:
-    """Return every vendored upstream gogcli skill folder when the feature is enabled."""
-    if not GOGCLI_ENABLED or not settings.GOGCLI_ENABLED:
-        return []
-    return [folder_name for folder_name, _path in _skill_files()]
-
-
-async def seed_gogcli_skill() -> None:
-    """Idempotently seed all vendored gogcli skills as non-default skills."""
-    if not GOGCLI_ENABLED or not settings.GOGCLI_ENABLED:
-        return
-
-    for folder_name, skill_path in _skill_files():
-        content = skill_path.read_text(encoding="utf-8")
-        name = _frontmatter_value(content, "name", folder_name)
-        description = _frontmatter_value(content, "description", f"gogcli skill: {folder_name}")
-        _ = await skill_dao.upsert_skill_package(
-            name=name,
-            description=description,
-            category="integration",
-            icon="G",
-            folder_name=folder_name,
-            is_builtin=True,
-            is_default=False,
-            files=[("SKILL.md", content)],
-            drop_missing_files=False,
-        )

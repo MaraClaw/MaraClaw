@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from python_on_whales.exceptions import NoSuchContainer
+from pywhales.exceptions import NoSuchContainer
 
 from app.config import Settings
 from app.core.domain.agents import AgentStatus
@@ -450,7 +450,7 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
 
 
-async def test_start_container_returns_none_when_python_on_whales_client_is_missing(monkeypatch, tmp_path):
+async def test_start_container_returns_none_when_pywhales_client_is_missing(monkeypatch, tmp_path):
     # Given
     class FakeClientNotFoundError(Exception):
         pass
@@ -554,7 +554,7 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
     assert docker_client.container.stop_calls == [("missing-container", {"time": 10})]
 
 
-async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_remove(monkeypatch):
+async def test_stop_and_remove_container_use_pywhales_api_stop_time_and_remove(monkeypatch):
     # Given
     manager = AgentManager.__new__(AgentManager)
     agent = AgentRecord(id=uuid.uuid4(), name="Running Agent", creator_id=uuid.uuid4())
@@ -589,7 +589,7 @@ async def test_stop_and_remove_container_use_python_on_whales_api_stop_time_and_
     assert agent.container_port is None
 
 
-def test_get_container_status_reads_python_on_whales_fields(monkeypatch):
+def test_get_container_status_reads_pywhales_fields(monkeypatch):
     # Given
     manager = AgentManager.__new__(AgentManager)
     inspected_container = SimpleNamespace(
@@ -616,7 +616,7 @@ def test_get_container_status_reads_python_on_whales_fields(monkeypatch):
     assert docker_client.container.inspect_calls == ["status-container"]
 
 
-def test_get_container_status_returns_not_found_when_python_on_whales_inspect_misses(monkeypatch):
+def test_get_container_status_returns_not_found_when_pywhales_inspect_misses(monkeypatch):
     # Given
     class FakeNoSuchContainerError(Exception):
         pass
@@ -637,7 +637,7 @@ def test_get_container_status_returns_not_found_when_python_on_whales_inspect_mi
     assert docker_client.container.inspect_calls == ["missing-container"]
 
 
-async def test_lifecycle_methods_treat_missing_python_on_whales_client_as_docker_error(monkeypatch):
+async def test_lifecycle_methods_treat_missing_pywhales_client_as_docker_error(monkeypatch):
     # Given
     class FakeClientNotFoundError(Exception):
         pass

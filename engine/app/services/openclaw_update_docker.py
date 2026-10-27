@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 
-from python_on_whales import DockerClient
-from python_on_whales.exceptions import NoSuchContainer, NoSuchImage
+from pywhales import DockerClient
+from pywhales.exceptions import NoSuchContainer, NoSuchImage
 
 from app.services.guest_identity import AGENT_LABEL
 from app.services.guest_probe import probe_guest
@@ -59,10 +59,11 @@ class UpgradeDocker:
         if not isinstance(stream, Iterator):
             raise OSError(f"docker pull of {reference} did not stream its log")
         digest: str | None = None
-        for _source, line in stream:
-            matched = _DIGEST_LINE.match(line.decode(errors="replace").strip())
-            if matched is not None:
-                digest = str(matched.group(1))
+        with closing(stream):
+            for _source, line in stream:
+                matched = _DIGEST_LINE.match(line.decode(errors="replace").strip())
+                if matched is not None:
+                    digest = str(matched.group(1))
         if "@" in reference:
             return self.client.image.inspect(reference).id
         if digest is None:
@@ -74,11 +75,16 @@ class UpgradeDocker:
             container = self.client.container.inspect(reference)
         except NoSuchContainer:
             return None
+        name = container.name
+        image = container.image
+        config = container.config
+        if name is None or image is None:
+            raise OSError("Guest inspection is missing rollback metadata")
         return ContainerInfo(
             id=container.id,
-            name=container.name,
-            image_id=container.image,
-            agent_id=(container.config.labels or {}).get(AGENT_LABEL),
+            name=name,
+            image_id=image,
+            agent_id=(config.labels or {}).get(AGENT_LABEL) if config is not None else None,
         )
 
     def image_exists(self, image_id: str) -> bool:

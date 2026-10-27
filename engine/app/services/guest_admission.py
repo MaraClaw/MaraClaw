@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Literal, override
 
 from anyio import to_thread
-from python_on_whales import ClientNotFoundError, DockerClient
-from python_on_whales.exceptions import DockerException
+from pywhales import ClientNotFoundError, DockerClient
+from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.records.agent import AgentRecord
@@ -51,9 +51,11 @@ def _check_capacity(client: DockerClient, agent: AgentRecord, memory_limit: int 
     )
     used = 0
     for guest in guests:
-        if (guest.config.labels or {}).get(AGENT_LABEL) == str(agent.id):
+        config = guest.config
+        host_config = guest.host_config
+        if config is not None and (config.labels or {}).get(AGENT_LABEL) == str(agent.id):
             continue
-        memory = guest.host_config.memory or 0
+        memory = (host_config.memory or 0) if host_config is not None else 0
         if memory <= 0:
             raise GuestAdmissionError("guest_memory_unbounded", "Another running guest has no hard memory limit")
         used += memory

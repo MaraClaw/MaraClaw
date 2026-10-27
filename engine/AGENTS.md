@@ -54,7 +54,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 - Seed MaraClaw (`maraclaw`) and OpenClaw (`openclaw`, default for unmatched end-user registration); do not rename/reuse `default` slug. System orgs cannot be disabled; system/default-end-user orgs cannot be deleted.
 - Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users have at most one tenant; transfer needs password confirmation. Domain join/transfer needs verified email and `get_current_user` (active + force-change gate).
 - Reset/verify links use `app/services/frontend_origin.py` `resolve_frontend_base_url`: CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`; never an unlisted request host.
-- Bundled `skill_creator_files/`, `gogcli_skill_files/`, `clawsec_skill_files/` are not normal service code. ClawSec is AGPL-3.0; retain its existing `AGENTS.md`, never add descendant guides under its skill subtrees.
+- Bundled `skill_creator_files/` and `linkup_skill_files/` are not normal service code.
 
 ## Commands (From `engine/`)
 
@@ -75,8 +75,8 @@ uv run python -m app.scripts.bootstrap_db
 ## Runtime And Images
 
 - `../.github/workflows/engine-ci.yml` runs Ruff, basedpyright, ty and `scripts/test.sh` with explicit scope/terminal report/90% gate; `PYTEST_ADDOPTS` adds XML/HTML. Separate `lifecycle-postgres` uses PostgreSQL 18.6 for setup/retry/authorization, start recovery, deletion/approval cleanup, ownership transfer and guest-config transaction regressions; it does not validate live Docker guests. Local gates include both freeze scripts; `scripts/lint.sh` skips them and uses `ty check --force-exclude`.
-- `Dockerfile`: pinned `uv==0.13.5`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
-- `start-from-docker.sh` builds `maraclaw-engine:local`, runs `maraclaw-engine`, forwards `.env` via `-e KEY` (not `--env-file`); mounts host Docker socket + Linux Docker CLI for python-on-whales/OpenClaw, dual-mounts `DATA_DIR` for host bind paths, creates `DOCKER_NETWORK` (default `maraclaw_network`).
+- `Dockerfile`: pinned `uv==0.13.6`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
+- `start-from-docker.sh` builds `maraclaw-engine:local`, runs `maraclaw-engine`, forwards `.env` via `-e KEY` (not `--env-file`); mounts host Docker socket + Linux Docker CLI for pywhales/OpenClaw, dual-mounts `DATA_DIR` for host bind paths, creates `DOCKER_NETWORK` (default `maraclaw_network`).
 - Bubblewrap 0.12 rejects setuid execution; the image explicitly clears its setuid bit and requires usable host user namespaces for non-root sandboxing. Launcher retains `SYS_ADMIN SETUID SETGID SYS_CHROOT SETPCAP NET_ADMIN SYS_PTRACE` + `seccomp=unconfined`; validate the startup probe and a real backend command, not only file mode. The short probe does not mount `/proc`; a successful probe can still leave the full backend blocked by host permissions. Namespace failure must not trigger host execution.
 - `app/process_roles.py` normalizes roles lowercase in Python and `entrypoint.sh` before its case-sensitive predicate: `Bootstrap` DOES run `app.scripts.bootstrap_db`. Only `all`/`bootstrap` run schema bootstrap; failure aborts unless `ALLOW_MIGRATION_FAILURE=true` explicitly permits continuation (not Alembic).
 - Runtime bootstrap orders system orgs, fail-closed PA, optional tools/templates/skills, agents; PA precedes agent seeders. `SystemOrgSeedError` and every PA seed failure abort; optional seed blocks warn. Lifecycle/task/readiness ownership: `app/runtime/AGENTS.md`.

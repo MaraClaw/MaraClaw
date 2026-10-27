@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import TypeAdapter
-from python_on_whales import DockerClient
+from pywhales import DockerClient
 
 from app.services import guest_readiness, openclaw_update_executor
 from app.services.guest_admission import GuestStartPreflightError

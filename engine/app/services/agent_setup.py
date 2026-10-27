@@ -29,7 +29,6 @@ from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
 from app.services.agent_setup_mcp_worker import run_agent_setup_mcp
 from app.services.agent_setup_skills import resolve_setup_skills
 from app.services.agent_workspace import render_agent_files, write_missing_agent_files
-from app.services.gogcli_runtime import gogcli_skill_folder_names
 from app.services.okr_agent_hook import hook_new_agent
 from app.services.openclaw_keys import write_gateway_api_key
 from app.services.openclaw_update_exclusion import locked_fresh_agent
@@ -99,8 +98,6 @@ async def persist_agent_setup(agent: AgentRecord, data: AgentCreate, raw_key: st
         if template:
             folders.extend(template.default_skills or [])
             servers = tuple(template.default_mcp_servers)
-    if data.gogcli_enabled:
-        folders.extend(gogcli_skill_folder_names())
     for skill in await resolve_setup_skills(agent.tenant_id, data.skill_ids or [], folders):
         for file in skill.files:
             files[f"skills/{skill.folder_name}/{file.path}"] = file.content.encode()

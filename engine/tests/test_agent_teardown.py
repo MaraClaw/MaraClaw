@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from python_on_whales.exceptions import DockerException
+from pywhales.exceptions import DockerException
 
 from app.records.agent import AgentRecord
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord

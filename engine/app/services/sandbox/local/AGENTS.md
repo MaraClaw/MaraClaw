@@ -5,7 +5,7 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 ## Backends
 
 - `subprocess_backend.py` is the default local backend. It uses bubblewrap (`bwrap`) for filesystem isolation when available.
-- `docker_backend.py` uses `python-on-whales` and should preserve Docker-level timeout, cleanup, and no-network semantics.
+- `docker_backend.py` uses `pywhales` and should preserve Docker-level timeout, cleanup, and no-network semantics.
 - Both implementations return the shared `ExecutionResult` shape from `app/services/sandbox/base.py`.
 
 ## Subprocess Safety

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from python_on_whales.exceptions import NoSuchContainer
+from pywhales.exceptions import NoSuchContainer
 
 from app.services import agent_manager as agent_manager_module, guest_readiness
 from app.services.agent_manager import AgentManager

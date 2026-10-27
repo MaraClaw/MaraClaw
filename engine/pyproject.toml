@@ -15,7 +15,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.32",
     "httpx[http2,socks]>=0.28.1",
-    "python-on-whales>=0.81.0",
+    "pywhales>=0.3.0",
     "websockets>=15.0.1",
     "aiofiles>=24.1.0,<25.0.0",
     "croniter>=6.2.4",
@@ -41,8 +41,8 @@ dependencies = [
     "weasyprint>=70.0",
     "markdown>=3.11.2",
     "beautifulsoup4>=4.15.0",
-    "boto3",
-    "aioboto3>=15.5.0",
+    "boto3>=1.43.119",
+    "s3transfer>=0.19.3",
     "uvloop>=0.23.0",
     "httptools>=0.9.0",
     "starlette>=1.10.0",
@@ -59,6 +59,7 @@ dependencies = [
     "amqp>=5.4.1",
     "gunicorn>=26.2.0",
     "typing-extensions>=4.16.0",
+    "pytest>=9.1.1",
 ]
 
 [project.optional-dependencies]
@@ -92,8 +93,6 @@ extend-exclude = [
     "agent_template",
     "agent_templates",
     "app/services/skill_creator_files",
-    "app/services/clawsec_skill_files",
-    "app/services/gogcli_skill_files",
     "app/services/linkup_skill_files",
 ]
 
@@ -223,8 +222,6 @@ exclude = [
     "agent_templates/**",
     "app/services/skill_creator_files/**",
     "app/services/linkup_skill_files/**",
-    "app/services/clawsec_skill_files/**",
-    "app/services/gogcli_skill_files/**",
 ]
 
 [tool.pytest.ini_options]
@@ -243,8 +240,6 @@ filterwarnings = [
 branch = true
 omit = [
     "app/services/skill_creator_files/*",
-    "app/services/gogcli_skill_files/*",
-    "app/services/clawsec_skill_files/*",
     "app/templates/*",
 ]
 

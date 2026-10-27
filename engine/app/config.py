@@ -181,8 +181,6 @@ class Settings(BaseSettings):
     # Requeue a gateway message the guest took but has not reported after this many seconds.
     OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
     GOGCLI_ENABLED: bool = True
-    # Seed and default-install vendored ClawSec OpenClaw security skills.
-    CLAWSEC_SKILLS_ENABLED: bool = True
 
     # Feishu OAuth
     FEISHU_APP_ID: str = ""

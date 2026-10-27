@@ -13,7 +13,6 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
 | OpenClaw image helpers | Photon project `docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule |
 | OpenClaw upgrades | `openclaw-updates.md` | Global notices, per-agent worker cutover/rollback, work and write gates, HTTP contract |
-| ClawSec skills | `clawsec-openclaw-skills.md` | Vendored AGPL ClawSec OpenClaw protection suite and seed wiring |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
 | Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Org-sync references are historical: provider directory sync is retired. `psycopg-migration.md` is **historical dual-stack**. |
 

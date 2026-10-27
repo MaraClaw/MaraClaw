@@ -117,21 +117,21 @@ class S3StorageBackend(S3CreateBackend):
         # the V4 signature body-hash is calculated on an empty content-type,
         # but GCS applies a different default - causing SignatureDoesNotMatch.
         resolved_ct = content_type or "application/octet-stream"
-        async with self._async_client() as client:
-            await client.put_object(
+        client = self._client_or_raise()
+        await anyio.to_thread.run_sync(
+            partial(
+                client.put_object,
                 Bucket=self.bucket,
                 Key=self._object_key(key),
                 Body=data,
                 ContentType=resolved_ct,
             )
+        )
 
     @override
     async def delete(self, key: str) -> None:
-        async with self._async_client() as client:
-            await client.delete_object(
-                Bucket=self.bucket,
-                Key=self._object_key(key),
-            )
+        client = self._client_or_raise()
+        await anyio.to_thread.run_sync(partial(client.delete_object, Bucket=self.bucket, Key=self._object_key(key)))
 
     @override
     async def delete_tree(self, key: str) -> None:
@@ -152,11 +152,7 @@ class S3StorageBackend(S3CreateBackend):
                 objects.append({"Key": item_key})
         if not objects:
             return
-        async with self._async_client() as client:
-            await client.delete_objects(
-                Bucket=self.bucket,
-                Delete={"Objects": objects},
-            )
+        await anyio.to_thread.run_sync(partial(client.delete_objects, Bucket=self.bucket, Delete={"Objects": objects}))
 
     @override
     async def stat(self, key: str) -> StorageEntry:

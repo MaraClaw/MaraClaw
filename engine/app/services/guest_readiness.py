@@ -1,7 +1,7 @@
 from time import monotonic
 
 from anyio import sleep, to_thread
-from python_on_whales import DockerClient
+from pywhales import DockerClient
 
 from app.services.guest_probe import probe_guest
 

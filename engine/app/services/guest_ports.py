@@ -1,6 +1,6 @@
 import secrets
 
-from python_on_whales.exceptions import DockerException
+from pywhales.exceptions import DockerException
 
 PORT_MIN = 18789
 PORT_MAX = 28788

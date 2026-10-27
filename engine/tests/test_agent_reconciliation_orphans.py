@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from python_on_whales.exceptions import NoSuchContainer
+from pywhales.exceptions import NoSuchContainer
 
 from app.records.agent import AgentRecord
 from app.services import agent_orphans, openclaw_update_gate
@@ -195,6 +195,13 @@ async def test_new_guests_are_kept_by_the_grace_period(sweep: Sweep, age_seconds
     # When reconciliation lists it before publication.
     await agent_orphans.sweep_orphan_containers(NOW)
     # Then the existing two-minute creation grace remains in force.
+    assert sweep.containers.calls == []
+
+
+@pytest.mark.parametrize("missing", ["config", "network_settings", "created"])
+async def test_missing_orphan_metadata_never_authorizes_removal(sweep: Sweep, missing: str) -> None:
+    setattr(sweep.containers.listed[0], missing, None)
+    await agent_orphans.sweep_orphan_containers(NOW)
     assert sweep.containers.calls == []
 
 

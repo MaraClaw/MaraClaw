@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from anyio import to_thread
-from python_on_whales import ClientNotFoundError
-from python_on_whales.exceptions import DockerException
+from pywhales import ClientNotFoundError
+from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services.agent_start_store import start_store
-from app.services.guest_admission import GuestStartPreflightError, guest_admission
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, guest_admission
 from app.services.guest_identity import inspect_guest_container, owned_guest_containers
 from app.services.guest_readiness import guest_ready
 
@@ -41,9 +41,13 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
         if guests:
             guest = guests[0]
             inspected = await to_thread.run_sync(inspect_guest_container, client, guest.id)
-            if inspected.state.status not in ("running", "exited", "created"):
+            state = inspected.state
+            host_config = inspected.host_config
+            if state is None or state.status not in ("running", "exited", "created"):
                 raise GuestStartPreflightError("Guest is not in a resumable state")
-            resume = inspected.state.status in ("exited", "created")
+            resume = state.status in ("exited", "created")
+            if resume and (host_config is None or host_config.memory is None):
+                raise GuestAdmissionError("guest_memory_unbounded", "Guest has no hard memory limit")
             async with AsyncExitStack() as stack:
                 if resume:
                     await stack.enter_async_context(
@@ -51,7 +55,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                             client,
                             agent,
                             manager._agent_dir(agent.id).parent,
-                            memory_limit=inspected.host_config.memory or 0,
+                            memory_limit=(host_config.memory or 0) if host_config is not None else 0,
                         )
                     )
                 agent.container_id = guest.id

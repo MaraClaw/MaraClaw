@@ -1,9 +1,8 @@
 """Bounded, read-only Docker exec probes; never use this runner for mutations."""
 
 import subprocess
-from pathlib import Path
 
-from python_on_whales import ClientNotFoundError, DockerClient
+from pywhales import ClientNotFoundError, DockerClient
 
 from app.config import get_settings
 
@@ -17,7 +16,7 @@ def probe_guest(client: DockerClient, reference: str, timeout: float) -> bool:
         ".then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
     )
     try:
-        command: list[str | Path] = [*client.docker_cmd, "exec", reference, "node", "-e", script]
+        command = [str(argument) for argument in client.docker_cmd] + ["exec", reference, "node", "-e", script]
         result = subprocess.run(  # noqa: S603 - trusted SDK prefix and inspected container ID, without a shell.
             command,
             stdin=subprocess.DEVNULL,

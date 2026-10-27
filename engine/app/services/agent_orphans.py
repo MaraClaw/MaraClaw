@@ -3,8 +3,8 @@ from functools import partial
 from uuid import UUID
 
 from anyio import to_thread
-from python_on_whales import ClientNotFoundError, Container, DockerClient
-from python_on_whales.exceptions import DockerException, NoSuchContainer
+from pywhales import ClientNotFoundError, Container, DockerClient
+from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -39,9 +39,12 @@ async def sweep_orphan_containers(now: datetime) -> None:
         )
         candidates: dict[str, UUID] = {}
         for container in containers:
-            label = (container.config.labels or {}).get("maraclaw.agent_id")
-            networks = container.network_settings.networks or {}
-            if label is None or network not in networks or now - container.created < ORPHAN_GRACE:
+            config = container.config
+            network_settings = container.network_settings
+            created = container.created
+            label = (config.labels or {}).get(AGENT_LABEL) if config is not None else None
+            networks = (network_settings.networks or {}) if network_settings is not None else {}
+            if label is None or network not in networks or created is None or now - created < ORPHAN_GRACE:
                 continue
             try:
                 agent_id = UUID(label)
@@ -67,15 +70,25 @@ async def sweep_orphan_containers(now: datetime) -> None:
                         continue
                     await assert_no_active_run(agent_id)
                     candidate = await to_thread.run_sync(_inspect_container, client, container_id)
-                    require_guest_owner(agent_id, container_id, (candidate.config.labels or {}).get(AGENT_LABEL))
+                    config = candidate.config
+                    network_settings = candidate.network_settings
+                    created = candidate.created
+                    require_guest_owner(
+                        agent_id, container_id, (config.labels or {}).get(AGENT_LABEL) if config else None
+                    )
                     if (
                         candidate.id != container_id
-                        or network not in (candidate.network_settings.networks or {})
-                        or now - candidate.created < ORPHAN_GRACE
+                        or network_settings is None
+                        or network not in (network_settings.networks or {})
+                        or created is None
+                        or now - created < ORPHAN_GRACE
                     ):
                         continue
                     recorded = await to_thread.run_sync(_inspect_container, client, current.container_id)
-                    require_guest_owner(agent_id, current.container_id, (recorded.config.labels or {}).get(AGENT_LABEL))
+                    config = recorded.config
+                    require_guest_owner(
+                        agent_id, current.container_id, (config.labels or {}).get(AGENT_LABEL) if config else None
+                    )
                     if recorded.id == candidate.id:
                         continue
                     await _remove_orphan(client, container_id, agent_id)

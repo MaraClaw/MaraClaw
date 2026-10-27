@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from python_on_whales.exceptions import NoSuchContainer
+from pywhales.exceptions import NoSuchContainer
 
 
 @dataclass(slots=True)

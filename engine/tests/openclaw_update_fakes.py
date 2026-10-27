@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from python_on_whales.exceptions import DockerException
+from pywhales.exceptions import DockerException
 
 from app.dao.openclaw_update_dao import SUCCEEDED_SWEEP_LIMIT
 from app.records.agent import AgentRecord
