@@ -21,6 +21,7 @@ class AgentScheduleRecord:
     cron_expr: str
     created_by: UUID
     is_enabled: bool = True
+    notify_on_failure: bool = False
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
     run_count: int = 0
@@ -28,6 +29,7 @@ class AgentScheduleRecord:
     timezone: str = "UTC"
     pending_due_at: datetime | None = None
     pending_instruction: str | None = None
+    pending_notify_on_failure: bool | None = None
     lease_token: UUID | None = None
     lease_expires_at: datetime | None = None
     pending_started_at: datetime | None = None
@@ -42,6 +44,7 @@ class AgentScheduleRecord:
             cron_expr=str_from_row(row["cron_expr"]),
             created_by=uuid_from_row(row["created_by"]),
             is_enabled=bool(row.get("is_enabled", True)),
+            notify_on_failure=bool(row.get("notify_on_failure", False)),
             last_run_at=datetime_from_row(row.get("last_run_at")),
             next_run_at=datetime_from_row(row.get("next_run_at")),
             run_count=int_from_row(row.get("run_count")),
@@ -50,6 +53,9 @@ class AgentScheduleRecord:
             pending_due_at=datetime_from_row(row.get("pending_due_at")),
             pending_instruction=(
                 str_from_row(row["pending_instruction"]) if row.get("pending_instruction") is not None else None
+            ),
+            pending_notify_on_failure=(
+                bool(row["pending_notify_on_failure"]) if row.get("pending_notify_on_failure") is not None else None
             ),
             lease_token=uuid_from_row(row["lease_token"]) if row.get("lease_token") is not None else None,
             lease_expires_at=datetime_from_row(row.get("lease_expires_at")),

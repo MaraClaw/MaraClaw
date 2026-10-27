@@ -12,7 +12,14 @@ from app.records.schedule import AgentScheduleRecord
 
 NOW = datetime(2026, 10, 15, 12, tzinfo=UTC)
 NEXT = NOW + timedelta(days=1)
-SLOT_COLUMNS = ("pending_due_at", "pending_instruction", "lease_token", "lease_expires_at", "pending_started_at")
+SLOT_COLUMNS = (
+    "pending_due_at",
+    "pending_instruction",
+    "lease_token",
+    "lease_expires_at",
+    "pending_started_at",
+    "pending_notify_on_failure",
+)
 
 
 @final
@@ -120,9 +127,13 @@ class _Cursor:
             changes = {key: value for key, value in params.items() if key != "id"}
             if "pending_due_at = next_run_at" in sql:
                 assert "pending_instruction = instruction" in sql
+                assert "pending_notify_on_failure = notify_on_failure" in sql
                 assert "pending_started_at = NULL" in sql
                 changes.update(
-                    pending_due_at=row.next_run_at, pending_instruction=row.instruction, pending_started_at=None
+                    pending_due_at=row.next_run_at,
+                    pending_instruction=row.instruction,
+                    pending_notify_on_failure=row.notify_on_failure,
+                    pending_started_at=None,
                 )
             else:
                 assert "next_run_at" not in params

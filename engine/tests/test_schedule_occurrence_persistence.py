@@ -15,11 +15,18 @@ from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool
 __all__ = ["pool"]
 
 
-async def test_reclaim_preserves_snapshot_and_advance_after_unstarted_interruption(pool: _Pool) -> None:
-    row = _schedule()
+@pytest.mark.parametrize("notify", [False, True])
+async def test_reclaim_preserves_snapshot_and_advance_after_unstarted_interruption(pool: _Pool, notify: bool) -> None:
+    row = replace(_schedule(), notify_on_failure=notify)
     pool.rows[row.id] = row
     (first,) = await agent_schedule_dao.claim_due(NOW, _next_run)
-    edited = replace(pool.rows[row.id], instruction="Edited", cron_expr="invalid", timezone="Not/A_Zone")
+    edited = replace(
+        pool.rows[row.id],
+        instruction="Edited",
+        cron_expr="invalid",
+        timezone="Not/A_Zone",
+        notify_on_failure=not notify,
+    )
     pool.rows[row.id] = edited
     compute = Mock(side_effect=AssertionError("Recovery must not recompute the cron"))
     (recovered,) = await agent_schedule_dao.claim_due(NOW + timedelta(minutes=5), compute)
@@ -28,6 +35,7 @@ async def test_reclaim_preserves_snapshot_and_advance_after_unstarted_interrupti
     assert recovered.lease_token != first.lease_token
     assert recovered.pending_due_at == row.next_run_at
     assert recovered.pending_instruction == row.instruction
+    assert recovered.pending_notify_on_failure is notify
     assert recovered.next_run_at == NEXT
     compute.assert_not_called()
 

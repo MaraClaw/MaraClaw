@@ -65,6 +65,7 @@ async def test_claim_coalesces_downtime_without_counting_when_due(pool: _Pool) -
         next_run_at=NEXT,
         pending_due_at=row.next_run_at,
         pending_instruction=row.instruction,
+        pending_notify_on_failure=False,
         lease_token=claim.lease_token,
         lease_expires_at=NOW + timedelta(minutes=5),
     )

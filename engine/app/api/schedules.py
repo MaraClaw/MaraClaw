@@ -40,6 +40,7 @@ class ScheduleCreate(BaseModel):
     cron_expr: str = Field(min_length=1, max_length=100)
     timezone: ScheduleTimezone = "UTC"
     is_enabled: bool = True
+    notify_on_failure: bool = False
 
 
 class ScheduleUpdate(BaseModel):
@@ -48,6 +49,7 @@ class ScheduleUpdate(BaseModel):
     cron_expr: str | None = None
     timezone: ScheduleTimezone = "UTC"
     is_enabled: bool | None = None
+    notify_on_failure: bool = False
 
 
 class ScheduleOut(BaseModel):
@@ -58,6 +60,7 @@ class ScheduleOut(BaseModel):
     cron_expr: str
     timezone: str
     is_enabled: bool
+    notify_on_failure: bool
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
     run_count: int
@@ -114,6 +117,7 @@ async def create_schedule(
             "cron_expr": data.cron_expr,
             "timezone": data.timezone,
             "is_enabled": data.is_enabled,
+            "notify_on_failure": data.notify_on_failure,
             "next_run_at": next_run if data.is_enabled else None,
             "created_by": current_user.id,
             "run_count": 0,

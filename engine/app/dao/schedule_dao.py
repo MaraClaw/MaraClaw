@@ -19,6 +19,7 @@ _COLUMNS = (
     "cron_expr",
     "timezone",
     "is_enabled",
+    "notify_on_failure",
     "last_run_at",
     "next_run_at",
     "run_count",
@@ -26,11 +27,19 @@ _COLUMNS = (
     "created_at",
     "pending_due_at",
     "pending_instruction",
+    "pending_notify_on_failure",
     "lease_token",
     "lease_expires_at",
     "pending_started_at",
 )
-_SLOT_COLUMNS = ("pending_due_at", "pending_instruction", "lease_token", "lease_expires_at", "pending_started_at")
+_SLOT_COLUMNS = (
+    "pending_due_at",
+    "pending_instruction",
+    "lease_token",
+    "lease_expires_at",
+    "pending_started_at",
+    "pending_notify_on_failure",
+)
 _CLEAR_SLOT = ", ".join(f"{column} = NULL" for column in _SLOT_COLUMNS)
 _OWNER_PREDICATE = (
     "id = %(id)s AND is_enabled IS TRUE AND pending_due_at IS NOT NULL "
@@ -113,7 +122,8 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
                         continue
                     assignments += (
                         ", pending_due_at = next_run_at, pending_instruction = instruction, "
-                        "pending_started_at = NULL, next_run_at = %(next_run_at)s"
+                        "pending_notify_on_failure = notify_on_failure, pending_started_at = NULL, "
+                        "next_run_at = %(next_run_at)s"
                     )
                     values["next_run_at"] = next_run
                 claimed_row = await db.fetchone(
