@@ -37,7 +37,7 @@ test -f "$GOG_KEYRING_PASSWORD_FILE" && test -n "$GOG_KEYRING_PASSWORD"
 test "$(node --version)" = "v26.12.1"
 test "$(node -p 'process.arch')" = "$EXPECTED_NODE_ARCH"
 printf 'executed node=%s arch=%s kernel=%s\n' "$(node --version)" "$(node -p 'process.arch')" "$(uname -m)"
-gog --version | grep '0.47.0'
+gog --version | grep '0.47.1'
 openclaw --version | grep '2026.10.7'
 """
 

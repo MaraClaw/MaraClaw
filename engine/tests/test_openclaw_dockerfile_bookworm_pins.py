@@ -120,8 +120,8 @@ def test_dockerfile_target_selection_uses_buildkit_arguments_not_host_architectu
     # Then
     if target in {"linux/amd64", "linux/arm64"}:
         expected = {
-            "amd64": "sha256:c3ed94efca90c754cdda300e3c7f8cc2f3d7df86d3fdc5d11f996c7518a09c24",
-            "arm64": "sha256:90d236ab91c6dae7139bfe0508eab94a8b4323238b62fa29e6cf479a352576f2",
+            "amd64": "sha256:279bc3a03c1919d774e268ef229949f45b753a0e21257f9fb315b05be7a40ea9",
+            "arm64": "sha256:c677ac6abf5e187e987a87fe1b588f454b002a7d7019de81b9e8db02e9e902b6",
         }
         assert result.returncode == 0, result.stderr
         assert result.stdout == expected[architecture]
