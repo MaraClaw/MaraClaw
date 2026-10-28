@@ -134,7 +134,7 @@ async def test_live_manual_control_scopes_all_path_bindings(
                 await db.execute(
                     "INSERT INTO agents (id, name, role_description, creator_id, max_triggers, min_poll_interval_min, "
                     "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
-                    "VALUES (%(id)s, 'Other', 'QA', %(creator)s, 10, 5, 10, 'private', 'none', 30)",
+                    "VALUES (%(id)s, 'Other', 'QA', %(creator)s, 10, 5, 10, 'private', 'use', 30)",
                     {"id": agent_id, "creator": run.requester_id},
                 )
             case "deleted":
