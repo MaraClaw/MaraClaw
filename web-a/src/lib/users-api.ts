@@ -107,6 +107,15 @@ export async function listUsersPage(input: UsersPageRequest, signal?: AbortSigna
   return apiRequest(`/api/users/page?${params}`, { schema: usersPageSchema, signal })
 }
 
+const companyRosterExportSchema = z.object({ csv: z.string() }).strict()
+
+export type CompanyRosterRequest = Pick<UsersPageRequest, 'tenantId' | 'search'>
+
+export async function exportCompanyUsers(input: CompanyRosterRequest, signal?: AbortSignal) {
+  const params = new URLSearchParams({ tenant_id: input.tenantId, search: input.search })
+  return apiRequest(`/api/users/export?${params}`, { schema: companyRosterExportSchema, signal })
+}
+
 export async function getUserDetail(userId: string, signal?: AbortSignal): Promise<UserDetail> {
   return apiRequest<UserDetail>(`/api/users/${userId}`, { signal })
 }
