@@ -54,7 +54,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 - Seed MaraClaw (`maraclaw`) and OpenClaw (`openclaw`, default for unmatched end-user registration); do not rename/reuse `default` slug. System orgs cannot be disabled; system/default-end-user orgs cannot be deleted.
 - Email domains live in `tenant_email_domains`, not `tenants.sso_domain`. End users have at most one tenant; transfer needs password confirmation. Domain join/transfer needs verified email and `get_current_user` (active + force-change gate).
 - Reset/verify links use `app/services/frontend_origin.py` `resolve_frontend_base_url`: CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`; never an unlisted request host.
-- Bundled `skill_creator_files/` is not normal service code; Photon owns the image-bundled Linkup skills.
+- Bundled `skill_creator_files/` is not normal service code; the guest image project owns the image-bundled Linkup skills.
 
 ## Commands (From `engine/`)
 
@@ -80,4 +80,4 @@ uv run python -m app.scripts.bootstrap_db
 - Bubblewrap 0.12 rejects setuid execution; the image explicitly clears its setuid bit and requires usable host user namespaces for non-root sandboxing. Launcher retains `SYS_ADMIN SETUID SETGID SYS_CHROOT SETPCAP NET_ADMIN SYS_PTRACE` + `seccomp=unconfined`; validate the startup probe and a real backend command, not only file mode. The short probe does not mount `/proc`; a successful probe can still leave the full backend blocked by host permissions. Namespace failure must not trigger host execution.
 - `app/process_roles.py` normalizes roles lowercase in Python and `entrypoint.sh` before its case-sensitive predicate: `Bootstrap` DOES run `app.scripts.bootstrap_db`. Only `all`/`bootstrap` run schema bootstrap; failure aborts unless `ALLOW_MIGRATION_FAILURE=true` explicitly permits continuation (not Alembic).
 - Runtime bootstrap orders system orgs, fail-closed PA, optional tools/templates/skills, agents; PA precedes agent seeders. `SystemOrgSeedError` and every PA seed failure abort; optional seed blocks warn. Lifecycle/task/readiness ownership: `app/runtime/AGENTS.md`.
-- Node 26.12.1 across guest `node:26.12.1-bookworm-slim`, sandbox `node:26.12.1-slim`, frontends `node:26.12.1-trixie-slim`; smoke requires host + guest `v26.12.1`. Guests support linux/amd64 and linux/arm64, gogcli 0.47.1 / OpenClaw 2026.10.7. Photon owns the guest recipe, helpers, build and Hub publish scripts; its local build loads one target and publication builds both under one versioned tag.
+- Node 26.12.1 across guest `node:26.12.1-bookworm-slim`, sandbox `node:26.12.1-slim`, frontends `node:26.12.1-trixie-slim`; smoke requires host + guest `v26.12.1`. Guests support linux/amd64 and linux/arm64, gogcli 0.47.1 / OpenClaw 2026.10.7. The guest image project owns the guest recipe, helpers, build and Hub publish scripts; its local build loads one target and publication builds both under one versioned tag.
