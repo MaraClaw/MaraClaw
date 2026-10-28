@@ -1,8 +1,8 @@
 # tests
 
-Root-level `test_*.py`, no shared `conftest.py`. Helpers include `agent_tools_catalog_fakes.py` and `openclaw_*_fixtures.py` in this directory. Prefer focused tests beside the contract being changed. Image build and OfficeCLI tests and smoke helpers live in Photon.
+Root-level `test_*.py`, no shared `conftest.py`. Helpers include `agent_tools_catalog_fakes.py` and `openclaw_*_fixtures.py` in this directory. Prefer focused tests beside the contract being changed. Image build and OfficeCLI tests and smoke helpers live in the guest image project.
 
-Run from `engine/`, not the monorepo root. Pytest has no `testpaths`; package-root `test_sandbox_config.py` is a print script, not a pytest module. OpenClaw node-pin tests need host Node `v26.12.1`; CI has no Node service. Guest: `node:26.12.1-bookworm-slim`; sandbox: `node:26.12.1-slim`; Photon's OfficeCLI smoke probe asserts container `v26.12.1`.
+Run from `engine/`, not the monorepo root. Pytest has no `testpaths`; package-root `test_sandbox_config.py` is a print script, not a pytest module. OpenClaw node-pin tests need host Node `v26.12.1`; CI has no Node service. Guest: `node:26.12.1-bookworm-slim`; sandbox: `node:26.12.1-slim`; the guest image project's OfficeCLI smoke probe asserts container `v26.12.1`.
 
 Inbound office parse: `test_document_parser.py`, `test_document_parser_routes.py`, binary `fixtures/anydoc/` (supported/malformed/encrypted/resource-limited/scanned). Do not mock anydoc for these cases. Route tests exercise storage-backed `read_document` for enterprise files and 10-50 MiB inputs.
 
