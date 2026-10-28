@@ -7,10 +7,10 @@ import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { groupDepartmentAssignments, listDepartments, renameDepartment, setUserDepartments, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { replaceUserDepartmentsOptions, renameDepartmentOptions } from '../src/pages/users-department-mutations.ts'
+import { createDepartmentOptions, replaceUserDepartmentsOptions, renameDepartmentOptions } from '../src/pages/users-department-mutations.ts'
 import { createFixture } from './helpers.ts'
 
-const original = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', created_at: '2026-10-18T00:00:00Z' }
+const original = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', description: '  Escalations\nBilling  ', created_at: '2026-10-18T00:00:00Z' }
 const renamed = { ...original, name: 'Customer operations' }
 const input = { tenantId: original.tenant_id, departmentId: original.id, name: renamed.name }
 const queryKey = ['admin-departments', original.tenant_id]
@@ -18,6 +18,46 @@ const initial: DepartmentsResponse = {
   departments: [original, { ...original, id: 'engineering', name: 'Engineering' }],
   assignments: [{ tenant_id: original.tenant_id, user_id: 'member-a', department_id: original.id }],
 }
+
+for (const description of [undefined, '', '  New responsibilities\nEscalations  ']) {
+  test(`create adapter carries ${JSON.stringify(description)} into the wire and owned directory`, async (t) => {
+    // Given
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    client.setQueryData(queryKey, initial)
+    const payload = description === undefined ? { name: 'Support' } : { name: 'Support', description }
+    const created = { ...original, id: 'support', ...payload, description: description ?? '' }
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(created))
+    const { policy } = createFixture()
+    const observer = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), createDepartmentOptions(client)))
+    // When
+    await observer.mutate({ tenantId: original.tenant_id, ...payload })
+    // Then
+    assert.deepEqual(JSON.parse(String(fetch.mock.calls[0]?.arguments[1]?.body)), payload)
+    assert.deepEqual(client.getQueryData<DepartmentsResponse>(queryKey)?.departments.at(-1), created)
+  })
+}
+
+test('late create description cannot populate a replacement session directory', async (t) => {
+  // Given
+  const { policy } = createFixture()
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  client.setQueryData(queryKey, initial)
+  const response = Promise.withResolvers<Response>()
+  const started = Promise.withResolvers<void>()
+  t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
+  const observer = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), createDepartmentOptions(client)))
+  const rejected = assert.rejects(observer.mutate({ tenantId: original.tenant_id, name: 'Support', description: '  Private responsibilities  ' }), StaleSessionError)
+  await started.promise
+  // When
+  policy.replace('token-b')
+  response.resolve(Response.json({ ...original, id: 'support', description: '  Private responsibilities  ' }))
+  // Then
+  await rejected
+  assert.deepEqual(client.getQueryData(queryKey), initial)
+  assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+})
 
 test('rename sends an encoded scoped PATCH and parses the department response', async (t) => {
   // Given
@@ -46,6 +86,23 @@ test('rename rejects a malformed department response', async (t) => {
   // Then
   await assert.rejects(pending, z.ZodError)
 })
+
+for (const description of ['', '  Revised billing ownership\n\nOnboarding  ']) {
+  test(`same-name edit forwards exact description ${JSON.stringify(description)} and updates owned cache`, async (t) => {
+    // Given
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    client.setQueryData(queryKey, initial)
+    const updated = { ...original, description }
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(updated))
+    const observer = new MutationObserver(client, renameDepartmentOptions(client))
+    // When
+    await observer.mutate({ tenantId: original.tenant_id, departmentId: original.id, name: original.name, description })
+    // Then
+    assert.deepEqual(JSON.parse(String(fetch.mock.calls[0]?.arguments[1]?.body)), { name: original.name, description })
+    assert.deepEqual(client.getQueryData<DepartmentsResponse>(queryKey)?.departments[0], updated)
+  })
+}
 
 test('rename preserves duplicate-name errors for inline field feedback', async (t) => {
   // Given

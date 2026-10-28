@@ -1,16 +1,30 @@
 import type { QueryClient } from '@tanstack/react-query'
 
-import { deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentMergeApply, type DepartmentMergePreview, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+import { createDepartment, deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentInput, type DepartmentMergeApply, type DepartmentMergePreview, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
 
-type RenameDepartmentInput = {
+type CreateDepartmentInput = DepartmentInput & { readonly tenantId: string }
+
+export function createDepartmentOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: ({ tenantId, ...input }: CreateDepartmentInput) => createDepartment(tenantId, input),
+    onSuccess: async (created: Department, input: CreateDepartmentInput) => {
+      const queryKey = ['admin-departments', input.tenantId]
+      queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => current
+        ? { ...current, departments: [...current.departments.filter((department) => department.id !== created.id), created] }
+        : undefined)
+      await queryClient.invalidateQueries({ queryKey, exact: true })
+    },
+  }
+}
+
+type RenameDepartmentInput = DepartmentInput & {
   readonly tenantId: string
   readonly departmentId: string
-  readonly name: string
 }
 
 export function renameDepartmentOptions(queryClient: QueryClient) {
   return {
-    mutationFn: (input: RenameDepartmentInput) => renameDepartment(input.tenantId, input.departmentId, { name: input.name }),
+    mutationFn: ({ tenantId, departmentId, ...input }: RenameDepartmentInput) => renameDepartment(tenantId, departmentId, input),
     onSuccess: (updated: Department, input: RenameDepartmentInput) => {
       const queryKey = ['admin-departments', input.tenantId]
       queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => current

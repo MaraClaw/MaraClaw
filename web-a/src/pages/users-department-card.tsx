@@ -18,6 +18,7 @@ import { DepartmentMerge } from './users-department-merge'
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Enter a department name').max(100, 'Use 100 characters or fewer'),
+  description: z.string(),
 })
 type FormValues = z.infer<typeof schema>
 
@@ -52,7 +53,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
   const wasEditing = useRef(false)
   const { register, handleSubmit, reset, setError, setFocus, clearErrors, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: department.name },
+    defaultValues: { name: department.name, description: department.description },
   })
 
   useEffect(() => {
@@ -77,25 +78,27 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
   }, [editing, rename.isPending, errors.name?.type, errors.root?.server, setFocus])
 
   function cancel() {
-    reset({ name: department.name })
+    reset({ name: department.name, description: department.description })
     rename.reset()
     setEditing(false)
   }
 
   function onSave(values: FormValues) {
     clearErrors()
-    rename.mutate({ tenantId, departmentId: department.id, name: values.name }, {
+    rename.mutate({ tenantId, departmentId: department.id, name: values.name,
+      ...(values.description === department.description.replace(/\r\n?/g, '\n') ? {} : { description: values.description }),
+    }, {
       onSuccess: (updated) => {
         if (!isCurrent()) return
         setEditing(false)
-        toast.success(`Renamed department to “${updated.name}”`)
+        toast.success(`Updated department “${updated.name}”`)
       },
       onError: (error) => {
         if (!isCurrent()) return
         const duplicate = error instanceof ApiError && error.status === 409
         const message = duplicate
           ? 'A department with this name already exists. Use a different name.'
-          : error instanceof ApiError ? error.message : 'Could not rename department. Check your connection and try again.'
+          : error instanceof ApiError ? error.message : 'Could not update department. Check your connection and try again.'
         setError(duplicate ? 'name' : 'root.server', { type: 'server', message })
       },
     })
@@ -176,7 +179,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
         ) : editing ? (
           <form
             className="space-y-3"
-            aria-label={`Rename ${department.name}`}
+            aria-label={`Edit ${department.name}`}
             aria-busy={rename.isPending}
             aria-describedby={errors.root?.server ? `${formId}-error` : undefined}
             onSubmit={handleSubmit(onSave)}
@@ -206,25 +209,32 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
                 <p id={`${formId}-name-error`} className="text-xs text-destructive">{errors.name.message}</p>
               ) : null}
             </div>
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor={`${formId}-description`}>Description (optional)</Label>
+              <textarea id={`${formId}-description`} rows={3} disabled={rename.isPending}
+                className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
+                {...register('description')} />
+            </div>
             {errors.root?.server ? (
               <p id={`${formId}-error`} role="alert" className="text-sm text-destructive">{errors.root.server.message}</p>
             ) : null}
             <div className="flex flex-wrap gap-2">
               <Button type="submit" size="sm" className="h-11 sm:h-9" disabled={rename.isPending}>
                 {rename.isPending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                Save name
+                Save department
               </Button>
               <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" disabled={rename.isPending} onClick={cancel}>
                 Cancel
               </Button>
             </div>
             <p role="status" className={rename.isPending ? 'text-xs text-muted-foreground' : 'sr-only'}>
-              {rename.isPending ? 'Saving department name…' : ''}
+              {rename.isPending ? 'Saving department…' : ''}
             </p>
           </form>
         ) : (
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="space-y-2">
             <p className="min-w-0 text-sm font-medium leading-relaxed wrap-anywhere"><bdi>{department.name}</bdi></p>
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground wrap-anywhere">{department.description || 'No description'}</p>
             <div className="flex flex-wrap gap-1">
             <Button
               ref={editButton}
@@ -233,12 +243,12 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
               size="sm"
               className="h-11 sm:h-9"
               onClick={() => {
-                reset({ name: department.name })
+                reset({ name: department.name, description: department.description })
                 rename.reset()
                 setEditing(true)
               }}
             >
-              Edit name<span className="sr-only"> for {department.name}</span>
+              Edit department<span className="sr-only"> for {department.name}</span>
             </Button>
             <Button ref={mergeButton} type="button" variant="ghost" size="sm" className="h-11 sm:h-9" onClick={() => setMerging(true)}>
               Merge<span className="sr-only"> {department.name}</span>

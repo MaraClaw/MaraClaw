@@ -22,6 +22,7 @@ import { DepartmentMemberships } from '@/pages/users-department-memberships'
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Enter a department name').max(100, 'Use 100 characters or fewer'),
+  description: z.string(),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -52,7 +53,7 @@ export function TenantUsers({
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '' },
+    defaultValues: { name: '', description: '' },
   })
   const assignments = groupDepartmentAssignments(departments.data?.assignments ?? [])
   const savingAssignment = assign.isPending ? assign.variables : undefined
@@ -65,7 +66,7 @@ export function TenantUsers({
 
   function onCreate(values: FormValues) {
     clearErrors()
-    create.mutate({ tenantId, name: values.name }, {
+    create.mutate({ tenantId, ...values }, {
       onSuccess: (created) => {
         if (!isCurrent()) return
         reset()
@@ -125,6 +126,12 @@ export function TenantUsers({
             {errors.name ? (
               <p id={`${formId}-name-error`} className="text-xs text-destructive">{errors.name.message}</p>
             ) : null}
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor={`${formId}-description`}>Description (optional)</Label>
+              <textarea id={`${formId}-description`} rows={3} disabled={create.isPending}
+                className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
+                {...register('description')} />
+            </div>
             {errors.root?.server ? (
               <p id={`${formId}-error`} role="alert" className="text-sm text-destructive">
                 {errors.root.server.message}
