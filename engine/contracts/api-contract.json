@@ -5526,6 +5526,11 @@
       },
       "DepartmentCreate": {
         "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
           "name": {
             "maxLength": 100,
             "minLength": 1,
@@ -5720,6 +5725,10 @@
             "title": "Created At",
             "type": "string"
           },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -5739,9 +5748,31 @@
           "id",
           "tenant_id",
           "name",
+          "description",
           "created_at"
         ],
         "title": "DepartmentOut",
+        "type": "object"
+      },
+      "DepartmentUpdate": {
+        "description": "Name stays required; omitted description is preserved by the update service.",
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DepartmentUpdate",
         "type": "object"
       },
       "DepartmentsOut": {
@@ -11818,6 +11849,18 @@
             "title": "Cron Expr",
             "type": "string"
           },
+          "ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At"
+          },
           "instruction": {
             "default": "",
             "maxLength": 5000,
@@ -12059,6 +12102,18 @@
             "title": "Cron Expr",
             "type": "string"
           },
+          "ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -12139,6 +12194,18 @@
               }
             ],
             "title": "Cron Expr"
+          },
+          "ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At"
           },
           "instruction": {
             "anyOf": [
@@ -15401,6 +15468,37 @@
         "title": "UnlockRequest",
         "type": "object"
       },
+      "UploadPolicy": {
+        "properties": {
+          "chat_file_max_bytes": {
+            "title": "Chat File Max Bytes",
+            "type": "integer"
+          },
+          "chat_image_max_bytes": {
+            "title": "Chat Image Max Bytes",
+            "type": "integer"
+          },
+          "image_extensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Image Extensions",
+            "type": "array"
+          },
+          "workspace_file_max_bytes": {
+            "title": "Workspace File Max Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chat_image_max_bytes",
+          "chat_file_max_bytes",
+          "workspace_file_max_bytes",
+          "image_extensions"
+        ],
+        "title": "UploadPolicy",
+        "type": "object"
+      },
       "UrlImportBody": {
         "properties": {
           "url": {
@@ -15734,6 +15832,20 @@
           "AGENT_ADMIN",
           "MEMBER"
         ]
+      },
+      "UserRosterExportOut": {
+        "additionalProperties": false,
+        "properties": {
+          "csv": {
+            "title": "Csv",
+            "type": "string"
+          }
+        },
+        "required": [
+          "csv"
+        ],
+        "title": "UserRosterExportOut",
+        "type": "object"
       },
       "UserUpdate": {
         "properties": {
@@ -27218,6 +27330,32 @@
         ]
       }
     },
+    "/api/chat/upload-policy": {
+      "get": {
+        "operationId": "get_2f6170692f636861742f75706c6f61642d706f6c696379",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Upload Policy",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/company-admissions/mine": {
       "get": {
         "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f6d696e65",
@@ -28193,7 +28331,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DepartmentCreate"
+                "$ref": "#/components/schemas/DepartmentUpdate"
               }
             }
           },
@@ -37984,6 +38122,71 @@
         ]
       }
     },
+    "/api/users/export": {
+      "get": {
+        "description": "Generate a complete company roster CSV using the current literal search.",
+        "operationId": "get_2f6170692f75736572732f6578706f7274",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Search",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRosterExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Users",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/users/org-admins": {
       "get": {
         "description": "List org admins in the caller's company.",
@@ -38817,6 +39020,7 @@
       "DepartmentMergeRequest",
       "DepartmentOptionsOut",
       "DepartmentOut",
+      "DepartmentUpdate",
       "DepartmentsOut",
       "DingTalkChannelPayload",
       "DiscordChannelPayload",
@@ -38890,6 +39094,12 @@
       "ResetPasswordResponse",
       "ReviewPage",
       "RoleUpdate",
+      "ScheduleCreate",
+      "ScheduleHistoryItem",
+      "ScheduleHistoryPage",
+      "ScheduleManualRunResponse",
+      "ScheduleOut",
+      "ScheduleUpdate",
       "ScreenshotRequest",
       "SearchAnalyticsExportStatus",
       "SearchAnalyticsOrgRanking",
@@ -38925,11 +39135,13 @@
       "TriggerUpdate",
       "TypeRequest",
       "UnlockRequest",
+      "UploadPolicy",
       "UserActiveUpdate",
       "UserDetailOut",
       "UserLogin",
       "UserQuotaUpdate",
       "UserRole",
+      "UserRosterExportOut",
       "UserUpdate",
       "UsersPageOut",
       "VerifyEmailRequest",
@@ -39047,6 +39259,7 @@
       "DepartmentOptionOut",
       "DepartmentOptionsOut",
       "DepartmentOut",
+      "DepartmentUpdate",
       "DepartmentsOut",
       "DingTalkChannelPayload",
       "DingTalkExtraConfig",
@@ -39088,6 +39301,7 @@
       "MCPTestRequest",
       "MCPTestResponse",
       "MCPTestSuccess",
+      "ManualRunStatus",
       "MemberAuthUser",
       "MemberDailyReportOut",
       "MemberDailyReportUpsert",
@@ -39140,6 +39354,12 @@
       "ResetPasswordResponse",
       "ReviewPage",
       "RoleUpdate",
+      "ScheduleCreate",
+      "ScheduleHistoryItem",
+      "ScheduleHistoryPage",
+      "ScheduleManualRunResponse",
+      "ScheduleOut",
+      "ScheduleUpdate",
       "ScreenshotRequest",
       "SearchAnalyticsExportStatus",
       "SearchAnalyticsKindCountProjection",
@@ -39188,12 +39408,14 @@
       "TurnAcceptedEvent",
       "TypeRequest",
       "UnlockRequest",
+      "UploadPolicy",
       "UserActiveUpdate",
       "UserAgentOut",
       "UserDetailOut",
       "UserLogin",
       "UserQuotaUpdate",
       "UserRole",
+      "UserRosterExportOut",
       "UserUpdate",
       "UsersPageOut",
       "ValidationError",

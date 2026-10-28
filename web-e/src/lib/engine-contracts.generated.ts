@@ -414,7 +414,7 @@ export type DepartmentAssignment = z.infer<typeof DepartmentAssignmentSchema>;
 export const DepartmentAssignmentsSchema = z.looseObject({ ["department_ids"]: z.array(z.guid()) });
 export type DepartmentAssignments = z.infer<typeof DepartmentAssignmentsSchema>;
 
-export const DepartmentCreateSchema = z.looseObject({ ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
+export const DepartmentCreateSchema = z.looseObject({ ["description"]: z.string().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
 export type DepartmentCreate = z.infer<typeof DepartmentCreateSchema>;
 
 export const DepartmentDeletionPreviewOutSchema = z.looseObject({ ["agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["membership_count"]: z.number().min(0).refine(Number.isInteger) });
@@ -429,7 +429,7 @@ export type DepartmentMembersOut = z.infer<typeof DepartmentMembersOutSchema>;
 export const DepartmentMergeConfirmationSchema = z.string().regex(new RegExp("^v1:[0-9a-f]{64}$", "u"));
 export type DepartmentMergeConfirmation = z.infer<typeof DepartmentMergeConfirmationSchema>;
 
-export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
+export const DepartmentOutSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["description"]: z.string(), ["id"]: z.guid(), ["name"]: z.string(), ["tenant_id"]: z.guid() });
 export type DepartmentOut = z.infer<typeof DepartmentOutSchema>;
 
 export const DepartmentMergePreviewOutSchema = z.looseObject({ ["confirmation_token"]: DepartmentMergeConfirmationSchema, ["destination"]: DepartmentOutSchema, ["destination_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["destination_membership_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["overlapping_membership_count"]: z.number().min(0).refine(Number.isInteger), ["source"]: DepartmentOutSchema, ["source_agent_grant_count"]: z.number().min(0).refine(Number.isInteger), ["source_membership_count"]: z.number().min(0).refine(Number.isInteger) });
@@ -443,6 +443,9 @@ export type DepartmentOptionOut = z.infer<typeof DepartmentOptionOutSchema>;
 
 export const DepartmentOptionsOutSchema = z.looseObject({ ["departments"]: z.array(DepartmentOptionOutSchema) });
 export type DepartmentOptionsOut = z.infer<typeof DepartmentOptionsOutSchema>;
+
+export const DepartmentUpdateSchema = z.looseObject({ ["description"]: z.string().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
+export type DepartmentUpdate = z.infer<typeof DepartmentUpdateSchema>;
 
 export const DepartmentsOutSchema = z.looseObject({ ["assignments"]: z.array(AssignmentOutSchema), ["departments"]: z.array(DepartmentOutSchema) });
 export type DepartmentsOut = z.infer<typeof DepartmentsOutSchema>;
@@ -692,6 +695,28 @@ export type ReviewPage = z.infer<typeof ReviewPageSchema>;
 export const RoleUpdateSchema = z.looseObject({ ["role"]: UserRoleSchema });
 export type RoleUpdate = z.infer<typeof RoleUpdateSchema>;
 
+export const ScheduleCreateSchema = z.looseObject({ ["cron_expr"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100), ["ends_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["instruction"]: z.string().refine(value => [...value].length <= 5000).optional(), ["is_enabled"]: z.boolean().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200), ["notify_on_failure"]: z.boolean().optional(), ["timezone"]: z.string().optional() });
+export type ScheduleCreate = z.infer<typeof ScheduleCreateSchema>;
+
+export const ScheduleHistoryItemSchema = z.looseObject({ ["created_at"]: z.union([z.string(), z.null()]), ["id"]: z.guid(), ["instruction"]: z.string(), ["reply"]: z.string(), ["status"]: z.intersection(z.union([z.literal("success"), z.literal("failure"), z.literal("cancelled"), z.literal("unknown")]), z.string()), ["summary"]: z.string() });
+export type ScheduleHistoryItem = z.infer<typeof ScheduleHistoryItemSchema>;
+
+export const ScheduleHistoryPageSchema = z.looseObject({ ["items"]: z.array(ScheduleHistoryItemSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ScheduleHistoryPage = z.infer<typeof ScheduleHistoryPageSchema>;
+
+export const ManualRunStatusValues = ["pending","running","success","failure","cancelled","unknown"] as const;
+export const ManualRunStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("running"), z.literal("success"), z.literal("failure"), z.literal("cancelled"), z.literal("unknown")]), z.string());
+export type ManualRunStatus = z.infer<typeof ManualRunStatusSchema>;
+
+export const ScheduleManualRunResponseSchema = z.looseObject({ ["agent_id"]: z.guid(), ["can_cancel"]: z.boolean(), ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["finished_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["requester_id"]: z.guid(), ["run_id"]: z.guid(), ["schedule_id"]: z.guid(), ["started_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["status"]: ManualRunStatusSchema });
+export type ScheduleManualRunResponse = z.infer<typeof ScheduleManualRunResponseSchema>;
+
+export const ScheduleOutSchema = z.looseObject({ ["agent_id"]: z.guid(), ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["created_by"]: z.union([z.guid(), z.null()]).optional(), ["creator_username"]: z.union([z.string(), z.null()]).optional(), ["cron_expr"]: z.string(), ["ends_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["id"]: z.guid(), ["instruction"]: z.string(), ["is_enabled"]: z.boolean(), ["last_run_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["name"]: z.string(), ["next_run_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["notify_on_failure"]: z.boolean(), ["run_count"]: z.number().refine(Number.isInteger), ["timezone"]: z.string() });
+export type ScheduleOut = z.infer<typeof ScheduleOutSchema>;
+
+export const ScheduleUpdateSchema = z.looseObject({ ["cron_expr"]: z.union([z.string(), z.null()]).optional(), ["ends_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["instruction"]: z.union([z.string(), z.null()]).optional(), ["is_enabled"]: z.union([z.boolean(), z.null()]).optional(), ["name"]: z.union([z.string(), z.null()]).optional(), ["notify_on_failure"]: z.boolean().optional(), ["timezone"]: z.string().optional() });
+export type ScheduleUpdate = z.infer<typeof ScheduleUpdateSchema>;
+
 export const ScreenshotRequestSchema = z.looseObject({ ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type ScreenshotRequest = z.infer<typeof ScreenshotRequestSchema>;
 
@@ -826,6 +851,9 @@ export type CredentialCapture = z.infer<typeof CredentialCaptureSchema>;
 export const UnlockRequestSchema = z.looseObject({ ["capture"]: z.union([CredentialCaptureSchema, z.null()]).optional(), ["export_cookies"]: z.boolean().optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["platform_hint"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type UnlockRequest = z.infer<typeof UnlockRequestSchema>;
 
+export const UploadPolicySchema = z.looseObject({ ["chat_file_max_bytes"]: z.number().refine(Number.isInteger), ["chat_image_max_bytes"]: z.number().refine(Number.isInteger), ["image_extensions"]: z.array(z.string()), ["workspace_file_max_bytes"]: z.number().refine(Number.isInteger) });
+export type UploadPolicy = z.infer<typeof UploadPolicySchema>;
+
 export const UserActiveUpdateSchema = z.looseObject({ ["is_active"]: z.boolean() });
 export type UserActiveUpdate = z.infer<typeof UserActiveUpdateSchema>;
 
@@ -840,6 +868,9 @@ export type UserLogin = z.infer<typeof UserLoginSchema>;
 
 export const UserQuotaUpdateSchema = z.looseObject({ ["quota_agent_ttl_hours"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["quota_max_agents"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["quota_message_limit"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["quota_message_period"]: z.union([z.string(), z.null()]).optional() });
 export type UserQuotaUpdate = z.infer<typeof UserQuotaUpdateSchema>;
+
+export const UserRosterExportOutSchema = z.strictObject({ ["csv"]: z.string() });
+export type UserRosterExportOut = z.infer<typeof UserRosterExportOutSchema>;
 
 export const UserUpdateSchema = z.looseObject({ ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.union([z.email(), z.null()]).optional(), ["primary_mobile"]: z.union([z.string(), z.null()]).optional(), ["timezone"]: z.union([z.string(), z.null()]).optional(), ["title"]: z.union([z.string(), z.null()]).optional() });
 export type UserUpdate = z.infer<typeof UserUpdateSchema>;
