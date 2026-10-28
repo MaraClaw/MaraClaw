@@ -49,7 +49,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 ## ENVIRONMENT AND SERVING
 
 - Public `VITE_*` only, never secrets. Empty `VITE_API_BASE_URL` means same-origin; never use `http://0.0.0.0:8000`.
-- Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 25m.
+- Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 51m (50 MiB file plus multipart framing).
 - Docker builds with Node 26.12.1 and serves via non-root `nginxinc/nginx-unprivileged` on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
 - CSP `font-src 'self' data:` blocks index.html's Google Fonts in the image; external APIs require `connect-src` edits. Local Office parsing uses only `script-src 'wasm-unsafe-eval'` and `worker-src 'self' blob:`; never add JavaScript `unsafe-eval`, data workers or remote viewer/font hosts. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
 
