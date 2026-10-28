@@ -51,7 +51,7 @@ class UpgradeDocker:
                 return self.client.image.inspect(reference).id
             except NoSuchImage as exc:
                 raise OSError(
-                    f"Local OpenClaw image {reference} is missing; build it with the Photon project's "
+                    f"Local OpenClaw image {reference} is missing; build it with the guest image project's "
                     "build-openclaw-local-dockerfile.sh "
                     "on the worker's Docker daemon before retrying the upgrade"
                 ) from exc
