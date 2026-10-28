@@ -71,6 +71,7 @@ def test_rename_preserves_department_identity_and_assignments(directory, name, e
         "id": str(first.id),
         "tenant_id": str(actor.tenant_id),
         "name": expected,
+        "description": first.description,
         "created_at": first.created_at.isoformat().replace("+00:00", "Z"),
     }
     assert rest[-1][first.id] == replace(first, name=expected)
@@ -138,8 +139,9 @@ def test_platform_admin_rename_requires_explicit_tenant(directory, selected):
 
 
 @pytest.mark.parametrize("case", ["missing", "inactive", "password", "demoted", "transferred"])
+@pytest.mark.parametrize("description_only", [False, True])
 def test_rename_rechecks_fresh_actor_before_mutation(
-    directory, monkeypatch, case: Literal["missing", "inactive", "password", "demoted", "transferred"]
+    directory, monkeypatch, case: Literal["missing", "inactive", "password", "demoted", "transferred"], description_only
 ):
     client, actor, subject, first, _, assignments, bumped, *rest = directory
     fresh_actor = replace(actor)
@@ -159,7 +161,8 @@ def test_rename_rechecks_fresh_actor_before_mutation(
     loader = AsyncMock(return_value=fresh_actor)
     monkeypatch.setattr(org_departments.user_dao, "get_with_identity", loader)
 
-    response = client.patch(f"/api/departments/{first.id}", json={"name": "Denied"})
+    payload = {"name": first.name, "description": "Denied"} if description_only else {"name": "Denied"}
+    response = client.patch(f"/api/departments/{first.id}", json=payload)
 
     assert response.status_code == 403
     assert rest[-1][first.id] == first

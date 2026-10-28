@@ -27,6 +27,7 @@ from app.schemas.department import (
     DepartmentOptionsOut,
     DepartmentOut,
     DepartmentsOut,
+    DepartmentUpdate,
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.org_departments import (
@@ -81,14 +82,16 @@ async def create_department(
             admin_tenant(actor, tenant)
             if await tenant_dao.get(tenant) is None:
                 raise HTTPException(404, "Organization not found")
-            row = await org_department_dao.create(obj_in={"tenant_id": tenant, "name": data.name})
+            row = await org_department_dao.create(
+                obj_in={"tenant_id": tenant, "name": data.name, "description": data.description}
+            )
             await write_admin_audit(
                 actor=actor,
                 action="department.create",
                 target_type="department",
                 target_id=row.id,
                 tenant_id=tenant,
-                changes={"name": field_change(None, row.name)},
+                changes={"name": field_change(None, row.name), "description": field_change(None, row.description)},
             )
             return DepartmentOut.model_validate(row)
     except UniqueViolationError as exc:
@@ -98,7 +101,7 @@ async def create_department(
 @router.patch("/departments/{department_id}", response_model=DepartmentOut)
 async def update_department(
     department_id: UUID,
-    data: DepartmentCreate,
+    data: DepartmentUpdate,
     tenant_id: UUID | None = Query(None),
     current_user: UserRecord = Depends(get_current_user),
 ) -> DepartmentOut:

@@ -68,25 +68,31 @@ def test_creation_records_fresh_actor_and_trimmed_allowlisted_name(directory, mo
         "target_type": "department",
         "target_id": next(row.id for row in directory[-1].values() if row.name == "Finance"),
         "tenant_id": actor.tenant_id,
-        "changes": {"name": {"before": None, "after": "Finance"}},
+        "changes": {"name": {"before": None, "after": "Finance"}, "description": {"before": None, "after": ""}},
         "details": {},
         "ip_address": None,
     }
 
 
-@pytest.mark.parametrize("operation", ["rename", "delete"])
+@pytest.mark.parametrize("operation", ["rename", "description", "delete"])
 def test_department_before_name_survives_mutating_dao(directory, monkeypatch, audit_sink, operation):
     # Given a DAO object that mutates in place, including an unrelated sensitive attribute.
     client, actor, _, first, *_, rows = directory
     mutable = SimpleNamespace(
-        id=first.id, tenant_id=first.tenant_id, name=first.name, created_at=first.created_at, token="never-audit-this"
+        id=first.id,
+        tenant_id=first.tenant_id,
+        name=first.name,
+        description=first.description,
+        created_at=first.created_at,
+        token="never-audit-this",
     )
     rows[first.id] = mutable
     fresh = replace(actor, identity=IdentityRecord(id=uuid4(), email="fresh@example.test"))
     monkeypatch.setattr(org_departments.user_dao, "get_with_identity", AsyncMock(return_value=fresh))
 
     async def update(*, db_obj, obj_in):
-        db_obj.name = obj_in["name"]
+        for field, value in obj_in.items():
+            setattr(db_obj, field, value)
         return db_obj
 
     async def delete(department):
@@ -100,16 +106,27 @@ def test_department_before_name_survives_mutating_dao(directory, monkeypatch, au
         org_departments.org_department_dao, "grant_agents_for_department", AsyncMock(return_value=set())
     )
     # When the service owner mutates the department through its real route.
-    if operation == "rename":
-        response = client.patch(f"/api/departments/{first.id}", json={"name": "  Revenue  "})
-    else:
-        response = client.delete(f"/api/departments/{first.id}")
+    match operation:
+        case "rename":
+            response = client.patch(f"/api/departments/{first.id}", json={"name": "  Revenue  "})
+        case "description":
+            response = client.patch(
+                f"/api/departments/{first.id}", json={"name": first.name, "description": "\tUpdated  "}
+            )
+        case "delete":
+            response = client.delete(f"/api/departments/{first.id}")
+        case _:
+            raise AssertionError(operation)
     # Then the event retains the original name rather than the mutated object or its extra fields.
-    assert response.status_code == (200 if operation == "rename" else 204)
+    assert response.status_code == (204 if operation == "delete" else 200)
     audit_sink.assert_awaited_once()
     event = audit_sink.await_args.kwargs["obj_in"]
-    assert event["action"] == f"department.{operation}"
-    assert event["changes"] == {"name": {"before": "Sales", "after": "Revenue" if operation == "rename" else None}}
+    assert event["action"] == ("department.delete" if operation == "delete" else "department.rename")
+    assert event["changes"] == (
+        {"description": {"before": first.description, "after": "\tUpdated  "}}
+        if operation == "description"
+        else {"name": {"before": "Sales", "after": "Revenue" if operation == "rename" else None}}
+    )
     assert event["target_id"] == first.id
     assert event["tenant_id"] == actor.tenant_id
     assert event["actor_email"] == "fresh@example.test"

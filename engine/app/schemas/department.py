@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class DepartmentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    description: str = ""
 
     @field_validator("name", mode="before")
     @classmethod
@@ -17,11 +18,16 @@ class DepartmentCreate(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class DepartmentUpdate(DepartmentCreate):
+    """Name stays required; omitted description is preserved by the update service."""
+
+
 class DepartmentOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
     id: UUID
     tenant_id: UUID
     name: str
+    description: str
     created_at: datetime
 
 

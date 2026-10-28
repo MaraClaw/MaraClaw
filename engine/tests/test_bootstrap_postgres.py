@@ -43,7 +43,8 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
     await bootstrap_db.main()
     # Then current patch-origin defaults, columns, indexes, constraints and seed survive.
     columns = await schema_db.fetchall(
-        "SELECT table_name, column_name, column_default, is_generated FROM information_schema.columns "
+        "SELECT table_name, column_name, column_default, is_generated, is_nullable, data_type "
+        "FROM information_schema.columns "
         "WHERE table_schema = current_schema()"
     )
     defaults = {(row["table_name"], row["column_name"]): row["column_default"] for row in columns}
@@ -64,8 +65,13 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("agent_schedules", "timezone"): "'UTC'::text",
         ("tenants", "is_system"): "false",
         ("tenants", "is_default_end_user_org"): "false",
+        ("local_departments", "description"): "''::text",
     }
     assert {key: defaults[key] for key in expected} == expected
+    description = next(
+        row for row in columns if (row["table_name"], row["column_name"]) == ("local_departments", "description")
+    )
+    assert (description["data_type"], description["is_nullable"]) == ("text", "NO")
     required = {
         ("users", "quota_period_start"),
         ("tools", "tenant_id"),

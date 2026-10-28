@@ -1711,6 +1711,7 @@ CREATE TABLE IF NOT EXISTS local_departments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL CHECK (name = btrim(name) AND length(name) > 0),
+    description TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (id, tenant_id)
 );

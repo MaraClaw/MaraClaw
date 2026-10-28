@@ -14,10 +14,17 @@ class OrgDepartmentRecord:
     tenant_id: UUID
     name: str
     created_at: datetime
+    description: str = ""
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> OrgDepartmentRecord:
         created_at = datetime_from_row(row["created_at"])
         if created_at is None:
             raise ValueError("Department created_at is required")
-        return cls(uuid_from_row(row["id"]), uuid_from_row(row["tenant_id"]), str_from_row(row["name"]), created_at)
+        return cls(
+            uuid_from_row(row["id"]),
+            uuid_from_row(row["tenant_id"]),
+            str_from_row(row["name"]),
+            created_at,
+            str_from_row(row["description"]),
+        )
