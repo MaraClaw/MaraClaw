@@ -109,7 +109,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     const sent: string[] = []
     sockets.push({ route, session: url.searchParams.get('session_id'), ticket: url.searchParams.get('ticket'), sent })
     route.onMessage((data) => sent.push(String(data)))
-    route.send(JSON.stringify({ type: 'connected' }))
+    route.send(JSON.stringify({ type: 'connected', session_id: url.searchParams.get('session_id') }))
   })
   return {
     sockets, tickets, requests: () => requests, ensures: () => ensures,
