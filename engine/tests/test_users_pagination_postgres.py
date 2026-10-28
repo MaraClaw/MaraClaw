@@ -39,14 +39,14 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
             );
             CREATE TEMP TABLE users (
                 id uuid PRIMARY KEY, identity_id uuid, tenant_id uuid, display_name text,
-                avatar_url text, title text, role text NOT NULL, is_active boolean DEFAULT true,
+                avatar_url text, title text, timezone text, role text NOT NULL, is_active boolean DEFAULT true,
                 registration_source text DEFAULT 'web', created_at timestamptz, updated_at timestamptz,
                 quota_message_limit integer DEFAULT 50, quota_message_period text DEFAULT 'permanent',
                 quota_messages_used integer DEFAULT 0, quota_period_start timestamptz,
                 quota_max_agents integer DEFAULT 2, quota_agent_ttl_hours integer DEFAULT 0,
                 is_genesis boolean DEFAULT false
             );
-            CREATE TEMP TABLE agents (creator_id uuid, is_expired boolean, status text);
+            CREATE TEMP TABLE agents (creator_id uuid, tenant_id uuid, is_expired boolean, status text);
         """)
         connection = DbConnection(raw)
 
@@ -197,8 +197,14 @@ async def test_counts_nonexpired_agents_when_returned_page_has_creators_without_
         (30, False, "running"),
     ]:
         await database.execute(
-            "INSERT INTO agents (creator_id, is_expired, status) VALUES (%(creator)s, %(expired)s, %(status)s)",
-            {"creator": UUID(int=creator), "expired": expired, "status": status},
+            "INSERT INTO agents (creator_id, tenant_id, is_expired, status) "
+            "VALUES (%(creator)s, %(tenant)s, %(expired)s, %(status)s)",
+            {
+                "creator": UUID(int=creator),
+                "tenant": FOREIGN if creator == 30 else TENANT,
+                "expired": expired,
+                "status": status,
+            },
         )
     response = await client.get("/api/users/page", params={"limit": 2})
     assert response.status_code == 200

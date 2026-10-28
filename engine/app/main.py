@@ -117,7 +117,7 @@ from app.api.tenants import router as tenants_router
 from app.api.tools import router as tools_router
 from app.api.triggers import router as triggers_router
 from app.api.upload import router as upload_router
-from app.api.users import router as users_router
+from app.api.users import export_router as users_export_router, router as users_router
 from app.api.webhooks import router as webhooks_router
 from app.api.websocket import router as ws_router
 from app.api.wechat import router as wechat_router
@@ -155,6 +155,7 @@ app.include_router(tools_router, prefix=settings.API_PREFIX, dependencies=_CRUD_
 app.include_router(files_upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(enterprise_kb_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(skills_router, prefix=settings.API_PREFIX)
+app.include_router(users_export_router, prefix=settings.API_PREFIX)
 app.include_router(users_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(slack_router, prefix=settings.API_PREFIX)
 app.include_router(discord_router, prefix=settings.API_PREFIX)

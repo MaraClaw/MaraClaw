@@ -14,6 +14,7 @@ from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import get_current_user, require_role
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
+from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import UserPagePosition, user_dao
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
@@ -30,6 +31,7 @@ from app.services.admin_provisioning import (
     set_peer_admin_active,
 )
 from app.services.tenant_provisioning import AdminEmailTakenError
+from app.services.user_roster_export import export_user_roster
 
 
 async def get_client_ip(request: Request) -> str | None:
@@ -39,6 +41,7 @@ async def get_client_ip(request: Request) -> str | None:
 
 
 router = APIRouter(prefix="/users", tags=["users"])
+export_router = APIRouter(prefix="/users", tags=["users"])
 
 
 class UserQuotaUpdate(BaseModel):
@@ -78,6 +81,12 @@ class AdminUserSummary(BaseModel):
 class UsersPageOut(BaseModel):
     items: list[AdminUserSummary]
     next_cursor: str | None
+
+
+class UserRosterExportOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    csv: str
 
 
 class _UsersPageCursor(BaseModel):
@@ -142,15 +151,8 @@ async def list_users(
     return out
 
 
-@router.get("/page", response_model=UsersPageOut)
-async def list_users_page(
-    tenant_id: str | None = None,
-    search: str = "",
-    cursor: str | None = Query(default=None, max_length=1024),
-    limit: int = Query(default=50, ge=1, le=100),
-    current_user: UserRecord = Depends(get_current_user),
-) -> UsersPageOut:
-    """Page company users, with admins first and null creation times last per group."""
+def _company_roster_tenant(tenant_id: str | None, current_user: UserRecord) -> uuid.UUID:
+    """Resolve the shared company scope for paginated users and roster export."""
     if current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     if current_user.role == "org_admin":
@@ -164,6 +166,32 @@ async def list_users_page(
             tenant_uuid = uuid.UUID(tenant_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid tenant_id") from exc
+    return tenant_uuid
+
+
+@export_router.get("/export", response_model=UserRosterExportOut)
+async def export_users(
+    tenant_id: str | None = None,
+    search: str = "",
+    current_user: UserRecord = Depends(get_current_user),
+) -> UserRosterExportOut:
+    """Generate a complete company roster CSV using the current literal search."""
+    tenant_uuid = _company_roster_tenant(tenant_id, current_user)
+    if await tenant_dao.get(tenant_uuid) is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return UserRosterExportOut(csv=await export_user_roster(tenant_uuid, search.strip(), current_user))
+
+
+@router.get("/page", response_model=UsersPageOut)
+async def list_users_page(
+    tenant_id: str | None = None,
+    search: str = "",
+    cursor: str | None = Query(default=None, max_length=1024),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: UserRecord = Depends(get_current_user),
+) -> UsersPageOut:
+    """Page company users, with admins first and null creation times last per group."""
+    tenant_uuid = _company_roster_tenant(tenant_id, current_user)
 
     normalized_search = search.strip()
     search_digest = sha256(normalized_search.encode()).hexdigest()
