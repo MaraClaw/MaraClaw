@@ -65,7 +65,7 @@ def _docker(monkeypatch: pytest.MonkeyPatch, *pull_lines: str, cached: bool = Tr
     return UpgradeDocker(client), daemon
 
 
-@pytest.mark.parametrize("reference", ["openclaw:2026.10.7", "openclaw"])
+@pytest.mark.parametrize("reference", ["openclaw:2026.10.8", "openclaw"])
 def test_local_image_returns_immutable_id_without_pulling(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
     # Given a cached local image distinct from the registry's image.
     docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}")
@@ -77,7 +77,7 @@ def test_local_image_returns_immutable_id_without_pulling(monkeypatch: pytest.Mo
     assert daemon.pulled == []
 
 
-@pytest.mark.parametrize("reference", ["openclaw:2026.10.7", "openclaw"])
+@pytest.mark.parametrize("reference", ["openclaw:2026.10.8", "openclaw"])
 def test_missing_local_image_requires_build_without_pulling(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
     # Given a local target absent from the worker's Docker daemon.
     docker, daemon = _docker(monkeypatch, f"Digest: {DIGEST}", cached=False)
