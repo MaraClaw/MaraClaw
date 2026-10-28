@@ -40,7 +40,7 @@ automatic recovery after lost admission or process crashes.
 `agent:main:hook:maraclaw:<conversation_id>` (message ID only when no conversation
 exists). Shared web and IM humans therefore select the same explicit guest key.
 
-Photon's `Dockerfile.openclaw` pins OpenClaw `2026.10.7`. Its packaged hook resolver and
+The guest image project's `Dockerfile.openclaw` pins OpenClaw `2026.10.7`. Its packaged hook resolver and
 dispatcher require **both** `sessionKey` and `sessionMode: persistent` to reuse
 the selected session; supplying a key alone still selects an isolated run.
 Engine configuration permits request session keys with bounded hook prefixes.
