@@ -1,7 +1,7 @@
 # app/services/linkup
 
 Engine-side Linkup key ring and HTTP proxy. Official skill packages are bundled
-in the Photon image; this package does not add function-calling tools.
+in the OpenClaw guest image; this package does not add function-calling tools.
 
 - `keys.py` - add/remove/list, cursor, quota cooldown
 - `client.py` - forward to api.linkup.so and rotate on quota; threads `agent_id` into analytics
