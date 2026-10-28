@@ -24,6 +24,8 @@ export async function runMergeConfirmationCases(harness) {
     await page.goto(`${base}users?company=${tenant}`)
     await page.getByRole('button', { name: 'Merge Operations', exact: true }).click()
     await page.context().setOffline(true)
+    // Deliver Query's window event before selection; intercepted routes can fulfill while offline.
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
     // When
     await panel(page).getByLabel('Destination department').selectOption(mergeDestinationId)
     // Then
@@ -34,6 +36,7 @@ export async function runMergeConfirmationCases(harness) {
     assert.equal(state.merges.length, 0)
     await harness.capture(page, 'merge-preview-offline')
     await page.context().setOffline(false)
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
     await expect(panel(page).locator('dd')).toHaveText(['2', '2', '1', '3', '4', '2'])
     await expect(checkbox(page)).not.toBeChecked()
     await expect(apply(page)).toBeDisabled()
@@ -43,7 +46,7 @@ export async function runMergeConfirmationCases(harness) {
     await harness.capture(page, 'merge-preview-reconnected-unconfirmed')
   })
 
-  for (const change of ['equal-count replacement', 'destination rename']) {
+  for (const change of ['equal-count replacement', 'destination rename', 'source description', 'destination description']) {
     await harness.scenario({ name: `stale ${change} refreshes preview and requires explicit new consent`, role: 'org_admin' }, async (page, state, base) => {
       // Given
       await review(page, state, base)
@@ -52,6 +55,8 @@ export async function runMergeConfirmationCases(harness) {
       state.mergeDetail = { code: 'department_merge_preview_changed' }
       state.mergePreviewGate = Promise.withResolvers()
       if (change === 'destination rename') state.directories[tenant].departments[1].name = 'Renamed engineering'
+      if (change === 'source description') state.directories[tenant].departments[0].description += '\n  '
+      if (change === 'destination description') state.directories[tenant].departments[1].description = '  Revised onboarding\nProduct support  '
       // When
       await apply(page).click()
       // Then
@@ -66,6 +71,10 @@ export async function runMergeConfirmationCases(harness) {
       state.mergePreviewGate.resolve()
       await expect(panel(page).locator('dd')).toHaveText(['2', '2', '1', '3', '4', '2'])
       if (change === 'destination rename') await expect(panel(page).getByText('“Operations” into “Renamed engineering”', { exact: true })).toBeVisible()
+      for (const [index, label] of [[0, 'Source description'], [1, 'Destination description (kept after merge)']]) {
+        const description = panel(page).getByText(label, { exact: true }).locator('..').locator('p').last()
+        assert.equal(await description.textContent(), state.directories[tenant].departments[index].description)
+      }
       await expect(checkbox(page)).not.toBeChecked()
       await expect(apply(page)).toBeDisabled()
       await page.keyboard.press('Enter')
@@ -83,6 +92,9 @@ export async function runMergeConfirmationCases(harness) {
       await expect(panel(page)).toHaveCount(0)
       assert.equal(state.merges.length, 2)
       assert.deepEqual(state.merges[1].payload, { destination_id: mergeDestinationId, confirmation_token: freshToken })
+      const kept = state.directories[tenant].departments.find((item) => item.id === mergeDestinationId)
+      const card = page.getByRole('list', { name: 'Departments', exact: true }).getByRole('listitem').filter({ has: page.getByRole('button', { name: `Merge ${kept.name}`, exact: true }) })
+      assert.equal(await card.locator('p').nth(1).textContent(), kept.description)
     })
   }
 
