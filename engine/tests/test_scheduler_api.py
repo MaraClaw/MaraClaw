@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -281,3 +281,92 @@ async def test_manual_receipt_projects_timestamps_without_private_fields(
     assert datetime.fromisoformat(created_at) == NOW
     assert (body["started_at"] is not None) is started
     assert (body["finished_at"] is not None) is finished
+
+
+@pytest.mark.parametrize("method", ["post", "patch"])
+@pytest.mark.parametrize("cutoff", ["2026-10-16T12:00:00", "2026-10-16", 1792152000, 1792152000.5, "1792152000", True])
+async def test_cutoff_rejects_non_offset_datetime_strings(
+    api: _HTTP, monkeypatch: pytest.MonkeyPatch, method: str, cutoff: object
+) -> None:
+    # Given a non-instant or a value that datetime coercion could treat as a timestamp.
+    path = api.url.rsplit("/", 1)[0] + "/" if method == "post" else api.url
+    create = AsyncMock(return_value=api.row)
+    monkeypatch.setattr(schedules.agent_schedule_dao, "create", create)
+    # When creating or updating through the JSON boundary.
+    response = await api.client.request(
+        method, path, json={"name": "Daily", "cron_expr": "0 12 * * *", "ends_at": cutoff}
+    )
+    # Then validation rejects it before writing.
+    assert response.status_code == 422
+    create.assert_not_awaited()
+    api.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("payload", [{"name": "Renamed"}, {"timezone": "Asia/Ho_Chi_Minh"}])
+async def test_patch_omission_preserves_cutoff_instant(api: _HTTP, payload: dict[str, object]) -> None:
+    # Given a saved cutoff whose offset differs from the recurrence timezone.
+    cutoff = datetime.fromisoformat("2026-10-18T17:00:00+05:30")
+    api.get_schedule.return_value = replace(api.row, ends_at=cutoff)
+    # When editing unrelated fields, including the recurrence timezone.
+    response = await api.client.patch(api.url, json=payload)
+    # Then omission never rewrites the instant.
+    assert response.status_code == 200
+    assert "ends_at" not in api.update.await_args_list[0].kwargs["obj_in"]
+
+
+async def test_cutoff_only_patch_retains_late_eligible_slot(api: _HTTP) -> None:
+    # Given an overdue occurrence that remains eligible even though the cutoff is past.
+    due_at = NOW - timedelta(days=2)
+    api.get_schedule.return_value = replace(api.row, next_run_at=due_at)
+    # When adding a cutoff without changing recurrence.
+    response = await api.client.patch(api.url, json={"ends_at": (NOW - timedelta(days=1)).isoformat()})
+    # Then the due occurrence is not silently replaced by a calculation from now.
+    assert response.status_code == 200
+    assert api.update.await_args_list[0].kwargs["obj_in"]["next_run_at"] == due_at
+
+
+@pytest.mark.parametrize("cutoff", [None, "2026-10-16T12:00:00Z", "2026-10-16T05:00:00-07:00"])
+async def test_create_round_trips_nullable_offset_cutoff(
+    api: _HTTP, monkeypatch: pytest.MonkeyPatch, cutoff: str | None
+) -> None:
+    # Given a valid future UTC instant represented with null, Z, or a negative offset.
+    expected = datetime.fromisoformat(cutoff) if cutoff is not None else None
+    create = AsyncMock(return_value=replace(api.row, ends_at=expected))
+    monkeypatch.setattr(schedules.agent_schedule_dao, "create", create)
+    # When creating through JSON.
+    response = await api.client.post(
+        api.url.rsplit("/", 1)[0] + "/", json={"name": "Daily", "cron_expr": "0 12 * * *", "ends_at": cutoff}
+    )
+    # Then the database receives a typed instant and the API serializes it without losing its offset.
+    assert response.status_code == 201
+    assert create.await_args_list[0].kwargs["obj_in"]["ends_at"] == expected
+    assert schedules.ScheduleOut.model_validate(response.json()).ends_at == expected
+
+
+@pytest.mark.parametrize(
+    "payload", [{"cron_expr": "0 13 * * *"}, {"timezone": "Asia/Ho_Chi_Minh"}, {"is_enabled": True}]
+)
+async def test_recurrence_patch_caps_future_at_saved_cutoff(
+    api: _HTTP, monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> None:
+    # Given a saved cutoff exactly at the newly computed recurrence.
+    api.get_schedule.return_value = replace(api.row, ends_at=NOW)
+    monkeypatch.setattr(schedules, "compute_next_run", lambda *_args, **_kwargs: NOW)
+    # When changing recurrence without supplying a new cutoff.
+    response = await api.client.patch(api.url, json=payload)
+    # Then equality exhausts only the future slot, not the schedule or current ownership.
+    assert response.status_code == 200
+    values = api.update.await_args_list[0].kwargs["obj_in"]
+    assert values["next_run_at"] is None
+    assert values.get("is_enabled", True) is True
+    assert "lease_token" not in values
+
+
+async def test_clear_cutoff_keeps_disabled_schedule_unscheduled(api: _HTTP) -> None:
+    # Given a disabled schedule with a finite cutoff and no next occurrence.
+    api.get_schedule.return_value = replace(api.row, is_enabled=False, next_run_at=None, ends_at=NOW)
+    # When removing the cutoff.
+    response = await api.client.patch(api.url, json={"ends_at": None})
+    # Then clearing does not implicitly enable it.
+    assert response.status_code == 200
+    assert api.update.await_args_list[0].kwargs["obj_in"] == {"ends_at": None, "next_run_at": None}

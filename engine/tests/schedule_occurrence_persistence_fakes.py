@@ -42,12 +42,18 @@ class _Cursor:
         if sql.startswith("SELECT"):
             if "FOR UPDATE SKIP LOCKED" in sql:
                 assert "WHERE is_enabled IS TRUE AND (" in sql
-                assert "(pending_due_at IS NULL AND next_run_at <= %(now)s)" in sql
+                assert "(pending_due_at IS NULL AND next_run_at <= %(now)s " in sql
+                assert "AND (ends_at IS NULL OR next_run_at < ends_at)) OR " in sql
                 assert "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)" in sql
                 now = params["now"]
                 assert isinstance(now, datetime)
                 for row in pool.rows.values():
-                    due = row.pending_due_at is None and row.next_run_at is not None and row.next_run_at <= now
+                    due = (
+                        row.pending_due_at is None
+                        and row.next_run_at is not None
+                        and row.next_run_at <= now
+                        and (row.ends_at is None or row.next_run_at < row.ends_at)
+                    )
                     expired = (
                         row.pending_due_at is not None
                         and row.lease_expires_at is not None

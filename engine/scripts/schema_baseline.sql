@@ -949,6 +949,7 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	notify_on_failure BOOLEAN NOT NULL DEFAULT false,
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
+	ends_at TIMESTAMP WITH TIME ZONE,
 	pending_due_at TIMESTAMP WITH TIME ZONE,
 	pending_instruction TEXT,
 	pending_notify_on_failure BOOLEAN,

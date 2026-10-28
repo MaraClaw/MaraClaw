@@ -24,6 +24,7 @@ class AgentScheduleRecord:
     notify_on_failure: bool = False
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
+    ends_at: datetime | None = None
     run_count: int = 0
     created_at: datetime | None = None
     timezone: str = "UTC"
@@ -47,6 +48,7 @@ class AgentScheduleRecord:
             notify_on_failure=bool(row.get("notify_on_failure", False)),
             last_run_at=datetime_from_row(row.get("last_run_at")),
             next_run_at=datetime_from_row(row.get("next_run_at")),
+            ends_at=datetime_from_row(row.get("ends_at")),
             run_count=int_from_row(row.get("run_count")),
             created_at=datetime_from_row(row.get("created_at")),
             timezone=str_from_row(row["timezone"]),

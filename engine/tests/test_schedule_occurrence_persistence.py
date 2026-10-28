@@ -178,6 +178,7 @@ async def test_start_and_finish_rollback_with_outer_transaction(pool: _Pool) -> 
 def test_record_restores_nullable_occurrence_fields_and_empty_instruction() -> None:
     row = replace(
         _schedule(),
+        ends_at=NEXT,
         pending_due_at=NOW,
         pending_instruction="",
         lease_token=uuid4(),

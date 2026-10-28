@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import Annotated, ClassVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic_core import PydanticCustomError
 
 from app.core.json_types import json_as_bool, json_as_str_or, object_mapping_from
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
@@ -34,6 +35,15 @@ router = APIRouter(prefix="/agents/{agent_id}/schedules", tags=["schedules"])
 ScheduleTimezone = Annotated[str, AfterValidator(validate_timezone)]
 
 
+def _cutoff_datetime(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise PydanticCustomError("datetime_string", "Input must be an offset-bearing datetime string")
+    return datetime.fromisoformat(value)
+
+
+ScheduleCutoff = Annotated[AwareDatetime, BeforeValidator(_cutoff_datetime)]
+
+
 class ScheduleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     instruction: str = Field(default="", max_length=5000)
@@ -41,6 +51,7 @@ class ScheduleCreate(BaseModel):
     timezone: ScheduleTimezone = "UTC"
     is_enabled: bool = True
     notify_on_failure: bool = False
+    ends_at: ScheduleCutoff | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -50,6 +61,7 @@ class ScheduleUpdate(BaseModel):
     timezone: ScheduleTimezone = "UTC"
     is_enabled: bool | None = None
     notify_on_failure: bool = False
+    ends_at: ScheduleCutoff | None = None
 
 
 class ScheduleOut(BaseModel):
@@ -63,6 +75,7 @@ class ScheduleOut(BaseModel):
     notify_on_failure: bool
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
+    ends_at: datetime | None = None
     run_count: int
     created_by: uuid.UUID | None = None
     creator_username: str | None = None
@@ -107,7 +120,9 @@ async def create_schedule(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can manage schedules")
 
-    next_run = _validated_next_run(data.cron_expr, data.timezone)
+    next_run: datetime | None = _validated_next_run(data.cron_expr, data.timezone)
+    if data.ends_at is not None and next_run >= data.ends_at:
+        next_run = None
 
     sched = await agent_schedule_dao.create(
         obj_in={
@@ -118,6 +133,7 @@ async def create_schedule(
             "timezone": data.timezone,
             "is_enabled": data.is_enabled,
             "notify_on_failure": data.notify_on_failure,
+            "ends_at": data.ends_at,
             "next_run_at": next_run if data.is_enabled else None,
             "created_by": current_user.id,
             "run_count": 0,
@@ -138,12 +154,14 @@ async def update_schedule(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can manage schedules")
 
-    sched = await agent_schedule_dao.get_for_agent(schedule_id, agent_id)
+    sched = await agent_schedule_dao.get_for_agent(schedule_id, agent_id, for_update=True)
     if not sched:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    updates = object_mapping_from(data.model_dump(exclude_unset=True))
-    if "cron_expr" in updates or "is_enabled" in updates or "timezone" in updates:
+    updates: dict[str, object] = object_mapping_from(data.model_dump(exclude_unset=True))
+    recurrence_changed = "cron_expr" in updates or "is_enabled" in updates or "timezone" in updates
+    next_run = sched.next_run_at
+    if recurrence_changed:
         is_enabled = (
             sched.is_enabled if "is_enabled" not in updates else json_as_bool(updates["is_enabled"], sched.is_enabled)
         )
@@ -156,7 +174,16 @@ async def update_schedule(
             if is_enabled or "cron_expr" in updates or "timezone" in updates
             else None
         )
-        updates["next_run_at"] = next_run if is_enabled else None
+        if not is_enabled:
+            next_run = None
+    elif "ends_at" in updates and sched.is_enabled and next_run is None:
+        next_run = _validated_next_run(sched.cron_expr, sched.timezone)
+
+    ends_at = data.ends_at if "ends_at" in updates else sched.ends_at
+    if "ends_at" in updates:
+        updates["ends_at"] = data.ends_at
+    if recurrence_changed or "ends_at" in updates:
+        updates["next_run_at"] = next_run if next_run is None or ends_at is None or next_run < ends_at else None
 
     updated = await agent_schedule_dao.update(db_obj=sched, obj_in=updates)
     return ScheduleOut.model_validate(updated)

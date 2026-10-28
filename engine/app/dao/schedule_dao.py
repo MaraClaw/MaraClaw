@@ -22,6 +22,7 @@ _COLUMNS = (
     "notify_on_failure",
     "last_run_at",
     "next_run_at",
+    "ends_at",
     "run_count",
     "created_by",
     "created_at",
@@ -70,10 +71,13 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
 
-    async def get_for_agent(self, schedule_id: UUID, agent_id: UUID) -> AgentScheduleRecord | None:
+    async def get_for_agent(
+        self, schedule_id: UUID, agent_id: UUID, *, for_update: bool = False
+    ) -> AgentScheduleRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM agent_schedules WHERE id = %(id)s AND agent_id = %(agent_id)s",
+                f"SELECT {self._select_list()} FROM agent_schedules WHERE id = %(id)s AND agent_id = %(agent_id)s"
+                + (" FOR UPDATE" if for_update else ""),
                 {"id": schedule_id, "agent_id": agent_id},
             )
             return AgentScheduleRecord.from_row(row) if row is not None else None
@@ -82,7 +86,8 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
-                "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s",
+                "WHERE is_enabled IS TRUE AND next_run_at <= %(now)s "
+                "AND (ends_at IS NULL OR next_run_at < ends_at)",
                 {"now": now},
             )
             return [AgentScheduleRecord.from_row(row) for row in rows]
@@ -96,7 +101,8 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_schedules "
                 "WHERE is_enabled IS TRUE AND ("
-                "(pending_due_at IS NULL AND next_run_at <= %(now)s) OR "
+                "(pending_due_at IS NULL AND next_run_at <= %(now)s "
+                "AND (ends_at IS NULL OR next_run_at < ends_at)) OR "
                 "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)) FOR UPDATE SKIP LOCKED",
                 {"now": now},
             )
@@ -125,7 +131,9 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
                         "pending_notify_on_failure = notify_on_failure, pending_started_at = NULL, "
                         "next_run_at = %(next_run_at)s"
                     )
-                    values["next_run_at"] = next_run
+                    values["next_run_at"] = (
+                        next_run if schedule.ends_at is None or next_run < schedule.ends_at else None
+                    )
                 claimed_row = await db.fetchone(
                     f"UPDATE agent_schedules SET {assignments} WHERE id = %(id)s RETURNING {self._select_list()}",
                     values,
