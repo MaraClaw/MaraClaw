@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createScheduleDraft, scheduleChanges } from '../src/lib/schedule-editor.ts'
+import { createScheduleDraft, scheduleChanges, scheduleEndFromInput, scheduleEndInput } from '../src/lib/schedule-editor.ts'
 
 const original = { name: 'Report', cron_expr: '0 9 * * *', instruction: 'Summarize', timezone: 'Asia/Shanghai', notify_on_failure: false }
 
@@ -16,6 +16,44 @@ for (const timezone of [null, undefined, 'Etc/GMT-7', 'America/New_York', 'Asia/
     // Then
     assert.deepEqual(draft, { name: '', cron_expr: '0 9 * * 1-5', instruction: '', timezone: timezone ?? 'UTC', notify_on_failure: false })
     assert.notEqual(draft, createScheduleDraft(timezone))
+  })
+}
+
+for (const ends_at of [undefined, null, '2030-01-16T09:30:45.123456+08:00']) {
+  test(`unrelated edits omit an unchanged ${String(ends_at)} cutoff`, () => {
+    // Given
+    const saved = { ...original, ends_at }
+    // When / Then
+    assert.deepEqual(scheduleChanges(saved, { ...saved, timezone: 'America/New_York' }), { timezone: 'America/New_York' })
+  })
+}
+
+test('cutoff can be added, replaced, and explicitly cleared without resending other fields', () => {
+  // Given
+  const saved = { ...original, ends_at: '2030-01-16T01:30:00Z' }
+  // When / Then
+  assert.deepEqual(scheduleChanges(original, saved), { ends_at: saved.ends_at })
+  assert.deepEqual(scheduleChanges(saved, { ...saved, ends_at: '2031-01-01T00:00:00Z' }), { ends_at: '2031-01-01T00:00:00Z' })
+  assert.deepEqual(scheduleChanges(saved, { ...saved, ends_at: null }), { ends_at: null })
+  assert.deepEqual(scheduleChanges(original, { ...original, ends_at: null }), {})
+})
+
+test('UTC input represents the saved absolute instant, not the cron or browser timezone', () => {
+  // Given / When / Then
+  assert.equal(scheduleEndInput('2030-01-16T09:30:45.123456+08:00'), '2030-01-16T01:30:45.123')
+  assert.equal(scheduleEndInput('2030-01-16T09:30:00+08:00'), '2030-01-16T01:30')
+  assert.equal(scheduleEndInput('2030-01-16T01:30:45.100Z'), '2030-01-16T01:30:45.1')
+  assert.equal(scheduleEndInput(null), '')
+  assert.equal(scheduleEndInput(undefined), '')
+  assert.equal(scheduleEndFromInput('2030-01-16T01:30'), '2030-01-16T01:30:00Z')
+  assert.equal(scheduleEndFromInput('2030-01-16T01:30:45.123'), '2030-01-16T01:30:45.123Z')
+  assert.equal(scheduleEndFromInput(''), null)
+})
+
+for (const input of ['invalid', '2030-02-30T01:30', '2030-01-16', '2030-01-16T01:30Z', '2030-01-16T01:30+08:00']) {
+  test(`UTC input rejects malformed or already-zoned ${JSON.stringify(input)}`, () => {
+    // Given / When / Then
+    assert.equal(scheduleEndFromInput(input), undefined)
   })
 }
 

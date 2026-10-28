@@ -5,6 +5,7 @@ import { apiRequest } from './http.ts'
 const scheduleFields = z.object({
   name: z.string(), instruction: z.string(), cron_expr: z.string(),
   timezone: z.string(), is_enabled: z.boolean(), notify_on_failure: z.boolean(),
+  ends_at: z.iso.datetime({ offset: true }).nullable().optional(),
 })
 const scheduleSchema = scheduleFields.extend({
   id: z.string(), next_run_at: z.string().nullable().optional(), last_run_at: z.string().nullable().optional(),

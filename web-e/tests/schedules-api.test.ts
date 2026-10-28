@@ -186,3 +186,64 @@ for (const response of [
     await assert.rejects(() => listScheduleHistoryPage('agent', 'schedule'))
   })
 }
+
+for (const ends_at of [null, '2030-01-16T01:30:00Z', '2030-01-16T09:30:45.123456+08:00']) {
+  test(`cutoff ${String(ends_at)} survives creation and reload`, async (context) => {
+    // Given
+    const schedule = { ...saved, ends_at }
+    context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+      if (init.method === 'POST') {
+        assert.equal(JSON.parse(String(init.body)).ends_at, ends_at)
+        return Response.json(schedule)
+      }
+      return Response.json([schedule])
+    })
+    // When
+    const created = await createSchedule('agent', schedule)
+    const reloaded = await listSchedules('agent')
+    // Then
+    assert.deepEqual(created, schedule)
+    assert.deepEqual(reloaded, [schedule])
+  })
+
+  test(`cutoff-only patch sends explicit ${String(ends_at)}`, async (context) => {
+    // Given
+    context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+      assert.deepEqual(JSON.parse(String(init.body)), { ends_at })
+      return Response.json({ ...saved, ends_at })
+    })
+    // When / Then
+    assert.equal((await updateSchedule('agent', saved.id, { ends_at })).ends_at, ends_at)
+  })
+}
+
+test('unrelated patch omits and preserves a saved cutoff', async (context) => {
+  // Given
+  const schedule = { ...saved, ends_at: '2030-01-16T09:30:45.123456+08:00' }
+  context.mock.method(globalThis, 'fetch', async (_path: string, init: RequestInit) => {
+    assert.deepEqual(JSON.parse(String(init.body)), { timezone: 'UTC' })
+    return Response.json({ ...schedule, timezone: 'UTC' })
+  })
+  // When / Then
+  assert.equal((await updateSchedule('agent', saved.id, { timezone: 'UTC' })).ends_at, schedule.ends_at)
+})
+
+for (const ends_at of ['2030-01-16T01:30:00', '2030-02-30T01:30:00Z', '', 1894757400, false]) {
+  test(`read rejects malformed cutoff ${JSON.stringify(ends_at)}`, async (context) => {
+    // Given
+    context.mock.method(globalThis, 'fetch', async () => Response.json([{ ...saved, ends_at }]))
+    // When / Then
+    await assert.rejects(() => listSchedules('agent'))
+  })
+}
+
+for (const ends_at of ['2030-01-16T01:30:00', '2030-02-30T01:30:00Z', '', 1894757400]) {
+  test(`write rejects malformed cutoff ${JSON.stringify(ends_at)} before HTTP`, async (context) => {
+    // Given
+    const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json(saved))
+    // When / Then
+    await assert.rejects(() => Reflect.apply(createSchedule, undefined, ['agent', { ...saved, ends_at }]))
+    await assert.rejects(() => Reflect.apply(updateSchedule, undefined, ['agent', saved.id, { ends_at }]))
+    assert.equal(fetch.mock.callCount(), 0)
+  })
+}
