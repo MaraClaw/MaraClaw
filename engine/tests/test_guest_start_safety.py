@@ -6,6 +6,7 @@ import builtins
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Unpack
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -76,6 +77,7 @@ def env(tmp_path, monkeypatch):
     docker = Docker()
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
+    monkeypatch.setattr(manager, "_prepare_linkup_proxy_token", AsyncMock())
     agent = AgentRecord(
         id=uuid4(),
         name="guest",
@@ -113,6 +115,38 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     # Then no runtime reference or old guest was destroyed.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == []
+
+
+async def test_token_persistence_failure_precedes_guest_mutation(env, monkeypatch):
+    manager, docker, agent = env
+
+    async def fail(_agent_id):
+        raise RuntimeError("persistence failed")
+
+    monkeypatch.setattr(manager, "_prepare_linkup_proxy_token", fail, raising=False)
+    materialize = AsyncMock()
+    monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
+    with pytest.raises(RuntimeError, match="persistence failed"):
+        await manager.replace_container(agent)
+    materialize.assert_not_awaited()
+    assert docker.removed == docker.runs == []
+
+
+async def test_no_docker_does_not_issue_token(env, monkeypatch):
+    manager, _docker, agent = env
+    monkeypatch.setattr(manager, "docker_client", None)
+    assert await manager.replace_container(agent) is None
+    manager._prepare_linkup_proxy_token.assert_not_awaited()
+
+
+async def test_disabled_proxy_does_not_issue_token(env, monkeypatch):
+    manager, _docker, agent = env
+    monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.delattr(manager, "_prepare_linkup_proxy_token")
+    issue = AsyncMock()
+    monkeypatch.setattr("app.services.linkup.tokens.make_proxy_token", issue)
+    await manager._prepare_linkup_proxy_token(agent.id)
+    issue.assert_not_awaited()
 
 
 @pytest.mark.parametrize("missing", ["state", "host_config"])

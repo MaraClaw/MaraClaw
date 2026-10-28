@@ -48,6 +48,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
             resume = state.status in ("exited", "created")
             if resume and (host_config is None or host_config.memory is None):
                 raise GuestAdmissionError("guest_memory_unbounded", "Guest has no hard memory limit")
+            await manager._prepare_linkup_proxy_token(agent.id)
             async with AsyncExitStack() as stack:
                 if resume:
                     await stack.enter_async_context(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import Response
 
@@ -31,7 +33,9 @@ async def proxy_v1(
         raise HTTPException(status_code=404, detail="Unknown Linkup path")
     token = _bearer_token(authorization)
     agent_id = parse_proxy_token(token)
-    if agent_id is None or not await agent_available(agent_id):
+    if agent_id is None or not await agent_available(
+        agent_id, sha256(f"{agent_id}.{token.split('.', 1)[1]}".encode()).digest()
+    ):
         raise HTTPException(status_code=401, detail="Invalid Linkup proxy token")
 
     body = await request.body()

@@ -9,7 +9,6 @@
   "reportAny": "error",
   "exclude": [
     "**/skill_creator_files/**",
-    "**/linkup_skill_files/**",
     "**/__pycache__/**",
     ".venv/**",
     "agent_template/**",

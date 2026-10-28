@@ -44,7 +44,7 @@ from app.services.guest_identity import (
 )
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
-from app.services.linkup_runtime import linkup_default_skill_folder_names
+from app.services.linkup_runtime import LINKUP_SEARCH_SKILL_FOLDER, linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
 from app.services.openclaw_inbox import (
     ensure_openclaw_tokens,
@@ -508,12 +508,12 @@ class AgentManager:
 
         linkup_skill_env: JsonObject = {}
         if settings.LINKUP_PROXY_ENABLED:
-            from app.services.linkup.tokens import make_proxy_token
+            from app.services.linkup.tokens import _proxy_token
 
             linkup_skill_env["LINKUP_API_BASE"] = (
                 settings.LINKUP_PROXY_BASE_URL.strip().rstrip("/") or f"{guest_engine_base_url()}/api/linkup"
             )
-            linkup_skill_env["LINKUP_PROXY_TOKEN"] = make_proxy_token(agent.id)
+            linkup_skill_env["LINKUP_PROXY_TOKEN"] = _proxy_token(agent.id)
         config["skills"] = {
             "entries": {
                 folder_name: {
@@ -534,6 +534,14 @@ class AgentManager:
         }
 
         return config
+
+    async def _prepare_linkup_proxy_token(self, agent_id: uuid.UUID) -> None:
+        if settings.LINKUP_PROXY_ENABLED:
+            from app.services.agent_start_store import committed_start_connection
+            from app.services.linkup.tokens import make_proxy_token
+
+            async with committed_start_connection():
+                await make_proxy_token(agent_id)
 
     async def start_container(
         self, agent: AgentRecord, *, image: str | None = None, rehydrate: bool = True
@@ -568,6 +576,7 @@ class AgentManager:
             agent.last_active_at = datetime.now(UTC)
             return None
 
+        await self._prepare_linkup_proxy_token(agent.id)
         original = agent
         try:
             if rehydrate:
@@ -631,6 +640,10 @@ class AgentManager:
                 "MARACLAW_API_BASE": guest_engine_base_url(),
                 **gogcli_envs,
             }
+            skill_entries = json_object_from(json_object_from(config["skills"])["entries"])
+            linkup_skill = json_object_from(skill_entries[LINKUP_SEARCH_SKILL_FOLDER])
+            linkup_env = json_object_from(linkup_skill["env"])
+            container_envs.update({key: value for key, value in linkup_env.items() if isinstance(value, str)})
             gateway_key = _read_gateway_key_file(agent_dir)
             if gateway_key not in (None, ""):
                 container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
@@ -651,17 +664,9 @@ class AgentManager:
             def run_container(container_port: int) -> Container:
                 return client.run(
                     guest_image,
-                    [
-                        "-s",
-                        "--",
-                        "/usr/local/bin/bootstrap-officecli.sh",
-                        "/usr/local/bin/validate-gogcli.sh",
-                        "openclaw",
-                        "gateway",
-                    ],
+                    ["openclaw", "gateway"],
                     detach=True,
                     name=guest_container_name(agent.id),
-                    entrypoint="tini",
                     networks=[settings.DOCKER_NETWORK],
                     publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
                     volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],

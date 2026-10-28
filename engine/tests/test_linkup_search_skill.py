@@ -1,35 +1,26 @@
-"""Gating tests for Linkup skill seed and removal of built-in search-engine tools."""
+"""Gating tests for Linkup configuration and removal of built-in search-engine tools."""
 
 from __future__ import annotations
 
 import json
-import re
-import shlex
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
 from app.config import Settings
-from app.core.json_types import json_as_str_or, json_loads_object, json_object_from, str_list_from_row
+from app.core.json_types import json_as_str_or, json_object_from, str_list_from_row
 from app.records.agent import AgentRecord
-from app.services import agent_manager as agent_manager_module, linkup_runtime
+from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import AgentManager
 from app.services.agent_tool_exec import registry
 from app.services.agent_tools_definitions import AGENT_TOOLS
 from app.services.linkup.tokens import parse_proxy_token
 from app.services.linkup_runtime import (
-    LINKUP_EXTRACT_SKILL_FOLDER,
     LINKUP_FETCH_SKILL_FOLDER,
-    LINKUP_RESEARCH_SKILL_FOLDER,
     LINKUP_SEARCH_SKILL_FOLDER,
     linkup_default_skill_folder_names,
-    linkup_skill_folder_names,
-    linkup_skill_root,
-    load_linkup_manifest,
-    seed_linkup_skills,
 )
 from app.services.tool_definitions import BUILTIN_TOOLS
 from app.services.tool_seeder import SYNC_IS_DEFAULT_TOOL_NAMES
@@ -37,8 +28,6 @@ from app.services.tool_seeder import SYNC_IS_DEFAULT_TOOL_NAMES
 DEFAULT_LINKUP_SKILLS = (
     LINKUP_SEARCH_SKILL_FOLDER,
     LINKUP_FETCH_SKILL_FOLDER,
-    LINKUP_RESEARCH_SKILL_FOLDER,
-    LINKUP_EXTRACT_SKILL_FOLDER,
 )
 
 REMOVED_SEARCH_TOOL_NAMES = (
@@ -80,74 +69,10 @@ def importlib_agent_tools() -> None:
     importlib.import_module("app.services.agent_tools")
 
 
-def _shell_requests(content: str) -> list[list[str]]:
-    return [
-        shlex.split(command.replace("\\\n", ""))
-        for block in re.findall(r"```shell\n(.*?)```", content, re.DOTALL)
-        for command in block.strip().split("\n\n")
-    ]
+def test_linkup_defaults_are_available_without_local_skill_directories(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "is_dir", lambda _path: False)
 
-
-@pytest.mark.parametrize("folder_name", DEFAULT_LINKUP_SKILLS)
-def test_official_linkup_skill_payload_calls_authenticated_proxy(folder_name: str) -> None:
-    manifest = load_linkup_manifest()
-    skill_text = (linkup_skill_root() / folder_name / "SKILL.md").read_text(encoding="utf-8")
-
-    requests = _shell_requests(skill_text)
-
-    assert folder_name in str_list_from_row(manifest.get("skills"))
-    assert folder_name in str_list_from_row(manifest.get("default_skills"))
-    assert folder_name in linkup_skill_folder_names()
-    assert folder_name in linkup_default_skill_folder_names()
-    assert linkup_runtime._frontmatter_value(skill_text, "name", "") == folder_name
-    endpoint = folder_name.removeprefix("linkup-")
-    assert requests
-    for request in requests:
-        assert request[0] == "curl"
-        urls = [arg for arg in request if arg.startswith(("$LINKUP_API_BASE", "https://", "http://"))]
-        assert len(urls) == 1
-        assert urls[0] == f"$LINKUP_API_BASE/v1/{endpoint}" or urls[0].startswith(f"$LINKUP_API_BASE/v1/{endpoint}/")
-        headers = [request[index + 1] for index, arg in enumerate(request) if arg == "-H"]
-        assert "Authorization: Bearer $LINKUP_PROXY_TOKEN" in headers
-    submission = requests[0]
-    assert submission[submission.index("-X") + 1] == "POST"
-    body = json_loads_object(submission[submission.index("-d") + 1])
-    assert ("q" if endpoint in {"search", "research"} else "url") in body
-
-
-@pytest.mark.asyncio
-async def test_seed_linkup_skills_upserts_official_default_package(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: the real seeder path with a captured skill_dao.
-    upserts: list[dict[str, Any]] = []
-
-    async def fake_get_by_folder_name(_folder_name: str):
-        return None
-
-    async def fake_upsert_skill_package(**kwargs):
-        upserts.append(kwargs)
-        return SimpleNamespace(id=uuid4(), folder_name=kwargs["folder_name"])
-
-    monkeypatch.setattr(linkup_runtime.skill_dao, "get_by_folder_name", fake_get_by_folder_name)
-    monkeypatch.setattr(linkup_runtime.skill_dao, "upsert_skill_package", fake_upsert_skill_package)
-
-    # When
-    processed = await seed_linkup_skills()
-
-    # Then
-    assert processed == len(DEFAULT_LINKUP_SKILLS)
-    assert {item["folder_name"] for item in upserts} == set(DEFAULT_LINKUP_SKILLS)
-    by_folder = {item["folder_name"]: item for item in upserts}
-    for folder_name in DEFAULT_LINKUP_SKILLS:
-        package = by_folder[folder_name]
-        assert package["name"] == folder_name
-        assert package["is_builtin"] is True
-        assert package["is_default"] is True
-        files = dict(package["files"])
-        assert files["SKILL.md"] == (linkup_skill_root() / folder_name / "SKILL.md").read_text(encoding="utf-8")
-        assert _shell_requests(files["SKILL.md"])
-        assert any(path.startswith("references/") for path in files)
+    assert linkup_default_skill_folder_names() == list(DEFAULT_LINKUP_SKILLS)
 
 
 @pytest.mark.parametrize("upstream_key", ["", "lk_raw_must_not_leak"])

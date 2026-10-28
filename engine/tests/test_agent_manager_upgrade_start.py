@@ -4,6 +4,7 @@ import json
 import uuid
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pywhales.exceptions import NoSuchContainer
@@ -46,6 +47,7 @@ class _Env:
         self.materialized: list[uuid.UUID] = []
         self.restored: list[uuid.UUID] = []
         monkeypatch.setattr(self.manager, "docker_client", self.docker, raising=False)
+        monkeypatch.setattr(self.manager, "_prepare_linkup_proxy_token", AsyncMock())
         monkeypatch.setattr(self.manager, "_agent_dir", lambda _id: self.agent_dir)
         monkeypatch.setattr(agent_manager_module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
         monkeypatch.setattr(agent_manager_module.settings, "GOGCLI_ENABLED", True)

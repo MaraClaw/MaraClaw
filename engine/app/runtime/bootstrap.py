@@ -51,11 +51,9 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.warning("[startup] Agent templates seed failed: {}", exc)
     try:
-        from app.services.linkup_runtime import seed_linkup_skills
         from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
 
         _ = await seed_skills()
-        _ = await seed_linkup_skills()
         _ = await push_default_skills_to_existing_agents()
     except Exception as exc:
         logger.warning("[startup] Skills seed failed: {}", exc)

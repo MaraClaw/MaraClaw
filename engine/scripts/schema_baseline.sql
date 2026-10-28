@@ -675,6 +675,11 @@ CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
 
+CREATE TABLE IF NOT EXISTS linkup_proxy_tokens (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) = 32)
+);
+
 CREATE TABLE IF NOT EXISTS company_transfer_retained_agents (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE RESTRICT,
     transfer_request_id UUID NOT NULL REFERENCES company_transfer_requests(id) ON DELETE RESTRICT,
