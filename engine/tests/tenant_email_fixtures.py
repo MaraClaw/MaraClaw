@@ -41,14 +41,14 @@ class SMTPAdmin:
 def smtp_admin(monkeypatch: pytest.MonkeyPatch) -> SMTPAdmin:
     own = TenantRecord(uuid4(), "Company", "company")
     mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=True)
-    openclaw = TenantRecord(uuid4(), "OpenClaw", "openclaw", is_system=True)
+    kabers = TenantRecord(uuid4(), "KABERs", "kabers", is_system=True)
     identity = IdentityRecord(id=uuid4(), email="admin@example.com")
     actor = UserRecord(id=uuid4(), tenant_id=own.id, role=UserRole.ORG_ADMIN, identity=identity, is_genesis=True)
     app = FastAPI()
     app.include_router(tenant_email.router, prefix="/api")
     app.include_router(enterprise.router, prefix="/api")
     app.include_router(notification.router, prefix="/api")
-    state = SMTPAdmin(actor, actor, own.id, app, {row.id: row for row in (own, mara, openclaw)})
+    state = SMTPAdmin(actor, actor, own.id, app, {row.id: row for row in (own, mara, kabers)})
     app.dependency_overrides[get_current_user] = lambda: state.actor
 
     async def get(tenant_id: UUID) -> JsonObject:

@@ -11,7 +11,7 @@ const company = {
   id: 'c919ad90-90be-4a1d-b699-1d02138b7f45', name: 'Example Company', slug: 'example',
   im_provider: 'none', is_active: true,
 }
-const fallback = { ...company, id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
+const fallback = { ...company, id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'KABERs', slug: 'kabers' }
 const originalUser: UserOut = {
   id: 'a4ad792f-8901-44f0-a9b6-8947da623f38', email: 'member@example.test',
   display_name: 'Original member', role: 'member', tenant_id: null, email_verified: true,

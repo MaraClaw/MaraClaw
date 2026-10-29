@@ -103,13 +103,13 @@ async def test_broadcast_attempt_routes_real_tenant_smtp_and_stable_message_id(
 
 
 async def test_identity_delivery_uses_saved_maraclaw_smtp_on_the_wire(broadcast_db: PersistenceDB, smtp_sink: SMTPSink):
-    # Given real MaraClaw and OpenClaw organizations with distinct saved transports.
-    mara, openclaw = await tenant(broadcast_db), await tenant(broadcast_db)
+    # Given real MaraClaw and KABERs organizations with distinct saved transports.
+    mara, kabers = await tenant(broadcast_db), await tenant(broadcast_db)
     await broadcast_db.admin.execute(
         "UPDATE tenants SET slug = 'maraclaw', is_system = TRUE WHERE id = %(id)s", {"id": mara}
     )
     await broadcast_db.admin.execute(
-        "UPDATE tenants SET slug = 'openclaw', is_system = TRUE WHERE id = %(id)s", {"id": openclaw}
+        "UPDATE tenants SET slug = 'kabers', is_system = TRUE WHERE id = %(id)s", {"id": kabers}
     )
     await tenant_email_dao.put(
         mara,
@@ -126,9 +126,9 @@ async def test_identity_delivery_uses_saved_maraclaw_smtp_on_the_wire(broadcast_
         ),
     )
     await tenant_email_dao.put(
-        openclaw,
+        kabers,
         email_config.stored_settings(
-            TenantEmailUpdate(enabled=True, smtp_host="openclaw.example.com", from_address="openclaw@example.com"),
+            TenantEmailUpdate(enabled=True, smtp_host="kabers.example.com", from_address="kabers@example.com"),
             {},
             public_only=False,
         ),

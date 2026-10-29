@@ -4,7 +4,7 @@ import type { NotificationRow } from '../src/lib/notifications-api'
 import { completedOnboarding } from './admission-access-fixture'
 
 const tokenKey = 'maraclaw-enduser-token'
-const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
+const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'KABERs', slug: 'kabers' }
 const target = { id: 'c919ad90-90be-4a1d-b699-1d02138b7f45', name: 'Example Company', slug: 'example' }
 const member = { id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db', display_name: 'Source member', email: 'member@example.test', tenant_id: source.id, role: 'member', email_verified: true, is_active: true, created_at: '2026-10-25T08:00:00Z' }
 const pending: AdmissionDetail = {
@@ -219,7 +219,7 @@ test('a refused approved-workspace switch leaves the source session usable', asy
 })
 
 for (const verified of [true, false]) {
-  test(`registration with an admission retains OpenClaw and ${verified ? 'opens its status' : 'preserves email verification'}`, async ({ page }) => {
+  test(`registration with an admission retains KABERs and ${verified ? 'opens its status' : 'preserves email verification'}`, async ({ page }) => {
     // Given
     const calls = await prepare(page)
     await page.addInitScript((key) => localStorage.removeItem(key), tokenKey)

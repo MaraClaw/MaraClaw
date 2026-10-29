@@ -64,7 +64,7 @@ async def test_get_returns_exact_empty_draft_contract(smtp_admin: SMTPAdmin):
     }
 
 
-@pytest.mark.parametrize("system_slug", ["maraclaw", "openclaw"])
+@pytest.mark.parametrize("system_slug", ["maraclaw", "kabers"])
 @pytest.mark.parametrize("method", ["GET", "PUT", "DELETE", "POST"])
 async def test_system_org_boundary(smtp_admin: SMTPAdmin, system_slug: str, method: str, monkeypatch):
     # Given the own genesis admin in either system organization.

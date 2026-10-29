@@ -20,7 +20,7 @@ const company = (id, name, extra = {}) => ({
   user_count: 20, active_user_count: 19, inactive_user_count: 1, agent_count: 8,
   org_admin_email: null, ...extra,
 })
-const initial = [company('alpha', 'Alpha Labs'), company('beta', 'Beta Works'), company('system', 'MaraClaw', { is_system: true }), company('default', 'OpenClaw', { is_default_end_user_org: true })]
+const initial = [company('alpha', 'Alpha Labs'), company('beta', 'Beta Works'), company('system', 'MaraClaw', { is_system: true }), company('default', 'KABERs', { is_default_end_user_org: true })]
 const admin = {
   id: 'operator', identity_id: 'identity', email: 'operator@example.test',
   display_name: 'Operator', avatar_url: null, role: 'platform_admin', is_platform_admin: true,
@@ -239,7 +239,7 @@ try {
     })
   }
 
-  for (const [id, name] of [['system', 'MaraClaw'], ['default', 'OpenClaw']]) await scenario(`protected ${id} company does not offer deletion`, async (page) => {
+  for (const [id, name] of [['system', 'MaraClaw'], ['default', 'KABERs']]) await scenario(`protected ${id} company does not offer deletion`, async (page) => {
     // Given / When
     await page.goto(`${base}companies/${id}`)
     // Then
