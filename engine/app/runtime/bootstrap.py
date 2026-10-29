@@ -5,16 +5,14 @@ from app.core.logging import logger
 
 async def bootstrap() -> None:
     from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
-    from app.services.system_org_seeder import SystemOrgSeedError, ensure_system_orgs
+    from app.services.system_org_seeder import ensure_system_orgs
     from app.services.transfer_policy import seed_transfer_policy
 
     try:
         _ = await ensure_system_orgs()
-    except SystemOrgSeedError:
-        logger.error("[startup] System organization seed failed: no default end-user org")
-        raise
     except Exception as exc:
-        logger.warning("[startup] System organization seed failed: {}", exc)
+        logger.error("[startup] System organization seed failed: {}", exc)
+        raise
     try:
         _ = await ensure_platform_admin()
     except PlatformAdminSeedError:

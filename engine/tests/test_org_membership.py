@@ -55,62 +55,102 @@ def test_normalize_email_domain_rejects_junk(raw):
 
 
 @pytest.mark.asyncio
-async def test_place_new_registration_claimed_domain_still_joins_openclaw(monkeypatch):
+async def test_place_new_registration_claimed_domain_waits_for_initial_admission(monkeypatch):
     acme = _tenant()
-    openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    kabers = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True)
     claim = SimpleNamespace(tenant_id=acme.id)
     monkeypatch.setattr(membership.tenant_email_domain_dao, "get_by_domain", AsyncMock(return_value=claim))
     monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(return_value=acme))
-    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=kabers))
 
     placed = await membership.place_new_registration(email="ada@acme.com")
-    assert placed.needs_org_confirm is False
-    assert placed.tenant_id == openclaw.id
-    assert placed.suggested is None
+    assert placed.needs_org_confirm is True
+    assert placed.tenant_id is None
+    assert placed.suggested is acme
 
 
 @pytest.mark.asyncio
-async def test_place_new_registration_autojoins_openclaw(monkeypatch):
-    openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+async def test_place_new_registration_autojoins_kabers(monkeypatch):
+    kabers = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True)
     monkeypatch.setattr(membership.tenant_email_domain_dao, "get_by_domain", AsyncMock(return_value=None))
-    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=kabers))
 
     placed = await membership.place_new_registration(email="bob@gmail.com")
     assert placed.needs_org_confirm is False
-    assert placed.tenant_id == openclaw.id
+    assert placed.tenant_id == kabers.id
 
 
 @pytest.mark.asyncio
-async def test_place_new_registration_invite_stays_in_openclaw(monkeypatch):
+async def test_place_new_registration_invite_stays_in_kabers(monkeypatch):
     invited = _tenant()
-    openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    kabers = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True)
     code = SimpleNamespace(tenant_id=invited.id, used_count=0, max_uses=5)
     monkeypatch.setattr(membership.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
     monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(return_value=invited))
-    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=kabers))
 
     placed = await membership.place_new_registration(email="x@y.com", invitation_code="ABCD")
     assert placed.needs_org_confirm is False
-    assert placed.tenant_id == openclaw.id
+    assert placed.tenant_id == kabers.id
 
 
 @pytest.mark.asyncio
 async def test_invalid_invite_is_invitation_error_not_503(monkeypatch):
-    openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    kabers = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True)
     monkeypatch.setattr(membership.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=None))
-    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=kabers))
     with pytest.raises(membership.InvitationError):
         await membership.place_new_registration(email="x@y.com", invitation_code="NOPE")
 
 
 @pytest.mark.asyncio
 async def test_exhausted_invite_is_invitation_error(monkeypatch):
-    openclaw = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    kabers = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True)
     code = SimpleNamespace(tenant_id=uuid.uuid4(), used_count=5, max_uses=5)
     monkeypatch.setattr(membership.invitation_code_dao, "get_active_by_code", AsyncMock(return_value=code))
-    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=openclaw))
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=kabers))
     with pytest.raises(membership.InvitationError):
         await membership.place_new_registration(invitation_code="USED")
+
+
+def _slug_lookup(monkeypatch, **by_slug: TenantRecord) -> AsyncMock:
+    lookup = AsyncMock(side_effect=lambda slug: by_slug.get(slug))
+    monkeypatch.setattr(membership.tenant_dao, "get_by_slug", lookup)
+    return lookup
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_org_prefers_the_default_end_user_org(monkeypatch):
+    default = _tenant(name="Acme", slug="acme", is_default_end_user_org=True)
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=default))
+    lookup = _slug_lookup(monkeypatch, kabers=_tenant(name="KABERs", slug="kabers"))
+
+    assert await membership.get_fallback_org() is default
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_org_resolves_kabers_slug_without_a_default_flag(monkeypatch):
+    kabers = _tenant(name="KABERs", slug="kabers", is_system=True)
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=None))
+    lookup = _slug_lookup(monkeypatch, kabers=kabers)
+
+    assert await membership.get_fallback_org() is kabers
+    lookup.assert_awaited_once_with("kabers")
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_org_rejects_missing_or_disabled_org(monkeypatch):
+    monkeypatch.setattr(membership.tenant_dao, "get_default_end_user_org", AsyncMock(return_value=None))
+    disabled = _tenant(name="KABERs", slug="kabers", is_system=True)
+    disabled.is_active = False
+    _slug_lookup(monkeypatch, kabers=disabled)
+    with pytest.raises(membership.DefaultOrgUnavailableError):
+        await membership.get_fallback_org()
+
+    _slug_lookup(monkeypatch)
+    with pytest.raises(membership.DefaultOrgUnavailableError):
+        await membership.get_fallback_org()
 
 
 @pytest.mark.asyncio

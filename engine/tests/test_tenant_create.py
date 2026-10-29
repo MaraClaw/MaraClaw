@@ -268,11 +268,13 @@ async def test_attach_genesis_org_admin_creates_when_missing(monkeypatch):
     )
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr("app.services.tenant_provisioning.hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr(
-        "app.services.tenant_provisioning.identity_dao.create_identity", AsyncMock(return_value=identity)
-    )
+    create_identity = AsyncMock(return_value=identity)
+    monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.create_identity", create_identity)
     monkeypatch.setattr("app.services.tenant_provisioning.user_dao.create", create_user)
-    monkeypatch.setattr("app.services.tenant_provisioning.participant_dao.create_for_user", AsyncMock())
+    participant = AsyncMock()
+    monkeypatch.setattr("app.services.tenant_provisioning.participant_dao.create_for_user", participant)
+    claim = AsyncMock()
+    monkeypatch.setattr("app.services.org_membership.add_email_domain", claim)
     bind = AsyncMock()
     with (
         patch("app.services.tenant_provisioning.connection_ctx") as ctx,
@@ -287,7 +289,15 @@ async def test_attach_genesis_org_admin_creates_when_missing(monkeypatch):
         )
     assert result.admin_email == "oa@acme.com"
     assert create_user.await_args is not None
-    assert create_user.await_args.kwargs["obj_in"]["is_genesis"] is True
+    user_fields = create_user.await_args.kwargs["obj_in"]
+    assert (user_fields["role"], user_fields["is_genesis"], user_fields["tenant_id"]) == ("org_admin", True, tenant_id)
+    assert create_identity.await_args is not None
+    identity_fields = create_identity.await_args.kwargs
+    assert identity_fields["must_change_password"] is True
+    assert identity_fields["is_platform_admin"] is False
+    participant.assert_awaited_once()
+    bind.assert_awaited_once_with(org_admin)
+    claim.assert_not_awaited()
 
 
 @pytest.mark.asyncio

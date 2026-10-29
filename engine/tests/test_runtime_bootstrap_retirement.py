@@ -80,17 +80,16 @@ async def test_bootstrap_stops_after_platform_admin_failure(
     assert seed_calls == [SEEDS[0]]
 
 
+@pytest.mark.parametrize("failure", [SystemOrgSeedError("default org"), RuntimeError("database")])
 async def test_bootstrap_stops_after_required_system_org_failure(
-    monkeypatch: pytest.MonkeyPatch, seed_calls: list[str]
+    monkeypatch: pytest.MonkeyPatch, seed_calls: list[str], failure: Exception
 ) -> None:
     # Given
-    monkeypatch.setattr(
-        "app.services.system_org_seeder.ensure_system_orgs", AsyncMock(side_effect=SystemOrgSeedError("default org"))
-    )
+    monkeypatch.setattr("app.services.system_org_seeder.ensure_system_orgs", AsyncMock(side_effect=failure))
     # When
-    with pytest.raises(SystemOrgSeedError):
+    with pytest.raises(type(failure)):
         await bootstrap()
-    # Then
+    # Then: no later seed runs, including the platform admin.
     assert seed_calls == []
 
 

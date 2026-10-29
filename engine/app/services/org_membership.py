@@ -21,7 +21,7 @@ from app.records.invitation import InvitationCodeRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.invitation_codes import normalize_invite_email
-from app.services.system_org_seeder import OPENCLAW_SLUG
+from app.services.system_org_seeder import KABERS_SLUG
 
 OrgMatchSource = Literal["invite", "domain", "default"]
 
@@ -41,7 +41,7 @@ class AlreadyInOrgError(RuntimeError):
 
 
 class DefaultOrgUnavailableError(RuntimeError):
-    """Raised when OpenClaw / the fallback org cannot be used."""
+    """Raised when KABERs / the fallback org cannot be used."""
 
 
 class SuggestedOrgMismatchError(RuntimeError):
@@ -87,7 +87,7 @@ def email_domain(email: str | None) -> str | None:
 async def get_fallback_org() -> TenantRecord:
     tenant = await tenant_dao.get_default_end_user_org()
     if tenant is None:
-        tenant = await tenant_dao.get_by_slug(OPENCLAW_SLUG)
+        tenant = await tenant_dao.get_by_slug(KABERS_SLUG)
     if tenant is None or not tenant.is_active:
         raise DefaultOrgUnavailableError("Default organization is not available")
     return tenant
@@ -170,8 +170,10 @@ async def place_new_registration(
     email: str | None = None,
     invitation_code: str | None = None,
 ) -> NewUserPlacement:
-    """New members stay in OpenClaw while company admission is reviewed."""
+    """Domain applicants await initial admission; invitations retain their existing placement."""
     resolution = await resolve_registration_org(email=email, invitation_code=invitation_code)
+    if resolution.source == "domain":
+        return NewUserPlacement(tenant_id=None, suggested=resolution.matched, needs_org_confirm=True)
     return NewUserPlacement(tenant_id=resolution.fallback.id, suggested=None, needs_org_confirm=False)
 
 
