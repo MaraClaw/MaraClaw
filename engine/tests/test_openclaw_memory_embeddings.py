@@ -93,7 +93,9 @@ def test_settings_read_exact_names_default_empty_and_ignore_other_spelling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
-    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    model_config = Settings.model_config.copy()
+    model_config["env_file"] = None
+    monkeypatch.setattr(Settings, "model_config", model_config)
     for name in (*NAMES, "EMBEDDING_DIMENSIONS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "99")
