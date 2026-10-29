@@ -5,7 +5,7 @@ import type { AdmissionDetail } from '../src/lib/types/company-admissions'
 import type { OnboardingStatus } from '../src/lib/onboarding-api'
 
 export const tokenKey = 'maraclaw-enduser-token'
-export const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
+export const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'KABERs', slug: 'kabers' }
 export const target = { id: 'c919ad90-90be-4a1d-b699-1d02138b7f45', name: 'Example Company', slug: 'example' }
 export const member: UserOut = {
   id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db', display_name: 'Applicant', email: 'member@example.test',
