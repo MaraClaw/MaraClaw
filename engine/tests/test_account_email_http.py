@@ -117,6 +117,9 @@ async def test_registration_needs_only_email_and_password(
     monkeypatch.setattr(registration_service, "bind_org_member", AsyncMock())
     monkeypatch.setattr(participant_dao, "create_for_user", AsyncMock())
     monkeypatch.setattr(
+        "app.services.domain_admission_auto.stage_verified_domain_admission", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
         org_membership,
         "place_new_registration",
         AsyncMock(return_value=SimpleNamespace(tenant_id=None, suggested=None, needs_org_confirm=False)),

@@ -47,6 +47,9 @@ async def test_registration_succeeds_and_logs_skipped_verification_without_trust
     monkeypatch.setattr(registration_service, "find_or_create_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(registration_service, "create_user_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(
+        "app.services.domain_admission_auto.stage_verified_domain_admission", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
         org_membership,
         "place_new_registration",
         AsyncMock(return_value=SimpleNamespace(tenant_id=None, suggested=None, needs_org_confirm=False)),

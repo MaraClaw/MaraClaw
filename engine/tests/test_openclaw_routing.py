@@ -760,7 +760,7 @@ async def test_wake_and_release_errors_are_both_logged(monkeypatch: pytest.Monke
     assert warnings == [(agent.id, dispatch_error), (agent.id, release_error)]
 
 
-async def test_completed_during_gateway_wait_skips_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_completed_during_hook_failure_skips_redispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from app.dao.gateway_message_dao import gateway_message_dao
     from app.services import openclaw_inbox
 
@@ -778,7 +778,7 @@ async def test_completed_during_gateway_wait_skips_dispatch(monkeypatch: pytest.
         return None
 
     def fake_recently_refused(agent_id: uuid.UUID) -> bool:
-        return True
+        return False
 
     def fake_mark_down(agent_id: uuid.UUID, error: str) -> None:
         return None
@@ -789,17 +789,11 @@ async def test_completed_during_gateway_wait_skips_dispatch(monkeypatch: pytest.
     async def fake_get(message_id: uuid.UUID, agent_id: uuid.UUID) -> GatewayMessageRecord:
         return row
 
-    async def fake_http(_agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str:
-        dispatches.append("http")
-        return "ECONNREFUSED"
-
-    def fake_wait(_agent: AgentRecord) -> bool:
+    def fake_exec(_agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> str:
         nonlocal row
-        row = replace(row, status="completed")
-        return True
-
-    def fake_exec(_agent: AgentRecord, agent_dir: Path, body: dict[str, str]) -> None:
         dispatches.append("exec")
+        row = replace(row, status="completed")
+        return "ECONNREFUSED"
 
     monkeypatch.setattr(openclaw_routing.agent_manager, "_agent_dir", fake_agent_dir)
     monkeypatch.setattr(openclaw_inbox, "ensure_openclaw_tokens", fake_tokens)
@@ -808,11 +802,10 @@ async def test_completed_during_gateway_wait_skips_dispatch(monkeypatch: pytest.
     monkeypatch.setattr(openclaw_inbox, "_mark_hooks_down", fake_mark_down)
     monkeypatch.setattr(openclaw_inbox, "_mark_hooks_up", fake_mark_up)
     monkeypatch.setattr(gateway_message_dao, "get_for_agent", fake_get)
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", fake_http)
-    monkeypatch.setattr(openclaw_inbox, "_wait_for_guest_gateway", fake_wait)
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
     monkeypatch.setattr(openclaw_inbox, "_exec_in_guest_hooks", fake_exec)
     assert await openclaw_inbox.wake_openclaw_inbox(agent, content="hello", message_id=row.id) is True
-    assert dispatches == ["http"]
+    assert dispatches == ["exec"]
 
 
 async def test_poll_during_wake_cannot_claim_same_message(monkeypatch: pytest.MonkeyPatch) -> None:

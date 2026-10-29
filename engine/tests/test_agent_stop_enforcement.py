@@ -77,7 +77,7 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
     class Containers:
         def list(self, *, filters, **kwargs: Unpack[IncludeAllKeyword]):
             assert kwargs["all"] is True
-            assert filters == {"label": "maraclaw.agent_id", "network": "owned"}
+            assert filters == [("label", "maraclaw.agent_id"), ("network", "owned")]
             assert threading.get_ident() != loop_thread
             return listed
 

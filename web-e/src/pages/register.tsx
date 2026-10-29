@@ -36,12 +36,12 @@ const highlights = [
   {
     icon: Building2,
     title: 'Company match',
-    body: 'If your work email is claimed, we will ask you to join that company.',
+    body: 'A matching email domain submits a company join request, pending organization admin approval.',
   },
   {
     icon: Sparkles,
     title: 'Ready workspace',
-    body: 'New accounts join OpenClaw. Transfer later if you belong to a company.',
+    body: 'If your email domain does not match a company, you automatically join KABERs.',
   },
   {
     icon: Lock,
@@ -123,9 +123,9 @@ export function RegisterPage() {
     <AuthShell
       headingId={`${formId}-heading`}
       title="Create your account"
-      description="New member accounts join OpenClaw. An invitation code submits a company admission request for review."
+      description="At signup, a matching email domain submits a company join request, pending organization admin approval. Without a match, you automatically join KABERs. An invitation code submits a company admission request for review."
       brandTitle="Start working with digital employees"
-      brandBody="Create an account to land in OpenClaw. You can transfer to a company later with an invite or a matching email domain."
+      brandBody="Sign up to request company membership with a matching email domain, subject to organization admin approval. Without a match, start in KABERs."
       highlights={highlights}
     >
       {formError ? (

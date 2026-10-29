@@ -3,24 +3,29 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
+from tests.transaction_pool_fakes import CountingPool
 
 from app.api import admin as admin_api, auth as auth_api
 from app.core import security as security_mod
 from app.core.domain.users import UserRole
 from app.core.json_types import object_mapping_from
-from app.core.security import hash_password
+from app.core.security import decode_access_token, get_current_user, hash_password, verify_password
+from app.db import session
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import TokenResponse
+from app.services import system_org_seeder as org_seeder, tenant_provisioning
 
 
 def _dummy_request() -> Request:
@@ -707,6 +712,9 @@ async def test_register_init_never_elevates_to_platform_admin(monkeypatch):
     monkeypatch.setattr("app.dao.identity_dao.get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr("app.dao.user_dao.get_by_identity_id", AsyncMock(return_value=[]))
     monkeypatch.setattr(
+        "app.services.domain_admission_auto.stage_verified_domain_admission", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
         "app.services.org_membership.place_new_registration",
         AsyncMock(return_value=SimpleNamespace(tenant_id=None, suggested=None, needs_org_confirm=False)),
     )
@@ -750,3 +758,218 @@ async def test_raise_if_password_change_required_blocks_tenant_ops():
     with pytest.raises(HTTPException) as exc:
         security_mod.raise_if_password_change_required(user)
     assert exc.value.status_code == 403
+
+
+class _SeededAccounts:
+    """Rows written by the default-organization seed and read back by the real auth stack."""
+
+    def __init__(self) -> None:
+        self.tenant: Any = SimpleNamespace(
+            id=uuid.uuid4(),
+            name="KABERs",
+            slug="kabers",
+            is_active=True,
+            default_message_limit=50,
+            default_message_period="permanent",
+            default_max_agents=2,
+            default_agent_ttl_hours=0,
+        )
+        self.identity: IdentityRecord | None = None
+        self.user: UserRecord | None = None
+        self.generation = 7
+        self.identities_created = 0
+        self.participants = AsyncMock()
+        self.domain_claims = AsyncMock()
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        identities, users = security_mod.identity_dao, security_mod.user_dao
+        monkeypatch.setattr(tenant_provisioning.tenant_dao, "get", AsyncMock(return_value=self.tenant))
+        monkeypatch.setattr(tenant_provisioning.participant_dao, "create_for_user", self.participants)
+        monkeypatch.setattr("app.services.org_membership.add_email_domain", self.domain_claims)
+        monkeypatch.setattr("app.services.registration_service.registration_service.bind_org_member", AsyncMock())
+        monkeypatch.setattr(identities, "get_by_email", AsyncMock(return_value=None))
+        monkeypatch.setattr(identities, "create_identity", self.create_identity)
+        monkeypatch.setattr(identities, "get_by_login_identifier", self.find_identity)
+        monkeypatch.setattr(identities, "get", self.get_identity)
+        monkeypatch.setattr(identities, "update", self.update_identity)
+        monkeypatch.setattr(identities, "get_auth_generation", self.get_generation)
+        monkeypatch.setattr(identities, "bump_auth_generation", self.bump_generation)
+        monkeypatch.setattr(users, "create", self.create_user)
+        monkeypatch.setattr(users, "genesis_org_admin_for_tenant", self.genesis_org_admin)
+        monkeypatch.setattr(users, "get", self.get_user)
+        monkeypatch.setattr(users, "get_with_identity", self.get_user)
+        monkeypatch.setattr(users, "get_by_identity_id", self.users_for_identity)
+
+    async def create_identity(self, **fields: Any) -> IdentityRecord:
+        self.identities_created += 1
+        self.identity = IdentityRecord(
+            id=uuid.uuid4(),
+            email=fields["email"],
+            phone=None,
+            password_hash=fields["password_hash"],
+            is_active=True,
+            email_verified=fields["email_verified"],
+            is_platform_admin=fields["is_platform_admin"],
+            must_change_password=fields["must_change_password"],
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+        return self.identity
+
+    async def create_user(self, *, obj_in: dict[str, Any]) -> UserRecord:
+        self.user = replace(UserRecord(id=uuid.uuid4(), created_at=_NOW), **obj_in)
+        return self.user
+
+    async def find_identity(self, login_identifier: str) -> IdentityRecord | None:
+        found = self.identity
+        return found if found is not None and found.email == login_identifier.lower() else None
+
+    async def get_identity(self, identity_id: uuid.UUID) -> IdentityRecord | None:
+        return self.identity if self.identity is not None and self.identity.id == identity_id else None
+
+    async def update_identity(self, *, db_obj: IdentityRecord, obj_in: dict[str, Any]) -> IdentityRecord:
+        for key, value in obj_in.items():
+            setattr(db_obj, key, value)
+        return db_obj
+
+    async def get_generation(self, identity_id: uuid.UUID) -> int | None:
+        return self.generation if self.identity is not None and self.identity.id == identity_id else None
+
+    async def bump_generation(self, identity_id: uuid.UUID) -> int:
+        self.generation += 1
+        return self.generation
+
+    async def genesis_org_admin(self, tenant_id: uuid.UUID) -> UserRecord | None:
+        return self.user if self.user is not None and self.user.tenant_id == tenant_id else None
+
+    async def get_user(self, user_id: uuid.UUID, **_: Any) -> UserRecord | None:
+        return self.user if self.user is not None and self.user.id == user_id else None
+
+    async def users_for_identity(self, identity_id: uuid.UUID, **_: Any) -> list[UserRecord]:
+        return [self.user] if self.user is not None and self.user.identity_id == identity_id else []
+
+
+def _default_admin_env(email: str, password: str) -> Any:
+    return SimpleNamespace(KABERS_ORG_ADMIN_EMAIL=email, KABERS_ORG_ADMIN_PASSWORD=password)
+
+
+async def _seed_default_org_admin(monkeypatch: pytest.MonkeyPatch) -> _SeededAccounts:
+    accounts = _SeededAccounts()
+    accounts.install(monkeypatch)
+    pool = CountingPool()
+    monkeypatch.setattr(session, "get_pool", lambda: pool)
+    monkeypatch.setattr(org_seeder, "get_settings", lambda: _default_admin_env("Owner@Example.com", "initial-secret"))
+    await org_seeder._ensure_default_org_admin(accounts.tenant)
+    return accounts
+
+
+def _auth_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(auth_api.router, prefix="/api")
+
+    @app.get("/api/protected")
+    async def protected(user: Annotated[UserRecord, Depends(get_current_user)]) -> dict[str, str]:
+        return {"user_id": str(user.id)}
+
+    return app
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_seeded_default_org_admin_is_a_forced_change_genesis_org_admin(monkeypatch):
+    accounts = await _seed_default_org_admin(monkeypatch)
+
+    assert accounts.identity is not None
+    assert accounts.user is not None
+    assert accounts.identity.email == "owner@example.com"
+    assert accounts.identity.must_change_password is True
+    assert accounts.identity.is_platform_admin is False
+    assert verify_password("initial-secret", accounts.identity.password_hash or "")
+    assert (accounts.user.role, accounts.user.is_genesis, accounts.user.tenant_id) == (
+        UserRole.ORG_ADMIN,
+        True,
+        accounts.tenant.id,
+    )
+    accounts.participants.assert_awaited_once()
+    accounts.domain_claims.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_seeded_default_org_admin_must_replace_initial_password_before_privileged_access(monkeypatch):
+    # Given the default organization's genesis admin seeded from the environment.
+    accounts = await _seed_default_org_admin(monkeypatch)
+    monkeypatch.setattr(auth_api, "_pending_org_fields", AsyncMock(return_value=(False, None)))
+
+    async with AsyncClient(transport=ASGITransport(app=_auth_app()), base_url="http://test") as client:
+        # When the admin signs in with the initial password.
+        login = await client.post(
+            "/api/auth/login", json={"login_identifier": "owner@example.com", "password": "initial-secret"}
+        )
+        # Then login succeeds but flags the forced change and issues a generation-bound token.
+        assert login.status_code == 200
+        initial = login.json()
+        assert initial["must_change_password"] is True
+        assert initial["user"]["must_change_password"] is True
+        assert (initial["user"]["role"], initial["user"]["is_genesis"]) == ("org_admin", True)
+        assert initial["user"]["tenant_id"] == str(accounts.tenant.id)
+        assert decode_access_token(initial["access_token"])["gen"] == 7
+
+        # And privileged access stays blocked until the password changes.
+        blocked = await client.get("/api/protected", headers=_bearer(initial["access_token"]))
+        assert blocked.status_code == 403
+        assert blocked.json()["detail"]["must_change_password"] is True
+
+        # When the admin replaces the initial password with the bootstrap token.
+        changed = await client.put(
+            "/api/auth/me/password",
+            headers=_bearer(initial["access_token"]),
+            json={"old_password": "initial-secret", "new_password": "replacement-secret"},
+        )
+        # Then the flag clears and the generation moves to a replacement token.
+        assert changed.status_code == 200
+        replaced = changed.json()
+        assert replaced["ok"] is True
+        assert replaced["must_change_password"] is False
+        assert decode_access_token(replaced["access_token"])["gen"] == 8
+        assert accounts.identity is not None
+        assert accounts.identity.must_change_password is False
+
+        # And only the replacement token reaches privileged routes.
+        allowed = await client.get("/api/protected", headers=_bearer(replaced["access_token"]))
+        assert allowed.status_code == 200
+        assert accounts.user is not None
+        assert allowed.json() == {"user_id": str(accounts.user.id)}
+        revoked = await client.get("/api/protected", headers=_bearer(initial["access_token"]))
+        assert revoked.status_code == 401
+
+        # And the initial password no longer signs in while the new one does without a forced change.
+        stale = await client.post(
+            "/api/auth/login", json={"login_identifier": "owner@example.com", "password": "initial-secret"}
+        )
+        assert stale.status_code == 401
+        relogin = await client.post(
+            "/api/auth/login", json={"login_identifier": "owner@example.com", "password": "replacement-secret"}
+        )
+        assert relogin.status_code == 200
+        assert relogin.json()["must_change_password"] is False
+
+
+@pytest.mark.asyncio
+async def test_restart_leaves_established_default_org_admin_credentials_unchanged(monkeypatch):
+    accounts = await _seed_default_org_admin(monkeypatch)
+    assert accounts.identity is not None
+    identity, password_hash = accounts.identity, accounts.identity.password_hash
+    monkeypatch.setattr(org_seeder, "get_settings", lambda: _default_admin_env("rotated@example.com", "rotated-secret"))
+
+    await org_seeder._ensure_default_org_admin(accounts.tenant)
+
+    assert accounts.identities_created == 1
+    assert accounts.identity is identity
+    assert (identity.email, identity.password_hash, identity.must_change_password) == (
+        "owner@example.com",
+        password_hash,
+        True,
+    )

@@ -26,28 +26,31 @@ An ordinary [start](../app/services/guest_start.py) means **ensure running**, no
 replace. A single owned running guest is reused without rewriting its workspace,
 configuration or credentials. An owned `exited` or `created` guest is started in
 place. Both paths require application readiness before publishing `running`:
-two consecutive successful probes within a 120-second bound. Conflicting ownership,
-multiple owned guests or an unresumable state fail rather than replacing a guest.
+two consecutive successful [bootstrap-aware probes](#bootstrap-handshake) within
+a 120-second bound. Conflicting ownership, multiple owned guests or an
+unresumable state fail rather than replacing a guest.
 If none exists, the engine prepares and creates one, then checks readiness.
 
 Explicit [replacement](../app/services/agent_manager.py) remains a separate path;
 OpenClaw upgrades call `start_container(..., rehydrate=False)`. Replacement
 prepares workspace/model/auth/config inputs, the image reference and port candidates
-before destroying an owned guest. Preparation or admission refusal does not first
-destroy that guest. Workspace/config/auth writes are **not transactional or rolled
-back** and may already affect the old guest; upgrades skip workspace rehydration.
+before destroying an owned guest. The new guest is recorded `creating`; its
+readiness owner (ordinary start or upgrade) publishes `running`. Preparation or
+admission refusal does not first destroy that guest. Workspace/config/auth writes
+are **not transactional or rolled back** and may already affect the old guest;
+upgrades skip workspace rehydration.
 Preparation is not image-pull validation or a guarantee of Docker creation.
 Replacement is not atomic; failure after removal can leave no guest.
 
 ### Readiness Deadlines And Cancellation
 
 Ordinary starts and [upgrades](openclaw-updates.md) share a
-[read-only probe runner](../app/services/guest_probe.py). It runs in-guest Node
-`fetch /readyz` through a local Docker CLI subprocess, preserving the installed
-client's Docker executable/global arguments and inherited environment. The guest
-fetch has a five-second `AbortSignal` timeout. Each host subprocess receives the
-remaining readiness deadline; sleeps are capped to that remainder, and even a
-second successful probe at or after the deadline is rejected.
+[read-only probe runner](../app/services/guest_probe.py). It runs the image helper's
+`check-ready` through a local Docker CLI subprocess, preserving the installed
+client's Docker executable/global arguments and inherited environment; only exit 0
+is ready. Each host subprocess receives the remaining readiness deadline; sleeps
+are capped to that remainder, and even a second successful probe at or after the
+deadline is rejected.
 
 A host timeout terminates and reaps the local CLI process. It does **not** prove
 that the Docker daemon cancelled or rolled back an exec it already accepted.
@@ -56,6 +59,35 @@ and start-recovery work use [cancellation draining](../app/services/agent_setup_
 under workspace exclusion: cancellation waits for owned mutable work to finish
 before releasing the lock. Upgrade interruption uses its durable journal and
 rollback path; a probe timeout alone is not a daemon rollback guarantee.
+
+### Bootstrap Handshake
+
+The guest image must provide executable `/usr/local/bin/bootstrap-agent-container.py`
+and, once bootstrap finishes, write `/tmp/maraclaw-bootstrap/AgentBootstrapCompleted.json`:
+`{"version":1,"event":"AgentBootstrapCompleted","boot_id":<Linux boot id>,"pid1_start_ticks":"<field 22 of /proc/1/stat>"}`.
+The event belongs to one guest lifetime, so a stop/start of the same container makes
+the earlier event stale. The helper validates it before acting:
+
+- `check-ready`: current-boot event first, then `/readyz`; exit 0 only if both pass.
+- `exec -- <argv>`: current-boot event immediately before `os.exec` of `argv`; the
+  action's own exit status is unchanged.
+
+A missing, stale or malformed event makes the helper exit 75 and print
+`bootstrap-agent-container: bootstrap pending: <reason>` to stderr. Because
+`exec --` keeps the action's own exit status, exit 75 alone proves nothing; the
+engine treats only exit 75 together with that stderr line as a refusal. The
+engine's [argv shapes](../app/services/guest_bootstrap.py) are its only readiness
+and gateway contact: probes use `check-ready`; inbox hook wakes, the
+shared-session CLI fallback and the generated `.maraclaw-poll.mjs` (which re-runs
+itself under `exec --` before it claims the inbox or calls the localhost hook)
+use `exec --`. A refusal leaves the work pending, with no retry over host HTTP or
+another transport, and the engine never starts the gateway: the image helper
+owns it. An image without the helper never becomes ready.
+
+A shared turn's claim is released back to pending only for such a positively
+identified refusal, because the action never ran. Every other failed or
+ambiguous wake, and any admitted action (including one that itself exits 75),
+keeps the claim.
 
 ## Limits On New Or Replacement Guests
 
@@ -119,11 +151,20 @@ reserves and unlimited-external-allocation refusal remain unchanged.
 
 New and replacement guests publish their gateway port on host `127.0.0.1`
 only. Inside the Docker network, the gateway retains `bind: lan` and token
-authentication so the engine can reach it by container name. OpenClaw's generic
-non-loopback warning still appears because it checks the in-container bind
-address, not authentication or Docker's host binding. Existing guests retain
-their original published binding until explicitly recreated; this does not
-restart or modify running guests automatically.
+authentication so the engine can reach it by container name. The generated
+`openclaw.json` declares `gateway.controlUi.allowedOrigins` as exactly
+`http://localhost:18789` and `http://127.0.0.1:18789` (no wildcard), so OpenClaw
+no longer seeds them at startup for the non-loopback bind. The engine rewrites
+`gateway` wholesale on each config write (only `mcp`, `skills` and `plugins`
+entries are preserved), so extra origins added by hand to a guest's
+`openclaw.json` are not retained. OpenClaw's generic non-loopback warning still
+appears because it checks the in-container bind address, not authentication,
+origins or Docker's host binding; it is expected. Existing guests retain
+their original published binding until explicitly recreated. Their config gains
+the origins when the engine next rewrites it, such as on the next gated work
+turn or replacement/upgrade; the origins hot-reload without a gateway restart.
+The seeding notice is absent on the next gateway startup with that config.
+This change does not proactively migrate or restart existing guests.
 
 [Port allocation](../app/services/guest_ports.py) prefers the persisted port when
 it is in the inclusive `18789..28788` range, then uses distinct random candidates.
@@ -410,3 +451,32 @@ These fields supplement existing container status. Missing/error observations
 are reported safely without raw environment, logs or exception dumps. Health,
 OOM history, ownership and port drift are diagnostic evidence, not application
 readiness, automatic repair or a reason to assume a retry will succeed.
+
+## User-Stop Notification
+
+After a user-requested `POST /api/agents/{agent_id}/stop` whose Docker stop is
+confirmed and whose `stopped` runtime is committed, the engine publishes one
+`AgentStopped` event on the Redis Pub/Sub channel `agent_lifecycle` through
+[the shared event helper](../app/core/events.py). It is published from
+[the stop lifecycle](../app/services/agent_lifecycle.py) while the per-agent lock
+is still held, with this
+[typed payload](../app/services/agent_lifecycle_events.py):
+
+```json
+{"version": 1, "event": "AgentStopped", "agent_id": "<uuid>",
+ "container_id": "<current id or null>", "stopped_at": "<UTC ISO-8601>"}
+```
+
+`container_id` is the committed reference: retained after a normal stop, `null`
+when Docker confirmed the guest missing. Docker-confirmed missing or already
+stopped guests count as stopped. A failed stop (502, ownership refusal, upgrade
+gate), a persistence or commit failure, and the no-Docker compatibility
+mode publish nothing.
+
+Limitations: Pub/Sub is at most once with no replay, so a subscriber that is
+offline or a Redis outage loses the event; publish errors are logged as a warning
+and never change the HTTP response. Each successful request publishes, so
+repeating Stop produces duplicate events and consumers must tolerate them. A
+failed stop already committed `stopped`, so a later successful retry still
+publishes. Heartbeat retries, disables, crashes and the stopped-container worker
+are not producers of this event.

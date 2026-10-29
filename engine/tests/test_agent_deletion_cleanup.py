@@ -1,11 +1,15 @@
 import errno
 import json
+import sys
+from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from pywhales import DockerClient
+from pywhales.components.container import cli_wrapper as container_cli
 
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
 from app.services.agent_deletion_archive import publish_deletion_archive
@@ -58,6 +62,26 @@ def test_archive_conflict_preserves_source_for_operator_recovery(tmp_path, confl
     assert (job.workspace_path / "SOUL.md").read_text() == "Workspace"
 
 
+def test_writer_discovery_emits_all_and_the_ownership_label_filter_with_real_sdk(monkeypatch):
+    # Given the installed Docker SDK with only its process execution boundary stubbed.
+    agent_id = uuid4()
+    client = DockerClient(client_call=[sys.executable])
+    commands: list[list[str]] = []
+
+    def run(command: Sequence[str | Path]) -> str:
+        commands.append([str(argument) for argument in command])
+        return ""
+
+    monkeypatch.setattr(container_cli, "run", run)
+    # When cleanup lists remaining writers through the real ContainerCLI.list implementation.
+    _remove_remaining_writers(client, agent_id)
+    # Then Docker receives --all with exactly the ownership label filter and nothing is removed.
+    (command,) = commands
+    filters = [value for flag, value in pairwise(command) if flag == "--filter"]
+    assert filters == [f"label={AGENT_LABEL}={agent_id}"]
+    assert "--all" in command
+
+
 def test_label_discovered_writers_are_removed_by_inspected_id(monkeypatch):
     # Given an owned duplicate writer discoverable only through its ownership label.
     agent_id = uuid4()
@@ -65,7 +89,7 @@ def test_label_discovered_writers_are_removed_by_inspected_id(monkeypatch):
 
     class Containers:
         def list(self, **kwargs):
-            assert kwargs == {"all": True, "filters": {"label": f"{AGENT_LABEL}={agent_id}"}}
+            assert kwargs == {"all": True, "filters": [("label", f"{AGENT_LABEL}={agent_id}")]}
             return [SimpleNamespace(id="full-inspected-id")]
 
         def inspect(self, reference):

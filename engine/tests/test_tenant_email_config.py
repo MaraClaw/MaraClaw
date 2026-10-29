@@ -83,7 +83,7 @@ async def test_explicit_tenant_never_consults_maraclaw(monkeypatch):
 
 @pytest.mark.parametrize("state", ["enabled", "missing", "disabled", "incomplete", "not_system"])
 async def test_noarg_resolution_uses_only_saved_maraclaw(monkeypatch, state):
-    # Given MaraClaw and distinct OpenClaw settings that cannot become the default.
+    # Given MaraClaw and distinct KABERs settings that cannot become the default.
     mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=state != "not_system")
     saved = email_config.stored_settings(
         TenantEmailUpdate(enabled=state != "disabled", smtp_host="mara.example.com", from_address="mara@example.com"),

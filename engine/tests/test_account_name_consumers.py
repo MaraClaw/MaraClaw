@@ -39,9 +39,7 @@ async def test_channel_provisioning_uses_real_contact_without_manufactured_handl
     monkeypatch.setattr(
         company_admission_dao,
         "tenant",
-        AsyncMock(
-            return_value=TenantRecord(id=tenant_id, name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
-        ),
+        AsyncMock(return_value=TenantRecord(id=tenant_id, name="KABERs", slug="kabers", is_default_end_user_org=True)),
     )
 
     result = await channel_users.ChannelUserService()._create_channel_user("feishu", "external-123", profile, tenant_id)

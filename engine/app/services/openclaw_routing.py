@@ -27,6 +27,7 @@ from app.services.agent_manager import agent_manager, guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.enterprise_llm import ensure_agent_company_models
+from app.services.guest_bootstrap import GuestBootstrapPendingError
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
@@ -257,6 +258,10 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
     except asyncio.CancelledError:
         await _release_wake_claim_shielded(agent, claimed)
         raise
+    except GuestBootstrapPendingError:
+        logger.info("[OpenClaw] guest bootstrap pending for {}; shared turn released to pending", agent.id)
+        await _release_wake_claim_shielded(agent, claimed, not_admitted=True)
+        return
     except Exception as exc:
         logger.warning("[OpenClaw] inbox wake error for {}: {}", agent.id, exc)
         await _release_wake_claim_shielded(agent, claimed)
@@ -266,8 +271,11 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
         logger.info("[OpenClaw] inbox left pending for {}; guest gateway will pick it up", agent.id)
 
 
-async def _release_wake_claim(agent: AgentRecord, claimed: GatewayMessageRecord | None) -> None:
-    if claimed is None or claimed.conversation_id == str(shared_session_id(agent.id)):
+async def _release_wake_claim(
+    agent: AgentRecord, claimed: GatewayMessageRecord | None, *, not_admitted: bool = False
+) -> None:
+    """Return the exact claim to pending; a shared claim only when the guest provably never admitted the turn."""
+    if claimed is None or (claimed.conversation_id == str(shared_session_id(agent.id)) and not not_admitted):
         return
     try:
         _ = await gateway_message_dao.release_delivery(claimed)
@@ -275,9 +283,11 @@ async def _release_wake_claim(agent: AgentRecord, claimed: GatewayMessageRecord 
         logger.warning("[OpenClaw] inbox claim release error for {}: {}", agent.id, exc)
 
 
-async def _release_wake_claim_shielded(agent: AgentRecord, claimed: GatewayMessageRecord | None) -> None:
+async def _release_wake_claim_shielded(
+    agent: AgentRecord, claimed: GatewayMessageRecord | None, *, not_admitted: bool = False
+) -> None:
     """Finish the release even when the wake is cancelled again; the cancellation then propagates."""
-    release = asyncio.ensure_future(_release_wake_claim(agent, claimed))
+    release = asyncio.ensure_future(_release_wake_claim(agent, claimed, not_admitted=not_admitted))
     cancelled = False
     while not release.done():
         try:

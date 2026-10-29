@@ -8,7 +8,7 @@ from typing import Any, ClassVar, final, override
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
-from app.core.domain.agents import AgentStatus
+from app.core.domain.agents import AgentStatus, AgentType
 from app.core.json_types import int_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_list_from_rows
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL
@@ -633,7 +633,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         tenant_id: UUID,
         names: Sequence[str],
         *,
-        agent_type: str | None = None,
+        agent_type: AgentType | None = None,
         exclude_stopped: bool = True,
     ) -> Sequence[AgentRecord]:
         if not names:
@@ -643,7 +643,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         clauses = ["tenant_id = %(tenant_id)s", "name = ANY(%(names)s)"]
         if agent_type is not None:
             clauses.append("agent_type = %(agent_type)s")
-            params["agent_type"] = agent_type
+            params["agent_type"] = agent_type.value
         if exclude_stopped:
             clauses.append("status <> 'stopped'")
         async with self.session() as db:

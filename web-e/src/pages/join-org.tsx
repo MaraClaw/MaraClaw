@@ -1,5 +1,5 @@
 import { Building2, Lock, Users } from 'lucide-react'
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 
 import { AuthShell } from '@/components/auth/auth-shell'
@@ -10,6 +10,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useInvitationLink } from '@/hooks/use-invitation-link'
 import { useInvitationPreview } from '@/hooks/use-invitation-preview'
 import { useJoinedWorkspace } from '@/hooks/use-joined-workspace'
+import { hasPendingAdmission } from '@/lib/admission-access'
 import { joinDefaultOrg } from '@/lib/auth-api'
 import { joinInvitation } from '@/lib/invitations-api'
 import { userFacingRequestError } from '@/lib/http'
@@ -47,6 +48,18 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<JoinOrgResponse | null>(null)
+  const [pendingAdmission, setPendingAdmission] = useState<boolean | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    void hasPendingAdmission(null, { owner, signal: controller.signal })
+      .then((pending) => {
+        if (!controller.signal.aborted && isCurrent(owner)) setPendingAdmission(pending)
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted && isCurrent(owner)) setError(userFacingRequestError(cause, 'Unable to check admission status. Refresh to try again.'))
+      })
+    return () => controller.abort()
+  }, [owner, isCurrent])
   async function choose(invited: boolean) {
     if (!isCurrent(owner) || submitting.current || (invited && !invitation.preview)) return
     submitting.current = true
@@ -63,6 +76,10 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
       if (isCurrent(owner)) { submitting.current = false; setBusy(false) }
     }
   }
+  if (pendingAdmission === true) return <Navigate to="/app/admissions" replace />
+  if (pendingAdmission === null) return error
+    ? <p role="alert" className="p-6 text-sm text-destructive">{error}</p>
+    : <p role="status" className="p-6 text-sm text-muted-foreground">Checking admission status…</p>
   return <AuthShell headingId={headingId} title="Join an organization" description="Validate your invitation to see the company, then confirm that you want to join."
     brandTitle="Land in the right workspace" brandBody="Only the company that invited you is shown. No organization directory or domain matching is needed." highlights={highlights}>
     {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}

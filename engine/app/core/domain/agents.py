@@ -13,6 +13,10 @@ class AgentStatus(StrEnum):
     ERROR = "error"
 
 
+class AgentType(StrEnum):
+    OPENCLAW = "openclaw"
+
+
 class PermissionAccessLevel(StrEnum):
     USE = "use"
     MANAGE = "manage"

@@ -147,10 +147,12 @@ async def test_provider_profile_update_keeps_real_identity_and_membership_persis
     user_update.assert_awaited_once_with(db_obj=user, obj_in={"display_name": "Ada"})
 
 
-async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
+@pytest.mark.parametrize("domain_matched", [False, True])
+async def test_provider_creation_keeps_identity_link_and_member_role(domain_matched: bool) -> None:
     # Given
     identity = IdentityRecord(id=uuid4(), email="ada@example.com")
-    fallback = TenantRecord(id=uuid4(), name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    fallback = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
+    company = TenantRecord(id=uuid4(), name="Company", slug="company")
     user = UserRecord(id=uuid4(), identity_id=identity.id, tenant_id=fallback.id)
     updated = UserRecord(id=user.id, identity_id=identity.id, tenant_id=fallback.id, registration_source="feishu")
     info = ExternalUserInfo(provider_type="feishu", provider_union_id="union-123", email="ada@example.com", name="Ada")
@@ -165,6 +167,10 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
         patch("app.services.sso_company_admission.user_dao.get_by_identity_id", AsyncMock(return_value=[])),
         patch("app.dao.identity_dao.identity_dao.get", AsyncMock(return_value=identity)),
         patch("app.services.org_membership.tenant_dao.get_default_end_user_org", AsyncMock(return_value=fallback)),
+        patch(
+            "app.services.org_membership.lookup_tenant_by_email_domain",
+            AsyncMock(return_value=company if domain_matched else None),
+        ),
         patch("app.services.registration_service.tenant_dao.get", AsyncMock(return_value=fallback)),
         patch("app.services.registration_service.resolve_email_config_async", AsyncMock(return_value=None)),
         patch("app.services.registration_service.registration_service.bind_org_member", AsyncMock()),
@@ -182,7 +188,8 @@ async def test_provider_creation_keeps_identity_link_and_member_role() -> None:
     fields = create.await_args.kwargs["obj_in"]
     assert fields["identity_id"] == identity.id
     assert fields["role"] == "member"
-    assert fields["tenant_id"] == fallback.id
+    assert fields["tenant_id"] == (None if domain_matched else fallback.id)
+    assert identity.email_verified is False
     update.assert_awaited_once_with(
         db_obj=user, obj_in={"registration_source": "feishu", "avatar_url": None, "is_active": True}
     )

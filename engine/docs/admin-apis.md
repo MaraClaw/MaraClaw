@@ -87,11 +87,13 @@ boundary, not a new JWT claim or a replacement for resource authorization.
 | Account | How created | First-login rule |
 |---------|-------------|------------------|
 | **Platform admin** | Startup uses genesis PA credentials already in the database. If those are missing, env vars `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` seed or repair them. Fail-closed if the env vars are also missing. | Must change password after first successful login (`identity.must_change_password`) |
-| **Genesis org admin** | Platform admin only: `POST /api/tenants` or `POST /api/admin/companies` with `admin_email` + `admin_password` | Must change password after first successful login |
+| **Genesis org admin** | KABERs: startup uses `KABERS_ORG_ADMIN_EMAIL` + `KABERS_ORG_ADMIN_PASSWORD` if its genesis admin is missing. Other companies: platform admin creates one via `POST /api/tenants` or `POST /api/admin/companies` with `admin_email` + `admin_password`. | Must change password after first successful login |
 | **Additional platform admin** | Genesis platform admin only: `POST /api/admin/platform-admins` | Must change password after first successful login |
 | **Additional org admin** | Genesis org admin only: `POST /api/users/org-admins` (or `PATCH /api/users/{id}/role`) | New accounts must change password after first login |
 
 Open registration never elevates to `platform_admin`. Bootstrap never elevates an existing email unless `PLATFORM_ADMIN_PASSWORD` verifies against that identity, then forces password change. Genesis platform admin membership is the **MaraClaw** system org. Genesis is stored on `users.is_genesis` and cannot be moved by role change, assign-user, or join.
+
+For a missing KABERs genesis org admin, both default-org env vars are required: the email must be valid and unused, and the password must be nonblank and 6–128 characters. Bootstrap fails closed on invalid credentials or a taken email. An existing genesis admin is left unchanged; env credentials do not rotate the password or re-enable the account. Bootstrap does not claim an email domain for KABERs. System organization seeding is fresh-database-only; no existing-organization migration is provided.
 
 While `must_change_password` is true, login still issues a token, but `get_current_user`, chat-ticket issuance, file download, tenant join, and admin gates return **403** until `PUT /api/auth/me/password` (or a password reset) clears the flag. WebSocket chat closes with **4003** if that requirement arises after ticket issuance. New password must differ from the current password. `GET /api/auth/me` and password change use `get_authenticated_user` and remain available. Tenant creation is platform-admin only (`POST /api/tenants` or `POST /api/admin/companies`). Platform settings expose invitation-code and SSO-domain redirect toggles only.
 
@@ -120,7 +122,7 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 |--------|------|---------|------------------|
 | `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]` including `user_count`, `active_user_count`, `inactive_user_count`, `agent_count`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
 | `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
-| `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/OpenClaw (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
+| `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/KABERs (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
 | `GET` | `/api/admin/metrics/leaderboards` | - | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |
 | `GET` | `/api/admin/metrics/enhanced` | - | avg tokens/session 30d, 7d retention, channel distribution, tool category top10, churn warnings |
@@ -166,7 +168,7 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 | Method | Path | Roles | Request | Response / notes |
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/tenants/{tenant_id}` | platform / org | - | Org: own tenant only. **Res:** `TenantOut` |
-| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. **`is_active` is platform_admin only** (403 otherwise). Cannot disable system or default end-user orgs (MaraClaw / OpenClaw). Setting `is_active=false` uses the same member/agent/automation cascade as company toggle. |
+| `PUT` | `/api/tenants/{tenant_id}` | platform / org | `TenantUpdate`: optional `name`, `im_provider`, `timezone`, `country_region`, `is_active`, `sso_enabled`, `sso_domain`, `a2a_async_enabled` | Org: own tenant. Platform: SSO fields stripped. **`is_active` is platform_admin only** (403 otherwise). Cannot disable system or default end-user orgs (MaraClaw / KABERs). Setting `is_active=false` uses the same member/agent/automation cascade as company toggle. |
 | `GET` | `/api/tenants/{tenant_id}/email-domains` | platform / org | - | Claimed email domains for the company |
 | `POST` | `/api/tenants/{tenant_id}/email-domains` | platform / org | `{ domain, is_default? }` | **201**. **409** if another company already claims the domain |
 | `PATCH` | `/api/tenants/{tenant_id}/email-domains/{domain_id}` | platform / org | `{ is_default: true }` | Make this the default invite domain |
@@ -188,11 +190,11 @@ is_system, is_default_end_user_org, can_disable
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/tenants/join` | Invitation join for **unassigned** users only: a valid recipient-bound code admits immediately, **200** `{ status: "approved", request: RequestSummary }`. Any existing member (OpenClaw or company) gets **409** and must use `/transfer`. Invalid, expired, spent or wrong-recipient codes are **400**. |
+| `POST` | `/api/tenants/join` | Invitation join for **unassigned** users only: a valid recipient-bound code admits immediately, **200** `{ status: "approved", request: RequestSummary }`. Any existing member (KABERs or company) gets **409** and must use `/transfer`. Invalid, expired, spent or wrong-recipient codes are **400**. |
 | `POST` | `/api/tenants/invitations/preview` | Body `{ invitation_code }`. Authenticated eligible unassigned/default-org member only. **200** `{ tenant: { id, name } }`; every other outcome is the same **400** `Invitation is invalid or no longer available`. Read-only. |
-| `POST` | `/api/tenants/transfer` | Body `{ password, invitation_code?, tenant_id?, transfer_choice?, free_destructive_consent? }`. Password required. A company target requires `invitation_code` (**403** otherwise; no verified-domain path to a company); a valid code admits at once, **200** `{ status: "approved", request }`, after the default-source, free-consent and paid-fee rules (paid stays **202** `payment_review` until payment is approved, then admits without destination approval). OpenClaw targets remain immediate. Protected admins blocked. |
-| `POST` | `/api/tenants/join-suggested` | Verified email-domain company admission request, **202** pending for active OpenClaw or unassigned users. Company members must use `/transfer` (**409**). Protected admins blocked. |
-| `POST` | `/api/tenants/join-default` | Decline the match and join OpenClaw. Active user required. Genesis / platform admin blocked. |
+| `POST` | `/api/tenants/transfer` | Body `{ password, invitation_code?, tenant_id?, transfer_choice?, free_destructive_consent? }`. Password required. A company target requires `invitation_code` (**403** otherwise; no verified-domain path to a company); a valid code admits at once, **200** `{ status: "approved", request }`, after the default-source, free-consent and paid-fee rules (paid stays **202** `payment_review` until payment is approved, then admits without destination approval). KABERs targets remain immediate. Protected admins blocked. |
+| `POST` | `/api/tenants/join-suggested` | Verified email-domain company admission request, **202** pending for active KABERs or unassigned users. Company members must use `/transfer` (**409**). Protected admins blocked. |
+| `POST` | `/api/tenants/join-default` | Decline the match and join KABERs. Active user required. Genesis / platform admin blocked. |
 | `GET` | `/api/tenants/lookup-by-email` | Public. `{ match, fallback }` for registration UI. Does not attach. |
 | `GET` | `/api/tenants/registration-config` | Public. Always `{ tenant_creation: "platform_admin_only" }`. |
 | `DELETE` | `/api/tenants/{tenant_id}` | Platform admin only. Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
@@ -210,10 +212,23 @@ Repeated requests for the same pending target return the same request without a
 second notification; a different pending target returns **409**.
 
 Invitation registration returns **201** with `admission_request: RequestSummary | null`;
-its user and token still represent OpenClaw (or the existing source membership).
+its user and token still represent KABERs (or the existing source membership).
+Without an invitation, a fresh signup matching a registered company email domain
+stays **tenantless** (`needs_org_confirm: true`, `suggested_org` identifies the match).
+An unverified match creates no domain admission until email verification succeeds;
+an already-verified match stages a pending `verified_domain` request immediately.
+This is initial admission (`source_tenant_id: null`, no transfer), not a KABERs
+transfer. The active target genesis administrator must approve before that same
+user is assigned the company and its quotas; rejection leaves the user tenantless.
+Unmatched signups still join KABERs. Registration replay does not re-place existing
+accounts or replace their pending target.
 Fresh SSO and OAuth tenant selection also stage admission rather than writing a
 company membership. New authenticated SSO users are active even when SMTP email
 verification is configured; existing disabled accounts remain disabled.
+Domain-matched fresh SSO accounts use the same tenantless placement and verified
+domain admission: OAuth does not establish email ownership, and a provider-selected
+company cannot bypass email verification or replace the domain target. Provider
+linkage remains on the applicant's actual membership through repeated login.
 Already-admitted SSO users and genesis provisioning remain
 unchanged. IM lazy registration cannot create company members; applicants must
 complete web admission first. Admin assign-user only changes roles within the
@@ -375,7 +390,7 @@ All four routes require an active administrator with `is_genesis=true`, role
 admins cannot view, configure, delete or test SMTP. Optional query `tenant_id`
 defaults to the caller's organization; a foreign organization is forbidden
 (**403**), including for platform admins. The password-change gate still applies.
-For SMTP, MaraClaw and OpenClaw are ordinary isolated organizations with no
+For SMTP, MaraClaw and KABERs are ordinary isolated organizations with no
 cross-organization privileges. The `web-a` control belongs only in Settings,
 visible to eligible admins, with no organization picker.
 
@@ -423,7 +438,7 @@ There is only one SMTP configuration path: encrypted organization settings.
 Identity verification/password-reset mail and platform incident/admission mail
 resolve the system organization with slug `maraclaw` and use only its enabled,
 complete saved SMTP. Missing or disabled MaraClaw SMTP means no delivery, never
-an OpenClaw or other organization fallback. Explicit organization delivery never
+a KABERs or other organization fallback. Explicit organization delivery never
 consults MaraClaw as a fallback. The platform genesis administrator must configure
 their own MaraClaw SMTP in Settings before sending email broadcasts.
 

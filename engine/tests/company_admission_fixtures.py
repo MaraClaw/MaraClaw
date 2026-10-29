@@ -94,6 +94,16 @@ async def review_page(scenario: AdmissionScenario, params: dict[str, str | int] 
 
 
 @pytest.fixture
+async def admission_http_domain(admission_scenario: AdmissionScenario) -> str:
+    domain = "registration.example.com"
+    await admission_scenario.db.execute(
+        "INSERT INTO tenant_email_domains (id,tenant_id,domain,is_default) VALUES (%(id)s,%(tid)s,%(domain)s,false)",
+        {"id": uuid4(), "tid": admission_scenario.target_id, "domain": domain},
+    )
+    return domain
+
+
+@pytest.fixture
 async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AdmissionScenario]:
     conninfo = os.environ.get("BOOTSTRAP_TEST_DATABASE_URL", "")
     if not conninfo:
@@ -109,7 +119,7 @@ async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
             await db.execute(await Path("scripts/schema_baseline.sql").read_text())
             await init_pool(conninfo=make_conninfo(conninfo, options=f"-csearch_path={schema}"), min_size=1, max_size=4)
             source = await tenant_dao.create(
-                obj_in={"name": "OpenClaw", "slug": "openclaw", "is_default_end_user_org": True}
+                obj_in={"name": "KABERs", "slug": "kabers", "is_default_end_user_org": True}
             )
             target = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme", "default_max_agents": 9})
 

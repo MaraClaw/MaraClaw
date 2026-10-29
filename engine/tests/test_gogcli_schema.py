@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from app.core.domain.agents import AgentType
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 
 
@@ -19,22 +20,22 @@ def test_agent_create_accepts_gogcli_enabled_true() -> None:
 
 def test_agent_create_defaults_to_openclaw() -> None:
     agent = AgentCreate(name="Guest Bot")
-    assert agent.agent_type == "openclaw"
+    assert agent.agent_type is AgentType.OPENCLAW
 
 
-def test_agent_create_accepts_openclaw_type() -> None:
-    agent = AgentCreate(name="Guest Bot", agent_type="openclaw")
-    assert agent.agent_type == "openclaw"
+def test_agent_create_accepts_openclaw_type_from_wire_json() -> None:
+    # Given a raw JSON request body, as it arrives over HTTP.
+    # When the request schema parses it.
+    agent = AgentCreate.model_validate_json('{"name": "Guest Bot", "agent_type": "openclaw"}')
+    # Then the domain sees the enum and the wire value is unchanged.
+    assert agent.agent_type is AgentType.OPENCLAW
+    assert agent.model_dump(mode="json")["agent_type"] == "openclaw"
 
 
-def test_agent_create_rejects_unknown_type() -> None:
+@pytest.mark.parametrize("value", ["guest", "native", "OpenClaw", "", " openclaw"])
+def test_agent_create_rejects_unknown_type(value: str) -> None:
     with pytest.raises(ValidationError):
-        _ = AgentCreate(name="Guest Bot", agent_type="guest")
-
-
-def test_agent_create_rejects_native_type() -> None:
-    with pytest.raises(ValidationError):
-        _ = AgentCreate(name="Legacy Bot", agent_type="native")
+        _ = AgentCreate.model_validate({"name": "Guest Bot", "agent_type": value})
 
 
 def test_agent_create_defaults_gogcli_enabled_to_false() -> None:
@@ -67,6 +68,32 @@ def test_agent_out_includes_and_serializes_gogcli_enabled() -> None:
     # Then: gogcli_enabled is part of the schema contract and serialized output.
     assert "gogcli_enabled" in AgentOut.model_fields
     assert agent.model_dump()["gogcli_enabled"] is True
+
+
+def test_agent_out_parses_and_serializes_agent_type_as_wire_text() -> None:
+    # Given a response source carrying the stored text value.
+    source = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Ops Bot",
+        role_description="",
+        status="idle",
+        creator_id=uuid.uuid4(),
+        autonomy_policy={},
+        tokens_used_today=0,
+        tokens_used_month=0,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        agent_type="openclaw",
+    )
+
+    # When validating and serializing the response.
+    agent = AgentOut.model_validate(source)
+
+    # Then the enum is typed internally and JSON keeps the same text.
+    assert agent.agent_type is AgentType.OPENCLAW
+    assert agent.model_dump_json().count('"agent_type":"openclaw"') == 1
+    source.agent_type = "guest"
+    with pytest.raises(ValidationError):
+        _ = AgentOut.model_validate(source)
 
 
 def test_agent_update_accepts_gogcli_enabled() -> None:

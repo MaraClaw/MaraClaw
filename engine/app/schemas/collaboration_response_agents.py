@@ -9,6 +9,7 @@ from app.core.domain.agents import (
     AgentAccessReason,
     AgentSharingMode,
     AgentStatus,
+    AgentType,
     CompanyAccessLevel,
     PermissionAccessLevel,
 )
@@ -77,7 +78,7 @@ class AgentModelDump(TypedDict):
     access_reason: AgentAccessReason | None
     llm_calls_today: int
     max_llm_calls_per_day: int
-    agent_type: str
+    agent_type: AgentType
     gogcli_enabled: bool
     openclaw_last_seen: datetime | None
     unread_count: int

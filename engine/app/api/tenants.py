@@ -374,7 +374,7 @@ def _org_summary(tenant: TenantRecord) -> OrgSummary:
 
 @router.get("/lookup-by-email", response_model=EmailLookupResponse)
 async def lookup_org_by_email(email: str) -> EmailLookupResponse:
-    """Public: which org an email would join, plus the OpenClaw fallback."""
+    """Public: which org an email would join, plus the KABERs fallback."""
     from app.services.org_membership import DefaultOrgUnavailableError, get_fallback_org, lookup_tenant_by_email_domain
 
     match = await lookup_tenant_by_email_domain(email)
@@ -432,7 +432,7 @@ async def join_suggested_org(
 
 @router.post("/join-default", response_model=JoinOrgResponse)
 async def join_default_org(current_user: UserRecord = Depends(get_current_user)) -> JoinOrgResponse:
-    """Decline a suggested org and join OpenClaw."""
+    """Decline a suggested org and join KABERs."""
     from app.core.security import create_access_token
     from app.services.org_membership import (
         AlreadyInOrgError,
@@ -520,7 +520,7 @@ async def transfer_organization(
         if target.id not in allowed_ids:
             raise HTTPException(
                 status_code=403,
-                detail="Transfer without an invite is only allowed to your email-domain org or OpenClaw",
+                detail="Transfer without an invite is only allowed to your email-domain org or KABERs",
             )
     else:
         raise HTTPException(status_code=400, detail="Provide an invitation code or a destination organization")

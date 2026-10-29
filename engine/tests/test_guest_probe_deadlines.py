@@ -134,12 +134,12 @@ def test_probe_preserves_real_client_prefix_and_environment(tmp_path, monkeypatc
         tlskey="key-sentinel",
         tlsverify=True,
     )
-    # When the real runner performs its read-only probe.
+    # When the real runner performs its read-only current-boot check.
     result = probe_guest(client, "owned-guest", 5.0)
     # Then connection selection, executable arguments and environment survive unchanged.
     assert result is True
     arguments = TypeAdapter(list[str]).validate_json(receipt.read_text(encoding="utf-8"))
-    assert arguments[:-2] == [
+    assert arguments[:-1] == [
         "prefix-sentinel",
         "--config",
         str(tmp_path / "config"),
@@ -160,10 +160,10 @@ def test_probe_preserves_real_client_prefix_and_environment(tmp_path, monkeypatc
         "--tlsverify",
         "exec",
         "owned-guest",
-        "node",
-        "-e",
+        "python3",
+        "/usr/local/bin/bootstrap-agent-container.py",
+        "check-ready",
     ]
-    assert "AbortSignal.timeout(5000)" in arguments[-2]
     assert arguments[-1] == "inherited-docker-host"
 
 

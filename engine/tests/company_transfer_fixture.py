@@ -43,7 +43,7 @@ class TransferFixture:
 
 @pytest.fixture
 async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TransferFixture]:
-    source = TenantRecord(id=uuid4(), name="Default", slug="openclaw", is_default_end_user_org=True)
+    source = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
     target = TenantRecord(id=uuid4(), name="Target", slug="target")
     identity = IdentityRecord(id=uuid4(), email="applicant@example.test", email_verified=True)
     applicant = UserRecord(id=uuid4(), tenant_id=source.id, identity_id=identity.id, identity=identity)

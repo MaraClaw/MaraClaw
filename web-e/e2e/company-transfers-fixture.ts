@@ -3,7 +3,7 @@ import type { AdmissionDetail } from '../src/lib/types/company-admissions'
 import type { TransferQuote, TransferSummary } from '../src/lib/types/company-transfers'
 
 export const tokenKey = 'maraclaw-enduser-token'
-export const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'OpenClaw', slug: 'openclaw' }
+export const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'KABERs', slug: 'kabers' }
 export const target = { id: 'c919ad90-90be-4a1d-b699-1d02138b7f45', name: 'Synthetic Company', slug: 'synthetic' }
 export const member = { id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db', display_name: 'Synthetic source member', email: 'member@example.test', tenant_id: source.id, role: 'member', email_verified: true, is_active: true, created_at: '2026-10-25T08:00:00Z' }
 export const quote: TransferQuote = {

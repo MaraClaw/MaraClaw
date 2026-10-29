@@ -7,7 +7,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.domain.activity import ActivityAction
-from app.core.domain.agents import AgentStatus, PermissionGrantScope
+from app.core.domain.agents import AgentStatus, AgentType, PermissionGrantScope
 from app.core.domain.approvals import ApprovalStatus
 from app.core.domain.channels import ChannelType
 from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
@@ -42,7 +42,7 @@ def test_domain_values_match_existing_sql_enum(enum_type: type[StrEnum], sql_nam
     assert [member.value for member in enum_type] == sql_values
 
 
-@pytest.mark.parametrize("enum_type", [UserRole, AgentStatus, ChannelType, TaskStatus, ActivityAction])
+@pytest.mark.parametrize("enum_type", [UserRole, AgentStatus, AgentType, ChannelType, TaskStatus, ActivityAction])
 def test_wire_roundtrip_preserves_plain_strings(enum_type: type[StrEnum]) -> None:
     # Given each existing wire value.
     adapter = TypeAdapter(enum_type)
@@ -81,6 +81,31 @@ def test_agent_record_rejects_unknown_database_status() -> None:
     # Given a stored agent with an unknown lifecycle status.
     row = {"id": uuid4(), "name": "Agent", "creator_id": uuid4(), "status": "future-value"}
     # When parsing the row, then the unknown state is not silently defaulted.
+    with pytest.raises(ValueError):
+        AgentRecord.from_row(row)
+
+
+def test_agent_record_parses_database_agent_type_to_enum() -> None:
+    # Given the stored VARCHAR text.
+    row = {"id": uuid4(), "name": "Agent", "creator_id": uuid4(), "agent_type": "openclaw"}
+    # When parsing the row, then domain code receives the enum.
+    assert AgentRecord.from_row(row).agent_type is AgentType.OPENCLAW
+
+
+@pytest.mark.parametrize("stored", [None, ""])
+def test_agent_record_defaults_missing_database_agent_type(stored: str | None) -> None:
+    # Given a row without a usable agent_type, as existing partial rows and defaults produce.
+    row = {"id": uuid4(), "name": "Agent", "creator_id": uuid4(), "agent_type": stored}
+    # When parsing the row, then the existing OpenClaw default is preserved.
+    assert AgentRecord.from_row(row).agent_type is AgentType.OPENCLAW
+    assert AgentRecord.from_row({k: v for k, v in row.items() if k != "agent_type"}).agent_type is AgentType.OPENCLAW
+
+
+@pytest.mark.parametrize("stored", ["guest", "native", "OPENCLAW"])
+def test_agent_record_rejects_unknown_database_agent_type(stored: str) -> None:
+    # Given a corrupt or retired stored type.
+    row = {"id": uuid4(), "name": "Agent", "creator_id": uuid4(), "agent_type": stored}
+    # When parsing the row, then it is not coerced into OpenClaw.
     with pytest.raises(ValueError):
         AgentRecord.from_row(row)
 

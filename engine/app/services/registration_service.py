@@ -288,7 +288,7 @@ class RegistrationService:
     ) -> tuple[TenantRecord | None, str | None]:
         """Determine tenant for new user registration.
 
-        Invite codes attach immediately. Every other new member joins OpenClaw
+        Invite codes attach immediately. Every other new member joins KABERs
         (the default end-user Org). Claimed domains can be joined later via transfer.
         """
         from app.services.org_membership import DefaultOrgUnavailableError, InvitationError, resolve_registration_org

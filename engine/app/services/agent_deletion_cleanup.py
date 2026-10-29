@@ -15,7 +15,7 @@ from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, requir
 
 
 def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
-    for listed in client.container.list(all=True, filters={"label": f"{AGENT_LABEL}={agent_id}"}):
+    for listed in client.container.list(all=True, filters=[("label", f"{AGENT_LABEL}={agent_id}")]):
         try:
             guest = client.container.inspect(listed.id)
             config = guest.config

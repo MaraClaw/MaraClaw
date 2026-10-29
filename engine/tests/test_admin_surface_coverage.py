@@ -1509,14 +1509,14 @@ async def test_tenants_client_ip_and_lookup_by_email(monkeypatch):
     assert await tenants_api.get_client_ip(req) == "203.0.113.9"
 
     match = _tenant(name="Acme", slug="acme")
-    fallback = _tenant(name="OpenClaw", slug="openclaw")
+    fallback = _tenant(name="KABERs", slug="kabers")
     monkeypatch.setattr("app.services.org_membership.lookup_tenant_by_email_domain", AsyncMock(return_value=match))
     monkeypatch.setattr("app.services.org_membership.get_fallback_org", AsyncMock(return_value=fallback))
     out = await tenants_api.lookup_org_by_email("ada@acme.com")
     assert out.match is not None
     assert out.match.slug == "acme"
     assert out.fallback is not None
-    assert out.fallback.slug == "openclaw"
+    assert out.fallback.slug == "kabers"
 
     from app.services.org_membership import DefaultOrgUnavailableError
 
@@ -1534,7 +1534,7 @@ async def test_tenants_client_ip_and_lookup_by_email(monkeypatch):
 async def test_join_default_immediate_and_suggested_pending_branches(monkeypatch, pending_admission):
     from app.services.org_membership import AlreadyInOrgError, DefaultOrgUnavailableError
 
-    fallback = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True, is_system=True)
+    fallback = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True, is_system=True)
     member = _user(role="member", tenant_id=None)
     attached = _user(role="member", tenant_id=fallback.id)
     admission = pending_admission(member, fallback, AdmissionMethod.VERIFIED_DOMAIN)
@@ -1669,7 +1669,7 @@ async def test_join_company_invitation_validation_and_deferred_attach_conflict(m
     consume.assert_not_awaited()
     assert member.tenant_id is None
 
-    fallback = _tenant(name="OpenClaw", slug="openclaw", is_default_end_user_org=True, is_system=True)
+    fallback = _tenant(name="KABERs", slug="kabers", is_default_end_user_org=True, is_system=True)
     monkeypatch.setattr(
         "app.services.org_membership.require_active_invitation",
         AsyncMock(return_value=SimpleNamespace(tenant_id=fallback.id)),

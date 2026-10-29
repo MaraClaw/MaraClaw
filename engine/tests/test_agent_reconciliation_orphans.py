@@ -1,8 +1,10 @@
 import builtins
-from collections.abc import AsyncGenerator
+import sys
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Unpack
@@ -10,6 +12,8 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from pywhales import DockerClient
+from pywhales.components.container import cli_wrapper as container_cli
 from pywhales.exceptions import NoSuchContainer
 
 from app.records.agent import AgentRecord
@@ -49,7 +53,7 @@ class Containers:
         self.inspected: dict[str, Guest] = {item.id: item for item in guests}
         self.calls: builtins.list[tuple[str, str]] = []
 
-    def list(self, *, filters: dict[str, str], **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[Guest]:
+    def list(self, *, filters: Iterable[tuple[str, str]], **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[Guest]:
         return self.listed
 
     def inspect(self, reference: str) -> Guest:
@@ -104,6 +108,33 @@ def sweep(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Sweep:
     monkeypatch.setattr(agent_orphans.agent_dao, "get", sweep.get)
     monkeypatch.setattr(openclaw_update_gate.openclaw_update_notice_dao, "gate_state", sweep.gate_state)
     return sweep
+
+
+async def test_sweep_emits_label_and_network_filters_through_the_real_wrapper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given the installed PyWhales container.list with only its process execution boundary stubbed.
+    client = DockerClient(client_call=[sys.executable])
+    commands: list[list[str]] = []
+
+    def run(command: Sequence[str | Path]) -> str:
+        commands.append([str(argument) for argument in command])
+        return ""
+
+    monkeypatch.setattr(container_cli, "run", run)
+    monkeypatch.setattr(
+        agent_orphans,
+        "agent_manager",
+        SimpleNamespace(docker_client=client, _agent_dir=lambda agent_id: tmp_path / str(agent_id)),
+    )
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK=NETWORK))
+    # When the sweep lists an empty Docker inventory.
+    await agent_orphans.sweep_orphan_containers(NOW)
+    # Then the wrapper accepts the request and Docker receives --all with both filters.
+    (command,) = commands
+    filters = [value for flag, value in pairwise(command) if flag == "--filter"]
+    assert sorted(filters) == ["label=maraclaw.agent_id", f"network={NETWORK}"]
+    assert "--all" in command
 
 
 async def test_older_owned_duplicate_is_removed_when_the_current_guest_is_known(sweep: Sweep) -> None:

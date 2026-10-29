@@ -123,10 +123,10 @@ try {
     assert.equal(state.requests.length, 0); assert.equal(state.auxiliaryRequests.length, 0)
     await capture('blocked')
   })
-  for (const role of ['org_admin', 'platform_admin']) await harness.scenario({ name: `openclaw-genesis-${role}`, user: { role, is_platform_admin: role === 'platform_admin', tenant_id: tenantB } }, async (page, state, capture) => {
-    // Given: the genesis administrator belongs to OpenClaw, not MaraClaw.
+  for (const role of ['org_admin', 'platform_admin']) await harness.scenario({ name: `kabers-genesis-${role}`, user: { role, is_platform_admin: role === 'platform_admin', tenant_id: tenantB } }, async (page, state, capture) => {
+    // Given: the genesis administrator belongs to KABERs, not MaraClaw.
     const section = page.getByRole('region', { name: 'Organization SMTP', exact: true })
-    await expect(section.getByText(/Your organization: OpenClaw/)).toBeVisible()
+    await expect(section.getByText(/Your organization: KABERs/)).toBeVisible()
     await expect(section.getByRole('combobox')).toHaveCount(0)
     await expect(section.getByLabel('SMTP host', { exact: true })).toHaveValue('')
     await expect(section.getByLabel('Sender name', { exact: true })).toHaveValue('')
@@ -170,7 +170,7 @@ try {
     state.getGate = null
     // When: a new authenticated own membership replaces the old session.
     await replaceMembership(page, state, tenantB)
-    await expect(section.getByText(/Your organization: OpenClaw/)).toBeVisible()
+    await expect(section.getByText(/Your organization: KABERs/)).toBeVisible()
     held.gate.resolve(); await held.delivered.promise
     // Then: old values, plaintext and late status cannot enter the new form.
     await expect(section.getByLabel('Sender name', { exact: true })).toHaveValue('')

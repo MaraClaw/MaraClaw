@@ -53,7 +53,7 @@ async def seed_preview_ownership(fixture: DeletionPostgres) -> None:
             "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, agent_type, "
             "max_triggers, min_poll_interval_min, webhook_rate_limit, access_mode, company_access_level, "
             "max_llm_calls_per_day, heartbeat_interval_minutes) "
-            "VALUES (%s, 'Extra', 'Role', %s, %s, 'employee', 1, 5, 5, 'private', 'use', 100, 240)",
+            "VALUES (%s, 'Extra', 'Role', %s, %s, 'openclaw', 1, 5, 5, 'private', 'use', 100, 240)",
             (extra_agent, fixture.other_user_id, fixture.tenant_id),
         )
         await db.execute("UPDATE agents SET creator_id = %s WHERE id = %s", (fixture.actor.id, content.peer_id))

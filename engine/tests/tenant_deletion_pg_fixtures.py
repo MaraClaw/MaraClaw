@@ -221,7 +221,7 @@ async def deletion_pg(
                         "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, agent_type, "
                         "max_triggers, min_poll_interval_min, webhook_rate_limit, access_mode, company_access_level, "
                         "max_llm_calls_per_day, heartbeat_interval_minutes) "
-                        "VALUES (%s, 'Agent', 'Role', %s, %s, 'employee', 1, 5, 5, 'private', 'use', 100, 240)",
+                        "VALUES (%s, 'Agent', 'Role', %s, %s, 'openclaw', 1, 5, 5, 'private', 'use', 100, 240)",
                         (agent_id, user_id, tenant_id),
                     )
                 row_memo.clear_row_memo()

@@ -124,9 +124,12 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
     EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     EMAIL_VERIFICATION_REQUIRED: bool = False  # Require email verification for login
-    # Genesis platform admin (seeded at bootstrap). Empty disables seeding.
+    # Genesis platform admin credentials are required when the account is missing.
     PLATFORM_ADMIN_EMAIL: str = ""
     PLATFORM_ADMIN_PASSWORD: str = ""
+    # KABERs organization genesis admin credentials are required when missing.
+    KABERS_ORG_ADMIN_EMAIL: str = ""
+    KABERS_ORG_ADMIN_PASSWORD: str = ""
     # Redis TTL for check_agent_access decisions. 0 disables the Redis layer.
     AGENT_ACCESS_CACHE_TTL_SECONDS: int = 45
     # Redis TTL for soul/memory/skill prompt fragments. 0 disables.
@@ -181,6 +184,11 @@ class Settings(BaseSettings):
     # Requeue a gateway message the guest took but has not reported after this many seconds.
     OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
     GOGCLI_ENABLED: bool = True
+    # Optional OpenAI-compatible memory embeddings for guests. Active only when all four are non-blank.
+    EMBEDDING_MODEL: str = ""
+    EMBEDDING_DIMS: str = ""
+    EMBEDDING_PROVIDER_URL: str = ""
+    EMBEDDING_API_KEY: str = ""
 
     # Feishu OAuth
     FEISHU_APP_ID: str = ""

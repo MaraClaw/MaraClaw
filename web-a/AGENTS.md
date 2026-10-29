@@ -42,7 +42,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - Page data uses TanStack Query; forms use RHF + Zod. New live screens need page + route + nav; shared component rules live in the components guide.
 - HTTP belongs in `src/lib/*-api.ts`, not raw `fetch` in pages/components or REST handlers in Vite.
 - Public `VITE_*` only; never ship `PLATFORM_ADMIN_*`. No hardcoded API hosts or `VITE_API_BASE_URL=http://0.0.0.0:8000`.
-- Keep Disable/Enable visible when `can_disable` is false (MaraClaw + OpenClaw).
+- Keep Disable/Enable visible when `can_disable` is false (MaraClaw + KABERs).
 - Users manages org departments and memberships. Provider organization sync is retired; `web-e` Directory retains People and Org Departments, without a Synced view.
 - `VITE_AUTH_BYPASS` is not implemented. README structure/status and bypass claims are not authoritative.
 

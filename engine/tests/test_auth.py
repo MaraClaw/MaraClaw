@@ -504,6 +504,9 @@ async def test_register_init_returns_submitted_email(monkeypatch):
     monkeypatch.setattr(auth_api, "hash_password_async", AsyncMock(return_value="hashed"))
     monkeypatch.setattr(auth_api.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_api, "create_access_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "app.services.domain_admission_auto.stage_verified_domain_admission", AsyncMock(return_value=None)
+    )
 
     with (
         patch("app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=None)),

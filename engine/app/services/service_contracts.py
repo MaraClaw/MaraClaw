@@ -12,11 +12,16 @@ class OpenClawGatewayAuth(TypedDict, closed=True):
     token: str
 
 
+class OpenClawControlUi(TypedDict, closed=True):
+    allowedOrigins: list[Literal["http://localhost:18789", "http://127.0.0.1:18789"]]
+
+
 class OpenClawGateway(TypedDict, closed=True):
     mode: Literal["local"]
     bind: Literal["lan"]
     port: Literal[18789]
     auth: OpenClawGatewayAuth
+    controlUi: OpenClawControlUi
 
 
 class OpenClawHooks(TypedDict, closed=True):

@@ -19,7 +19,7 @@ Three independently configured packages: FastAPI `engine/` plus two Vite apps, w
 
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
-| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.8 | Mature |
+| **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.10 | Mature |
 | **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, admissions, notifications, Take Control, OpenClaw update notices) |
 | **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, tools, broadcast, notifications, activity, admission approvals, OpenClaw updates, Linkup keys + search analytics |
 

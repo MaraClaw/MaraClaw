@@ -13,7 +13,7 @@ __all__ = ["domain_admission_fixture"]
 async def test_verification_stages_domain_request_after_email_ownership_is_verified(
     domain_admission_fixture: DomainAdmissionFixture,
 ) -> None:
-    # Given an unverified newly registered default-organization member in a claimed domain.
+    # Given an unverified newly registered tenantless applicant in a claimed domain.
     fixture = domain_admission_fixture
     fixture.identity.email_verified = False
     fixture.identity.is_active = False
@@ -27,7 +27,7 @@ async def test_verification_stages_domain_request_after_email_ownership_is_verif
     assert response.status_code == 200, response.text
     assert response.json()["access_token"] == "access-token"
     assert response.json()["identity"]["email_verified"] is True
-    assert response.json()["user"]["tenant_id"] == str(fixture.source.id)
+    assert response.json()["user"]["tenant_id"] is None
     assert "admission_request" not in response.json()
     (request,) = fixture.admissions.rows.values()
     assert (request.method, request.status, request.target_tenant_id) == (
@@ -37,7 +37,8 @@ async def test_verification_stages_domain_request_after_email_ownership_is_verif
     )
     (notice,) = fixture.notices
     assert (notice.user_id, notice.type, notice.ref_id) == (fixture.genesis.id, "company_admission_pending", request.id)
-    assert fixture.applicant.tenant_id == fixture.source.id
+    assert fixture.applicant.tenant_id is None
+    assert request.source_tenant_id is None
 
 
 @pytest.mark.parametrize("same_target", [False, True])

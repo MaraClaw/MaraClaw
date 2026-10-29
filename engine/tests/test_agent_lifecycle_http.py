@@ -9,6 +9,7 @@ import pytest
 from fastapi import Depends, FastAPI
 
 from app.api import agents as api
+from app.core import events
 from app.core.domain.agents import AgentStatus
 from app.db import session
 from app.db.connection import DbConnection
@@ -26,6 +27,7 @@ class TransactionalRuntime:
         self.committed = replace(agent)
         self.pending = None
         self.events = []
+        self.published = []
         self.locked = False
         self.released = anyio.Event()
 
@@ -44,6 +46,11 @@ class TransactionalRuntime:
     async def rollback(self):
         self.events.append("rollback")
         self.pending = None
+
+    async def publish(self, channel, message):
+        self.events.append("publish")
+        self.published.append((channel, message))
+        return 1
 
 
 @pytest.fixture
@@ -113,6 +120,11 @@ def surface(monkeypatch, tmp_path):
     async def serialize(record, _viewer):
         return api.AgentOut.model_validate(record)
 
+    async def redis():
+        return runtime
+
+    monkeypatch.setattr(events, "get_redis", redis)
+    monkeypatch.setattr(lifecycle.agent_manager, "docker_client", None)
     monkeypatch.setattr(api, "check_agent_access", authorize)
     monkeypatch.setattr(api.agent_dao, "get", get_agent)
     monkeypatch.setattr(api.agent_dao, "update", runtime.update)

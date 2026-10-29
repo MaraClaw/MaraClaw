@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.api import agents as agents_api, background_tasks
-from app.core.domain.agents import AgentStatus
+from app.core.domain.agents import AgentStatus, AgentType
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.agent_dao import AGENT_DELETE_CLEANUP_SQL
@@ -63,7 +63,7 @@ def make_agent(creator_id: uuid.UUID, **overrides):
             role_description="assistant",
             creator_id=creator_id,
             status=AgentStatus.IDLE,
-            agent_type="openclaw",
+            agent_type=AgentType.OPENCLAW,
             is_system=False,
             tenant_id=uuid.uuid4(),
         ),

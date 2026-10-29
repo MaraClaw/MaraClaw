@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.core.domain.agents import AgentStatus
@@ -7,6 +8,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
+from app.services.agent_lifecycle_events import AgentStopped, publish_agent_stopped
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.agent_start_reconciler import execute_start
@@ -84,6 +86,8 @@ async def stop_agent_guest(agent_id: UUID, persist: RuntimePersistence = persist
             await flush_request_transaction()
             if not stopped:
                 return LifecycleFailure(502, "guest_stop_failed", "Guest stop is pending retry")
+            if agent_manager.docker_client is not None:
+                await publish_agent_stopped(AgentStopped(agent_id, saved.container_id, datetime.now(UTC)))
             return LifecycleSuccess(saved)
 
     return await drain_on_cancel(section())

@@ -28,7 +28,7 @@ async def seed_deletion_content(fixture: DeletionPostgres) -> DeletionContent:
             "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, agent_type, "
             "max_triggers, min_poll_interval_min, webhook_rate_limit, access_mode, company_access_level, "
             "max_llm_calls_per_day, heartbeat_interval_minutes) "
-            "VALUES (%s, 'Peer', 'Role', %s, %s, 'employee', 1, 5, 5, 'private', 'use', 100, 240)",
+            "VALUES (%s, 'Peer', 'Role', %s, %s, 'openclaw', 1, 5, 5, 'private', 'use', 100, 240)",
             (peer_id, fixture.other_user_id, fixture.other_tenant_id),
         )
         for ref_id, participant_id in participants.items():

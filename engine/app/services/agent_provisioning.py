@@ -12,6 +12,7 @@ from app.core.domain.agents import (
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
+    AgentType,
     PermissionAccessLevel,
     PermissionGrantScope,
 )
@@ -103,7 +104,7 @@ async def provision_agent(
         "avatar_url": data.avatar_url,
         "creator_id": context.actor.id,
         "tenant_id": context.tenant_id,
-        "agent_type": "openclaw",
+        "agent_type": AgentType.OPENCLAW,
         "gogcli_enabled": bool(data.gogcli_enabled),
         "primary_model_id": data.primary_model_id,
         "secondary_model_id": data.secondary_model_id,

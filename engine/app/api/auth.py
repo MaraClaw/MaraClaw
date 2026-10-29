@@ -394,12 +394,6 @@ async def register_init_flow(
                 role=UserRole.MEMBER,
                 tenant_id=placement.tenant_id,
             )
-        elif user.tenant_id is None and placement.tenant_id is not None:
-            from app.services.org_membership import attach_user_to_org
-
-            placed = await tenant_dao.get(placement.tenant_id)
-            if placed is not None:
-                user = await attach_user_to_org(user, placed)
         user.identity = identity
         if audience is AuthAudience.MEMBER:
             require_member_user(user)
@@ -442,7 +436,7 @@ async def register_init_flow(
         message="Registration initiated. Please verify your email."
         if not identity.email_verified
         else "Registration successful.",
-        needs_org_confirm=placement.needs_org_confirm and user.tenant_id is None,
+        needs_org_confirm=user.tenant_id is None,
         suggested_org=_suggested_org(placement.suggested),
         target_tenant_id=data.target_tenant_id,
         admission_request=admission_request,

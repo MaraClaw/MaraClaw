@@ -7,19 +7,19 @@ from typing import Final
 import pytest
 
 DOCKERFILE: Final = Path(__file__).resolve().parents[1] / "Dockerfile"
-PRODUCTION_STAGE: Final = "FROM python:3.14.8-slim-trixie AS production"
+PRODUCTION_STAGE: Final = "FROM python:3.14.10-slim-trixie AS production"
 APT_INSTALL: Final = "apt-get install -y --no-install-recommends"
 APPROVED_DIRECT_PINS: Final = (
     "tini=0.19.0-3+b8",
     "curl=8.14.1-2+deb13u7",
     "bubblewrap=0.12.0-1~deb13u1",
-    "chromium=156.0.8078.47-1~deb13u1",
+    "chromium=156.0.8078.73-1~deb13u1",
 )
 REGRESSION_CASES: Final = (
     ("ARG TINI_VERSION=0.19.0-3+b8", "ARG TINI_VERSION=0.19.0-3+b7", "stale tini pin"),
     ("curl=8.14.1-2+deb13u7", "curl=8.14.1-2+deb13u5", "stale curl pin"),
     ("bubblewrap=0.12.0-1~deb13u1", "bubblewrap=0.11.0-2+deb13u1", "stale bubblewrap pin"),
-    ("chromium=156.0.8078.47-1~deb13u1", "chromium=154.0.8037.92-1~deb13u1", "stale Chromium pin"),
+    ("chromium=156.0.8078.73-1~deb13u1", "chromium=156.0.8078.47-1~deb13u1", "stale Chromium pin"),
     ("curl=8.14.1-2+deb13u7", "", "missing curl direct entry"),
     ("curl=8.14.1-2+deb13u7", "curl", "unpinned curl direct entry"),
     (
@@ -28,8 +28,8 @@ REGRESSION_CASES: Final = (
         "duplicate curl direct entry",
     ),
     (
-        "chromium=156.0.8078.47-1~deb13u1",
-        "chromium=156.0.8078.47-1",
+        "chromium=156.0.8078.73-1~deb13u1",
+        "chromium=156.0.8078.73-1",
         "non-security Chromium replacement",
     ),
 )

@@ -25,6 +25,12 @@ def fake_token_preparation(monkeypatch):
     monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", AsyncMock())
 
 
+@pytest.fixture(autouse=True)
+def blank_embedding_settings(monkeypatch):
+    for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
+        monkeypatch.setattr(agent_manager_module.settings, name, "")
+
+
 class RecordingContainerApi:
     def __init__(self, inspect_result=None, inspect_error=None, stop_error=None, remove_error=None):
         self.inspect_result = inspect_result
@@ -99,9 +105,72 @@ def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_pa
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
-    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
+
+
+CONTROL_UI_ORIGINS = ["http://localhost:18789", "http://127.0.0.1:18789"]
+
+
+def test_generate_openclaw_config_seeds_exact_control_ui_origins_and_keeps_token(monkeypatch, tmp_path):
+    # Given
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    manager = AgentManager.__new__(AgentManager)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Origins Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    (agent_dir / ".openclaw-gateway-token").write_text("persisted-gateway-token", encoding="utf-8")
+
+    # When
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
+
+    # Then
+    assert config["gateway"] == {
+        "mode": "local",
+        "bind": "lan",
+        "port": 18789,
+        "auth": {"mode": "token", "token": "persisted-gateway-token"},
+        "controlUi": {"allowedOrigins": CONTROL_UI_ORIGINS},
+    }
+
+
+def test_write_guest_config_adds_control_ui_origins_to_legacy_config_without_rotating_token(monkeypatch, tmp_path):
+    # Given
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
+    manager = AgentManager.__new__(AgentManager)
+    agent = AgentRecord(id=uuid.uuid4(), name="Legacy Agent", creator_id=uuid.uuid4())
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    (agent_dir / ".openclaw-gateway-token").write_text("legacy-gateway-token", encoding="utf-8")
+    config_path = agent_dir / "openclaw.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "gateway": {
+                    "mode": "local",
+                    "bind": "lan",
+                    "port": 18789,
+                    "auth": {"mode": "token", "token": "legacy-gateway-token"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # When
+    manager.write_guest_config(agent, primary=None)
+
+    # Then
+    gateway = json.loads(config_path.read_text(encoding="utf-8"))["gateway"]
+    assert gateway["controlUi"] == {"allowedOrigins": CONTROL_UI_ORIGINS}
+    assert gateway["auth"] == {"mode": "token", "token": "legacy-gateway-token"}
+    assert (gateway["bind"], gateway["port"]) == ("lan", 18789)
 
 
 def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
@@ -153,7 +222,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
     assert config["agents"]["defaults"]["heartbeat"]["every"] == "30s"
-    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
@@ -212,7 +281,7 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
     # Then
     assert path == config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {
         "slots": {"memory": "memory-core"},
@@ -415,7 +484,8 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["envs"]["OPENCLAW_HOME"] == "/home/node"
     assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/.openclaw"
     assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
-    assert "OPENCLAW_GATEWAY_TOKEN" in run_kwargs["envs"]
+    assert run_kwargs["envs"]["OPENCLAW_GATEWAY_TOKEN"] == config["gateway"]["auth"]["token"]
+    assert config["gateway"]["controlUi"] == {"allowedOrigins": CONTROL_UI_ORIGINS}
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     envs = run_kwargs["envs"]
     assert "LINKUP_API_KEY" not in envs
@@ -474,7 +544,7 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     # Then
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": True, "provider": "none"}
+    assert config["memory"]["search"] == {"enabled": True}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
 

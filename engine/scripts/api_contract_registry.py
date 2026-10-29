@@ -12,6 +12,7 @@ from app.core.domain.agents import (
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
+    AgentType,
     PermissionAccessLevel,
     PermissionGrantScope,
 )
@@ -75,6 +76,7 @@ ENUM_TYPES: tuple[type[StrEnum], ...] = (
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
+    AgentType,
     PermissionAccessLevel,
     PermissionGrantScope,
     ApprovalAction,

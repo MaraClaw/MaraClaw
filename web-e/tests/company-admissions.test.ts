@@ -62,7 +62,7 @@ for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) 
     // Given
     const detail = {
       ...summary, status, applicant: { id: 'member', email: 'member@example.test' },
-      source_tenant: { id: 'source', name: 'OpenClaw' }, decided_by_user_id: null,
+      source_tenant: { id: 'source', name: 'KABERs' }, decided_by_user_id: null,
     }
     context.mock.method(globalThis, 'fetch', async (path: string) => {
       assert.equal(path, '/api/company-admissions/request%2Fone')
@@ -78,7 +78,7 @@ for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) 
 const withdrawn = {
   ...summary, status: 'withdrawn', decided_at: '2026-10-21T12:00:00Z',
   applicant: { id: 'member', email: 'member@example.test' },
-  source_tenant: { id: 'source', name: 'OpenClaw' }, decided_by_user_id: null,
+  source_tenant: { id: 'source', name: 'KABERs' }, decided_by_user_id: null,
 } as const
 
 test('withdraw sends an owner-fenced bodyless POST and accepts repeated terminal detail without changing the session', async (context) => {
