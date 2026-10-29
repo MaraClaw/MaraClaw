@@ -33,6 +33,8 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
     monkeypatch.setattr(module.settings, "LINKUP_API_KEY", "")
+    for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
+        monkeypatch.setattr(module.settings, name, "")
     monkeypatch.setattr(module, "_guest_config_fingerprints", {})
     agent = AgentRecord(id=uuid4(), name="Resource Agent", creator_id=uuid4())
     directory = tmp_path / str(agent.id)
@@ -178,7 +180,7 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
 
     # Then
     stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
-    assert json_object_from(stored["memory"])["search"] == {"enabled": True, "provider": "none"}
+    assert json_object_from(stored["memory"])["search"] == {"enabled": True}
     plugins: JsonObject = {"slots": {"memory": "memory-core"}}
     if config_exists:
         plugins["entries"] = previous_entries

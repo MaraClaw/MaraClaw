@@ -53,6 +53,11 @@ from app.services.openclaw_inbox import (
     inbox_config_block,
     write_maraclaw_sync_skill,
 )
+from app.services.openclaw_memory_embeddings import (
+    memory_embedding_config,
+    memory_embedding_fingerprint,
+    memory_search_block,
+)
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
 
@@ -417,6 +422,7 @@ class AgentManager:
             )
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
+        parts.append(memory_embedding_fingerprint(memory_embedding_config(settings)))
         return "|".join(parts)
 
     def write_guest_config(
@@ -482,7 +488,7 @@ class AgentManager:
         defaults["heartbeat"] = heartbeat_block()
         config: JsonObject = {
             "agents": {"defaults": defaults},
-            "memory": {"search": {"enabled": True, "provider": "none"}},
+            "memory": {"search": memory_search_block(memory_embedding_config(settings))},
             "plugins": {"slots": {"memory": "memory-core"}},
         }
         agent_dir = self._agent_dir(agent.id)
