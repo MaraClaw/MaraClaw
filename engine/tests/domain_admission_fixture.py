@@ -58,7 +58,7 @@ class DomainAdmissionFixture:
 
 @pytest.fixture
 async def domain_admission_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DomainAdmissionFixture]:
-    source = TenantRecord(id=uuid4(), name="OpenClaw", slug="openclaw", is_default_end_user_org=True)
+    source = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
     target = TenantRecord(id=uuid4(), name="Claimed Company", slug="claimed")
     other = TenantRecord(id=uuid4(), name="Invited Company", slug="invited")
     created_at = datetime(2026, 10, 24, tzinfo=UTC)
@@ -96,8 +96,9 @@ async def domain_admission_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIter
     async def memberships(_identity_id: UUID) -> list[UserRecord]:
         return [applicant] if fixture.registered else []
 
-    async def create_user(**_kwargs: object) -> UserRecord:
+    async def create_user(*, tenant_id: UUID | None, **_kwargs: object) -> UserRecord:
         fixture.registered = True
+        applicant.tenant_id = tenant_id
         return applicant
 
     async def get_user(user_id: UUID, **_kwargs: object) -> UserRecord | None:

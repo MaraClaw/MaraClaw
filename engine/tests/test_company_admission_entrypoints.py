@@ -1,5 +1,5 @@
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -8,12 +8,81 @@ from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.services.auth_provider import ExternalUserInfo, GoogleAuthProvider
-from company_admission_fixtures import AdmissionScenario, admission_scenario
+from company_admission_fixtures import AdmissionScenario, admission_http_domain, admission_scenario
 
-__all__ = ["admission_scenario"]
+__all__ = ["admission_http_domain", "admission_scenario"]
 
 
-@pytest.mark.parametrize("source", ["company", "openclaw", "unassigned"])
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+async def test_domain_signup_is_initial_admission_without_transfer(
+    admission_scenario: AdmissionScenario, admission_http_domain: str, monkeypatch: pytest.MonkeyPatch, decision: str
+):
+    # Given a new verified email in the company's claimed domain.
+    scenario = admission_scenario
+    monkeypatch.setattr(auth, "_send_verification_email_task", AsyncMock())
+    registration = await scenario.client.post(
+        "/api/auth/register/init", json={"email": f"new-domain@{admission_http_domain}", "password": "qa-password"}
+    )
+    assert registration.status_code == 201, registration.text
+    body = registration.json()
+    assert body["user"]["tenant_id"] is None
+    assert body["needs_org_confirm"] is True
+    admission = body["admission_request"]
+    assert admission["method"] == "verified_domain"
+    assert admission["source_tenant_id"] is None
+    assert admission["transfer"] is None
+    # When the target genesis administrator decides the initial request.
+    response = await scenario.client.post(
+        f"/api/company-admissions/{admission['id']}/decision",
+        json={"decision": decision},
+        headers=scenario.headers(scenario.genesis),
+    )
+    # Then only approval attaches the same user with destination quotas, without a transfer.
+    assert response.status_code == 200, response.text
+    user = await user_dao.get(UUID(body["user"]["id"]))
+    assert user is not None
+    assert str(user.id) == body["user"]["id"]
+    assert user.tenant_id == (scenario.target_id if decision == "approved" else None)
+    if decision == "approved":
+        assert user.quota_max_agents == 9
+    assert await scenario.db.fetchval("SELECT count(*) FROM company_transfer_requests") == 0
+
+
+@pytest.mark.parametrize("invalidated", ["verification", "domain"])
+async def test_initial_domain_approval_revalidates_email_proof(
+    admission_scenario: AdmissionScenario, admission_http_domain: str, invalidated: str
+):
+    # Given a pending initial domain request whose ownership proof is subsequently invalidated.
+    scenario = admission_scenario
+    response = await scenario.client.post(
+        "/api/auth/register/init", json={"email": f"invalidated@{admission_http_domain}", "password": "qa-password"}
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    if invalidated == "verification":
+        await scenario.db.execute(
+            "UPDATE identities SET email_verified=false WHERE email=%(email)s",
+            {"email": f"invalidated@{admission_http_domain}"},
+        )
+    else:
+        await scenario.db.execute(
+            "DELETE FROM tenant_email_domains WHERE domain=%(domain)s", {"domain": admission_http_domain}
+        )
+    # When the genesis administrator attempts approval.
+    decision = await scenario.client.post(
+        f"/api/company-admissions/{body['admission_request']['id']}/decision",
+        json={"decision": "approved"},
+        headers=scenario.headers(scenario.genesis),
+    )
+    # Then invalid proof prevents assignment, with no transfer created.
+    assert decision.status_code == 403, decision.text
+    user = await user_dao.get(UUID(body["user"]["id"]))
+    assert user is not None
+    assert user.tenant_id is None
+    assert await scenario.db.fetchval("SELECT count(*) FROM company_transfer_requests") == 0
+
+
+@pytest.mark.parametrize("source", ["company", "kabers", "unassigned"])
 @pytest.mark.parametrize("method", ["invitation", "domain"])
 async def test_company_join_is_for_unassigned_newcomers_only(
     admission_scenario: AdmissionScenario, source: str, method: str
@@ -79,11 +148,15 @@ async def test_default_member_cannot_reach_a_company_through_a_verified_domain(
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
 
 
-async def test_invitation_registration_remains_openclaw(
+async def test_invitation_registration_remains_kabers(
     admission_scenario: AdmissionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = admission_scenario
     monkeypatch.setattr(auth, "_send_verification_email_task", AsyncMock())
+    await scenario.db.execute(
+        "UPDATE invitation_codes SET invited_email=%(email)s WHERE code='JOIN'",
+        {"email": "new@company.example.com"},
+    )
     response = await scenario.client.post(
         "/api/auth/register/init",
         json={
@@ -103,7 +176,7 @@ async def test_invitation_registration_remains_openclaw(
 
 
 @pytest.mark.parametrize("explicit_tenant", [True, False])
-async def test_fresh_sso_creates_only_openclaw_membership(admission_scenario: AdmissionScenario, explicit_tenant: bool):
+async def test_fresh_sso_creates_only_kabers_membership(admission_scenario: AdmissionScenario, explicit_tenant: bool):
     scenario = admission_scenario
     provider = await identity_provider_dao.create(
         obj_in={

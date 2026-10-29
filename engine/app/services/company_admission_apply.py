@@ -34,9 +34,10 @@ async def apply_approved_admission(
     await db.execute("DELETE FROM local_department_memberships WHERE user_id=%(user)s", {"user": current.id})
     sso_members = await db.fetchall(
         "SELECT m.id FROM org_members m JOIN identity_providers p ON p.id=m.provider_id "
-        "WHERE m.user_id=%(user)s AND (p.tenant_id=%(target)s OR p.tenant_id IS NULL) "
+        "WHERE m.user_id=%(user)s AND (p.tenant_id=%(target)s OR p.tenant_id IS NULL "
+        "OR (%(initial)s AND m.tenant_id IS NULL)) "
         "AND p.provider_type <> 'web'",
-        {"user": current.id, "target": target.id},
+        {"user": current.id, "target": target.id, "initial": request.source_tenant_id is None},
     )
     try:
         _ = await transfer_user_to_org(current, target)

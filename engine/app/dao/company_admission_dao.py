@@ -55,6 +55,17 @@ class CompanyAdmissionDAO(BaseDAO[CompanyAdmissionRecord]):
             row = await db.fetchone("SELECT * FROM tenants WHERE id=%(id)s", {"id": tenant_id})
             return TenantRecord.from_row(row) if row is not None else None
 
+    async def has_approved_initial_domain_admission(self, applicant_id: UUID, tenant_id: UUID) -> bool:
+        async with self.session() as db:
+            return bool(
+                await db.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM company_admission_requests "
+                    "WHERE applicant_user_id=%(user)s AND target_tenant_id=%(tenant)s "
+                    "AND source_tenant_id IS NULL AND method='verified_domain' AND status='approved')",
+                    {"user": applicant_id, "tenant": tenant_id},
+                )
+            )
+
     async def list_mine(self, applicant_id: UUID, *, limit: int, offset: int) -> list[CompanyAdmissionRecord]:
         async with self.session() as db:
             rows = await db.fetchall(

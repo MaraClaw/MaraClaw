@@ -28,23 +28,23 @@ def eligible_member(user: UserRecord | None) -> TypeGuard[UserRecord]:
 
 
 async def stage_verified_domain_admission(user: UserRecord) -> CompanyAdmissionRecord | None:
-    if user.tenant_id is None:
-        return None
     current = await user_dao.get_with_identity(user.id, fresh=True)
     if not eligible_member(current):
         return None
     target = await lookup_tenant_for_verified_email(current)
     if target is None or target.is_system or target.is_default_end_user_org:
         return None
+    source_id = current.tenant_id
     async with connection_ctx() as db:
-        await lock_tenants(db, (user.tenant_id, target.id))
-        await lock_user(db, user.id, user.tenant_id)
+        await lock_tenants(db, (source_id, target.id))
+        await lock_user(db, user.id, source_id)
         current = await user_dao.get_with_identity(user.id, fresh=True)
-        if not eligible_member(current):
+        if not eligible_member(current) or current.tenant_id != source_id:
             return None
-        source = await admissions.tenant(user.tenant_id)
-        if source is None or not source.is_active or not source.is_default_end_user_org:
-            return None
+        if source_id is not None:
+            source = await admissions.tenant(source_id)
+            if source is None or not source.is_active or not source.is_default_end_user_org:
+                return None
         if await admissions.pending_for(user.id) is not None:
             return None
         if await admissions.has_invitation_history(user.id):

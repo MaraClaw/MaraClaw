@@ -2,13 +2,74 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from app.dao.invitation_code_dao import invitation_code_dao
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
+from app.records.identity import IdentityProviderRecord
 from app.records.invitation import InvitationCodeRecord
+from app.services.sso_company_admission import stage_sso_admission
 from domain_admission_fixture import DomainAdmissionFixture, domain_admission_fixture
 
 __all__ = ["domain_admission_fixture"]
+
+
+@pytest.mark.parametrize("approved_initial", [False, True])
+async def test_sso_replay_exemption_requires_approved_initial_domain_admission(
+    domain_admission_fixture: DomainAdmissionFixture, monkeypatch: pytest.MonkeyPatch, approved_initial: bool
+) -> None:
+    # Given a linked company member, with or without an approved initial domain admission.
+    fixture = domain_admission_fixture
+    fixture.applicant.tenant_id = fixture.target.id
+    provider = IdentityProviderRecord(id=uuid4(), provider_type="google", name="Google", tenant_id=fixture.other.id)
+    monkeypatch.setattr(
+        "app.services.sso_company_admission.find_pending_sso_user", AsyncMock(return_value=fixture.applicant)
+    )
+    monkeypatch.setattr(
+        "app.services.sso_company_admission.company_admission_dao.has_approved_initial_domain_admission",
+        AsyncMock(return_value=approved_initial),
+    )
+    submit = AsyncMock(side_effect=HTTPException(409, "Company members must transfer"))
+    monkeypatch.setattr("app.services.sso_company_admission.submit_request", submit)
+    # When SSO targets a different company, only the initially admitted account reuses its membership.
+    if approved_initial:
+        assert await stage_sso_admission(fixture.applicant, provider, "external", target_id=fixture.other.id)
+        submit.assert_not_awaited()
+    else:
+        with pytest.raises(HTTPException) as error:
+            await stage_sso_admission(fixture.applicant, provider, "external", target_id=fixture.other.id)
+        assert error.value.status_code == 409
+
+
+@pytest.mark.parametrize("verified", [False, True])
+async def test_tenantless_sso_keeps_domain_proof_and_provider_linkage(
+    domain_admission_fixture: DomainAdmissionFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    verified: bool,
+) -> None:
+    # Given a tenantless domain applicant and a provider targeting another company.
+    fixture = domain_admission_fixture
+    fixture.applicant.tenant_id = None
+    fixture.identity.email_verified = verified
+    provider = IdentityProviderRecord(id=uuid4(), provider_type="google", name="Google", tenant_id=fixture.other.id)
+    link = AsyncMock()
+    monkeypatch.setattr("app.services.sso_company_admission.find_pending_sso_user", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.services.sso_company_admission.org_member_dao.create", link)
+    # When the SSO admission seam handles the provider identity.
+    handled = await stage_sso_admission(fixture.applicant, provider, "external", target_id=fixture.other.id)
+    # Then only verified email permits domain admission, never the conflicting SSO target.
+    assert handled is True
+    assert fixture.applicant.tenant_id is None
+    assert fixture.identity.email_verified is verified
+    assert len(fixture.admissions.rows) == int(verified)
+    if verified:
+        (request,) = fixture.admissions.rows.values()
+        assert request.target_tenant_id == fixture.target.id
+        assert request.method == AdmissionMethod.VERIFIED_DOMAIN
+        assert request.source_tenant_id is None
+    assert link.await_args is not None
+    assert link.await_args.kwargs["obj_in"]["tenant_id"] is None
+    assert link.await_args.kwargs["obj_in"]["user_id"] == fixture.applicant.id
 
 
 async def test_registration_stages_verified_domain_request_without_moving_membership(
@@ -18,14 +79,18 @@ async def test_registration_stages_verified_domain_request_without_moving_member
     fixture = domain_admission_fixture
     # When the real registration route is called over HTTP.
     response = await fixture.register()
-    # Then a pending request and reviewer notification exist, while membership remains in OpenClaw.
+    # Then an initial pending request exists without assigning any company membership.
     assert response.status_code == 201, response.text
     request = response.json()["admission_request"]
     assert request["method"] == "verified_domain"
     assert request["status"] == "pending"
     assert request["target_tenant"]["id"] == str(fixture.target.id)
-    assert response.json()["user"]["tenant_id"] == str(fixture.source.id)
-    assert fixture.applicant.tenant_id == fixture.source.id
+    assert response.json()["user"]["tenant_id"] is None
+    assert response.json()["needs_org_confirm"] is True
+    assert response.json()["suggested_org"]["id"] == str(fixture.target.id)
+    assert request["source_tenant_id"] is None
+    assert request["transfer"] is None
+    assert fixture.applicant.tenant_id is None
     assert len(fixture.admissions.rows) == 1
     (notice,) = fixture.notices
     assert (notice.user_id, notice.type, str(notice.ref_id)) == (
@@ -47,12 +112,42 @@ async def test_registration_without_verified_domain_match_creates_no_request(
         fixture.identity.email = "member@unclaimed.example"
     # When registration completes.
     response = await fixture.register()
-    # Then the account remains in OpenClaw without admission side effects.
+    # Then only an unmatched account joins KABERs; an unverified match stays unassigned.
     assert response.status_code == 201, response.text
     assert response.json()["admission_request"] is None
     assert response.json()["user"]["email_verified"] == email_verified
-    assert fixture.applicant.tenant_id == fixture.source.id
+    assert fixture.applicant.tenant_id == (fixture.source.id if email_verified else None)
     assert not fixture.admissions.rows
+    assert not fixture.notices
+
+
+@pytest.mark.parametrize("domain_still_claimed", [False, True])
+async def test_registration_replay_preserves_tenantless_pending_target(
+    domain_admission_fixture: DomainAdmissionFixture,
+    domain_still_claimed: bool,
+) -> None:
+    # Given an existing tenantless applicant with a pending company request.
+    fixture = domain_admission_fixture
+    fixture.registered = True
+    fixture.applicant.tenant_id = None
+    pending = await fixture.admissions.create(
+        obj_in={
+            "applicant_user_id": fixture.applicant.id,
+            "source_tenant_id": None,
+            "target_tenant_id": fixture.target.id,
+            "method": AdmissionMethod.VERIFIED_DOMAIN.value,
+        }
+    )
+    if not domain_still_claimed:
+        fixture.identity.email = "member@unclaimed.example"
+    # When registration is replayed with valid credentials.
+    response = await fixture.register()
+    # Then replay neither assigns KABERs nor overwrites the original admission.
+    assert response.status_code == 201, response.text
+    assert response.json()["user"]["tenant_id"] is None
+    assert response.json()["needs_org_confirm"] is True
+    assert list(fixture.admissions.rows.values()) == [pending]
+    assert pending.target_tenant_id == fixture.target.id
     assert not fixture.notices
 
 

@@ -25,14 +25,26 @@ async def find_pending_sso_user(provider: IdentityProviderRecord, external_id: s
 async def stage_sso_admission(
     user: UserRecord, provider: IdentityProviderRecord, external_id: str, *, target_id: UUID | None
 ) -> bool:
-    if target_id is None or user.tenant_id == target_id:
-        return False
-    target = await company_admission_dao.tenant(target_id)
-    if target is None or target.is_system or target.is_default_end_user_org:
-        return False
-    await submit_request(user, target_id, AdmissionMethod.SSO)
-    existing = await find_pending_sso_user(provider, external_id)
-    if existing is None:
+    linked = await find_pending_sso_user(provider, external_id)
+    if (
+        user.tenant_id is not None
+        and linked is not None
+        and linked.id == user.id
+        and await company_admission_dao.has_approved_initial_domain_admission(user.id, user.tenant_id)
+    ):
+        return True
+    if user.tenant_id is None:
+        from app.services.domain_admission_auto import stage_verified_domain_admission
+
+        await stage_verified_domain_admission(user)
+    else:
+        if target_id is None or user.tenant_id == target_id:
+            return False
+        target = await company_admission_dao.tenant(target_id)
+        if target is None or target.is_system or target.is_default_end_user_org:
+            return False
+        await submit_request(user, target_id, AdmissionMethod.SSO)
+    if linked is None:
         await org_member_dao.create(
             obj_in={
                 "provider_id": provider.id,
@@ -47,7 +59,7 @@ async def stage_sso_admission(
 
 async def create_sso_user(identity_id: UUID, display_name: str, *, source: str, avatar: str | None) -> UserRecord:
     from app.dao.identity_dao import identity_dao
-    from app.services.org_membership import get_fallback_org
+    from app.services.org_membership import place_new_registration
     from app.services.registration_service import registration_service
 
     existing = await user_dao.get_by_identity_id(identity_id)
@@ -56,11 +68,11 @@ async def create_sso_user(identity_id: UUID, display_name: str, *, source: str, 
     identity = await identity_dao.get(identity_id)
     if identity is None:
         raise ValueError("Identity not found")
-    fallback = await get_fallback_org()
+    placement = await place_new_registration(email=identity.email)
     user = await registration_service.create_user_with_identity(
         identity=identity,
         display_name=display_name,
-        tenant_id=fallback.id,
+        tenant_id=placement.tenant_id,
     )
     updated = await user_dao.update(
         db_obj=user, obj_in={"registration_source": source, "avatar_url": avatar, "is_active": True}
