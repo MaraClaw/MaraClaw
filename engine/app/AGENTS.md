@@ -14,7 +14,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 
 - Preserve `PROCESS_ROLE` side-effect gating; every process still mounts HTTP routers. `process_roles.py` strips/lowercases/validates roles in Python and Docker `entrypoint.sh` before its case-sensitive predicate. `Bootstrap` runs schema bootstrap; failure aborts unless `ALLOW_MIGRATION_FAILURE=true` explicitly allows continuation.
 - Schema is **not** applied in lifespan. Use `python -m app.scripts.bootstrap_db`.
-- Bootstrap role order matters: **`ensure_system_orgs()`** (MaraClaw + OpenClaw) → **`ensure_platform_admin()`** → tools/templates/skills → agent seeders. OpenClaw is the default end-user org. Platform admin seed is not optional on greenfield.
+- Bootstrap role order matters: **`ensure_system_orgs()`** (MaraClaw + KABERs, including missing KABERs genesis org admin) → **`ensure_platform_admin()`** → tools/templates/skills → agent seeders. KABERs is the default end-user org. System org and platform admin seeds are required.
 - New companies + genesis org admin: `services/tenant_provisioning.py` (called from `POST /api/tenants/` and `POST /api/admin/companies`). Not self-serve.
 - Reset/verify email links: `services/frontend_origin.py` (CORS-allowlisted Origin/Referer, else `PUBLIC_BASE_URL`).
 - `runtime/diagnostics.py` `log_bwrap_startup_status()` is warn-only.
