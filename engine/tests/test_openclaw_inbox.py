@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from pywhales.exceptions import DockerException, NoSuchContainer
 
@@ -13,11 +15,10 @@ from app.services import openclaw_inbox
 from app.services.openclaw_inbox import (
     guest_engine_base_url,
     inbox_cli_argv,
-    openclaw_container_name,
     wake_openclaw_inbox,
-    wake_urls,
     write_maraclaw_sync_skill,
 )
+from guest_bootstrap_fakes import BOOTSTRAP_PENDING_EXIT, GUARD, PENDING_STDERR, guard_refusal
 
 
 class OwnedGuestInspect:
@@ -36,6 +37,35 @@ class OwnedGuestInspect:
         )
 
 
+class ScriptedDocker(OwnedGuestInspect):
+    """Records every exec; each call consumes the next outcome (the last repeats), reading the payload it names."""
+
+    def __init__(self, agent_id: uuid.UUID, directory: Path, *outcomes: Exception | None) -> None:
+        super().__init__(agent_id)
+        self.container = self
+        self.directory = directory
+        self.outcomes = list(outcomes) or [None]
+        self.calls: list[list[str]] = []
+        self.payloads: list[str] = []
+
+    def execute(self, container, argv, stream=False):
+        self.calls.append(list(argv))
+        if argv[-1].endswith(".json"):
+            self.payloads.append((self.directory / Path(argv[-1]).name).read_text(encoding="utf-8"))
+        outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
+        if outcome is not None:
+            raise outcome
+        return ""
+
+
+def forbid_host_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("the engine contacted the guest gateway over host HTTP")
+
+    monkeypatch.setattr(httpx, "AsyncClient", refuse)
+    monkeypatch.setattr(httpx, "Client", refuse)
+
+
 def test_guest_engine_base_url_is_docker_alias() -> None:
     assert guest_engine_base_url() == "http://maraclaw-engine:8000"
 
@@ -51,75 +81,40 @@ def test_write_skill_uses_engine_alias(tmp_path) -> None:
     assert "maraclaw-sync" in bootstrap.read_text(encoding="utf-8")
 
 
-def test_wake_urls_prefer_container_name() -> None:
-    agent_id = uuid.uuid4()
-    agent: Any = SimpleNamespace(id=agent_id, container_port=19876)
-    urls = wake_urls(agent)
-    assert urls[0] == f"http://{openclaw_container_name(agent_id)}:18789/hooks/agent"
-    assert urls[1] == "http://host.docker.internal:19876/hooks/agent"
-    assert not any(url.startswith("http://127.0.0.1:") for url in urls)
-
-
-async def test_wake_uses_http_hooks_when_reachable(tmp_path, monkeypatch) -> None:
+async def test_wake_delivers_through_the_guarded_in_guest_hooks(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[object] = []
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append((container, list(argv), stream))
-            return ""
-
-    async def http_ok(*_args, **_kwargs):
-        return None
-
+    docker = ScriptedDocker(agent_id, agent_dir)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_ok)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
 
     woke = await wake_openclaw_inbox(agent, content="Good morning!", message_id=agent_id)
+
     assert woke is True
-    assert execute_calls == []
+    assert len(docker.calls) == 1
+    assert docker.calls[0][: len(GUARD)] == GUARD
+    assert docker.calls[0][len(GUARD)] == "node"
+    assert "Good morning!" in docker.payloads[0]
+    assert not list(agent_dir.glob(".maraclaw-wake-*.json"))
 
 
-async def test_wake_uses_docker_exec_on_loopback(tmp_path, monkeypatch) -> None:
+async def test_each_wake_uses_its_own_payload_file(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
-    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[tuple[str, list[str], bool]] = []
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc")
+    docker = ScriptedDocker(agent_id, agent_dir)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
 
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
+    first = openclaw_inbox._exec_in_guest_hooks(agent, agent_dir, openclaw_inbox._wake_body("first"))
+    second = openclaw_inbox._exec_in_guest_hooks(agent, agent_dir, openclaw_inbox._wake_body("second"))
 
-        def execute(self, container, argv, stream=False):
-            execute_calls.append((container, list(argv), stream))
-            return ""
-
-    async def http_down(*_args, **_kwargs):
-        return "http hooks unreachable in test"
-
-    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
-    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
-
-    woke = await wake_openclaw_inbox(agent, content="Good morning!")
-    assert woke is True
-    assert execute_calls
-    assert execute_calls[0][0] == "container-abc"
-    assert execute_calls[0][1][0] == "node"
-    payload = (agent_dir / ".maraclaw-wake.json").read_text(encoding="utf-8")
-    assert "Good morning!" in payload
+    assert first is second is None
+    assert docker.calls[0][-1] != docker.calls[1][-1]
+    assert ["first" in docker.payloads[0], "second" in docker.payloads[1]] == [True, True]
 
 
 def test_inbox_cli_targets_default_agent_locally() -> None:
@@ -133,86 +128,63 @@ async def test_wake_leaves_pending_when_hooks_refuse(tmp_path, monkeypatch) -> N
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            raise RuntimeError("ECONNREFUSED 18789")
-
-    async def http_down(*_args, **_kwargs):
-        return "ECONNREFUSED 18789"
-
-    async def no_recreate(*_args, **_kwargs):
-        return None
-
+    docker = ScriptedDocker(agent_id, agent_dir, RuntimeError("ECONNREFUSED 18789"))
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
-    monkeypatch.setattr(openclaw_inbox, "_GATEWAY_WAIT_ATTEMPTS", 1)
-    monkeypatch.setattr(openclaw_inbox, "_GATEWAY_WAIT_SECONDS", 0)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.start_container", no_recreate)
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
+
     assert woke is False
-    assert execute_calls[0][0] == "node"
+    assert docker.calls[0][: len(GUARD)] == GUARD
+    assert docker.calls[0][len(GUARD)] == "node"
 
 
-async def test_wake_starts_guest_gateway_then_hooks(tmp_path, monkeypatch) -> None:
+async def test_wake_never_starts_the_guest_gateway(tmp_path, monkeypatch) -> None:
+    # Given a refusing gateway; the guest's bootstrap helper, not the engine, owns its startup.
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
-    started = False
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            joined = " ".join(str(part) for part in argv)
-            nonlocal started
-            if "nohup openclaw gateway" in joined:
-                started = True
-                return ""
-            if "18789" in joined and "fetch" in joined:
-                if started:
-                    return ""
-                raise DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789")
-            if argv and argv[0] == "node":
-                if started:
-                    return ""
-                raise DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789")
-            return ""
-
-    async def http_down(*_args, **_kwargs):
-        return "ECONNREFUSED 18789"
-
-    async def no_recreate(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
+    docker = ScriptedDocker(agent_id, agent_dir, DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789"))
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 2)
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
-    monkeypatch.setattr(openclaw_inbox, "_GATEWAY_WAIT_ATTEMPTS", 2)
-    monkeypatch.setattr(openclaw_inbox, "_GATEWAY_WAIT_SECONDS", 0)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.start_container", no_recreate)
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
-    assert woke is True
-    assert started is True
-    assert any(call[0] == "node" for call in execute_calls)
+
+    assert woke is False
+    assert len(docker.calls) == 2
+    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "node" for call in docker.calls)
+
+
+@pytest.mark.parametrize("attempts", [1, 2])
+async def test_pending_bootstrap_leaves_work_pending_without_any_other_transport(
+    tmp_path, monkeypatch, attempts
+) -> None:
+    # Given the guest's current boot has not finished bootstrapping.
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
+    docker = ScriptedDocker(agent_id, agent_dir, guard_refusal())
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", attempts)
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
+
+    woke = await wake_openclaw_inbox(agent, content="Hello.")
+
+    # Then the one guarded attempt is final: no retry, host HTTP, CLI, or gateway start.
+    assert woke is False
+    assert len(docker.calls) == 1
+    assert docker.calls[0][: len(GUARD)] == GUARD
+    assert agent_id not in openclaw_inbox._HOOKS_DOWN_UNTIL
 
 
 async def test_wake_skips_in_guest_hooks_after_recent_econnrefused(tmp_path, monkeypatch) -> None:
@@ -220,95 +192,60 @@ async def test_wake_skips_in_guest_hooks_after_recent_econnrefused(tmp_path, mon
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            return ""
-
-    async def http_down(*_args, **_kwargs):
-        return "http hooks unreachable in test"
-
+    docker = ScriptedDocker(agent_id, agent_dir)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
     openclaw_inbox._HOOKS_DOWN_UNTIL[agent_id] = openclaw_inbox.time.monotonic() + 30
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
     assert woke is False
-    assert execute_calls == []
+    assert docker.calls == []
     openclaw_inbox._HOOKS_DOWN_UNTIL.pop(agent_id, None)
 
 
-async def test_http_refuse_still_tries_in_guest_hooks(tmp_path, monkeypatch) -> None:
+async def test_refused_hooks_are_retried_through_the_guard(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            return ""
-
-    async def http_down(*_args, **_kwargs):
-        return "ECONNREFUSED 18789"
-
-    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
+    docker = ScriptedDocker(agent_id, agent_dir, RuntimeError("ECONNREFUSED 18789"), None)
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 2)
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
+
     assert woke is True
-    assert execute_calls[0][0] == "node"
-    assert all(call[0] != "openclaw" for call in execute_calls)
+    assert len(docker.calls) == 2
+    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "node" for call in docker.calls)
 
 
-async def test_skips_cli_when_inbox_already_reported(tmp_path, monkeypatch) -> None:
+async def test_skips_redelivery_when_inbox_already_reported(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
-    message_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            return ""
-
-    async def http_down(*_args, **_kwargs):
-        return "ECONNREFUSED 18789"
+    message_id = uuid.uuid4()
+    docker = ScriptedDocker(agent_id, agent_dir, RuntimeError("ECONNREFUSED 18789"))
 
     async def already_done(_message_id, _agent_id):
         return SimpleNamespace(status="completed")
 
     from app.dao.gateway_message_dao import gateway_message_dao
 
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
     monkeypatch.setattr(gateway_message_dao, "get_for_agent", already_done)
 
     woke = await wake_openclaw_inbox(agent, content="Hello.", message_id=message_id)
     assert woke is True
-    assert execute_calls == []
+    assert len(docker.calls) == 1
 
 
 def test_hooks_unreachable_ignores_port_and_http_status() -> None:
@@ -318,41 +255,27 @@ def test_hooks_unreachable_ignores_port_and_http_status() -> None:
     assert openclaw_inbox._hooks_unreachable("ConnectError: all connection attempts failed") is True
 
 
-async def test_http_401_does_not_start_guest_gateway(tmp_path, monkeypatch) -> None:
+async def test_hook_denial_is_not_retried_and_never_starts_the_gateway(tmp_path, monkeypatch) -> None:
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
     agent_dir.mkdir()
     agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc", container_port=19876)
-    execute_calls: list[list[str]] = []
     warnings: list[str] = []
     denial = DockerException(
         ["docker", "exec", "command-secret"], 1, stdout=b"HTTP 401 stdout-secret", stderr=b"ECONNREFUSED stderr-secret"
     )
-
-    class FakeDocker(OwnedGuestInspect):
-        def __init__(self) -> None:
-            super().__init__(agent_id)
-            self.container = self
-
-        def execute(self, container, argv, stream=False):
-            execute_calls.append(list(argv))
-            raise denial
-
-    async def http_down(*_args, **_kwargs):
-        return "http://maraclaw-agent-deadbeef:18789/hooks/agent: HTTP 401"
-
+    docker = ScriptedDocker(agent_id, agent_dir, denial)
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_ATTEMPTS", 1)
     monkeypatch.setattr(openclaw_inbox, "_HOOK_RETRY_SECONDS", 0)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: agent_dir)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
-    monkeypatch.setattr(openclaw_inbox, "_http_hooks_wake", http_down)
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
+    forbid_host_http(monkeypatch)
     monkeypatch.setattr(openclaw_inbox.logger, "warning", lambda message, *args: warnings.append(message.format(*args)))
 
     woke = await wake_openclaw_inbox(agent, content="Hello.")
     assert woke is False
-    assert execute_calls[0][0] == "node"
-    assert not any("nohup openclaw gateway" in " ".join(call) for call in execute_calls)
-    assert len(execute_calls) == 1
+    assert len(docker.calls) == 1
+    assert docker.calls[0][: len(GUARD)] == GUARD
     assert len(warnings) == 1
     assert str(denial) in warnings[0]
     assert "secret" not in warnings[0]
@@ -380,6 +303,39 @@ def test_docker_execute_redacts_captured_connection_failure(monkeypatch, stdout:
     assert error is not None
     assert openclaw_inbox._hooks_unreachable(error)
     assert "secret" not in error
+
+
+@pytest.mark.parametrize(
+    ("code", "stderr", "refused"),
+    [
+        (BOOTSTRAP_PENDING_EXIT, PENDING_STDERR, True),
+        (BOOTSTRAP_PENDING_EXIT, None, False),
+        (BOOTSTRAP_PENDING_EXIT, "openclaw: temporary failure\n", False),
+        (BOOTSTRAP_PENDING_EXIT, f"warning\n{PENDING_STDERR}", False),
+        (1, PENDING_STDERR, False),
+    ],
+    ids=["helper-refusal", "action-75-silent", "action-75-other-stderr", "marker-not-first", "marker-other-code"],
+)
+def test_docker_execute_reports_only_the_helper_refusal_as_bootstrap_pending(
+    monkeypatch, code: int, stderr: str | None, refused: bool
+) -> None:
+    # Given `exec --` preserves the action's exit status, so exit 75 alone can come from an admitted action.
+    agent_id = uuid.uuid4()
+    agent: Any = SimpleNamespace(id=agent_id, container_id="container-abc")
+
+    class FakeDocker(OwnedGuestInspect):
+        def __init__(self) -> None:
+            super().__init__(agent_id)
+            self.container = self
+
+        def execute(self, container, argv, stream=False):
+            raise DockerException(["docker", "exec"], code, stderr=None if stderr is None else stderr.encode())
+
+    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", FakeDocker())
+    # When the exec fails.
+    error = openclaw_inbox._docker_execute(agent, ["node"])
+    # Then only the helper's own refusal is reported as pending bootstrap.
+    assert (error == openclaw_inbox.BOOTSTRAP_PENDING) is refused
 
 
 def test_wake_body_includes_message_id_for_direct_report() -> None:

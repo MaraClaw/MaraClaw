@@ -37,8 +37,19 @@ def test_guest_fragments_validate_when_generated() -> None:
     parsed = TypeAdapter(OpenClawInboxConfig).validate_python(config, strict=True)
 
     assert parsed["gateway"]["auth"]["token"] == "gateway-secret"
+    assert parsed["gateway"]["controlUi"]["allowedOrigins"] == ["http://localhost:18789", "http://127.0.0.1:18789"]
     assert parsed["hooks"]["token"] == "hooks-secret"
     assert parsed["hooks"]["allowedSessionKeyPrefixes"] == ["hook:", "agent:main:hook:maraclaw:"]
+
+
+def test_guest_gateway_contract_rejects_wildcard_control_ui_origin() -> None:
+    config = inbox_config_block(hooks_token="hooks-secret", gateway_token="gateway-secret")
+    gateway = config["gateway"]
+    assert isinstance(gateway, dict)
+    gateway["controlUi"] = {"allowedOrigins": ["*"]}
+
+    with pytest.raises(ValidationError):
+        TypeAdapter(OpenClawInboxConfig).validate_python(config, strict=True)
 
 
 def test_heartbeat_fragment_validates_when_generated() -> None:

@@ -1,8 +1,21 @@
 import json
 from pathlib import Path
 
+from app.services import guest_bootstrap
+
 _DISPATCHER = """\
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+// Re-run once behind the bootstrap guard: nothing below may claim the inbox or reach the hook before the helper
+// has validated this boot's AgentBootstrapCompleted event (exit 75 otherwise).
+if (process.argv[2] !== "--bootstrap-guarded") {
+  const guarded = spawnSync("python3",
+    [GUARD_PATH, "exec", "--", process.execPath, fileURLToPath(import.meta.url), "--bootstrap-guarded"],
+    { stdio: "inherit" });
+  if (guarded.error) throw guarded.error;
+  process.exit(guarded.status ?? 1);
+}
 const base = BASE_URL;
 const token = readFileSync(new URL(".openclaw-hooks-token", import.meta.url), "utf8").trim();
 const headers = { "X-Api-Key": process.env.MARACLAW_GATEWAY_API_KEY };
@@ -34,6 +47,10 @@ def write_poll_dispatcher(
     agent_dir: Path, base_url: str, *, hooks_url: str = "http://127.0.0.1:18789/hooks/agent"
 ) -> Path:
     destination = agent_dir / ".maraclaw-poll.mjs"
-    source = _DISPATCHER.replace("BASE_URL", json.dumps(base_url)).replace("HOOKS_URL", json.dumps(hooks_url))
+    source = (
+        _DISPATCHER.replace("GUARD_PATH", json.dumps(guest_bootstrap.BOOTSTRAP_HELPER))
+        .replace("BASE_URL", json.dumps(base_url))
+        .replace("HOOKS_URL", json.dumps(hooks_url))
+    )
     destination.write_text(source, encoding="utf-8")
     return destination

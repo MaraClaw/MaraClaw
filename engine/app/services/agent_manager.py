@@ -572,7 +572,8 @@ class AgentManager:
         ``image`` overrides the agent's pinned image, which overrides the configured one.
         ``rehydrate=False`` reuses the on-disk state as-is (no storage materialization or
         gogcli restore); the OpenClaw upgrade executor needs that to keep its snapshot exact.
-        Returns container_id or None if Docker not available.
+        Returns container_id or None if Docker not available. The new guest is only ``creating``: its caller
+        publishes ``running`` once the current boot's bootstrap event and readiness are proven.
         """
         if agent.setup_pending:
             raise ValueError("Agent setup is incomplete")
@@ -706,7 +707,7 @@ class AgentManager:
                     for target in (original, agent):
                         target.container_id = container.id
                         target.container_port = container_port
-                        target.status = AgentStatus.RUNNING
+                        target.status = AgentStatus.CREATING
                         target.last_active_at = now
                     logger.info("Started guest {} for agent {} on port {}", container.id[:12], agent.id, container_port)
                     return container.id
