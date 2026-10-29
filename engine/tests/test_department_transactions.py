@@ -11,7 +11,7 @@ from app.dao.org_department_dao import OrgDepartmentDAO
 from app.db import session
 from app.db.connection import DbConnection, Row
 from app.db.errors import ForeignKeyViolationError
-from app.schemas.department import AssignmentsOut, DepartmentCreate
+from app.schemas.department import AssignmentsOut, DepartmentCreate, DepartmentUpdate
 from app.services import org_departments
 from department_delete_postgres_fixtures import (
     DepartmentStore,
@@ -130,7 +130,7 @@ async def _mutate_department(store: DepartmentStore, operation: str) -> None:
             await departments.create_department(DepartmentCreate(name="Created"), store.tenant, store.actor)
         case "rename":
             await org_departments.rename_department(
-                store.actor, store.selected, DepartmentCreate(name="Renamed"), store.tenant
+                store.actor, store.selected, DepartmentUpdate(name="Renamed"), store.tenant
             )
         case "delete":
             await org_departments.delete_department(store.actor, store.selected, store.tenant)

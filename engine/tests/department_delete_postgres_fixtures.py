@@ -70,8 +70,9 @@ async def department_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPa
         )
     for department, name in ((selected, "Selected"), (other, "Keep")):
         await schema_db.execute(
-            "INSERT INTO local_departments (id, tenant_id, name) VALUES (%(id)s, %(tenant)s, %(name)s)",
-            {"id": department, "tenant": tenant, "name": name},
+            "INSERT INTO local_departments (id, tenant_id, name, description) "
+            "VALUES (%(id)s, %(tenant)s, %(name)s, %(description)s)",
+            {"id": department, "tenant": tenant, "name": name, "description": f"  {name} responsibilities\n"},
         )
     for member, department in [*((member, selected) for member in members), (members[1], other)]:
         await schema_db.execute(

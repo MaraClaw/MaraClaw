@@ -113,6 +113,14 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
       {ready && preview.data ? (
         <div className="space-y-3 text-sm">
           <p className="font-medium wrap-anywhere">“{preview.data.source.name}” into “{preview.data.destination.name}”</p>
+          <div className="space-y-1">
+            <p className="font-medium">Source description</p>
+            <p className="whitespace-pre-wrap text-muted-foreground wrap-anywhere">{preview.data.source.description || 'No description'}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="font-medium">Destination description (kept after merge)</p>
+            <p className="whitespace-pre-wrap text-muted-foreground wrap-anywhere">{preview.data.destination.description || 'No description'}</p>
+          </div>
           <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
             <dt>Source memberships</dt><dd className="tabular-nums">{preview.data.source_membership_count}</dd>
             <dt>Destination memberships</dt><dd className="tabular-nums">{preview.data.destination_membership_count}</dd>
@@ -122,7 +130,7 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
             <dt>Overlapping agent grants</dt><dd className="tabular-nums">{preview.data.overlapping_agent_grant_count}</dd>
           </dl>
           <p className="text-muted-foreground">These are associations, not people losing access. Members joining the destination also gain its department-based agent access. Other memberships and access remain unchanged.</p>
-          <p className="text-muted-foreground">Your confirmation applies to this preview. If names, memberships or eligible grants change, review a fresh preview and confirm again.</p>
+          <p className="text-muted-foreground">Your confirmation applies to this preview. If names, descriptions, memberships or eligible grants change, review a fresh preview and confirm again.</p>
           <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg py-2">
             <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary" checked={confirmed} disabled={merge.isPending} onChange={(event) => setConfirmedToken(event.target.checked ? preview.data.confirmation_token : null)} />
             <span className="min-w-0 wrap-anywhere">I understand that “{preview.data.source.name}” will be permanently merged into “{preview.data.destination.name}”.</span>

@@ -161,7 +161,7 @@ class Settings(BaseSettings):
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"
-    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.7"
+    MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.10.8"
     OPENCLAW_GATEWAY_PORT: int = 18789
     # Trial limits for newly created/replacement guests; never auto-update existing guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)

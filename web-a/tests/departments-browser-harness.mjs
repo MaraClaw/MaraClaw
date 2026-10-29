@@ -23,7 +23,7 @@ export const admission = {
 const row = (id, tenantId = tenant) => ({ id, email: `${id}@example.test`, display_name: id, role: 'member', is_active: true, is_genesis: false, tenant_id: tenantId, agents_count: 0, created_at: '2026-10-20T00:00:00Z', source: 'local' })
 const admin = { ...row('operator'), id: '11111111-1111-4111-8111-111111111111', identity_id: '11111111-1111-4111-8111-111111111111', avatar_url: null, title: null, primary_mobile: null, registration_source: null, role: 'platform_admin', is_platform_admin: true, is_genesis: true, email_verified: true, must_change_password: false }
 export const directory = (name = 'Operations', tenantId = tenant) => ({
-  departments: [{ id: departmentId, tenant_id: tenantId, name, created_at: '2026-10-20T00:00:00Z' }, { id: 'engineering', tenant_id: tenantId, name: 'Engineering', created_at: '2026-10-20T00:00:00Z' }],
+  departments: [{ id: departmentId, tenant_id: tenantId, name, description: '  Escalations\nBilling questions  ', created_at: '2026-10-20T00:00:00Z' }, { id: 'engineering', tenant_id: tenantId, name: 'Engineering', description: 'Onboarding and product support', created_at: '2026-10-20T00:00:00Z' }],
   assignments: [{ user_id: 'Member', tenant_id: tenantId, department_id: departmentId }, { user_id: 'Member', tenant_id: tenantId, department_id: 'engineering' }],
 })
 
@@ -70,6 +70,20 @@ export async function createHarness() {
         else if (path === '/api/admin/companies') body = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
         else if (path === '/api/admin/platform-admins') body = []
         else if (path === '/api/users/page') body = { items: [row('Member', selected)], next_cursor: null }
+        else if (path === '/api/departments' && request.method() === 'POST') {
+          const payload = request.postDataJSON()
+          call.payload = payload
+          body = { id: `created-${state.directories[selected].departments.length}`, tenant_id: selected, ...payload, description: payload.description ?? '', created_at: '2026-10-20T00:00:00Z' }
+          state.directories[selected].departments.push(body)
+        }
+        else if (path.startsWith('/api/departments/') && request.method() === 'PATCH') {
+          const payload = request.postDataJSON()
+          call.payload = payload
+          const current = state.directories[selected]
+          const index = current.departments.findIndex((item) => item.id === decodeURIComponent(path.split('/')[3]))
+          body = { ...current.departments[index], ...payload }
+          current.departments[index] = body
+        }
         else if (path === '/api/departments') body = state.directories[selected]
         else if (path.endsWith('/merge-preview') || path.endsWith('/merge')) {
           const apply = request.method() === 'POST'

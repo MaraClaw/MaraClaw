@@ -40,7 +40,7 @@ async def merge_store(department_store: DepartmentStore) -> tuple[DepartmentStor
         {"user": store.members[2], "source": store.selected},
     )
     await store.db.execute(
-        "INSERT INTO local_departments (id, tenant_id, name) VALUES (%(id)s, %(tenant)s, 'Unrelated')",
+        "INSERT INTO local_departments (id, tenant_id, name, description) VALUES (%(id)s, %(tenant)s, 'Unrelated', '')",
         {"id": unrelated_department, "tenant": store.tenant},
     )
     for user, department in ((store.members[2], store.other), (store.members[0], unrelated_department)):
@@ -130,7 +130,7 @@ async def merge_request(store: DepartmentStore, operation: str, *, confirmation_
 
 async def merge_state(store: DepartmentStore) -> tuple[list[Row], list[Row], list[Row], list[Row]]:
     return (
-        await store.db.fetchall("SELECT id, name FROM local_departments ORDER BY id"),
+        await store.db.fetchall("SELECT id, name, description FROM local_departments ORDER BY id"),
         await store.db.fetchall(
             "SELECT user_id, department_id FROM local_department_memberships ORDER BY user_id, department_id"
         ),

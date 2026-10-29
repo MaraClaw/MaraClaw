@@ -15,6 +15,7 @@ export const schedulesApiPath = `/api/agents/${originalAgent.id}/schedules/`
 const createSchema = z.object({
   name: z.string(), instruction: z.string(), cron_expr: z.string(),
   timezone: z.string(), is_enabled: z.boolean(), notify_on_failure: z.boolean(),
+  ends_at: z.iso.datetime({ offset: true }).nullable().optional(),
 }).strict()
 const patchSchema = createSchema.partial()
 const scheduleSchema = createSchema.extend({

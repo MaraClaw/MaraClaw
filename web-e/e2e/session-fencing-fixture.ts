@@ -6,6 +6,7 @@ import type { AgentOutSchema } from '../src/lib/engine-contracts.generated'
 import type { OnboardingStatus } from '../src/lib/onboarding-api'
 import type { AgentOut } from '../src/lib/workspace-api'
 import { lifecycleReady } from './agent-lifecycle-data'
+import { uploadPolicy } from './upload-policy-data'
 
 export const tokenKey = 'maraclaw-enduser-token'
 export const originalToken = 'fencing-original-session'
@@ -58,6 +59,10 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
     const replacing = request.headers().authorization === `Bearer ${replacementToken}` || (switched && switchToken === originalToken)
     const company = replacing ? replacementCompany : originalCompany
     switch (path) {
+      case '/api/chat/upload-policy':
+        expect(request.method()).toBe('GET')
+        await route.fulfill({ json: uploadPolicy })
+        return
       case '/api/auth/chat-ticket': {
         expect(request.method()).toBe('POST')
         expect(request.headers().authorization).toBe(`Bearer ${replacing ? replacementToken : originalToken}`)

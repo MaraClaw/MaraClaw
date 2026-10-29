@@ -5,6 +5,7 @@ from enum import StrEnum
 from pydantic import JsonValue, TypeAdapter
 
 from app.api.agent_credentials import AgentCredentialPayload
+from app.api.upload import UploadPolicy
 from app.core.domain.activity import ActivityAction
 from app.core.domain.agents import (
     AgentAccessReason,
@@ -51,6 +52,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "notification",
         "okr",
         "onboarding",
+        "schedules",
         "tasks",
         "tools",
         "triggers",
@@ -121,4 +123,5 @@ def explicit_schemas() -> dict[str, JsonValue]:
     schemas["ApprovalDecisionRequest"] = ApprovalDecisionRequest.model_json_schema(
         ref_template="#/components/schemas/{model}"
     )
+    schemas["UploadPolicy"] = UploadPolicy.model_json_schema(ref_template="#/components/schemas/{model}")
     return schemas

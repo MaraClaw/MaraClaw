@@ -22,7 +22,7 @@ import {
 } from '@/lib/schedules-api'
 import type { AgentOut } from '@/lib/workspace-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import { createScheduleDraft, scheduleChanges, type ScheduleDraft } from '@/lib/schedule-editor'
+import { createScheduleDraft, scheduleChanges, scheduleEndFromInput, scheduleEndInput, type ScheduleDraft } from '@/lib/schedule-editor'
 import { describeScheduleRecurrence, recognizeScheduleRecurrence } from '@/lib/schedule-recurrence'
 import { formatScheduleNextRun, scheduleTimezoneError } from '@/lib/schedule-time'
 import { timezoneLabel } from '@/lib/timezone-catalog'
@@ -44,6 +44,8 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
   const [timezoneError, setTimezoneError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const timezoneInput = useRef<HTMLSelectElement>(null)
+  const endTimeInput = useRef<HTMLInputElement>(null)
+  const [endTimeError, setEndTimeError] = useState(false)
   const [historyId, setHistoryId] = useState<string | null>(null)
   const runIntents = useRef(new Map<string, string>())
   const mounted = useRef(true)
@@ -116,7 +118,11 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               timezoneInput.current?.focus()
               return
             }
-            save.mutate(draft)
+            const input = endTimeInput.current?.value ?? ''
+            const endsAt = scheduleEndFromInput(input)
+            setEndTimeError(endsAt === undefined)
+            if (endsAt === undefined) { endTimeInput.current?.focus(); return }
+            save.mutate({ ...draft, ...(input === scheduleEndInput(editing?.ends_at) ? {} : { ends_at: endsAt }) })
           }}
         >
           <fieldset disabled={save.isPending} className="grid gap-3">
@@ -133,6 +139,16 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                 onChange={scope.effect((event) => { setDraft({ ...draft, timezone: event.target.value }); setTimezoneError(null) })} />
               <p id="schedule-timezone-help" className="text-xs text-muted-foreground">Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. New schedules use your Settings preference, or GMT +0 (UTC).</p>
               {timezoneError ? <p id="schedule-timezone-error" role="status" className="text-sm text-destructive">{timezoneError}</p> : null}
+            </div>
+            <div className="grid min-w-0 gap-2">
+              <Label htmlFor="schedule-ends-at">End time (UTC)</Label>
+              <Input key={editorVersion} id="schedule-ends-at" name="ends_at" ref={endTimeInput} type="datetime-local" step="any"
+                defaultValue={scheduleEndInput(editing?.ends_at)} aria-invalid={endTimeError}
+                aria-describedby={`schedule-ends-at-help${endTimeError ? ' schedule-ends-at-error' : ''}`}
+                onChange={scope.effect(() => setEndTimeError(false))}
+                onInvalid={scope.effect((event) => { event.preventDefault(); setEndTimeError(true); event.currentTarget.focus() })} />
+              <p id="schedule-ends-at-help" className="text-xs text-muted-foreground">Optional. Periodic runs stop before this UTC instant, regardless of the recurrence timezone. Leave blank for no end time. Manual runs remain available.</p>
+              {endTimeError ? <p id="schedule-ends-at-error" role="status" className="text-sm text-destructive">Enter a valid UTC date and time, or leave it blank.</p> : null}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="schedule-instruction">Instruction</Label>
@@ -151,6 +167,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               <Button type="submit">{save.isPending ? 'Saving...' : editing ? 'Save schedule' : 'Add schedule'}</Button>
               {editing ? <Button type="button" variant="outline" onClick={scope.effect(() => {
                 setEditing(null); setDraft(createScheduleDraft(user?.timezone)); setTimezoneError(null); setSaveError(null)
+                setEndTimeError(false)
                 setEditorVersion((version) => version + 1)
               })}>Cancel edit</Button> : null}
             </div>
@@ -179,6 +196,10 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               <p className="text-xs text-muted-foreground">
                 {describeScheduleRecurrence(recognizeScheduleRecurrence(item.cron_expr))} · {timezoneLabel(item.timezone)} · next {formatScheduleNextRun(item)}
               </p>
+              <p className="text-xs text-muted-foreground">{item.ends_at ? <>Ends before <time dateTime={item.ends_at}>
+                {new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(item.ends_at))}
+                {item.ends_at.match(/\.\d+/)?.[0] ?? ''} UTC
+              </time></> : 'No end time'}</p>
               <p aria-live="polite" className="text-sm text-muted-foreground">{runMessages[item.id]}</p>
               {isCreator && acceptedRun?.scheduleId === item.id ? <ScheduleRunReceipt key={acceptedRun.runId}
                 agentId={agent.id} scheduleId={item.id} runId={acceptedRun.runId} /> : null}
@@ -198,8 +219,9 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                     if (!scope.isCurrent()) return
                     setEditing(item)
                     setEditorVersion((version) => version + 1)
-                    setDraft({ name: item.name, cron_expr: item.cron_expr, instruction: item.instruction, timezone: item.timezone, notify_on_failure: item.notify_on_failure })
+                    setDraft(item)
                     setTimezoneError(null)
+                    setEndTimeError(false)
                     setSaveError(null)
                   }}
                 >

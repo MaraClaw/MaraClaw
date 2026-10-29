@@ -29,7 +29,7 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - `x_search.py` - `search_x` via xAI Responses API `x_search` (posts/users/threads). Not a web search engine.
 - `xai_credentials.py` - shared `XAI_API_KEY` fallback and `api.x.ai` base-url allowlist for Search X and Grok Imagine.
 - Register those names in `_agent_tool_exec_search.py`. Do not re-add Google/Bing/Tavily-style search-engine tools.
-- Web search/fetch for OpenClaw agents are Photon image-bundled Linkup skills; engine configuration keys are in `app/services/linkup_runtime.py`.
+- Web search/fetch for OpenClaw agents are guest image-bundled Linkup skills; engine configuration keys are in `app/services/linkup_runtime.py`.
 - Tests: `tests/test_search_web_tools.py`, `tests/test_x_search.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.
 
 ## Code Execution

@@ -29,6 +29,8 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
     before = await merge_state(store)
     preview = await merge_request(store, "preview")
     assert preview.status_code == 200
+    assert preview.json()["source"]["description"] == "  Selected responsibilities\n"
+    assert preview.json()["destination"]["description"] == "  Keep responsibilities\n"
     assert [
         preview.json()[name]
         for name in (
@@ -51,6 +53,7 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
     )
     renamed = await merge_request(store, "destination_rename")
     assert renamed.status_code == 200
+    assert renamed.json()["description"] == "  Keep responsibilities\n"
 
     changed = await merge_state(store)
     rejected = await merge_request(
@@ -67,7 +70,9 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
     assert response.json()["source_membership_count"] == 3
     assert response.json()["overlapping_membership_count"] == 2
     assert response.json()["destination"]["name"] == "Renamed"
+    assert response.json()["destination"]["description"] == "  Keep responsibilities\n"
     after = await merge_state(store)
+    assert next(row["description"] for row in after[0] if row["id"] == store.other) == "  Keep responsibilities\n"
     assert {row["id"] for row in after[0]} == {store.other, unrelated}
     assert {(row["user_id"], row["department_id"]) for row in after[1]} == {
         *((member, store.other) for member in store.members),

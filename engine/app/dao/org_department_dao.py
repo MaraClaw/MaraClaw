@@ -33,8 +33,8 @@ class DepartmentMergeState:
         canonical = json.dumps(
             [
                 str(self.source.tenant_id),
-                [str(self.source.id), self.source.name],
-                [str(self.destination.id), self.destination.name],
+                [str(self.source.id), self.source.name, self.source.description],
+                [str(self.destination.id), self.destination.name, self.destination.description],
                 *[[str(identity) for identity in sorted(group)] for group in identities],
             ],
             separators=(",", ":"),
@@ -55,13 +55,13 @@ class DepartmentMergeState:
 @final
 class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
     table: ClassVar[str] = "local_departments"
-    columns: ClassVar[tuple[str, ...]] = ("id", "tenant_id", "name", "created_at")
+    columns: ClassVar[tuple[str, ...]] = ("id", "tenant_id", "name", "description", "created_at")
     record_factory = staticmethod(OrgDepartmentRecord.from_row)
 
     async def list_for_tenant(self, tenant_id: UUID) -> list[OrgDepartmentRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT id, tenant_id, name, created_at FROM local_departments "
+                "SELECT id, tenant_id, name, description, created_at FROM local_departments "
                 "WHERE tenant_id = %(tenant)s ORDER BY lower(name), id",
                 {"tenant": tenant_id},
             )

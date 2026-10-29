@@ -10,8 +10,8 @@ import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { mergeDepartmentOptions } from '../src/pages/users-department-mutations.ts'
 import { createFixture } from './helpers.ts'
 
-const source = { id: '10000000-0000-4000-8000-000000000001', tenant_id: '20000000-0000-4000-8000-000000000001', name: 'Operations', created_at: '2026-10-18T00:00:00Z' }
-const destination = { ...source, id: '10000000-0000-4000-8000-000000000002', name: 'Engineering' }
+const source = { id: '10000000-0000-4000-8000-000000000001', tenant_id: '20000000-0000-4000-8000-000000000001', name: 'Operations', description: '  Escalations\nBilling  ', created_at: '2026-10-18T00:00:00Z' }
+const destination = { ...source, id: '10000000-0000-4000-8000-000000000002', name: 'Engineering', description: '  Onboarding\nProduct support  ' }
 const other = { ...source, id: '10000000-0000-4000-8000-000000000003', name: 'Finance' }
 const confirmationToken = `v1:${'6'.repeat(64)}`
 const input = { tenantId: source.tenant_id, sourceId: source.id, destinationId: destination.id, confirmationToken }
@@ -20,6 +20,15 @@ const assignment = (user_id: string, department_id: string) => ({ user_id, depar
 const directory: DepartmentsResponse = {
   departments: [source, destination, other],
   assignments: [assignment('overlap', source.id), assignment('overlap', destination.id), assignment('source-only', source.id), assignment('destination-only', destination.id), assignment('source-only', other.id), assignment('unrelated', other.id)],
+}
+
+for (const field of ['source', 'destination'] as const) {
+  test(`preview rejects null ${field} description instead of hiding reviewed metadata`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ ...result, [field]: { ...result[field], description: null } }))
+    // When / Then
+    await assert.rejects(previewDepartmentMerge(input), z.ZodError)
+  })
 }
 const result = {
   confirmation_token: confirmationToken,

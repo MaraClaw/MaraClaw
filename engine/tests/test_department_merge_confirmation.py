@@ -49,6 +49,8 @@ async def test_direct_service_apply_also_requires_a_valid_confirmation(merge_dir
         "destination_grant",
         "source_name",
         "destination_name",
+        "source_description",
+        "destination_description",
         "reverse",
         "tenant",
     ],
@@ -71,6 +73,9 @@ def test_apply_rejects_reviewed_identity_or_selection_change_before_effects(merg
         case "source_name" | "destination_name":
             department = source if change == "source_name" else destination
             rows[department.id] = replace(department, name="Renamed")
+        case "source_description" | "destination_description":
+            department = source if change == "source_description" else destination
+            rows[department.id] = replace(department, description=department.description + " ")
         case "reverse":
             source_id, destination_id = destination.id, source.id
         case "tenant":

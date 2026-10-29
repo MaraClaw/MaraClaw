@@ -5,7 +5,7 @@ from contextvars import Context
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -67,6 +67,7 @@ async def live_schedule() -> AsyncIterator[AgentScheduleRecord]:
                     "timezone": row.timezone,
                     "created_by": row.created_by,
                     "next_run_at": row.next_run_at,
+                    "ends_at": row.ends_at,
                     "run_count": row.run_count,
                 }
             )
@@ -269,3 +270,155 @@ async def test_live_schema_rejects_partial_occurrence(live_schedule: AgentSchedu
                 .as_string(),
                 {"id": claim.id},
             )
+
+
+@pytest.mark.parametrize("offset_us", [-1, 0, 1])
+async def test_live_cutoff_compares_due_not_worker_time(live_schedule: AgentScheduleRecord, offset_us: int) -> None:
+    # Given an overdue occurrence one microsecond before, exactly at, or after the cutoff.
+    assert live_schedule.next_run_at is not None
+    cutoff = live_schedule.next_run_at - timedelta(microseconds=offset_us)
+    await agent_schedule_dao.update(db_obj=live_schedule, obj_in={"ends_at": cutoff})
+    # When a late worker tries admission after the cutoff has elapsed.
+    claims = await agent_schedule_dao.claim_due(NOW, _next_run)
+    # Then only the strict-before occurrence is admitted, with no ineligible successor.
+    assert len(claims) == int(offset_us < 0)
+    saved = await agent_schedule_dao.get(live_schedule.id)
+    assert saved is not None
+    assert saved.is_enabled is True
+    assert saved.ends_at == cutoff
+    if claims:
+        assert claims[0].pending_due_at == live_schedule.next_run_at
+        assert claims[0].next_run_at is None
+        assert claims[0].lease_token is not None
+        assert await agent_schedule_dao.finish_occurrence(saved.id, claims[0].lease_token, NOW)
+        assert await agent_schedule_dao.claim_due(NEXT, _next_run) == []
+    else:
+        assert saved.pending_due_at is None
+        assert saved.lease_token is None
+
+
+@pytest.mark.parametrize("successor_offset_us", [-1, 0, 1])
+async def test_live_final_eligible_claim_preserves_lease_without_successor(
+    live_schedule: AgentScheduleRecord, successor_offset_us: int
+) -> None:
+    # Given an eligible occurrence and a successor near the cutoff.
+    cutoff = NEXT - timedelta(microseconds=successor_offset_us)
+    await agent_schedule_dao.update(db_obj=live_schedule, obj_in={"ends_at": cutoff})
+    # When independent workers compete for the final eligible occurrence.
+    async with connection_ctx():
+        (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+        competitor = asyncio.create_task(agent_schedule_dao.claim_due(NOW, _next_run), context=Context())
+        assert await asyncio.wait_for(competitor, timeout=2) == []
+    # Then admission survives even when advancing reaches the cutoff; ownership remains usable.
+    assert claim.is_enabled is True
+    assert claim.next_run_at == (NEXT if successor_offset_us < 0 else None)
+    assert claim.lease_token is not None
+    assert await agent_schedule_dao.start_occurrence(claim.id, claim.lease_token, NOW)
+    assert await agent_schedule_dao.finish_occurrence(claim.id, claim.lease_token, NOW)
+
+
+@pytest.mark.parametrize("started", [False, True])
+async def test_live_cutoff_edit_keeps_recovery_and_token_fencing(
+    live_schedule: AgentScheduleRecord, started: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a claimed occurrence and a cutoff shortened to exclude its scheduled time.
+    (first,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+    assert first.lease_token is not None
+    if started:
+        assert await agent_schedule_dao.start_occurrence(first.id, first.lease_token, NOW)
+    cutoff = NOW - timedelta(days=6)
+    monkeypatch.setattr(schedules, "compute_next_run", lambda *_args, **_kwargs: NEXT)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=schedule_app(first)), base_url="http://qa"
+    ) as client:
+        response = await client.patch(
+            f"/agents/{first.agent_id}/schedules/{first.id}", json={"ends_at": cutoff.isoformat()}
+        )
+    assert response.status_code == 200
+    edited = await agent_schedule_dao.get(first.id)
+    assert edited is not None
+    assert edited.lease_token == first.lease_token
+    assert edited.pending_due_at == first.pending_due_at
+    assert edited.next_run_at is None
+    assert await agent_schedule_dao.renew_occurrence(first.id, first.lease_token, NOW)
+    compute = Mock(side_effect=AssertionError("Recovery must not recompute recurrence"))
+    # When a restarted DAO recovers after lease expiry and cutoff.
+    restarted = type(agent_schedule_dao)()
+    (recovered,) = await restarted.claim_due(NOW + timedelta(minutes=5), compute)
+    # Then only the rotated token can start and settle, with one start count and intact snapshot.
+    assert recovered.lease_token is not None
+    assert recovered.lease_token != first.lease_token
+    assert recovered.pending_instruction == first.pending_instruction
+    assert recovered.pending_notify_on_failure == first.pending_notify_on_failure
+    for write in (restarted.renew_occurrence, restarted.start_occurrence, restarted.finish_occurrence):
+        assert not await write(first.id, first.lease_token, NOW + timedelta(minutes=5))
+    assert await restarted.start_occurrence(first.id, recovered.lease_token, NOW + timedelta(minutes=5))
+    assert await restarted.finish_occurrence(first.id, recovered.lease_token, NOW + timedelta(minutes=5))
+    saved = await restarted.get(first.id)
+    assert saved is not None
+    assert saved.run_count == live_schedule.run_count + 1
+    assert saved.is_enabled is True
+    assert saved.next_run_at is None
+    compute.assert_not_called()
+
+
+@pytest.mark.parametrize("new_cutoff", [None, "2026-10-18T19:00:00+07:00"])
+async def test_live_http_cutoff_round_trip_and_restore(
+    live_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch, new_cutoff: str | None
+) -> None:
+    # Given an initial cutoff before the next occurrence, persisted via the actual HTTP/SQL stack.
+    monkeypatch.setattr(schedules, "compute_next_run", lambda *_args, **_kwargs: NEXT)
+    base = f"/agents/{live_schedule.agent_id}/schedules/"
+    cutoff = "2026-10-16T19:00:00+07:00"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=schedule_app(live_schedule)), base_url="http://qa"
+    ) as client:
+        created = await client.post(base, json={"name": "Bounded", "cron_expr": "0 12 * * *", "ends_at": cutoff})
+        assert created.status_code == 201
+        record = schedules.ScheduleOut.model_validate(created.json())
+        assert record.ends_at == NEXT
+        assert record.is_enabled is True
+        assert record.next_run_at is None
+        path = base + str(record.id)
+        for payload in ({"name": "Renamed"}, {"timezone": "Asia/Ho_Chi_Minh"}):
+            changed = await client.patch(path, json=payload)
+            assert changed.status_code == 200
+            assert schedules.ScheduleOut.model_validate(changed.json()).ends_at == NEXT
+        # When explicitly removing or extending the cutoff of the exhausted schedule.
+        restored = await client.patch(path, json={"ends_at": new_cutoff})
+        listed = await client.get(base)
+    # Then future scheduling is restored and list/persistence retain the same absolute instant.
+    assert restored.status_code == 200
+    assert listed.status_code == 200
+    saved = schedules.ScheduleOut.model_validate(restored.json())
+    assert saved.next_run_at == NEXT
+    assert saved.is_enabled is True
+    assert saved.ends_at == (datetime.fromisoformat(new_cutoff) if new_cutoff is not None else None)
+    persisted = await agent_schedule_dao.get(saved.id)
+    assert persisted is not None
+    assert persisted.ends_at == saved.ends_at
+    listed_record = schedules.ScheduleOut.model_validate(
+        next(item for item in listed.json() if item["id"] == str(saved.id))
+    )
+    assert (listed_record.ends_at, listed_record.next_run_at, listed_record.timezone) == (
+        saved.ends_at,
+        NEXT,
+        "Asia/Ho_Chi_Minh",
+    )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_live_manual_run_remains_available_after_cutoff(
+    manual_schedule: AgentScheduleRecord, manual_http: httpx.AsyncClient, enabled: bool
+) -> None:
+    # Given an exhausted schedule, either enabled or explicitly disabled.
+    cutoff = NOW - timedelta(days=6)
+    await agent_schedule_dao.update(db_obj=manual_schedule, obj_in={"ends_at": cutoff, "is_enabled": enabled})
+    # When its creator explicitly requests a manual run over HTTP.
+    response = await manual_http.post(f"/agents/{manual_schedule.agent_id}/schedules/{manual_schedule.id}/run")
+    # Then the cutoff has no effect on manual acceptance or its instruction snapshot.
+    assert response.status_code == 200
+    assert response.json()["status"] == "triggered"
+    receipt = await schedule_manual_run_dao.get(UUID(response.json()["run_id"]))
+    assert receipt is not None
+    assert receipt.instruction == manual_schedule.instruction

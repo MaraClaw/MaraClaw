@@ -3,8 +3,10 @@
 import base64
 import uuid
 from pathlib import Path
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict
 
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
@@ -39,6 +41,25 @@ MIME_MAP = {
     ".webp": "image/webp",
     ".bmp": "image/bmp",
 }
+
+
+class UploadPolicy(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    chat_image_max_bytes: int
+    chat_file_max_bytes: int
+    workspace_file_max_bytes: int
+    image_extensions: list[str]
+
+
+@router.get("/upload-policy", dependencies=[Depends(get_current_user)])
+async def get_upload_policy() -> UploadPolicy:
+    return UploadPolicy(
+        chat_image_max_bytes=IMAGE_UPLOAD_MAX_BYTES,
+        chat_file_max_bytes=MAX_INPUT_BYTES,
+        workspace_file_max_bytes=MAX_INPUT_BYTES,
+        image_extensions=sorted(IMAGE_EXTENSIONS),
+    )
 
 
 def validate_upload_filename(filename: str) -> str:

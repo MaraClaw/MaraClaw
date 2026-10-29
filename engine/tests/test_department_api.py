@@ -31,8 +31,16 @@ def directory(monkeypatch):
     tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
     actor = UserRecord(id=uuid4(), tenant_id=tenant.id, role=UserRole.ORG_ADMIN)
     subject = UserRecord(id=uuid4(), tenant_id=tenant.id)
-    first = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Sales", created_at=datetime.now(UTC))
-    second = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name="Support", created_at=datetime.now(UTC))
+    first = OrgDepartmentRecord(
+        id=uuid4(),
+        tenant_id=tenant.id,
+        name="Sales",
+        description="  Sales responsibilities\n",
+        created_at=datetime.now(UTC),
+    )
+    second = OrgDepartmentRecord(
+        id=uuid4(), tenant_id=tenant.id, name="Support", description="\tEscalations  ", created_at=datetime.now(UTC)
+    )
     people = {actor.id: actor, subject.id: subject}
     department_rows = {first.id: first, second.id: second}
     assignments = {subject.id: {first.id}}
@@ -77,7 +85,13 @@ def directory(monkeypatch):
     async def create(*, obj_in):
         if any(row.name.lower() == obj_in["name"].lower() for row in department_rows.values()):
             raise UniqueViolationError
-        row = OrgDepartmentRecord(id=uuid4(), tenant_id=tenant.id, name=obj_in["name"], created_at=datetime.now(UTC))
+        row = OrgDepartmentRecord(
+            id=uuid4(),
+            tenant_id=tenant.id,
+            name=obj_in["name"],
+            description=obj_in["description"],
+            created_at=datetime.now(UTC),
+        )
         department_rows[row.id] = row
         return row
 
@@ -127,7 +141,8 @@ def test_directory_and_creation_http_shapes(directory):
     created = client.post(f"/api/departments?tenant_id={actor.tenant_id}", json={"name": "  Finance  "})
     assert created.status_code == 201
     assert created.json()["name"] == "Finance"
-    assert set(created.json()) == {"id", "tenant_id", "name", "created_at"}
+    assert created.json()["description"] == ""
+    assert set(created.json()) == {"id", "tenant_id", "name", "description", "created_at"}
 
 
 @pytest.mark.parametrize("operation", ["create", "assign"])

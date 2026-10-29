@@ -1,22 +1,27 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { chromium, expect } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { launchRosterBrowser } from './roster-export-owned-browser.mjs'
+import { exerciseRosterExports, installRosterProbe } from './roster-export-browser-cases.mjs'
 
-const output = join(process.env.TMPDIR, 'users-pagination-evidence')
+const output = process.env.USERS_PAGINATION_ARTIFACTS ?? join(process.env.TMPDIR, 'users-pagination-evidence')
 await mkdir(output, { recursive: true })
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
 let browser
-let skillBrowser
+let ownedBrowser
 const evidence = []
+const scrollOwners = []
 const row = (id, tenant = 'alpha', extra = {}) => ({
   id, email: `${id}@example.test`, display_name: id,
   role: 'member', is_active: false, is_genesis: false, tenant_id: tenant,
   agents_count: 2, created_at: '2026-10-20T00:00:00Z', source: 'local', ...extra,
 })
 const admin = {
-  ...row('Operator', 'alpha'), identity_id: 'identity', avatar_url: null,
+  ...row('Operator'), id: 'a1111111-1111-4111-8111-111111111111',
+  tenant_id: 'a3333333-3333-4333-8333-333333333333',
+  identity_id: 'a2222222-2222-4222-8222-222222222222', avatar_url: null,
   role: 'platform_admin', is_platform_admin: true, is_genesis: true,
   email_verified: true, must_change_password: false, is_active: true,
 }
@@ -28,13 +33,16 @@ async function scenario(name, exercise, options = {}) {
   const context = await browser.newContext({ viewport: { width: 1365, height: 1000 } })
   context.setDefaultTimeout(10_000)
   const state = {
-    role: options.role ?? 'platform_admin', calls: [], patches: [], companyCalls: 0, gates: [],
+    role: options.role ?? 'platform_admin', calls: [], patches: [], companyCalls: 0, gates: [], exports: [], downloads: [], exportReplies: 0,
+    exportAnswer: async () => ({ csv: 'id,email\r\nserver-only,off-page@example.test\r\n' }),
     answer: async ({ tenant, search, cursor: next }) => ({ items: [row(search || (next ? 'Last member' : `${tenant} member`), tenant)], next_cursor: null }),
   }
   const errors = []
   try {
     await context.addInitScript(() => localStorage.setItem('maraclaw-admin-token', 'synthetic-token'))
+    await context.addInitScript(installRosterProbe)
     const page = await context.newPage()
+    page.on('download', (download) => state.downloads.push(download))
     page.on('pageerror', (error) => errors.push(error.message))
     await page.route('**/api/**', async (route) => {
       const request = route.request()
@@ -48,6 +56,8 @@ async function scenario(name, exercise, options = {}) {
       else if (path === '/api/admin/companies') { state.companyCalls++; body = [company('alpha'), company('beta')] }
       else if (path === '/api/admin/platform-admins') body = [row('Hidden supervisor', null, { role: 'platform_admin' })]
       else if (path === '/api/departments') body = { departments: [], assignments: [] }
+      else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
+      else if (path === '/api/tenants/me') body = { ...company(admin.tenant_id), is_default_end_user_org: false }
       else if (path === '/api/users/page') {
         const input = { tenant: url.searchParams.get('tenant_id'), search: url.searchParams.get('search'), cursor: url.searchParams.get('cursor') }
         assert.equal(url.searchParams.get('limit'), '50')
@@ -55,11 +65,19 @@ async function scenario(name, exercise, options = {}) {
         const result = await state.answer(input)
         status = result.status ?? 200
         body = result.body ?? result
+      } else if (path === '/api/users/export') {
+        const input = { tenant: url.searchParams.get('tenant_id'), search: url.searchParams.get('search') }
+        assert.deepEqual([...url.searchParams.keys()].sort(), ['search', 'tenant_id'])
+        state.exports.push(input)
+        const result = await state.exportAnswer(input)
+        status = result.status ?? 200
+        body = result.body ?? result
       } else if (path.endsWith('/active') && request.method() === 'PATCH') {
         state.patches.push({ path, body: request.postDataJSON() })
         body = row(decodeURIComponent(path.split('/').at(-2)), 'alpha', { is_active: true })
-      } else throw new Error(`Unexpected API ${request.method()} ${path}`)
+      } else { errors.push(`Unexpected API ${request.method()} ${path}`); status = 501; body = { detail: 'Unexpected synthetic route' } }
       await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+      if (path === '/api/users/export') state.exportReplies++
     })
     await exercise(page, state)
     assert.deepEqual(errors, [])
@@ -84,7 +102,8 @@ const gated = (state) => {
 
 try {
   await server.listen()
-  browser = await chromium.launch({ headless: true, args: ['--remote-debugging-port=0', '--enable-automation'] })
+  ownedBrowser = await launchRosterBrowser()
+  browser = ownedBrowser.browser
   await scenario('server paging preserves ordering, separate platform admins and departments, then exhausts', async (page, state) => {
     // Given
     state.answer = async ({ cursor: next }) => next ? { items: [row('Last member')], next_cursor: null } : first
@@ -96,7 +115,7 @@ try {
     const companyLinks = page.getByRole('link', { name: /^Open (First member|Second admin)$/ })
     assert.deepEqual(await companyLinks.evaluateAll((links) => links.map((link) => link.getAttribute('aria-label'))), ['Open First member', 'Open Second admin'])
     await page.getByRole('button', { name: 'Load more users' }).focus()
-    await page.screenshot({ path: join(output, 'users-pagination-keyboard-focus.png'), animations: 'disabled' })
+    await ownedBrowser.capture(page, join(output, 'users-pagination-keyboard-focus.png'))
     // When
     await page.getByRole('button', { name: 'Load more users' }).click()
     // Then
@@ -106,28 +125,18 @@ try {
     assert.deepEqual(state.calls, [{ tenant: 'alpha', search: '', cursor: null }, { tenant: 'alpha', search: '', cursor }])
     for (const width of [390, 1440, 1920]) for (const colorScheme of ['light', 'dark']) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+      await ownedBrowser.emulate(page, width === 390 ? 'iphone-14' : { width, height: 1000, deviceScaleFactor: 1, mobile: false, hasTouch: false })
       await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
       await page.evaluate(() => document.fonts.ready)
+      scrollOwners.push({ width, colorScheme, ...await page.evaluate(() => ({
+        width: innerWidth, dpr: devicePixelRatio,
+        owners: [...document.querySelectorAll('*')].filter((element) => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight).map((element) => element.tagName.toLowerCase()),
+      })) })
       for (const position of ['top', 'end']) {
         await page.locator('main').evaluate((main, end) => { main.scrollTop = end ? main.scrollHeight : 0 }, position === 'end')
-        await page.screenshot({ path: join(output, `users-pagination-${width}-${colorScheme}-${position}.png`), animations: 'disabled' })
+        await ownedBrowser.capture(page, join(output, `users-pagination-${width}-${colorScheme}-${position}.png`))
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
-    }
-    if (process.env.USERS_PAGINATION_BROWSER_SKILL) {
-      const cdp = await browser.newBrowserCDPSession()
-      const { arguments: args } = await cdp.send('Browser.getBrowserCommandLine')
-      const profile = args.find((arg) => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length)
-      const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')
-      const { loadOmowright } = await import(`${process.env.USERS_PAGINATION_BROWSER_SKILL}/scripts/omowright.mjs`)
-      const { omowright } = await loadOmowright()
-      skillBrowser = await omowright.connect(`http://127.0.0.1:${port}`)
-      const target = (await skillBrowser.listTargets()).find((tab) => tab.url?.includes('/users?'))
-      const owned = await skillBrowser.attachPage(target.id)
-      await writeFile(join(output, 'users-pagination-browser-snapshot.json'), JSON.stringify(omowright.compactSnapshot(await owned.snapshot())))
-      await skillBrowser.close()
-      skillBrowser = undefined
-      await cdp.detach()
     }
   })
 
@@ -226,7 +235,7 @@ try {
     await expect(openUser(page, 'Retired session')).toHaveCount(0)
     await expect(openUser(page, 'Hidden supervisor')).toHaveCount(0)
     await expect(page.getByRole('combobox')).toHaveCount(0)
-    assert.deepEqual(state.calls.at(-1), { tenant: 'alpha', search: '', cursor: null })
+    assert.deepEqual(state.calls.at(-1), { tenant: admin.tenant_id, search: '', cursor: null })
   })
 
   await scenario('invalid platform-admin company selection never starts an unscoped or foreign users request', async (page, state) => {
@@ -256,9 +265,11 @@ try {
     assert.deepEqual(state.patches, [{ path: '/api/users/First%20member/active', body: { is_active: true } }])
     await expect.poll(() => state.companyCalls).toBeGreaterThan(1)
   })
+  await exerciseRosterExports(scenario, { openUsers, openUser, gated, admin, output, ownedBrowser })
+  await writeFile(join(output, 'scroll-owners.json'), JSON.stringify(scrollOwners, null, 2))
   await writeFile(join(output, 'results.json'), JSON.stringify(evidence, null, 2))
 } finally {
-  await skillBrowser?.close()
-  await browser?.close()
+  await ownedBrowser?.close()
   await server.close()
+  await writeFile(join(output, 'teardown.json'), JSON.stringify({ browserClosed: true, serverClosed: true, ...ownedBrowser?.resources }, null, 2))
 }

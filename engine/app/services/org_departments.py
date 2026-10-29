@@ -17,12 +17,12 @@ from app.records.user import UserRecord
 from app.schemas.department import (
     AssignmentOut,
     AssignmentsOut,
-    DepartmentCreate,
     DepartmentDeletionPreviewOut,
     DepartmentMembersOut,
     DepartmentMergePreviewOut,
     DepartmentMergeSelection,
     DepartmentOut,
+    DepartmentUpdate,
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import END_USER_ROLES
@@ -57,7 +57,7 @@ async def list_department_members(actor: UserRecord, department_id: UUID) -> Dep
 
 
 async def rename_department(
-    actor: UserRecord, department_id: UUID, data: DepartmentCreate, tenant_id: UUID | None
+    actor: UserRecord, department_id: UUID, data: DepartmentUpdate, tenant_id: UUID | None
 ) -> DepartmentOut:
     tenant = admin_tenant(actor, tenant_id)
     try:
@@ -74,17 +74,25 @@ async def rename_department(
             department = await org_department_dao.get(department_id)
             if department is None or department.tenant_id != tenant:
                 raise HTTPException(404, "Department not found")
-            before_name = department.name
-            if before_name == data.name:
+            supplied = data.model_dump(exclude_unset=True)
+            changes = {
+                field: field_change(before, after)
+                for field, before, after in (
+                    ("name", department.name, data.name),
+                    ("description", department.description, data.description),
+                )
+                if field in data.model_fields_set and before != after
+            }
+            if not changes:
                 return DepartmentOut.model_validate(department)
-            updated = await org_department_dao.update(db_obj=department, obj_in={"name": data.name})
+            updated = await org_department_dao.update(db_obj=department, obj_in=supplied)
             await write_admin_audit(
                 actor=fresh_actor,
                 action="department.rename",
                 target_type="department",
                 target_id=department_id,
                 tenant_id=tenant,
-                changes={"name": field_change(before_name, updated.name)},
+                changes=changes,
             )
             return DepartmentOut.model_validate(updated)
     except UniqueViolationError as exc:

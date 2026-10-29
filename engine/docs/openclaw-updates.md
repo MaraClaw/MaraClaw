@@ -44,7 +44,7 @@ Upgrade gates are separate from [new-work eligibility](guest-containers.md#new-w
 
 ## Image preparation and retry
 
-- Bare references without a digest or repository slash (for example, `openclaw:2026.10.7` or `openclaw`) are local-only. Before publishing a notice, build the configured version with `./build-openclaw-local-dockerfile.sh` from the Photon project, using the same Docker daemon as the worker. Keep the configured image tag and build version aligned; do not retag an older release as the target version.
+- Bare references without a digest or repository slash (for example, `openclaw:2026.10.8` or `openclaw`) are local-only. Before publishing a notice, build the configured version with `./build-openclaw-local-dockerfile.sh` from the guest image project, using the same Docker daemon as the worker. Keep the configured image tag and build version aligned; do not retag an older release as the target version.
 - Namespaced/registry references and all digest-pinned references are freshly pulled during upgrades, even when cached. A registry failure never falls back to a cached image.
 - A missing local image fails with `pull_failed` without pulling or touching the old guest. Prepare the exact target image, then retry the same notice with `POST /agents/{id}/openclaw-update` and its `notice_id`. An outstanding mandatory notice still gates work until an upgrade succeeds.
 

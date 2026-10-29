@@ -4,6 +4,7 @@ from app.core.json_types import json_object_from_response
 from app.schemas.department import DepartmentMergePreviewOut
 from department_merge_postgres_fixtures import (
     department_store,
+    merge_client,
     merge_request,
     merge_state,
     merge_store,
@@ -13,7 +14,10 @@ from department_merge_postgres_fixtures import (
 __all__ = ["department_store", "merge_store", "schema_db"]
 
 
-@pytest.mark.parametrize("change", ["membership", "grant", "source_name", "destination_name"])
+@pytest.mark.parametrize(
+    "change",
+    ["membership", "grant", "source_name", "destination_name", "source_description", "destination_description"],
+)
 async def test_reviewed_merge_rejects_equal_count_replacement_or_rename(merge_store, change):
     store, destination_agent, _ = merge_store
     reviewed = await merge_request(store, "preview")
@@ -49,6 +53,17 @@ async def test_reviewed_merge_rejects_equal_count_replacement_or_rename(merge_st
                 "UPDATE local_departments SET name = 'Renamed' WHERE id = %(id)s",
                 {"id": store.selected if change == "source_name" else store.other},
             )
+        case "source_description" | "destination_description":
+            preview = DepartmentMergePreviewOut.model_validate_json(reviewed.content)
+            selected = preview.source if change == "source_description" else preview.destination
+            async with merge_client(store) as client:
+                edited = await client.patch(
+                    f"/api/departments/{selected.id}",
+                    json={"name": selected.name, "description": selected.description + " "},
+                )
+            assert edited.status_code == 200, edited.text
+            assert edited.json()["description"] == selected.description + " "
+            assert store.invalidated == []
     before = await merge_state(store)
     current = await merge_request(store, "preview")
     assert {key: value for key, value in json_object_from_response(current).items() if key.endswith("_count")} == {

@@ -7,6 +7,7 @@ const departmentSchema = z.object({
   id: z.string(),
   tenant_id: z.string(),
   name: z.string(),
+  description: z.string(),
   created_at: z.string(),
 }).readonly()
 
@@ -38,6 +39,7 @@ const deletionPreviewSchema = z.object({
 
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
 export type Department = z.infer<typeof departmentSchema>
+export type DepartmentInput = { readonly name: string; readonly description?: string }
 export type UserDepartments = z.infer<typeof userDepartmentsSchema>
 export type DepartmentMergePreview = z.infer<typeof DepartmentMergePreviewOutSchema>
 export type DepartmentMergeSelection = {
@@ -78,7 +80,7 @@ export async function listDepartments(tenantId: string, signal?: AbortSignal) {
   return apiRequest(`/api/departments?${query}`, { schema: departmentsSchema, signal })
 }
 
-export async function createDepartment(tenantId: string, input: { readonly name: string }) {
+export async function createDepartment(tenantId: string, input: DepartmentInput) {
   const query = new URLSearchParams({ tenant_id: tenantId })
   return apiRequest(`/api/departments?${query}`, {
     schema: departmentSchema,
@@ -87,7 +89,7 @@ export async function createDepartment(tenantId: string, input: { readonly name:
   })
 }
 
-export async function renameDepartment(tenantId: string, departmentId: string, input: { readonly name: string }) {
+export async function renameDepartment(tenantId: string, departmentId: string, input: DepartmentInput) {
   const query = new URLSearchParams({ tenant_id: tenantId })
   return apiRequest(`/api/departments/${encodeURIComponent(departmentId)}?${query}`, {
     schema: departmentSchema,

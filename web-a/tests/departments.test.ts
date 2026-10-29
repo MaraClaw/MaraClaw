@@ -4,13 +4,13 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { deleteDepartment, mergeDepartment, previewDepartmentDeletion, previewDepartmentMerge, type DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { createDepartment, deleteDepartment, listDepartments, mergeDepartment, previewDepartmentDeletion, previewDepartmentMerge, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { deleteDepartmentOptions } from '../src/pages/users-department-mutations.ts'
 import { createFixture } from './helpers.ts'
 
-const department = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', created_at: '2026-10-18T00:00:00Z' }
+const department = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', description: '  Escalations\nBilling questions  ', created_at: '2026-10-18T00:00:00Z' }
 const input = { tenantId: department.tenant_id, departmentId: department.id }
 const queryKey = ['admin-departments', input.tenantId]
 const directory: DepartmentsResponse = {
@@ -26,9 +26,41 @@ const mergeSelection = { tenantId: '86b8142b-31e6-44ab-a35e-e10998037030', sourc
 const mergeResult = {
   confirmation_token: `v1:${'a'.repeat(64)}`,
   source: { ...department, id: '10000000-0000-4000-8000-000000000001', tenant_id: mergeSelection.tenantId },
-  destination: { ...department, id: mergeSelection.destinationId, tenant_id: mergeSelection.tenantId, name: 'Engineering' },
+  destination: { ...department, id: mergeSelection.destinationId, tenant_id: mergeSelection.tenantId, name: 'Engineering', description: '  Product support\nOnboarding  ' },
   source_membership_count: 2, destination_membership_count: 3, overlapping_membership_count: 1,
   source_agent_grant_count: 4, destination_agent_grant_count: 5, overlapping_agent_grant_count: 2,
+}
+
+test('list retains exact non-null department descriptions', async (t) => {
+  // Given
+  t.mock.method(globalThis, 'fetch', async () => Response.json(directory))
+  // When
+  const result = await listDepartments(input.tenantId)
+  // Then
+  assert.deepEqual(result, directory)
+})
+
+for (const description of [undefined, '', '  Billing\n\nEscalations  ']) {
+  test(`create preserves ${JSON.stringify(description)} without breaking name-only requests`, async (t) => {
+    // Given
+    const payload = description === undefined ? { name: department.name } : { name: department.name, description }
+    const created = { ...department, description: description ?? '' }
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(created))
+    // When
+    const result = await createDepartment(input.tenantId, payload)
+    // Then
+    assert.deepEqual(JSON.parse(String(fetch.mock.calls[0]?.arguments[1]?.body)), payload)
+    assert.deepEqual(result, created)
+  })
+}
+
+for (const description of [null, undefined, 42]) {
+  test(`directory rejects malformed description ${description}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ ...directory, departments: [{ ...department, description }] }))
+    // When / Then
+    await assert.rejects(listDepartments(input.tenantId), z.ZodError)
+  })
 }
 
 test('merge preview validates all association counts and forwards the scoped selection and cancellation', async (t) => {

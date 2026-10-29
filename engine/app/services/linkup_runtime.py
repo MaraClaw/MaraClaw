@@ -1,4 +1,4 @@
-"""Canonical configuration keys for Photon-bundled Linkup skills."""
+"""Canonical configuration keys for guest image-bundled Linkup skills."""
 
 from __future__ import annotations
 

@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { createFilePreview, reduceFilePreview } from '@/lib/file-download'
 import { ApiError, formatApiDetail, userFacingRequestError } from '@/lib/http'
+import { formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   deleteFileContent,
   fileTicketUrl,
@@ -71,6 +72,19 @@ export function AgentFilesPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [version, setVersion] = useState<string | undefined>()
+  const uploadPolicy = useQuery({
+    queryKey: ['upload-policy'],
+    queryFn: ({ signal }) => getUploadPolicy({ signal, owner: scope.owner }),
+    retry: false,
+  })
+  const upload = useMutation({
+    mutationFn: (file: File) => uploadWorkspaceFile(agent.id, file, path || 'workspace/knowledge_base'),
+    onSuccess() {
+      toast.success('Uploaded')
+      void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
+    },
+    onError(error) { toast.error(userFacingRequestError(error, 'Upload failed')) },
+  })
 
   const listing = useQuery({
     queryKey: ['files', agent.id, path],
@@ -132,23 +146,30 @@ export function AgentFilesPage() {
           <input
             type="file"
             className="w-24 text-[10px]"
+            aria-label="Upload workspace file"
+            aria-describedby="workspace-upload-policy"
+            disabled={!uploadPolicy.isSuccess || upload.isPending}
             onChange={(event) => {
-              if (!scope.isCurrent()) return
+              if (!scope.isCurrent() || !uploadPolicy.isSuccess || upload.isPending) return
               const file = event.target.files?.[0]
-              if (!file) return
-              void uploadWorkspaceFile(agent.id, file, path || 'workspace/knowledge_base')
-                .then(() => {
-                  if (!scope.isCurrent()) return
-                  toast.success('Uploaded')
-                  void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
-                })
-                .catch((error: unknown) => {
-                  if (!scope.isCurrent()) return
-                  toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? 'Upload failed') : 'Upload failed')
-                })
               event.target.value = ''
+              if (!file) return
+              if (file.size > uploadPolicy.data.workspace_file_max_bytes) {
+                toast.error(`File exceeds the ${formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes)} workspace upload limit.`)
+                return
+              }
+              upload.mutate(file)
             }}
           />
+        </div>
+        <div id="workspace-upload-policy" className="mb-3 text-xs text-muted-foreground">
+          {uploadPolicy.isError ? <div role="alert" className="space-y-2 text-destructive">
+            <p>Could not load upload limits. Uploading is unavailable.</p>
+            <Button type="button" size="sm" variant="outline" disabled={uploadPolicy.isFetching}
+              onClick={() => { if (scope.isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
+          </div> : <p role="status">{uploadPolicy.isSuccess
+            ? `All files, including images: up to ${formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes)}.`
+            : 'Loading upload limits…'}</p>}
         </div>
         {listing.isLoading ? <Loader2 className="size-4 animate-spin" /> : null}
         <ul className="space-y-1">

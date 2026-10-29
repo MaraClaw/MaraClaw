@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { installedAgentSkillsOptions } from '@/hooks/agent-skills-options'
 import { useChatHistory } from '@/hooks/use-chat-history'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
-import { useQuery as useWorkspaceQuery } from '@/hooks/session-workspace'
+import { useMutation as useWorkspaceMutation, useQuery as useWorkspaceQuery } from '@/hooks/session-workspace'
 import { authSession } from '@/lib/auth-session'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
@@ -24,6 +24,7 @@ import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isWritableSession } from '@/lib/chat/sessions'
 import { ChatEventType, archivedSessionId } from '@/lib/chat/protocol'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { chatUploadLimit, formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   createSession,
   listSessions,
@@ -104,6 +105,13 @@ export function AgentChatPage() {
     queryFn: () => listSessions(agent.id, user?.id === agent.creator_id ? 'all' : 'mine'),
     enabled: authSession.isCurrent(mountedOwner) && Boolean(token),
   })
+
+  const uploadPolicy = useWorkspaceQuery({
+    queryKey: ['upload-policy'],
+    queryFn: ({ signal }) => getUploadPolicy({ signal, owner }),
+    retry: false,
+  })
+  const upload = useWorkspaceMutation({ mutationFn: (file: File) => uploadChatFile(file, agent.id) })
 
   const sharedSessionQuery = useQuery({
     queryKey: ['shared-session', agent.id],
@@ -451,8 +459,13 @@ export function AgentChatPage() {
   }
 
   async function onFile(file: File) {
-    if (!isCurrent() || !writable || !submissions.active) return
+    if (!isCurrent() || !writable || !submissions.active || !uploadPolicy.isSuccess) return
     if (busy) return
+    const limit = chatUploadLimit(file.name, uploadPolicy.data)
+    if (file.size > limit) {
+      toast.error(`File exceeds the ${formatUploadLimit(limit)} chat upload limit.`)
+      return
+    }
     if (!sendRef.current) {
       toast.error('Chat is not connected yet. Try again in a moment.')
       return
@@ -462,7 +475,7 @@ export function AgentChatPage() {
     setRetryStartedAt(null)
     const uploadSession = activeSessionRef.current
     try {
-      const uploaded = await uploadChatFile(file, agent.id)
+      const uploaded = await upload.mutateAsync(file)
       if (!isCurrent() || !submissions.active || !sendRef.current || activeSessionRef.current !== uploadSession) return
       const submission = createAttachmentSubmission(uploaded)
       updateLines((prev) => isCurrent() ? [
@@ -588,7 +601,8 @@ export function AgentChatPage() {
               type="file"
               className="text-xs"
               aria-label="Attach a file"
-              disabled={busy || socketStopped}
+              aria-describedby="chat-upload-policy"
+              disabled={busy || socketStopped || !uploadPolicy.isSuccess}
               onChange={(event) => {
                 if (!isCurrent()) return
                 const file = event.target.files?.[0]
@@ -600,6 +614,15 @@ export function AgentChatPage() {
               {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" />}
               Send
             </Button>
+          </div>
+          <div id="chat-upload-policy" className="mt-2 text-xs text-muted-foreground">
+            {uploadPolicy.isError ? <div role="alert" className="space-y-2 text-destructive">
+              <p>Could not load upload limits. Uploading is unavailable.</p>
+              <Button type="button" size="sm" variant="outline" disabled={uploadPolicy.isFetching}
+                onClick={() => { if (isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
+            </div> : <p role="status">{uploadPolicy.isSuccess
+              ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`
+              : 'Loading upload limits…'}</p>}
           </div>
         </form> : null}
       </section>

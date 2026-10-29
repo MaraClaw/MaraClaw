@@ -24,6 +24,7 @@ import {
 } from '@/lib/users-api'
 import { TenantUsers } from '@/pages/users-departments'
 import { resetUsersPagination, useUsersPagination } from '@/pages/users-pagination'
+import { useUsersRosterExport } from '@/pages/users-roster-export'
 
 export function UsersPage() {
   const { user, owner } = useAuth()
@@ -35,7 +36,20 @@ export function UsersPage() {
   const companyId = params.get('company') ?? ''
   const filterId = useId()
 
+  const companies = useQuery({
+    queryKey: ['admin-companies'],
+    queryFn: ({ signal }) => listCompanies(undefined, signal),
+    enabled: platformAdmin,
+  })
+
+  const tenantId = platformAdmin
+    ? companies.data?.find((company) => company.id === companyId)?.id ?? null
+    : user?.tenant_id ?? null
+
+  const rosterExport = useUsersRosterExport({ tenantId, search }, owner)
+
   const updateListState = useCallback((patch: { q?: string; company?: string }, replace = true) => {
+    rosterExport.retire()
     setParams(
       (current) => {
         const next = new URLSearchParams(current)
@@ -51,17 +65,7 @@ export function UsersPage() {
       },
       { replace },
     )
-  }, [setParams])
-
-  const companies = useQuery({
-    queryKey: ['admin-companies'],
-    queryFn: ({ signal }) => listCompanies(undefined, signal),
-    enabled: platformAdmin,
-  })
-
-  const tenantId = platformAdmin
-    ? companies.data?.find((company) => company.id === companyId)?.id ?? null
-    : user?.tenant_id ?? null
+  }, [setParams, rosterExport.retire])
 
   useEffect(() => {
     if (!platformAdmin || tenantId || !companies.data?.length) return
@@ -173,7 +177,13 @@ export function UsersPage() {
             />
           </span>
         </label>
+        <Button type="button" variant="outline" disabled={!tenantId || rosterExport.pending} aria-busy={rosterExport.pending} onClick={rosterExport.start}>
+          {rosterExport.pending ? 'Exporting company CSV…' : 'Export company CSV'}
+        </Button>
       </div>
+
+      {rosterExport.message ? <p role="status" className="text-sm text-muted-foreground">{rosterExport.message}</p> : null}
+      {rosterExport.error ? <p role="alert" className="text-sm text-destructive">{rosterExport.error}</p> : null}
 
       {companies.error ? (
         <p className="text-sm text-destructive">

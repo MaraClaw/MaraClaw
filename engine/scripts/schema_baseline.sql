@@ -949,6 +949,7 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	notify_on_failure BOOLEAN NOT NULL DEFAULT false,
 	last_run_at TIMESTAMP WITH TIME ZONE, 
 	next_run_at TIMESTAMP WITH TIME ZONE, 
+	ends_at TIMESTAMP WITH TIME ZONE,
 	pending_due_at TIMESTAMP WITH TIME ZONE,
 	pending_instruction TEXT,
 	pending_notify_on_failure BOOLEAN,
@@ -1710,6 +1711,7 @@ CREATE TABLE IF NOT EXISTS local_departments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL CHECK (name = btrim(name) AND length(name) > 0),
+    description TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (id, tenant_id)
 );
