@@ -4,7 +4,7 @@ import uuid
 from typing import Any, TypedDict
 
 from app.config import get_settings
-from app.core.domain.agents import AgentStatus, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.agents import AgentStatus, AgentType, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.logging import logger
@@ -28,7 +28,7 @@ from app.services.storage import get_storage_backend, store_agent_bytes
 
 async def _create_openclaw_seed_agent(obj_in: dict[str, Any]) -> AgentRecord:
     raw_key, key_hash = mint_openclaw_gateway_key()
-    payload = {**obj_in, "agent_type": "openclaw", "api_key_hash": key_hash}
+    payload = {**obj_in, "agent_type": AgentType.OPENCLAW, "api_key_hash": key_hash}
     agent = await agent_dao.create(obj_in=payload)
     write_gateway_api_key(agent, raw_key)
     return agent

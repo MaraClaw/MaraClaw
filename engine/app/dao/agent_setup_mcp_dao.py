@@ -2,6 +2,7 @@
 
 from uuid import UUID, uuid4
 
+from app.core.domain.agents import AgentType
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.agent_setup_mcp import AgentSetupMCPWork, MCPWarningCode
@@ -33,7 +34,7 @@ CREATE INDEX IF NOT EXISTS agent_setup_mcp_work_queue_idx
 
 _ELIGIBLE = """
 a.creator_id=w.owner_id AND a.tenant_id IS NOT DISTINCT FROM w.tenant_id
-AND NOT a.setup_pending AND a.agent_type='openclaw' AND NOT a.is_expired
+AND NOT a.setup_pending AND a.agent_type=%(agent_type)s AND NOT a.is_expired
 AND (a.expires_at IS NULL OR a.expires_at > clock_timestamp())
 AND EXISTS (SELECT 1 FROM agent_setups s WHERE s.agent_id=a.id AND s.state='succeeded')
 AND EXISTS (SELECT 1 FROM users u JOIN identities i ON i.id=u.identity_id
@@ -45,6 +46,9 @@ AND NOT EXISTS (SELECT 1 FROM openclaw_update_runs r WHERE r.agent_id=a.id AND r
 """
 _OWNED = """w.agent_id=%(agent)s AND w.server_id=%(server)s AND w.state='running'
     AND w.claim_token=%(token)s AND w.lease_until > clock_timestamp()"""
+
+
+_ELIGIBLE_PARAMS: dict[str, object] = {"agent_type": AgentType.OPENCLAW.value}
 
 
 def _claim_params(claim: AgentSetupMCPWork) -> dict[str, object]:
@@ -78,7 +82,7 @@ class AgentSetupMCPDAO:
                 (w.state='warning' AND w.warning_code <> 'unsupported_remote_transport' AND {_ELIGIBLE}) AS retryable
                 FROM agent_setup_mcp_work w JOIN agents a ON a.id=w.agent_id
                 WHERE w.agent_id=%(agent)s ORDER BY w.server_id""",
-                {"agent": agent_id},
+                {"agent": agent_id, **_ELIGIBLE_PARAMS},
             )
             return [AgentSetupMCPStatus.model_validate(row) for row in rows]
 
@@ -88,7 +92,7 @@ class AgentSetupMCPDAO:
                 await db.fetchval(
                     f"""SELECT 1 FROM agents a JOIN agent_setup_mcp_work w ON w.agent_id=a.id
                 WHERE w.agent_id=%(agent)s AND w.server_id=%(server)s AND {_ELIGIBLE}""",
-                    _claim_params(work),
+                    {**_claim_params(work), **_ELIGIBLE_PARAMS},
                 )
             )
 
@@ -104,7 +108,7 @@ class AgentSetupMCPDAO:
                   claimed_at=clock_timestamp(),lease_until=clock_timestamp()+%(seconds)s * interval '1 second',
                   attempts=w.attempts+1,updated_at=clock_timestamp()
                 FROM candidate c WHERE w.agent_id=c.agent_id AND w.server_id=c.server_id RETURNING w.*""",
-                {"token": uuid4(), "seconds": lease_seconds},
+                {"token": uuid4(), "seconds": lease_seconds, **_ELIGIBLE_PARAMS},
             )
             return AgentSetupMCPWork.from_row(row) if row is not None else None
 
@@ -137,7 +141,12 @@ class AgentSetupMCPDAO:
                     f"""UPDATE agent_setup_mcp_work w SET state=%(state)s,warning_code=%(warning)s,
                 claim_token=NULL,lease_until=NULL,updated_at=clock_timestamp() FROM agents a
                 WHERE a.id=w.agent_id AND {_OWNED} AND {_ELIGIBLE} RETURNING 1""",
-                    {**_claim_params(claim), "state": "warning" if warning else "succeeded", "warning": warning},
+                    {
+                        **_claim_params(claim),
+                        **_ELIGIBLE_PARAMS,
+                        "state": "warning" if warning else "succeeded",
+                        "warning": warning,
+                    },
                 )
             )
 

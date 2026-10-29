@@ -17,7 +17,7 @@ const task = {
   assignee: 'agent', created_by: id, created_at: createdAt, updated_at: createdAt,
 }
 
-for (const field of ['status', 'access_mode', 'company_access_level', 'access_level', 'access_reason']) {
+for (const field of ['status', 'agent_type', 'access_mode', 'company_access_level', 'access_level', 'access_reason']) {
   test(`agent HTTP parsing rejects an unknown ${field} instead of accepting a string`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json({ ...agent, [field]: 'unknown-contract-value' }))
@@ -39,9 +39,9 @@ for (const access_reason of ['creator', 'administrator', 'company', 'direct', 'd
   })
 }
 
-test('agent parsing preserves an open runtime identifier alongside canonical access and status values', async (t) => {
+test('agent parsing preserves the canonical runtime identifier alongside canonical access and status values', async (t) => {
   // Given
-  const payload = { ...agent, agent_type: 'future-runtime', access_mode: 'company', company_access_level: 'use' }
+  const payload = { ...agent, agent_type: 'openclaw', access_mode: 'company', company_access_level: 'use' }
   t.mock.method(globalThis, 'fetch', async () => Response.json(payload))
   // When
   const result = await getAgent(id)

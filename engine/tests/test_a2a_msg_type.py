@@ -9,11 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.domain.agents import AgentType
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
 def _make_agent(
-    agent_id=None, name="TestAgent", tenant_id=None, agent_type="openclaw", expired=False, primary_model_id=None
+    agent_id=None, name="TestAgent", tenant_id=None, agent_type=AgentType.OPENCLAW, expired=False, primary_model_id=None
 ):
     agent = MagicMock()
     agent.id = agent_id or uuid.uuid4()
@@ -506,7 +508,9 @@ async def test_openclaw_target_still_queues():
     src_participant = _make_participant(ref_id=from_agent_id)
     tgt_participant = _make_participant(ref_id=target_id)
     source_agent = _make_agent(from_agent_id, name="Alice")
-    target_agent = _make_agent(target_id, name="OpenClawBot", agent_type="openclaw", tenant_id=source_agent.tenant_id)
+    target_agent = _make_agent(
+        target_id, name="OpenClawBot", agent_type=AgentType.OPENCLAW, tenant_id=source_agent.tenant_id
+    )
     target_agent.openclaw_last_seen = datetime.now(UTC)
 
     session = MagicMock()

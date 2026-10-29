@@ -236,7 +236,6 @@ class WebSocketChatHandler:
 
         # State fields initialized during setup
         self.agent_name: str = ""
-        self.agent_type: str = ""
         self.role_description: str = ""
         self.welcome_message: str = ""
         self.ctx_size: int = 100
@@ -290,7 +289,6 @@ class WebSocketChatHandler:
         self.websocket.state.chat_binding = self.binding
         self.conv_id = str(self.binding.session_id)
         self.agent_name = self.agent.name
-        self.agent_type = self.agent.agent_type or ""
         self.role_description = self.agent.role_description or ""
         self.welcome_message = self.agent.welcome_message or ""
         self.ctx_size = self.agent.context_window_size or 100

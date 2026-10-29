@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 
 from app.api import chat_sessions, websocket
+from app.core.domain.agents import AgentType
 from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets as tickets
 from app.services.shared_chat import shared_session_id
@@ -55,7 +56,7 @@ def context(monkeypatch):
     agent = SimpleNamespace(
         id=binding.agent_id,
         name="Agent",
-        agent_type="",
+        agent_type=AgentType.OPENCLAW,
         role_description="",
         welcome_message="",
         context_window_size=100,

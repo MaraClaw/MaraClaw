@@ -3,6 +3,7 @@
 from typing import final
 from uuid import UUID, uuid4
 
+from app.core.domain.agents import AgentType
 from app.core.row_memo import memo_drop
 from app.dao.base import BaseDAO
 from app.records.agent_setup import AgentSetupRecord, AgentSetupStatus
@@ -20,10 +21,10 @@ class AgentSetupDAO(BaseDAO[AgentSetupRecord]):
             row = await db.fetchone(
                 """SELECT a.setup_pending, s.state,
                     CASE WHEN s.failure_code IS NOT NULL THEN 'setup_failed' END AS failure_code,
-                    COALESCE(s.state = 'failed' AND a.setup_pending AND a.agent_type = 'openclaw'
+                    COALESCE(s.state = 'failed' AND a.setup_pending AND a.agent_type = %(agent_type)s
                       AND s.inputs->>'gateway_key_encrypted' <> '', false) AS retryable
                 FROM agents a LEFT JOIN agent_setups s ON s.agent_id = a.id WHERE a.id = %(id)s""",
-                {"id": agent_id},
+                {"id": agent_id, "agent_type": AgentType.OPENCLAW.value},
             )
             return AgentSetupStatus.model_validate(row) if row is not None else None
 
@@ -34,10 +35,10 @@ class AgentSetupDAO(BaseDAO[AgentSetupRecord]):
                 """UPDATE agent_setups s SET state = 'pending', failure_code = NULL,
                     claim_token = NULL, lease_until = NULL
                 FROM agents a WHERE s.agent_id = %(id)s AND a.id = s.agent_id
-                  AND s.state = 'failed' AND a.setup_pending AND a.agent_type = 'openclaw'
+                  AND s.state = 'failed' AND a.setup_pending AND a.agent_type = %(agent_type)s
                   AND s.inputs->>'gateway_key_encrypted' <> ''
                 RETURNING s.agent_id""",
-                {"id": agent_id},
+                {"id": agent_id, "agent_type": AgentType.OPENCLAW.value},
             )
             if row is None:
                 return None

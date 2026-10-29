@@ -11,6 +11,7 @@ from app.core.domain.agents import (
     AgentPermissionScope,
     AgentSharingMode,
     AgentStatus,
+    AgentType,
     CompanyAccessLevel,
     PermissionAccessLevel,
 )
@@ -229,7 +230,7 @@ class UserUpdate(BaseModel):
 
 class AgentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100, description="Agent name, 2-100 characters")
-    agent_type: str = Field(default="openclaw", pattern="^openclaw$")
+    agent_type: AgentType = AgentType.OPENCLAW
     gogcli_enabled: bool = False
     role_description: str = Field(default="", max_length=500, description="Role description, max 500 characters")
     bio: str | None = None
@@ -306,7 +307,7 @@ class AgentOut(BaseModel):
     )
     llm_calls_today: int = 0
     max_llm_calls_per_day: int = 1000
-    agent_type: str = "openclaw"
+    agent_type: AgentType = AgentType.OPENCLAW
     gogcli_enabled: bool = False
     openclaw_last_seen: datetime | None = None
     unread_count: int = 0

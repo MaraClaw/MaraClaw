@@ -999,10 +999,8 @@
       "AgentCreate": {
         "properties": {
           "agent_type": {
-            "default": "openclaw",
-            "pattern": "^openclaw$",
-            "title": "Agent Type",
-            "type": "string"
+            "$ref": "#/components/schemas/AgentType",
+            "default": "openclaw"
           },
           "autonomy_policy": {
             "anyOf": [
@@ -1761,9 +1759,8 @@
             "description": "Winning access reason for this viewer; null when no same-tenant access policy matches."
           },
           "agent_type": {
-            "default": "openclaw",
-            "title": "Agent Type",
-            "type": "string"
+            "$ref": "#/components/schemas/AgentType",
+            "default": "openclaw"
           },
           "autonomy_policy": {
             "$ref": "#/components/schemas/JsonObject-Output"
@@ -2623,6 +2620,16 @@
         ],
         "title": "AgentToolWithConfigResponse",
         "type": "object"
+      },
+      "AgentType": {
+        "enum": [
+          "openclaw"
+        ],
+        "title": "AgentType",
+        "type": "string",
+        "x-enum-varnames": [
+          "OPENCLAW"
+        ]
       },
       "AgentUpdate": {
         "properties": {
@@ -35809,7 +35816,7 @@
     },
     "/api/tenants/join-default": {
       "post": {
-        "description": "Decline a suggested org and join OpenClaw.",
+        "description": "Decline a suggested org and join KABERs.",
         "operationId": "post_2f6170692f74656e616e74732f6a6f696e2d64656661756c74",
         "responses": {
           "200": {
@@ -35893,7 +35900,7 @@
     },
     "/api/tenants/lookup-by-email": {
       "get": {
-        "description": "Public: which org an email would join, plus the OpenClaw fallback.",
+        "description": "Public: which org an email would join, plus the KABERs fallback.",
         "operationId": "get_2f6170692f74656e616e74732f6c6f6f6b75702d62792d656d61696c",
         "parameters": [
           {
@@ -38974,6 +38981,7 @@
       "AgentToolResponse",
       "AgentToolUpdate",
       "AgentToolWithConfigResponse",
+      "AgentType",
       "AgentUpdate",
       "ApplicantPage",
       "ApprovalAction",
@@ -39190,6 +39198,7 @@
       "AgentToolResponse",
       "AgentToolUpdate",
       "AgentToolWithConfigResponse",
+      "AgentType",
       "AgentUpdate",
       "AgentUpdateOut",
       "AgentWorkBlockCode",
