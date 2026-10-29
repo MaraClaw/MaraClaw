@@ -83,7 +83,7 @@ def _get_docker() -> DockerClientFactory:
 
 # Language to docker image mapping
 _DOCKER_IMAGES = {
-    "python": "python:3.14.8-slim-trixie",
+    "python": "python:3.14.10-slim-trixie",
     "bash": "bash:5.3",
     "node": "node:26.12.1-slim",
 }

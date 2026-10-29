@@ -3,7 +3,7 @@
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
 FROM docker:29.9.2-cli AS dockercli
 
-FROM python:3.14.8-slim-trixie AS deps
+FROM python:3.14.10-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
 WORKDIR /app
@@ -36,7 +36,7 @@ RUN set -eu; set --; \
     rm -f /tmp/requirements.txt
 
 # ─── Production ─────────────────────────────────────────
-FROM python:3.14.8-slim-trixie AS production
+FROM python:3.14.10-slim-trixie AS production
 
 ARG APT_MIRROR=deb.debian.org
 ARG TINI_VERSION=0.19.0-3+b8
@@ -63,7 +63,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-        chromium=156.0.8078.47-1~deb13u1 && \
+        chromium=156.0.8078.73-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 

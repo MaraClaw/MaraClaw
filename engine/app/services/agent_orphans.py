@@ -35,7 +35,7 @@ async def sweep_orphan_containers(now: datetime) -> None:
         return
     try:
         containers = await to_thread.run_sync(
-            partial(client.container.list, all=True, filters={"label": "maraclaw.agent_id", "network": network})
+            partial(client.container.list, all=True, filters=[("label", AGENT_LABEL), ("network", network)])
         )
         candidates: dict[str, UUID] = {}
         for container in containers:

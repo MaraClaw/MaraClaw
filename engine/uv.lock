@@ -1,6 +1,6 @@
 version = 1
 revision = 5
-requires-python = ">=3.14.8"
+requires-python = ">=3.14.10"
 
 [[package]]
 name = "agent-detector"
@@ -2036,7 +2036,7 @@ requires-dist = [
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.5.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "python-pptx", specifier = ">=1.0.2" },
-    { name = "pywhales", specifier = ">=0.6.1" },
+    { name = "pywhales", specifier = ">=0.6.5" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", extras = ["hiredis"], specifier = ">=8.1.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.3" },
@@ -3059,16 +3059,16 @@ wheels = [
 
 [[package]]
 name = "pytz"
-version = "2026.5"
+version = "2026.6"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/14/21/d83d6ef28c4c912c4bb4d1dcf591f7b8c6bde87b9c66f9f454677314e16d/pytz-2026.5.tar.gz", hash = "sha256:fa23724b9c486543b9ff54a327ee7569ac83ade54bb9afd0fc18676620401c86", size = 318572, upload-time = "2026-10-04T02:37:58.719Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/b0/168030b0bfcc334cf09fa3313afdb888d892c8a0027324683d1de0ec277e/pytz-2026.6.tar.gz", hash = "sha256:3b0fc2727707663d6e517936f444fd8a8b240f1fc32f4bf7ee03274245945284", size = 318520, upload-time = "2026-10-29T09:05:47.011Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/ef/c66110d46fb800dda0bf33164182dfadabe26a90e4476844d502a23dca8e/pytz-2026.5-py2.py3-none-any.whl", hash = "sha256:e658af3757f9e26a9d25dd2aff38335acd92bc9104f890a894b2c1ba28311b03", size = 506342, upload-time = "2026-10-04T02:37:56.814Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/25/564f3fc5b70c1398d706c51f2b1470d0ea0b1b2f96fee67877b6f5bdf3b6/pytz-2026.6-py2.py3-none-any.whl", hash = "sha256:7fed3fee8fd6bd4a2b7b75a8d56021d0624127bf69bd5691f115db929ac570b3", size = 506321, upload-time = "2026-10-29T09:05:45.14Z" },
 ]
 
 [[package]]
 name = "pywhales"
-version = "0.6.1"
+version = "0.6.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -3076,9 +3076,9 @@ dependencies = [
     { name = "s3transfer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/35/0275f7c1bd7d9ab9ac95ad65b7f690a0e4e58ae28adcde137d1f0ddea3c9/pywhales-0.6.1.tar.gz", hash = "sha256:abfaa8968a973cd6a4dfa62f8b5d583adf661eba9f18c0aafab9aaa9ddb573a0", size = 259526, upload-time = "2026-10-28T06:03:39.813Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/2e/eb449fa8f1ef44868765d4527e710e5971ed22a494c7d78305bfd3eb1928/pywhales-0.6.5.tar.gz", hash = "sha256:5f54b1ae26229547640b01d0f87af80656a9e0f459f489866cb43ff92921a4e4", size = 282264, upload-time = "2026-10-29T00:47:55.414Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/4a/e956ed8638f77f8b4bde4601ab52f855e39a7941c59a1ddee7a1cfff4e61/pywhales-0.6.1-py3-none-any.whl", hash = "sha256:9ff9060aec91ebc5faaa0de784271d66d1546b73f40f8fa5aee0bf37b18a6ecf", size = 241840, upload-time = "2026-10-28T06:03:38.386Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/08/00ff869e290d067d66e04af93fc4c31ebd6e7420d761d998f5501ccf6084/pywhales-0.6.5-py3-none-any.whl", hash = "sha256:6f3af9acd6c508f5ff8492cc847e22a5bce37a7545095af527574346a9eaa0f7", size = 250346, upload-time = "2026-10-29T00:47:54.025Z" },
 ]
 
 [[package]]

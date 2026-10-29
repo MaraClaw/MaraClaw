@@ -31,7 +31,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 
 ## Engine-Wide Rules
 
-- Python >=3.14.8 (`.python-version`, image `python:3.14.8-slim-trixie`); Ruff `py314`, line 120, double quotes, LF. Pydantic v2: `model_config`, `Field(default_factory=...)`.
+- Python >=3.14.10 (`.python-version`, image `python:3.14.10-slim-trixie`); Ruff `py314`, line 120, double quotes, LF. Pydantic v2: `model_config`, `Field(default_factory=...)`.
 - Env names are case-sensitive; `CORS_ORIGINS` is a JSON list, single-quoted in `.env`. New settings belong in `app/config.py` and `.env.example`.
 - New DB work uses DAOs + `app.db` only; multi-write handlers use `async with connection_ctx():` for one commit. No SQLAlchemy, `app/models/`, Alembic or `create_all`. `check_no_new_sqlalchemy.py` has an empty allowlist and forbids SQLAlchemy in `app/db/`.
 - Schema truth is `scripts/schema_baseline.sql`: fresh-only initialization, idempotent rerun, no upgrade patches. `pyproject.toml` still lists `asyncpg`; add no callers. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy.

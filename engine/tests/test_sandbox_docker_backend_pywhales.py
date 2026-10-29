@@ -116,9 +116,9 @@ async def test_execute_runs_python_container_with_pywhales_kwargs():
     assert result.stderr == "stderr text"
     assert result.exit_code == 0
     assert result.error is None
-    assert client.image.exists_calls == ["python:3.14.8-slim-trixie"]
+    assert client.image.exists_calls == ["python:3.14.10-slim-trixie"]
     assert client.image.pull_calls == []
-    assert client.run_args == ("python:3.14.8-slim-trixie", ["python3", "-c", "print('hello')"])
+    assert client.run_args == ("python:3.14.10-slim-trixie", ["python3", "-c", "print('hello')"])
     assert client.run_kwargs == {
         "detach": True,
         "memory": "256m",
