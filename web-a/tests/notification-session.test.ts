@@ -4,7 +4,7 @@ import { MutationObserver, QueryObserver } from '@tanstack/react-query'
 
 import {
   notificationArchiveOptions, notificationKeys, notificationRestoreOptions,
-  notificationsOptions, notificationUnreadOptions, notificationsReadSelectedOptions,
+  notificationsOptions, notificationUnreadOptions, notificationsReadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions,
 } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { createSessionQueryScope, ownQueryClient } from '../src/hooks/session-query-client.ts'
@@ -17,8 +17,8 @@ const notification = notificationSchema.parse({
   link: null, ref_id: null, sender_name: null, is_read: false, created_at: null, archived_at: null,
 })
 
-for (const retire of ['logout', 'replacement', 'same-token'] as const) for (const status of [200, 503]) {
-  test(`selected read late ${status} cannot affect a ${retire} session`, async (t) => {
+for (const options of [notificationsReadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions]) for (const retire of ['logout', 'replacement', 'same-token'] as const) for (const status of [200, 503]) {
+  test(`${options.name} late ${status} cannot affect a ${retire} session`, async (t) => {
     // Given
     const { policy } = createFixture()
     const owner = policy.capture()
@@ -29,7 +29,7 @@ for (const retire of ['logout', 'replacement', 'same-token'] as const) for (cons
     const started = Promise.withResolvers<void>()
     t.after(() => response.resolve(Response.json({ ok: true })))
     t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
-    const mutation = new MutationObserver(client, ownMutationOptions(policy, owner, notificationsReadSelectedOptions(client)))
+    const mutation = new MutationObserver(client, ownMutationOptions(policy, owner, options(client)))
     const rejected = assert.rejects(mutation.mutate([notification.id]), StaleSessionError)
     await started.promise
     // When

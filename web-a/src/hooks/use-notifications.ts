@@ -5,7 +5,7 @@ import { useSessionMutation } from './use-session-mutation'
 import type { NotificationView } from '@/lib/notifications-api'
 import {
   notificationKeys, notificationReadOptions, notificationsOptions, notificationsReadAllOptions, notificationUnreadOptions,
-  notificationArchiveOptions, notificationRestoreOptions, notificationsReadSelectedOptions,
+  notificationArchiveOptions, notificationRestoreOptions, notificationsReadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions,
 } from './notification-options'
 
 export function useNotificationUnreadCount() {
@@ -22,6 +22,8 @@ export function useNotifications(cursor: string | null, view: NotificationView =
   const markSelectedRead = useSessionMutation(notificationsReadSelectedOptions(client))
   const archive = useSessionMutation(notificationArchiveOptions(client))
   const restore = useSessionMutation(notificationRestoreOptions(client))
+  const archiveSelected = useSessionMutation(notificationsArchiveSelectedOptions(client))
+  const restoreSelected = useSessionMutation(notificationsRestoreSelectedOptions(client))
   const resetFirstPage = (nextView = view) => client.resetQueries({ queryKey: notificationKeys.list(null, nextView), exact: true })
-  return { notifications, markRead, markAllRead, markSelectedRead, archive, restore, resetFirstPage }
+  return { notifications, markRead, markAllRead, markSelectedRead, archive, restore, archiveSelected, restoreSelected, resetFirstPage }
 }
