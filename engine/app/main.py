@@ -81,6 +81,7 @@ from app.api.agentbay_control import router as agentbay_control_router
 from app.api.agents import router as agents_router
 from app.api.atlassian import router as atlassian_router
 from app.api.auth import router as auth_router
+from app.api.channel_catalog import router as channel_catalog_router
 from app.api.chat_sessions import router as chat_sessions_router
 from app.api.company_admissions import router as company_admissions_router
 from app.api.departments import router as departments_router
@@ -139,6 +140,7 @@ app.include_router(tasks_router, prefix=settings.API_PREFIX, dependencies=_CRUD_
 app.include_router(files_router, prefix=settings.API_PREFIX)
 app.include_router(file_previews_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
+app.include_router(channel_catalog_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
