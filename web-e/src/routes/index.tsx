@@ -15,6 +15,7 @@ const AgentChatPage = lazy(() => import('@/pages/app/agent-chat').then((module) 
 const AgentFilesPage = lazy(() => import('@/pages/app/agent-files').then((module) => ({ default: module.AgentFilesPage })))
 const AgentNewPage = lazy(() => import('@/pages/app/agent-new').then((module) => ({ default: module.AgentNewPage })))
 const AgentSchedulesPage = lazy(() => import('@/pages/app/agent-schedules').then((module) => ({ default: module.AgentSchedulesPage })))
+const AgentActivityPage = lazy(() => import('@/pages/app/agent-activity').then((module) => ({ default: module.AgentActivityPage })))
 const AgentSettingsPage = lazy(() => import('@/pages/app/agent-settings').then((module) => ({ default: module.AgentSettingsPage })))
 const AgentSkillsPage = lazy(() => import('@/pages/app/agent-skills').then((module) => ({ default: module.AgentSkillsPage })))
 const AgentTasksPage = lazy(() => import('@/pages/app/agent-tasks').then((module) => ({ default: module.AgentTasksPage })))
@@ -87,6 +88,7 @@ export function AppRouter() {
                   <Route path="tools" element={<AgentToolsPage />} />
                   <Route path="tasks" element={<AgentTasksPage />} />
                   <Route path="schedules" element={<AgentSchedulesPage />} />
+                  <Route path="activity" element={<AgentActivityPage />} />
                   <Route path="channels" element={<AgentChannelsPage />} />
                   <Route path="relationships" element={<AgentRelationshipsPage />} />
                   <Route path="permissions" element={<AgentPermissionsPage />} />

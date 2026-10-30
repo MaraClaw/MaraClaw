@@ -19,6 +19,7 @@ const tabs = [
   { id: 'tools', to: 'tools', label: 'Tools', icon: 'tools' },
   { id: 'tasks', to: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'schedules', to: 'schedules', label: 'Schedules', icon: 'schedules' },
+  { id: 'activity', to: 'activity', label: 'Activity', icon: 'activity' },
   { id: 'channels', to: 'channels', label: 'Channels', icon: 'channels' },
   { id: 'people', to: 'relationships', label: 'People', icon: 'people' },
   { id: 'access', to: 'permissions', label: 'Access', icon: 'access' },
@@ -67,6 +68,7 @@ export function AgentLayout() {
     retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
     retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
   })
+  const visibleTabs = tabs.filter((tab) => tab.id !== 'activity' || query.data?.access_level === 'manage')
 
   if (!query.data) {
     if (query.isLoading) {
@@ -79,7 +81,7 @@ export function AgentLayout() {
             </div>
           </div>
           <SectionRail
-            items={tabs}
+            items={visibleTabs}
             label="Agent sections"
             className={railClass}
           />
@@ -88,7 +90,7 @@ export function AgentLayout() {
     }
     return (
       <div className={chat ? layoutClass : 'space-y-3 p-6'}>
-        {chat ? <SectionRail items={tabs} label="Agent sections" className={railClass} /> : null}
+        {chat ? <SectionRail items={visibleTabs} label="Agent sections" className={railClass} /> : null}
         <div className={chat ? 'min-w-0 space-y-3 p-6 md:col-start-2' : undefined}>
           {chat ? <Button variant="outline" asChild><Link to="/app/agents">Agents</Link></Button> : <AgentsListButton />}
           <p className="text-sm text-destructive">
@@ -110,7 +112,7 @@ export function AgentLayout() {
         <AgentAccessExplanation reason={agent.access_reason} />
       </div>
       <SectionRail
-        items={tabs}
+        items={visibleTabs}
         label="Agent sections"
         className={railClass}
       />
