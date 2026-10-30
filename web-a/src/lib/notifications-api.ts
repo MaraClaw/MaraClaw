@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { apiRequest } from './http.ts'
 import {
   NotificationKind as EngineNotificationKind, NotificationKindSchema, NotificationReadResponseSchema,
-  NotificationResponseSchema, NotificationUnreadCountResponseSchema,
+  NotificationResponseSchema, NotificationUnreadCountResponseSchema, ReadSelectedRequestSchema,
 } from './engine-contracts.generated.ts'
 
 export const NotificationKind = {
@@ -69,8 +69,18 @@ export async function markAllNotificationsRead() {
 }
 
 export async function markSelectedNotificationsRead(ids: readonly NotificationId[]) {
-  const input = z.object({ ids: z.array(z.uuid()).min(1).max(200) }).parse({ ids })
+  const input = ReadSelectedRequestSchema.parse({ ids })
   return apiRequest('/api/notifications/read-selected', { schema: readResultSchema, method: 'POST', body: input })
+}
+
+export async function archiveSelectedNotifications(ids: readonly NotificationId[]) {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  return apiRequest('/api/notifications/archive', { schema: readResultSchema, method: 'POST', body })
+}
+
+export async function restoreSelectedNotifications(ids: readonly NotificationId[]) {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  return apiRequest('/api/notifications/restore', { schema: readResultSchema, method: 'POST', body })
 }
 
 export async function archiveNotification(id: NotificationId) {
