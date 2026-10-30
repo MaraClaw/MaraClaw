@@ -50,6 +50,12 @@ export type AgentAccessReason = z.infer<typeof AgentAccessReasonSchema>;
 export const AgentActivityResponseSchema = z.looseObject({ ["action_type"]: ActivityActionSchema, ["created_at"]: z.union([z.string(), z.null()]), ["detail"]: z.looseObject({  }), ["id"]: z.string(), ["related_id"]: z.union([z.string(), z.null()]), ["summary"]: z.string() });
 export type AgentActivityResponse = z.infer<typeof AgentActivityResponseSchema>;
 
+export const AgentActivityTimelineItemSchema = z.looseObject({ ["action_type"]: z.string(), ["created_at"]: z.union([z.string(), z.null()]), ["id"]: z.string(), ["summary"]: z.string() });
+export type AgentActivityTimelineItem = z.infer<typeof AgentActivityTimelineItemSchema>;
+
+export const AgentActivityTimelinePageSchema = z.looseObject({ ["items"]: z.array(AgentActivityTimelineItemSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type AgentActivityTimelinePage = z.infer<typeof AgentActivityTimelinePageSchema>;
+
 export const ApprovalActionValues = ["approve","reject"] as const;
 export const ApprovalAction = { APPROVE: "approve", REJECT: "reject" } as const;
 export const ApprovalActionSchema = z.intersection(z.union([z.literal("approve"), z.literal("reject")]), z.string());
@@ -209,6 +215,9 @@ export const ApprovalStatus = { PENDING: "pending", APPROVED: "approved", REJECT
 export const ApprovalStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("approved"), z.literal("rejected")]), z.string());
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
 
+export const ArchiveSelectedRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type ArchiveSelectedRequest = z.infer<typeof ArchiveSelectedRequestSchema>;
+
 export const AssignmentOutSchema = z.looseObject({ ["department_id"]: z.union([z.guid(), z.null()]), ["tenant_id"]: z.guid(), ["user_id"]: z.guid() });
 export type AssignmentOut = z.infer<typeof AssignmentOutSchema>;
 
@@ -263,6 +272,9 @@ export const ChannelTypeValues = ["feishu","wecom","wechat","whatsapp","dingtalk
 export const ChannelType = { FEISHU: "feishu", WECOM: "wecom", WECHAT: "wechat", WHATSAPP: "whatsapp", DINGTALK: "dingtalk", SLACK: "slack", DISCORD: "discord", ATLASSIAN: "atlassian", MICROSOFT_TEAMS: "microsoft_teams", AGENTBAY: "agentbay", GOOGLE_CHAT: "google_chat" } as const;
 export const ChannelTypeSchema = z.intersection(z.union([z.literal("feishu"), z.literal("wecom"), z.literal("wechat"), z.literal("whatsapp"), z.literal("dingtalk"), z.literal("slack"), z.literal("discord"), z.literal("atlassian"), z.literal("microsoft_teams"), z.literal("agentbay"), z.literal("google_chat")]), z.string());
 export type ChannelType = z.infer<typeof ChannelTypeSchema>;
+
+export const ChannelCatalogEntrySchema = z.looseObject({ ["channel_type"]: ChannelTypeSchema, ["display_name"]: z.string(), ["supports_inbound"]: z.boolean(), ["supports_proactive"]: z.boolean(), ["transport"]: z.string() });
+export type ChannelCatalogEntry = z.infer<typeof ChannelCatalogEntrySchema>;
 
 export const ChannelConfigCreateSchema = z.looseObject({ ["app_id"]: z.string(), ["app_secret"]: z.string(), ["channel_type"]: ChannelTypeSchema.optional(), ["encrypt_key"]: z.union([z.string(), z.null()]).optional(), ["extra_config"]: z.union([JsonInputObjectSchema, z.null()]).optional(), ["verification_token"]: z.union([z.string(), z.null()]).optional() });
 export type ChannelConfigCreate = z.infer<typeof ChannelConfigCreateSchema>;
@@ -644,6 +656,9 @@ export type OrgAdminCreateResponse = z.infer<typeof OrgAdminCreateResponseSchema
 export const OrgAdminOutSchema = z.looseObject({ ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["role"]: UserRoleSchema, ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
 export type OrgAdminOut = z.infer<typeof OrgAdminOutSchema>;
 
+export const OrgUsersPageOutSchema = z.looseObject({ ["items"]: z.array(AuthUserSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type OrgUsersPageOut = z.infer<typeof OrgUsersPageOutSchema>;
+
 export const OwnershipTransferRequestSchema = z.strictObject({ ["agent_ids"]: z.array(z.guid()).min(1).max(100), ["from_user_id"]: z.guid(), ["to_user_id"]: z.guid() });
 export type OwnershipTransferRequest = z.infer<typeof OwnershipTransferRequestSchema>;
 
@@ -693,6 +708,9 @@ export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequestSchema>;
 
 export const ResetPasswordResponseSchema = z.looseObject({ ["ok"]: z.boolean() });
 export type ResetPasswordResponse = z.infer<typeof ResetPasswordResponseSchema>;
+
+export const RestoreSelectedRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type RestoreSelectedRequest = z.infer<typeof RestoreSelectedRequestSchema>;
 
 export const ReviewPageSchema = z.looseObject({ ["items"]: z.array(RequestDetailSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
 export type ReviewPage = z.infer<typeof ReviewPageSchema>;
