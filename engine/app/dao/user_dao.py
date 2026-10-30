@@ -76,6 +76,22 @@ class UserPagePosition:
     user_id: UUID
 
 
+@dataclass(frozen=True, slots=True)
+class DirectoryPagePosition:
+    display_name: str
+    user_id: UUID
+
+
+_DIRECTORY_SEARCH_SQL = (
+    "("
+    + " OR ".join(
+        f"{expression} ILIKE %(search)s ESCAPE E'\\\\'"
+        for expression in ("u.display_name", "i.email", "u.title", "u.role::text")
+    )
+    + ")"
+)
+
+
 def _user_record_from_row(row: Mapping[str, object]) -> UserRecord:
     return UserRecord.from_row(row)
 
@@ -624,6 +640,38 @@ class UserDAO(BaseDAO[UserRecord]):
                 "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
                 f"WHERE {' AND '.join(clauses)} "
                 f"ORDER BY {_USER_PAGE_ROLE_RANK} ASC, u.created_at ASC NULLS LAST, u.id ASC LIMIT %(limit)s",
+                params,
+            )
+            return [_user_from_joined_row(row) for row in rows]
+
+    async def list_directory_page(
+        self,
+        tenant_id: UUID,
+        *,
+        search: str = "",
+        after: DirectoryPagePosition | None = None,
+        limit: int = 50,
+    ) -> Sequence[UserRecord]:
+        """Fetch at most limit + 1 active members ordered by display name, then id, including one lookahead.
+
+        ``search`` is matched as a literal case-insensitive substring. The seek comparison and ORDER BY use the
+        same column expressions, so both follow the column collation.
+        """
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit + 1}
+        clauses = ["u.tenant_id = %(tenant_id)s", "u.is_active IS TRUE"]
+        if search:
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params["search"] = f"%{escaped}%"
+            clauses.append(_DIRECTORY_SEARCH_SQL)
+        if after is not None:
+            params.update({"after_name": after.display_name, "after_id": after.user_id})
+            clauses.append("(u.display_name, u.id) > (%(after_name)s, %(after_id)s)")
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('u')}, {self._identity_select()} "
+                "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY u.display_name ASC, u.id ASC LIMIT %(limit)s",
                 params,
             )
             return [_user_from_joined_row(row) for row in rows]
