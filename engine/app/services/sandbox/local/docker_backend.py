@@ -85,7 +85,7 @@ def _get_docker() -> DockerClientFactory:
 _DOCKER_IMAGES = {
     "python": "python:3.14.10-slim-trixie",
     "bash": "bash:5.3",
-    "node": "node:26.12.1-slim",
+    "node": "node:26.13.0-slim",
 }
 
 # Docker run command mapping
