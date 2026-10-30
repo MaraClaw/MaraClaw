@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { MutationObserver, QueryClient, type InfiniteData } from '@tanstack/react-query'
 
-import { notificationKeys, notificationListOptions, notificationsReadSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
+import { notificationKeys, notificationListOptions, notificationsArchiveSelectedOptions, notificationsReadSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
 import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { ReadSelectedRequestSchema } from '../src/lib/engine-contracts.generated.ts'
@@ -32,7 +32,15 @@ async function fixture(t: TestContext) {
       const { ids } = ReadSelectedRequestSchema.parse(JSON.parse(String(init.body)))
       writes++
       if (ids.some((selected) => !rows.some((row) => row.id === selected))) return Response.json({ detail: 'Notification not found' }, { status: 404 })
-      rows = rows.map((row) => ({ ...row, is_read: row.is_read || ids.includes(row.id) }))
+      rows = rows.map((row) => {
+        if (!ids.includes(row.id)) return row
+        switch (url.pathname) {
+          case '/api/notifications/archive': return { ...row, archived_at: row.archived_at ?? '2030-01-02T00:00:00Z' }
+          case '/api/notifications/restore': return { ...row, archived_at: null }
+          case '/api/notifications/read-selected': return { ...row, is_read: true }
+          default: throw new Error(`Unexpected batch endpoint ${url.pathname}`)
+        }
+      })
       return Response.json({ ok: true })
     }
     const category = url.searchParams.get('category')
@@ -62,10 +70,11 @@ test('selected read refreshes every overlapping category and archived list witho
   }
 })
 
-test('a failed mixed batch keeps all cached rows and badges unchanged', async (t) => {
+for (const options of [notificationsReadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions]) {
+test(`${options.name} failed mixed batch keeps all cached rows and badges unchanged`, async (t) => {
   // Given
   const { client, scope, list, count } = await fixture(t)
-  const mutation = new MutationObserver(client, fenceMutationOptions(scope, notificationsReadSelectedOptions(client)))
+  const mutation = new MutationObserver(client, fenceMutationOptions(scope, options(client)))
   // When / Then
   await assert.rejects(mutation.mutate([id, '33333333-3333-4333-8333-333333333333']), ApiError)
   assert.equal(count('all'), 1)
@@ -73,13 +82,13 @@ test('a failed mixed batch keeps all cached rows and badges unchanged', async (t
 })
 
 for (const status of [200, 503]) {
-  test(`retired selected response ${status} cannot invalidate a replacement owner's cache`, async (t) => {
+    test(`retired ${options.name} response ${status} cannot invalidate a replacement owner's cache`, async (t) => {
     // Given
     const { client, scope, store, user, count, list } = await fixture(t)
     const response = Promise.withResolvers<Response>()
     const started = Promise.withResolvers<void>()
     const fetch = t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
-    const mutation = new MutationObserver(client, fenceMutationOptions(scope, notificationsReadSelectedOptions(client)))
+    const mutation = new MutationObserver(client, fenceMutationOptions(scope, options(client)))
     const rejected = assert.rejects(mutation.mutate([id]), status === 200 ? RetiredWorkspaceError : ApiError)
     await started.promise
     store.applySession(store.capture(), { access_token: 'replacement', user })
@@ -92,3 +101,44 @@ for (const status of [200, 503]) {
     assert.deepEqual(list('all', 'active'), [initial[0]])
   })
 }
+}
+
+for (const [options, selected, activeIds, countValue] of [
+  [notificationsArchiveSelectedOptions, id, [], 0],
+  [notificationsRestoreSelectedOptions, otherId, [id, otherId], 2],
+] as const) {
+  test(`${options.name} refreshes overlapping views and counts without marking read`, async (t) => {
+    // Given
+    const { client, scope, list, count, writes } = await fixture(t)
+    const mutation = new MutationObserver(client, fenceMutationOptions(scope, options(client)))
+    // When
+    await mutation.mutate([selected, selected])
+    // Then
+    assert.equal(writes(), 1)
+    for (const category of ['all', 'social', 'broadcast'] as const) {
+      assert.equal(count(category), countValue)
+      assert.deepEqual(list(category, 'active')?.map((row) => row.id), activeIds)
+      assert.ok(list(category, 'active')?.every((row) => row.is_read === false))
+      assert.ok(list(category, 'archived')?.every((row) => row.is_read === false))
+    }
+  })
+}
+
+test('queued selected restore is fenced before transport after the archive owner retires', async (t) => {
+  // Given
+  const { client, scope, store, user } = await fixture(t)
+  const response = Promise.withResolvers<Response>()
+  const started = Promise.withResolvers<void>()
+  const fetch = t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
+  const archive = new MutationObserver(client, fenceMutationOptions(scope, notificationsArchiveSelectedOptions(client)))
+  const restore = new MutationObserver(client, fenceMutationOptions(scope, notificationsRestoreSelectedOptions(client)))
+  const archived = assert.rejects(archive.mutate([id]), RetiredWorkspaceError)
+  await started.promise
+  const restored = assert.rejects(restore.mutate([id]), RetiredWorkspaceError)
+  // When
+  store.applySession(store.capture(), { access_token: 'replacement', user })
+  response.resolve(Response.json({ ok: true }))
+  await Promise.all([archived, restored])
+  // Then
+  assert.equal(fetch.mock.callCount(), 1)
+})

@@ -34,8 +34,10 @@ export async function prepareOrgDepartments(page: Page, role = 'member', switchT
         if (role === 'member') return route.fallback()
         await route.fulfill({ json: { ...originalUser, role } })
         return
-      case '/api/org/users':
-        await route.fulfill({ json: [] })
+      case '/api/org/users/page':
+        expect(request.method()).toBe('GET')
+        expect(url.searchParams.get('limit')).toBe('50')
+        await route.fulfill({ json: { items: [], next_cursor: null } })
         return
       case '/api/departments':
         state.privilegedRequests++

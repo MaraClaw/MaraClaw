@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.domain.activity import ActivityAction
-from app.core.json_types import date_from_row, int_from_row
+from app.core.json_types import date_from_row, datetime_from_row, int_from_row, str_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.activity_log import AgentActivityLogRecord
 from app.schemas.schedule_history import HistoryOutcome
@@ -22,6 +23,26 @@ _COLUMNS = (
     "related_id",
     "created_at",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityTimelineEntry:
+    """Payload-free projection of one activity row."""
+
+    id: UUID
+    action_type: str
+    summary: str
+    created_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityTimelineQuery:
+    """One page request; ``before`` is the (created_at, id) of the last row already seen."""
+
+    agent_id: UUID
+    limit: int
+    action_type: str | None = None
+    before: tuple[datetime | None, UUID] | None = None
 
 
 @final
@@ -54,6 +75,40 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
                 params,
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]
+
+    async def list_timeline_page(self, query: ActivityTimelineQuery) -> list[ActivityTimelineEntry]:
+        """Order by ``created_at DESC NULLS LAST, id DESC``; the seek clause follows the same order."""
+        params: dict[str, object] = {"agent_id": query.agent_id, "limit": query.limit}
+        clauses = ["agent_id = %(agent_id)s"]
+        if query.action_type is not None:
+            clauses.append("action_type::text = %(action_type)s")
+            params["action_type"] = query.action_type
+        if query.before is not None:
+            created_at, log_id = query.before
+            params["before_id"] = log_id
+            if created_at is None:
+                clauses.append("(created_at IS NULL AND id < %(before_id)s)")
+            else:
+                params["before_created_at"] = created_at
+                clauses.append(
+                    "(created_at < %(before_created_at)s "
+                    "OR (created_at = %(before_created_at)s AND id < %(before_id)s) OR created_at IS NULL)"
+                )
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id, action_type, summary, created_at FROM agent_activity_logs "
+                f"WHERE {' AND '.join(clauses)} ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [
+                ActivityTimelineEntry(
+                    id=uuid_from_row(row["id"]),
+                    action_type=str_from_row(row["action_type"]),
+                    summary=str_from_row(row["summary"]),
+                    created_at=datetime_from_row(row.get("created_at")),
+                )
+                for row in rows
+            ]
 
     async def list_schedule_history(
         self,

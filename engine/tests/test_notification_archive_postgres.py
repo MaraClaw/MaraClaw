@@ -8,6 +8,11 @@ from app.core.notification_kinds import NotificationKind
 from app.dao.notification_dao import notification_dao
 from app.schemas.notification_responses import NotificationResponse
 from notification_archive_fixtures import ArchiveScenario, archive_scenario, schema_db
+from notification_archive_selected_postgres import (
+    test_overlapping_selected_batches_are_consistent,
+    test_selected_archive_rejects_invalid_input,
+    test_selected_archive_replay_preserves_read_state,
+)
 from notification_read_selected_postgres import (
     test_selected_read_enforces_submitted_upper_bound_in_postgres,
     test_selected_read_rejects_hidden_rows_even_when_archived_or_read,
@@ -18,6 +23,9 @@ from notification_read_selected_postgres import (
 __all__ = [
     "archive_scenario",
     "schema_db",
+    "test_overlapping_selected_batches_are_consistent",
+    "test_selected_archive_rejects_invalid_input",
+    "test_selected_archive_replay_preserves_read_state",
     "test_selected_read_enforces_submitted_upper_bound_in_postgres",
     "test_selected_read_rejects_hidden_rows_even_when_archived_or_read",
     "test_selected_read_rejects_mixed_invalid_ids_atomically",

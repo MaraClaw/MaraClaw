@@ -43,10 +43,18 @@ export async function prepareNotifications(page: Page, initial: readonly Notific
         rows = rows.map((row) => ({ ...row, is_read: row.is_read || (row.archived_at === null && matches(row, category)) }))
         return route.fulfill({ status: 204 })
       }
-      if (url.pathname.endsWith('/read-selected')) {
+      if (['/api/notifications/read-selected', '/api/notifications/archive', '/api/notifications/restore'].includes(url.pathname)) {
         const { ids } = ReadSelectedRequestSchema.parse(request.postDataJSON())
         if (ids.some((id) => !rows.some((row) => row.id === id))) return route.fulfill({ status: 404, json: { detail: 'Notification not found' } })
-        rows = rows.map((row) => ({ ...row, is_read: row.is_read || ids.includes(row.id) }))
+        rows = rows.map((row) => {
+          if (!ids.includes(row.id)) return row
+          switch (url.pathname) {
+            case '/api/notifications/read-selected': return { ...row, is_read: true }
+            case '/api/notifications/archive': return { ...row, archived_at: row.archived_at ?? '2030-01-02T00:00:00Z' }
+            case '/api/notifications/restore': return { ...row, archived_at: null }
+            default: throw new Error(`Unsupported batch action ${url.pathname}`)
+          }
+        })
         return route.fulfill({ json: { ok: true } })
       }
       const [, id, action] = /^\/api\/notifications\/([^/]+)\/(read|archive|restore)$/.exec(url.pathname) ?? []

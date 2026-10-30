@@ -874,6 +874,69 @@
         "title": "AgentActivityResponse",
         "type": "object"
       },
+      "AgentActivityTimelineItem": {
+        "properties": {
+          "action_type": {
+            "title": "Action Type",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action_type",
+          "summary",
+          "created_at"
+        ],
+        "title": "AgentActivityTimelineItem",
+        "type": "object"
+      },
+      "AgentActivityTimelinePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentActivityTimelineItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "AgentActivityTimelinePage",
+        "type": "object"
+      },
       "AgentApprovalResolveRequest": {
         "properties": {
           "action": {
@@ -3093,6 +3156,25 @@
         "title": "ApprovedAdmissionResponse",
         "type": "object"
       },
+      "ArchiveSelectedRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "ArchiveSelectedRequest",
+        "type": "object"
+      },
       "ArchivedSessionDetail": {
         "additionalProperties": false,
         "properties": {
@@ -3742,6 +3824,39 @@
           "must_change_password"
         ],
         "title": "ChangePasswordResponse",
+        "type": "object"
+      },
+      "ChannelCatalogEntry": {
+        "description": "Static capabilities of one channel type; never proof that credentials or remote permissions work.",
+        "properties": {
+          "channel_type": {
+            "$ref": "#/components/schemas/ChannelType"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "supports_inbound": {
+            "title": "Supports Inbound",
+            "type": "boolean"
+          },
+          "supports_proactive": {
+            "title": "Supports Proactive",
+            "type": "boolean"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_type",
+          "display_name",
+          "transport",
+          "supports_inbound",
+          "supports_proactive"
+        ],
+        "title": "ChannelCatalogEntry",
         "type": "object"
       },
       "ChannelConfigCreate": {
@@ -10586,6 +10701,34 @@
         "title": "OrgSummary",
         "type": "object"
       },
+      "OrgUsersPageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuthUser"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "OrgUsersPageOut",
+        "type": "object"
+      },
       "OwnershipTransferRequest": {
         "additionalProperties": false,
         "properties": {
@@ -11806,6 +11949,25 @@
           "revision_id"
         ],
         "title": "RestoreRevisionBody",
+        "type": "object"
+      },
+      "RestoreSelectedRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RestoreSelectedRequest",
         "type": "object"
       },
       "ReviewPage": {
@@ -18271,6 +18433,101 @@
           }
         ],
         "summary": "Get Agent Activity",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/activity/page": {
+      "get": {
+        "description": "Manage-only timeline without raw payloads; the cursor is bound to this agent and filter.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f61637469766974792f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentActivityTimelinePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Agent Activity Page",
         "tags": [
           "activity"
         ]
@@ -26814,6 +27071,36 @@
         ]
       }
     },
+    "/api/channel-catalog": {
+      "get": {
+        "operationId": "get_2f6170692f6368616e6e656c2d636174616c6f67",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChannelCatalogEntry"
+                  },
+                  "title": "Response Get Channel Catalog Api Channel Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Channel Catalog",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
     "/api/channel/discord/{agent_id}/webhook": {
       "post": {
         "description": "Handle Discord Interaction webhooks (PING + slash commands).",
@@ -32112,6 +32399,53 @@
         ]
       }
     },
+    "/api/notifications/archive": {
+      "post": {
+        "description": "Archive every selected notification, or none if any is missing, foreign or hidden.",
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f61726368697665",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveSelectedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Selected Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/broadcast": {
       "post": {
         "description": "Send a notification to all users and agents in the current tenant.\nRequires org_admin or platform_admin role.",
@@ -32458,6 +32792,53 @@
           }
         ],
         "summary": "Mark Selected Read",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/restore": {
+      "post": {
+        "description": "Restore every selected notification, or none if any is missing, foreign or hidden.",
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f726573746f7265",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreSelectedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Selected Notifications",
         "tags": [
           "notifications"
         ]
@@ -33898,6 +34279,100 @@
           }
         ],
         "summary": "List Users",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/api/org/users/page": {
+      "get": {
+        "operationId": "get_2f6170692f6f72672f75736572732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Search",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgUsersPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Users Page",
         "tags": [
           "organization"
         ]
@@ -38960,6 +39435,7 @@
       "AdmissionStatus",
       "AgentAccessReason",
       "AgentActivityResponse",
+      "AgentActivityTimelinePage",
       "AgentApprovalResolveRequest",
       "AgentConversationResponse",
       "AgentCreate",
@@ -38987,6 +39463,7 @@
       "ApprovalAction",
       "ApprovalDecisionRequest",
       "ApprovalStatus",
+      "ArchiveSelectedRequest",
       "AssignmentOut",
       "AssignmentsOut",
       "AuthUser",
@@ -38998,6 +39475,7 @@
       "CategoryTestResponse",
       "ChangePasswordRequest",
       "ChangePasswordResponse",
+      "ChannelCatalogEntry",
       "ChannelConfigCreate",
       "ChannelConfigOut",
       "ChannelType",
@@ -39083,6 +39561,7 @@
       "OrgAdminCreateRequest",
       "OrgAdminCreateResponse",
       "OrgAdminOut",
+      "OrgUsersPageOut",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PeriodOut",
@@ -39100,6 +39579,7 @@
       "ResendVerificationRequest",
       "ResetPasswordRequest",
       "ResetPasswordResponse",
+      "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",
       "ScheduleCreate",
@@ -39172,6 +39652,8 @@
       "AdmissionTenant",
       "AgentAccessReason",
       "AgentActivityResponse",
+      "AgentActivityTimelineItem",
+      "AgentActivityTimelinePage",
       "AgentApprovalResolveRequest",
       "AgentBayLiveEvent",
       "AgentConversationResponse",
@@ -39206,6 +39688,7 @@
       "ApprovalAction",
       "ApprovalDecisionRequest",
       "ApprovalStatus",
+      "ArchiveSelectedRequest",
       "ArchivedSessionDetail",
       "ArchivedSessionErrorEvent",
       "AssignmentOut",
@@ -39223,6 +39706,7 @@
       "CategoryTestSuccess",
       "ChangePasswordRequest",
       "ChangePasswordResponse",
+      "ChannelCatalogEntry",
       "ChannelConfigCreate",
       "ChannelConfigOut",
       "ChannelType",
@@ -39342,6 +39826,7 @@
       "OrgAdminCreateRequest",
       "OrgAdminCreateResponse",
       "OrgAdminOut",
+      "OrgUsersPageOut",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PeriodFrequency",
@@ -39361,6 +39846,7 @@
       "ResendVerificationRequest",
       "ResetPasswordRequest",
       "ResetPasswordResponse",
+      "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",
       "ScheduleCreate",

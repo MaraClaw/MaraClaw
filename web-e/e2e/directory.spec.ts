@@ -1,23 +1,10 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
-import type { DirectoryUser } from '../src/lib/directory-api'
-import { directoryPath, orgDepartment, prepareOrgDepartments } from './org-departments-fixture'
+import { dana, peoplePageRoute, prepareDirectory } from './directory-fixture'
+import { registerPeoplePaginationTests } from './directory-pagination-cases'
+import { directoryPath, orgDepartment } from './org-departments-fixture'
 
-const people = [
-  { id: 'dana', display_name: 'Dana Woods', email: 'dana@example.test', title: 'Product engineer', role: 'org_admin' },
-  { id: 'rowan', display_name: 'Rowan Chen', email: 'rowan@example.test', title: 'Marketing designer', role: 'member' },
-] satisfies readonly DirectoryUser[]
-
-async function prepareDirectory(page: Page) {
-  const state = await prepareOrgDepartments(page, 'org_admin')
-  const retiredRequests: string[] = []
-  page.on('request', (request) => {
-    const path = new URL(request.url()).pathname
-    if (path.startsWith('/api/enterprise/org/')) retiredRequests.push(path)
-  })
-  await page.route('**/api/org/users', (route) => route.fulfill({ json: people }))
-  return { state, retiredRequests }
-}
+registerPeoplePaginationTests()
 
 for (const entry of [
   { name: 'People', path: '/app/directory', tab: 'People', query: '' },
@@ -25,7 +12,7 @@ for (const entry of [
   { name: 'a stale synced link', path: '/app/directory?tab=synced&q=engineer', tab: 'People', query: 'engineer' },
 ]) {
   test(`opens ${entry.name} without retired provider requests`, async ({ page }) => {
-    const { retiredRequests } = await prepareDirectory(page)
+    const { retiredRequests, requests } = await prepareDirectory(page)
 
     await page.goto(entry.path)
 
@@ -37,6 +24,7 @@ for (const entry of [
       if (entry.query) await expect(page.getByText('Rowan Chen', { exact: true })).toHaveCount(0)
     }
     expect(retiredRequests).toEqual([])
+    expect(requests.length).toBe(entry.tab === 'Departments' ? 0 : 1)
     const sections = page.getByRole('navigation', { name: 'Directory sections' })
     await expect(sections.getByRole('button')).toHaveCount(2)
     await expect(sections.getByRole('button', { name: entry.tab, exact: true })).toHaveAttribute('aria-current', 'true')
@@ -47,7 +35,7 @@ for (const entry of [
 
 for (const query of ['  DANA  ', 'dana@example', 'Dana Woods', 'engineer', 'org_admin']) {
   test(`People search matches ${JSON.stringify(query)} without provider requests`, async ({ page }) => {
-    const { retiredRequests } = await prepareDirectory(page)
+    const { retiredRequests, requests } = await prepareDirectory(page)
     await page.goto('/app/directory')
     await expect(page.getByText('Rowan Chen', { exact: true })).toBeVisible()
 
@@ -57,6 +45,7 @@ for (const query of ['  DANA  ', 'dana@example', 'Dana Woods', 'engineer', 'org_
     await expect(page.getByText('Rowan Chen', { exact: true })).toHaveCount(0)
     expect(new URL(page.url()).searchParams.get('q')).toBe(query)
     expect(retiredRequests).toEqual([])
+    expect(requests.at(-1)?.searchParams.get('search')).toBe(query.trim().toLowerCase())
   })
 }
 
@@ -76,9 +65,9 @@ test('People search can recover from no matches', async ({ page }) => {
 test('People uses email when a display name is absent', async ({ page }) => {
   // Given
   await prepareDirectory(page)
-  await page.route('**/api/org/users', (route) => route.fulfill({ json: [
-    { id: 'email-only', display_name: '', email: 'email-only@example.test', role: 'member' },
-  ] }))
+  await page.route(peoplePageRoute, (route) => route.fulfill({ json: {
+    items: [{ ...dana, display_name: '', email: 'email-only@example.test' }], next_cursor: null,
+  } }))
   // When
   await page.goto('/app/directory')
   // Then
@@ -88,9 +77,10 @@ test('People uses email when a display name is absent', async ({ page }) => {
 test('People does not render or search retired account usernames', async ({ page }) => {
   // Given
   await prepareDirectory(page)
-  await page.route('**/api/org/users', (route) => route.fulfill({ json: [
-    { ...people[0], username: 'retired-account-handle' },
-  ] }))
+  await page.route(peoplePageRoute, (route) => route.fulfill({ json: {
+    items: new URL(route.request().url()).searchParams.get('search') ? [] : [{ ...dana, username: 'retired-account-handle' }],
+    next_cursor: null,
+  } }))
   await page.goto('/app/directory')
   await expect(page.getByText('Dana Woods', { exact: true })).toBeVisible()
   await expect(page.getByText('retired-account-handle', { exact: false })).toHaveCount(0)

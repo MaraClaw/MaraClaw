@@ -11,7 +11,7 @@ from typing import Any, TypedDict
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.background_tasks import schedule_background_task
-from app.core.json_types import json_as_str_or, json_loads_value, json_object_from
+from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
@@ -26,6 +26,7 @@ from app.services.channels import (
     google_chat as gchat,
     inbound as channel_inbound,
 )
+from app.services.channels.google_chat_credentials import GoogleChatCredentialError, resolve_google_chat_write
 from app.services.channels.redact import channel_config_out
 from app.services.platform_service import platform_service
 
@@ -64,42 +65,22 @@ async def configure_google_chat_channel(
     project_number = str(data.get("project_number") or "").strip()
     if not project_number:
         raise HTTPException(status_code=422, detail="project_number is required")
-
-    client_email = str(data.get("client_email") or "").strip()
-    audience = str(data.get("audience") or project_number).strip()
     verification_token = str(data.get("verification_token") or "").strip() or None
 
-    extra: dict[str, Any] = {"audience": audience}
-    sa_json = data.get("service_account_json")
-    if isinstance(sa_json, dict):
-        extra["service_account_json"] = sa_json
-        client_email = client_email or str(sa_json.get("client_email") or "").strip()
-    elif isinstance(sa_json, str) and sa_json.strip():
-        try:
-            parsed_raw = json_loads_value(sa_json)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="service_account_json must be valid JSON") from exc
-        if not isinstance(parsed_raw, dict):
-            raise HTTPException(status_code=422, detail="service_account_json must be a JSON object")
-        parsed = json_object_from(parsed_raw)
-        if "private_key" not in parsed or "client_email" not in parsed:
-            raise HTTPException(
-                status_code=422,
-                detail="service_account_json must include client_email and private_key",
-            )
-        extra["service_account_json"] = parsed
-        client_email = client_email or str(parsed.get("client_email") or "").strip()
+    existing = await channel_config.get_channel_config(agent_id, CHANNEL_TYPE)
+    try:
+        write = resolve_google_chat_write(data, existing, project_number)
+    except GoogleChatCredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Never store SA PEM in encrypt_key (VARCHAR(255) is too small).
-    # Keep encrypt_key cleared for this channel type.
     config = await channel_config.upsert_channel_config(
         agent_id=agent_id,
         channel_type=CHANNEL_TYPE,
         app_id=project_number,
-        app_secret=client_email or None,
-        encrypt_key=None,
+        app_secret=write.client_email,
+        encrypt_key=write.encrypt_key,
         verification_token=verification_token,
-        extra_config=extra,
+        extra_config=write.extra_config,
         is_configured=True,
     )
     return channel_config_out(config)

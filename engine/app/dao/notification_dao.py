@@ -166,6 +166,24 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
             await db.execute(f"UPDATE notifications SET is_read = TRUE WHERE {where}", params)
             return True
 
+    async def _set_selected_archive_for_user(self, ids: Sequence[UUID], user_id: UUID, *, archive: bool) -> bool:
+        distinct_ids = sorted(set(ids))
+        params = {"ids": distinct_ids, "user_id": user_id}
+        where = "id = ANY(%(ids)s) AND user_id = %(user_id)s AND " + VISIBLE_NOTIFICATION_SQL
+        async with self.session() as db:
+            rows = await db.fetchall(f"SELECT id FROM notifications WHERE {where} ORDER BY id FOR UPDATE", params)
+            if {uuid_from_row(row["id"]) for row in rows} != set(distinct_ids):
+                return False
+            assignment = "COALESCE(archived_at, now())" if archive else "NULL"
+            await db.execute(f"UPDATE notifications SET archived_at = {assignment} WHERE id = ANY(%(ids)s)", params)
+            return True
+
+    async def archive_selected_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+        return await self._set_selected_archive_for_user(ids, user_id, archive=True)
+
+    async def restore_selected_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+        return await self._set_selected_archive_for_user(ids, user_id, archive=False)
+
     async def mark_all_read_for_user(self, user_id: UUID, *, types: Sequence[NotificationKind] | None = None) -> None:
         params: dict[str, object] = {"user_id": user_id}
         clauses = ["user_id = %(user_id)s", "is_read IS FALSE", "archived_at IS NULL", VISIBLE_NOTIFICATION_SQL]

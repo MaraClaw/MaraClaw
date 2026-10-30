@@ -5,19 +5,21 @@ import uuid
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.json_types import int_from_row
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
-from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.activity_log_dao import ActivityTimelineQuery, agent_activity_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.activity_responses import (
+    AgentActivityCursor,
     AgentActivityResponse,
+    AgentActivityTimelinePage,
     AgentConversationResponse,
     ConversationMessageResponse,
 )
@@ -59,6 +61,53 @@ async def get_agent_activity(
         }
         for log in logs
     ]
+
+
+@router.get("/agents/{agent_id}/activity/page")
+async def get_agent_activity_page(
+    agent_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    action_type: str | None = Query(None),
+    cursor: str | None = Query(None, min_length=1, max_length=2048),
+    current_user: UserRecord = Depends(get_current_user),
+) -> AgentActivityTimelinePage:
+    """Manage-only timeline without raw payloads; the cursor is bound to this agent and filter."""
+    _, level = await check_agent_access(current_user, agent_id, fresh=True)
+    if level != "manage":
+        raise HTTPException(status_code=403, detail="Manage access required")
+
+    before = None
+    if cursor is not None:
+        try:
+            position = AgentActivityCursor.decode(cursor)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Invalid activity cursor") from error
+        if position.agent_id != agent_id or position.action_type != action_type:
+            raise HTTPException(status_code=422, detail="Activity cursor does not match this agent or filter")
+        before = (position.created_at, position.id)
+
+    entries = await agent_activity_log_dao.list_timeline_page(
+        ActivityTimelineQuery(agent_id=agent_id, limit=limit + 1, action_type=action_type, before=before)
+    )
+    page = entries[:limit]
+    next_cursor = None
+    if len(entries) > limit:
+        last = page[-1]
+        next_cursor = AgentActivityCursor(
+            version=1, agent_id=agent_id, action_type=action_type, created_at=last.created_at, id=last.id
+        ).encode()
+    return {
+        "items": [
+            {
+                "id": str(entry.id),
+                "action_type": entry.action_type,
+                "summary": entry.summary,
+                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+            }
+            for entry in page
+        ],
+        "next_cursor": next_cursor,
+    }
 
 
 # ─── Chat History (per-agent) ─────────────────────────────────

@@ -17,6 +17,7 @@ const ICON_NAMES = [
   'tools',
   'tasks',
   'schedules',
+  'activity',
   'channels',
   'people',
   'access',

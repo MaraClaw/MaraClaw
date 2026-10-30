@@ -8,9 +8,10 @@ from app.dao.notification_dao import notification_dao
 from notification_archive_fixtures import ArchiveScenario
 
 
+@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
 @pytest.mark.parametrize("invalid_recipient", ["colleague", "outsider", "missing"])
 async def test_selected_read_rejects_mixed_invalid_ids_atomically(
-    archive_scenario: ArchiveScenario, invalid_recipient: str
+    archive_scenario: ArchiveScenario, invalid_recipient: str, operation: str
 ) -> None:
     # Given: two valid unread rows and an invalid selector.
     scenario = archive_scenario
@@ -26,7 +27,7 @@ async def test_selected_read_rejects_mixed_invalid_ids_atomically(
     before = await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id")
     # When
     response = await scenario.client.post(
-        "/api/notifications/read-selected",
+        f"/api/notifications/{operation}",
         headers=scenario.headers(scenario.owner),
         json={"ids": [str(first.id), str(selectors[invalid_recipient]), str(second.id), str(first.id)]},
     )
@@ -36,10 +37,11 @@ async def test_selected_read_rejects_mixed_invalid_ids_atomically(
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
+@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
 @pytest.mark.parametrize("reference", ["agent_id", "ref_id", "link"])
 @pytest.mark.parametrize("archived", [False, True])
 async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
-    archive_scenario: ArchiveScenario, reference: str, archived: bool
+    archive_scenario: ArchiveScenario, reference: str, archived: bool, operation: str
 ) -> None:
     # Given: an owned notice hidden by the shared retained-agent visibility predicate.
     scenario = archive_scenario
@@ -91,7 +93,7 @@ async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
     before = await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id")
     # When: valid and hidden selectors appear in one batch.
     response = await scenario.client.post(
-        "/api/notifications/read-selected",
+        f"/api/notifications/{operation}",
         headers=scenario.headers(scenario.owner),
         json={"ids": [str(visible.id), str(hidden.id)]},
     )
@@ -101,10 +103,14 @@ async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
-async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: ArchiveScenario) -> None:
+@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
+async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: ArchiveScenario, operation: str) -> None:
     # Given: a deferred database failure after the batch update executes.
     scenario = archive_scenario
     notices = [await scenario.notice(), await scenario.notice()]
+    if operation == "restore":
+        for notice in notices:
+            await notification_dao.archive_for_user(notice.id, scenario.owner.id)
     await scenario.db.execute(
         "CREATE FUNCTION reject_selected_read() RETURNS trigger LANGUAGE plpgsql AS $$ "
         "BEGIN RAISE EXCEPTION 'selected read rejected' USING ERRCODE = '23514'; END; $$"
@@ -117,7 +123,7 @@ async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: Arch
     # When
     with pytest.raises(CheckViolation, match="selected read rejected"):
         await scenario.client.post(
-            "/api/notifications/read-selected",
+            f"/api/notifications/{operation}",
             headers=scenario.headers(scenario.owner),
             json={"ids": [str(notice.id) for notice in notices]},
         )
@@ -125,10 +131,11 @@ async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: Arch
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
+@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
 @pytest.mark.parametrize("count", [200, 201])
 @pytest.mark.parametrize("duplicates", [False, True])
 async def test_selected_read_enforces_submitted_upper_bound_in_postgres(
-    archive_scenario: ArchiveScenario, count: int, duplicates: bool
+    archive_scenario: ArchiveScenario, count: int, duplicates: bool, operation: str
 ) -> None:
     # Given: a submitted set at or beyond the limit, optionally all the same UUID.
     scenario = archive_scenario
@@ -141,11 +148,12 @@ async def test_selected_read_enforces_submitted_upper_bound_in_postgres(
     selected = [ids[0]] * count if duplicates else ids
     # When
     response = await scenario.client.post(
-        "/api/notifications/read-selected",
+        f"/api/notifications/{operation}",
         headers=scenario.headers(scenario.owner),
         json={"ids": [str(note_id) for note_id in selected]},
     )
     # Then: the original submitted count, not the distinct count, determines acceptance.
     assert response.status_code == (200 if count == 200 else 422)
-    stored = await scenario.db.fetchall("SELECT id, is_read FROM notifications")
-    assert {row["id"] for row in stored if row["is_read"]} == (set(selected) if count == 200 else set())
+    stored = await scenario.db.fetchall("SELECT id, is_read, archived_at FROM notifications")
+    changed = {row["id"] for row in stored if row["is_read"] or row["archived_at"] is not None}
+    assert changed == (set(selected) if count == 200 and operation != "restore" else set())

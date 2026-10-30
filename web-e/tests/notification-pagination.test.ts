@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { InfiniteQueryObserver, MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { notificationKeys, notificationListOptions, notificationReadOptions } from '../src/hooks/notification-options.ts'
+import { notificationKeys, notificationListOptions, notificationReadOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions } from '../src/hooks/notification-options.ts'
 import { listNotifications, type NotificationRow } from '../src/lib/notifications-api.ts'
 
 const first: NotificationRow = { id: 'first', title: 'First', type: 'broadcast', created_at: '2030-01-01T00:00:00Z', archived_at: null }
@@ -65,5 +65,32 @@ for (const malformed of [[], {}, { items: [] }, { items: [], next_cursor: '' }, 
     t.mock.method(globalThis, 'fetch', async () => Response.json(malformed))
     // When / Then
     await assert.rejects(listNotifications(), z.ZodError)
+  })
+}
+
+for (const options of [notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions]) {
+  test(`${options.name} restarts cached Active and Archived traversal at the head`, async (t) => {
+    // Given
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    t.after(() => client.clear())
+    const cursors: (string | null)[] = []
+    t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return Response.json({ ok: true })
+      const cursor = new URL(String(input), 'http://fixture.test').searchParams.get('cursor')
+      cursors.push(cursor)
+      return Response.json({ items: [first], next_cursor: cursor ? null : 'older' })
+    })
+    for (const view of ['active', 'archived'] as const) {
+      const observer = new InfiniteQueryObserver(client, notificationListOptions('broadcast', view))
+      await observer.refetch(); await observer.fetchNextPage()
+    }
+    cursors.length = 0
+    // When
+    await new MutationObserver(client, options(client)).mutate(['11111111-1111-4111-8111-111111111111'])
+    // Then
+    assert.deepEqual(cursors, [null, null])
+    for (const view of ['active', 'archived'] as const) {
+      assert.deepEqual(client.getQueryData(notificationKeys.list('broadcast', view)), { pages: [{ items: [first], next_cursor: 'older' }], pageParams: [null] })
+    }
   })
 }

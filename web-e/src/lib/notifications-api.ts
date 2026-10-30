@@ -93,6 +93,16 @@ export async function markSelectedNotificationsRead(ids: readonly string[]): Pro
   await apiRequest('/api/notifications/read-selected', { method: 'POST', body, schema: archiveResultSchema })
 }
 
+export async function archiveSelectedNotifications(ids: readonly string[]): Promise<void> {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  await apiRequest('/api/notifications/archive', { method: 'POST', body, schema: archiveResultSchema })
+}
+
+export async function restoreSelectedNotifications(ids: readonly string[]): Promise<void> {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  await apiRequest('/api/notifications/restore', { method: 'POST', body, schema: archiveResultSchema })
+}
+
 export async function archiveNotification(id: string): Promise<void> {
   await apiRequest(`/api/notifications/${encodeURIComponent(id)}/archive`, { schema: archiveResultSchema, method: 'POST' })
 }

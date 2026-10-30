@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
-import { notificationArchiveOptions, notificationKeys, notificationListOptions, notificationReadOptions, notificationRestoreOptions, notificationsReadAllOptions, notificationsReadSelectedOptions, notificationUnreadOptions } from '@/hooks/notification-options'
+import { notificationArchiveOptions, notificationKeys, notificationListOptions, notificationReadOptions, notificationRestoreOptions, notificationsArchiveSelectedOptions, notificationsReadAllOptions, notificationsReadSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '@/hooks/notification-options'
 import { useNotificationSelection } from '@/hooks/use-notification-selection'
 import { useInfiniteQuery, useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { userFacingRequestError } from '@/lib/http'
@@ -25,6 +25,7 @@ function memberLink(link?: string | null): string | null {
 export function NotificationsPage() {
   const [category, setCategory] = useState<NotificationCategory>('all')
   const [view, setView] = useState<NotificationView>('active')
+  const heading = useRef<HTMLHeadingElement>(null)
   const scope = useWorkspaceSession()
   const query = useInfiniteQuery(notificationListOptions(category, view))
   const unreadQuery = useQuery(notificationUnreadOptions(category))
@@ -33,7 +34,10 @@ export function NotificationsPage() {
   const markSelected = useMutation(notificationsReadSelectedOptions(scope.client))
   const archive = useMutation(notificationArchiveOptions(scope.client))
   const restore = useMutation(notificationRestoreOptions(scope.client))
-  const pending = markRead.isPending || markAll.isPending || markSelected.isPending || archive.isPending || restore.isPending
+  const archiveSelected = useMutation(notificationsArchiveSelectedOptions(scope.client))
+  const restoreSelected = useMutation(notificationsRestoreSelectedOptions(scope.client))
+  const moveSelected = view === 'active' ? archiveSelected : restoreSelected
+  const pending = markRead.isPending || markAll.isPending || markSelected.isPending || archive.isPending || restore.isPending || archiveSelected.isPending || restoreSelected.isPending
   const hasUnread = (unreadQuery.data ?? 0) > 0
   const items = [...new Map(query.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item])).values()]
   const selectionContext = useMemo(() => ({ scope, category, view }), [scope, category, view])
@@ -45,12 +49,14 @@ export function NotificationsPage() {
     if (!markSelected.isPending) markSelected.reset()
     if (!archive.isPending) archive.reset()
     if (!restore.isPending) restore.reset()
+    if (!archiveSelected.isPending) archiveSelected.reset()
+    if (!restoreSelected.isPending) restoreSelected.reset()
   }
 
   return (
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-display text-2xl font-semibold">Inbox</h1>
+        <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold focus-visible:outline focus-visible:outline-ring">Inbox</h1>
         {view === 'active' ? <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
           {markAll.isPending ? 'Marking all read…' : 'Mark all read'}
         </Button> : null}
@@ -59,8 +65,13 @@ export function NotificationsPage() {
         <Button className={cn(actionClass, 'disabled:bg-secondary disabled:text-secondary-foreground disabled:opacity-100 disabled:shadow-none')} disabled={pending || selection.ids.length === 0} onClick={() => {
           if (pending || selection.ids.length === 0) return
           resetErrors()
-          markSelected.mutate([...selection.ids], { onSuccess: scope.effect(selection.complete) })
+          markSelected.mutate([...selection.ids], { onSuccess: scope.effect(() => { if (selection.complete()) heading.current?.focus() }) })
         }}>{markSelected.isPending ? 'Marking selected read…' : 'Mark selected read'}</Button>
+        <Button variant="outline" className={actionClass} disabled={pending || selection.ids.length === 0} onClick={() => {
+          if (pending || selection.ids.length === 0) return
+          resetErrors()
+          moveSelected.mutate([...selection.ids], { onSuccess: scope.effect(() => { if (selection.complete()) heading.current?.focus() }) })
+        }}>{view === 'active' ? archiveSelected.isPending ? 'Archiving selected…' : 'Archive selected' : restoreSelected.isPending ? 'Restoring selected…' : 'Restore selected'}</Button>
         <p role="status" className="text-sm text-muted-foreground">{selection.ids.length} selected (up to 200 loaded notifications)</p>
         {selection.ids.length > 0 ? <Button variant="ghost" className={actionClass} onClick={selection.clear}>Clear selection</Button> : null}
       </div>
@@ -90,9 +101,9 @@ export function NotificationsPage() {
           <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={scope.effect(() => void unreadQuery.refetch())}>Retry unread count</Button>
         </div> : null}
       </div>
-      <p role="status" aria-atomic="true" className="sr-only">{archive.isSuccess ? 'Notification archived. Its read status is unchanged.' : restore.isSuccess ? 'Notification restored to Active.' : markRead.isSuccess ? 'Notification marked as read.' : markSelected.isSuccess ? 'Selected notifications marked as read.' : markAll.isSuccess ? `All active notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
+      <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Their read status is unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored to Active. Their read status is unchanged.' : archive.isSuccess ? 'Notification archived. Its read status is unchanged.' : restore.isSuccess ? 'Notification restored to Active.' : markRead.isSuccess ? 'Notification marked as read.' : markSelected.isSuccess ? 'Selected notifications marked as read.' : markAll.isSuccess ? `All active notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
       {markRead.isError || markAll.isError || markSelected.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(markRead.error ?? markAll.error ?? markSelected.error, 'Unable to mark notifications as read. Try again.')}</p> : null}
-      {archive.isError || restore.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(archive.error ?? restore.error, 'Unable to move this notification. Try again.')}</p> : null}
+      {archive.isError || restore.isError || archiveSelected.isError || restoreSelected.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error, archiveSelected.isError || restoreSelected.isError ? 'Unable to move selected notifications. Your selection is kept. Try again.' : 'Unable to move this notification. Try again.')}</p> : null}
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading notifications…</p> : null}
       {query.isError && !query.isFetchNextPageError ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')}</p>

@@ -1,12 +1,13 @@
-import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { useMemo } from 'react'
+import { useInfiniteQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useSearchParams } from 'react-router-dom'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { PersonCard, PersonCardList } from '@/components/directory-people'
 import { OrgDepartments } from '@/components/org-departments'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { listOrgUsers } from '@/lib/directory-api'
+import { listOrgUsersPage } from '@/lib/directory-api'
+import { userFacingRequestError } from '@/lib/http'
 
 const tabs = [
   { id: 'people', label: 'People', icon: 'people' },
@@ -41,19 +42,19 @@ export function DirectoryPage() {
     else copy.delete('q')
     setSearchParams(copy, { replace: true })
   }
-  const users = useQuery({ queryKey: ['directory', 'users'], queryFn: listOrgUsers })
-
-  const filteredUsers = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return (users.data ?? []).filter((user) => {
-      if (!q) return true
-      return [user.display_name, user.email, user.title, user.role]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q))
-    })
-  }, [users.data, search])
-
   const query = search.trim()
+  const normalizedSearch = query.toLowerCase()
+  const users = useInfiniteQuery<Awaited<ReturnType<typeof listOrgUsersPage>>, Error, string | null>({
+    queryKey: ['directory', 'users', 'page', normalizedSearch],
+    initialPageParam: null,
+    queryFn: ({ pageParam, signal }) => listOrgUsersPage({
+      search: normalizedSearch, cursor: pageParam, signal, owner: scope.owner,
+    }),
+    getNextPageParam: (page) => page.next_cursor,
+    enabled: tab === 'people',
+    retry: false,
+  })
+  const loadedUsers = users.data?.pages.flatMap((page) => page.items) ?? []
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
@@ -86,14 +87,16 @@ export function DirectoryPage() {
       />
       <div className="min-h-0 space-y-5 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
       {tab === 'people' ? (
+        <>
+        {!users.isError || users.data ? (
         <PersonCardList
           loading={users.isLoading}
-          error={users.error}
-          count={filteredUsers.length}
+          error={null}
+          count={loadedUsers.length}
           empty={query ? `No people match “${query}”.` : 'No people in this company yet.'}
           errorFallback="Unable to load people"
         >
-          {filteredUsers.map((user) => {
+          {loadedUsers.map((user) => {
             const name = user.display_name || user.email || 'Member'
             return (
               <PersonCard
@@ -107,6 +110,38 @@ export function DirectoryPage() {
             )
           })}
         </PersonCardList>
+        ) : null}
+        {users.isError ? (
+          <div className="space-y-3">
+            <p role="alert" className="text-sm text-destructive">
+              {userFacingRequestError(users.error, users.isFetchNextPageError
+                ? 'Unable to load more people.'
+                : users.data ? 'Unable to refresh people.' : 'Unable to load people.')}
+            </p>
+            <Button
+              variant="outline"
+              className="min-h-11"
+              disabled={users.isFetching}
+              onClick={() => users.isFetchNextPageError ? users.fetchNextPage() : users.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {users.hasNextPage && !users.isFetchNextPageError ? (
+          <Button
+            variant="outline"
+            className="min-h-11 min-w-32"
+            disabled={users.isFetching}
+            onClick={() => users.fetchNextPage()}
+          >
+            {users.isFetchingNextPage ? 'Loading more…' : 'Load more'}
+          </Button>
+        ) : null}
+        <p role="status" className="sr-only">
+          {users.isLoading ? 'Loading people.' : users.isFetchingNextPage ? 'Loading more people.' : `${loadedUsers.length} people loaded.`}
+        </p>
+        </>
       ) : null}
 
       {tab === 'departments' ? <OrgDepartments /> : null}

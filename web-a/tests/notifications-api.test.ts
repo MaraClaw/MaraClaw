@@ -6,7 +6,7 @@ import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import {
   fetchNotifications, fetchNotificationUnreadCount, markNotificationRead, markAllNotificationsRead,
-  archiveNotification, restoreNotification, markSelectedNotificationsRead, NotificationKind, notificationSchema,
+  archiveNotification, restoreNotification, markSelectedNotificationsRead, archiveSelectedNotifications, restoreSelectedNotifications, NotificationKind, notificationSchema,
 } from '../src/lib/notifications-api.ts'
 
 const notification = {
@@ -132,47 +132,49 @@ test('mark-read preserves a transport failure instead of reporting success', asy
   await assert.rejects(markAllNotificationsRead(), (error) => error instanceof ApiError && error.status === 503)
 })
 
-test('selected read sends one bounded UUID batch and parses success', async (t) => {
+for (const [endpoint, action] of [['read-selected', markSelectedNotificationsRead], ['archive', archiveSelectedNotifications], ['restore', restoreSelectedNotifications]] as const) {
+test(`selected ${endpoint} sends one bounded UUID batch and parses success`, async (t) => {
   // Given
   const ids = Array.from({ length: 200 }, () => notificationSchema.parse(notification).id)
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json({ ok: true }))
   // When
-  const result = await markSelectedNotificationsRead(ids)
+  const result = await action(ids)
   // Then
   assert.equal(fetch.mock.callCount(), 1)
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
-  assert.equal(url, '/api/notifications/read-selected')
+  assert.equal(url, `/api/notifications/${endpoint}`)
   assert.equal(options?.method, 'POST')
   assert.deepEqual(JSON.parse(String(options?.body)), { ids })
   assert.deepEqual(result, { ok: true })
 })
 
 for (const length of [0, 201]) {
-  test(`selected read rejects ${length} ids before any request, including duplicates`, async (t) => {
+  test(`selected ${endpoint} rejects ${length} ids before any request, including duplicates`, async (t) => {
     // Given
     const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }))
     const ids = Array.from({ length }, () => notificationSchema.parse(notification).id)
     // When / Then
-    await assert.rejects(markSelectedNotificationsRead(ids), z.ZodError)
+    await assert.rejects(action(ids), z.ZodError)
     assert.equal(fetch.mock.callCount(), 0)
   })
 }
 
 for (const status of [404, 422, 503]) {
-  test(`selected read preserves batch failure ${status}`, async (t) => {
+  test(`selected ${endpoint} preserves batch failure ${status}`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Unavailable' }, { status }))
     // When / Then
-    await assert.rejects(markSelectedNotificationsRead([notificationSchema.parse(notification).id]), (error) => error instanceof ApiError && error.status === status)
+    await assert.rejects(action([notificationSchema.parse(notification).id]), (error) => error instanceof ApiError && error.status === status)
   })
 }
 
-test('selected read rejects malformed success', async (t) => {
+test(`selected ${endpoint} rejects malformed success`, async (t) => {
   // Given
   t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false }))
   // When / Then
-  await assert.rejects(markSelectedNotificationsRead([notificationSchema.parse(notification).id]), z.ZodError)
+  await assert.rejects(action([notificationSchema.parse(notification).id]), z.ZodError)
 })
+}
 
 for (const [action, mutate] of [['archive', archiveNotification], ['restore', restoreNotification]] as const) {
   test(`${action} posts only the notification id and validates success`, async (t) => {
