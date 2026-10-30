@@ -2,12 +2,14 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
+from app.api.organization_cursor import decode_cursor, encode_cursor
 from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import get_current_admin, get_current_user
 from app.dao.identity_dao import identity_dao
-from app.dao.user_dao import user_dao
+from app.dao.user_dao import DirectoryPagePosition, user_dao
 from app.db.session import optional_connection_ctx
 from app.records.user import UserRecord
 from app.schemas.schemas import AuthUser, UserUpdate
@@ -19,11 +21,7 @@ router = APIRouter(prefix="/org", tags=["organization"])
 # ─── Users Management ──────────────────────────────────
 
 
-@router.get("/users", response_model=list[AuthUser])
-async def list_users(
-    tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> list[AuthUser]:
-    """List users, optionally filtered by tenant."""
+def _resolve_tenant(tenant_id: uuid.UUID | None, current_user: UserRecord) -> uuid.UUID | None:
     if (
         current_user.role == "org_admin"
         and not current_user.is_platform_admin
@@ -34,6 +32,15 @@ async def list_users(
     target_tenant_id = current_user.tenant_id
     if current_user.role in ("platform_admin", "org_admin") and tenant_id:
         target_tenant_id = tenant_id
+    return target_tenant_id
+
+
+@router.get("/users", response_model=list[AuthUser])
+async def list_users(
+    tenant_id: uuid.UUID | None = None, current_user: UserRecord = Depends(get_current_user)
+) -> list[AuthUser]:
+    """List users, optionally filtered by tenant."""
+    target_tenant_id = _resolve_tenant(tenant_id, current_user)
     if not target_tenant_id:
         return []
 
@@ -43,6 +50,37 @@ async def list_users(
         order_by_display_name=True,
     )
     return [AuthUser.model_validate(u) for u in users]
+
+
+class OrgUsersPageOut(BaseModel):
+    items: list[AuthUser]
+    next_cursor: str | None
+
+
+@router.get("/users/page", response_model=OrgUsersPageOut)
+async def list_users_page(
+    tenant_id: uuid.UUID | None = None,
+    search: str = "",
+    cursor: str | None = Query(default=None, max_length=1024),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: UserRecord = Depends(get_current_user),
+) -> OrgUsersPageOut:
+    target_tenant_id = _resolve_tenant(tenant_id, current_user)
+    normalized_search = search.strip()
+    if "\x00" in normalized_search:
+        raise HTTPException(status_code=422, detail="Invalid search")
+    after = decode_cursor(cursor, target_tenant_id, normalized_search) if cursor is not None else None
+    if target_tenant_id is None:
+        return OrgUsersPageOut(items=[], next_cursor=None)
+    rows = await user_dao.list_directory_page(target_tenant_id, search=normalized_search, after=after, limit=limit)
+    page = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit:
+        last = page[-1]
+        next_cursor = encode_cursor(
+            target_tenant_id, normalized_search, DirectoryPagePosition(last.display_name, last.id)
+        )
+    return OrgUsersPageOut(items=[AuthUser.model_validate(user) for user in page], next_cursor=next_cursor)
 
 
 @router.patch("/users/{user_id}", response_model=AuthUser)
