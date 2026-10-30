@@ -58,7 +58,7 @@ try {
             const items = rows.slice(start, start + 50)
             body = { items, next_cursor: rows.length > start + 50 ? items.at(-1).id : null }
           }
-        } else if (active && method === 'POST' && path === '/api/notifications/read-selected') {
+        } else if (active && method === 'POST' && ['/api/notifications/read-selected', '/api/notifications/archive', '/api/notifications/restore'].includes(path)) {
           const owner = active, chunks = []
           for await (const chunk of request) chunks.push(chunk)
           const input = JSON.parse(Buffer.concat(chunks).toString())
@@ -67,7 +67,18 @@ try {
           const held = owner.hold
           if (held) { held.started.resolve(); await held.released.promise }
           if (owner.failSelected) { status = owner.failSelected; owner.failSelected = undefined; body = { detail: 'Unavailable' } }
-          else { owner.items = owner.items.map((item) => input.ids.includes(item.id) ? { ...item, is_read: true } : item); body = { ok: true } }
+          else {
+            owner.items = owner.items.map((item) => {
+              if (!input.ids.includes(item.id)) return item
+              switch (path) {
+                case '/api/notifications/read-selected': return { ...item, is_read: true }
+                case '/api/notifications/archive': return { ...item, archived_at: item.archived_at ?? '2026-10-24T00:00:00Z' }
+                case '/api/notifications/restore': return { ...item, archived_at: null }
+                default: throw new Error(`Unsupported batch action ${path}`)
+              }
+            })
+            body = { ok: true }
+          }
         } else if (active && method === 'POST' && path === '/api/notifications/read-all') {
           active.items = active.items.map((item) => item.archived_at === null ? { ...item, is_read: true } : item); body = { ok: true }
         } else if (active && method === 'POST' && active.items.some((item) => ['read', 'archive', 'restore'].some((action) => path === `/api/notifications/${item.id}/${action}`))) {

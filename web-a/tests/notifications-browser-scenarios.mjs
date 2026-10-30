@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { notificationFixture, inspectNotifications, captureNotifications, visible } from './notifications-browser-evidence.mjs'
+import { exerciseSelectedMoves } from './selected-notifications-browser.mjs'
 
 export async function exerciseNotifications(page, { active, receipt, output, reload }) {
   const original = notificationFixture(), saved = notificationFixture(true)
@@ -183,6 +184,7 @@ export async function exerciseNotifications(page, { active, receipt, output, rel
   await reload(); await visible(page.locator('[role="alert"]').filter({ hasText: 'Unable to load notifications' })); await capture('list-error')
   active.listFailure = false
   await page.snapshot(); await button('Retry').click(); await visible(page.locator('button[aria-label="Archive notification: Paged notice 1"]'))
+  await exerciseSelectedMoves(page, { active, receipt, output, reload })
   active.items = []
   await reload(); await visible(page.locator('h2').filter({ hasText: /^No active notifications$/u })); await capture('active-empty')
   await view('Archived'); await visible(page.locator('h2').filter({ hasText: /^No archived notifications$/u })); await capture('archived-empty')

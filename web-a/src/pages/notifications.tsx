@@ -19,34 +19,35 @@ export function NotificationsPage() {
   const [cursors, setCursors] = useState<readonly (string | null)[]>([null])
   const [view, setView] = useState<NotificationView>('active')
   const [selected, setSelected] = useState<readonly NotificationId[]>([])
-  const [selectedError, setSelectedError] = useState(false)
+  const [selectedError, setSelectedError] = useState<string | null>(null)
   const selectionOwner = useRef({})
   const heading = useRef<HTMLHeadingElement>(null)
   const isCurrent = useSessionCurrent()
-  const { notifications, markRead, markAllRead, markSelectedRead, archive, restore, resetFirstPage } = useNotifications(cursors.at(-1) ?? null, view)
+  const { notifications, markRead, markAllRead, markSelectedRead, archive, restore, archiveSelected, restoreSelected, resetFirstPage } = useNotifications(cursors.at(-1) ?? null, view)
+  const moveSelected = view === 'active' ? archiveSelected : restoreSelected
   const unread = useNotificationUnreadCount()
-  const pending = markRead.isPending || markAllRead.isPending || markSelectedRead.isPending || archive.isPending || restore.isPending
+  const pending = markRead.isPending || markAllRead.isPending || markSelectedRead.isPending || archive.isPending || restore.isPending || archiveSelected.isPending || restoreSelected.isPending
   const items = [...new Map(notifications.data?.items.map((item) => [item.id, item])).values()]
   useEffect(() => {
-    if (markRead.isSuccess || markAllRead.isSuccess || markSelectedRead.isSuccess || archive.isSuccess || restore.isSuccess) setCursors([null])
-  }, [markRead.isSuccess, markAllRead.isSuccess, markSelectedRead.isSuccess, archive.isSuccess, restore.isSuccess])
+    if (markRead.isSuccess || markAllRead.isSuccess || markSelectedRead.isSuccess || archive.isSuccess || restore.isSuccess || archiveSelected.isSuccess || restoreSelected.isSuccess) setCursors([null])
+  }, [markRead.isSuccess, markAllRead.isSuccess, markSelectedRead.isSuccess, archive.isSuccess, restore.isSuccess, archiveSelected.isSuccess, restoreSelected.isSuccess])
   const selectedIds = items.filter((item) => selected.includes(item.id)).slice(0, 200).map((item) => item.id)
   const hasUnread = (unread.data?.unread_count ?? 0) > 0 || items.some((item) => !item.is_read && item.archived_at === null)
   const mutationError = archive.isError ? 'Unable to archive this notification. Try again.'
     : restore.isError ? 'Unable to restore this notification. Try again.'
-    : selectedError ? 'Unable to mark selected notifications as read. Your selection is kept. Try again.'
+    : selectedError ? selectedError
     : markRead.isError || markAllRead.isError ? 'Unable to mark notifications as read. Try again.' : null
 
   function resetErrors() {
-    setSelectedError(false)
-    for (const mutation of [markRead, markAllRead, markSelectedRead, archive, restore]) {
+    setSelectedError(null)
+    for (const mutation of [markRead, markAllRead, markSelectedRead, archive, restore, archiveSelected, restoreSelected]) {
       if (!mutation.isPending) mutation.reset()
     }
   }
 
   function select(ids: readonly NotificationId[]) {
     selectionOwner.current = {}
-    setSelectedError(false)
+    setSelectedError(null)
     setSelected(ids)
   }
 
@@ -62,8 +63,18 @@ export function NotificationsPage() {
     const ids = [...selectedIds]
     resetErrors()
     markSelectedRead.mutate(ids, {
-      onSuccess: () => { if (isCurrent() && selectionOwner.current === owner) select([]) },
-      onError: () => { if (isCurrent() && selectionOwner.current === owner) setSelectedError(true) },
+      onSuccess: () => { if (isCurrent() && selectionOwner.current === owner) { select([]); focusInbox() } },
+      onError: () => { if (isCurrent() && selectionOwner.current === owner) setSelectedError('Unable to mark selected notifications as read. Your selection is kept. Try again.') },
+    })
+  }
+
+  function moveSelection() {
+    if (pending || selectedIds.length === 0 || !isCurrent()) return
+    const owner = selectionOwner.current
+    resetErrors()
+    moveSelected.mutate([...selectedIds], {
+      onSuccess: () => { if (isCurrent() && selectionOwner.current === owner) { select([]); focusInbox() } },
+      onError: () => { if (isCurrent() && selectionOwner.current === owner) setSelectedError('Unable to move selected notifications. Your selection is kept. Try again.') },
     })
   }
 
@@ -106,10 +117,14 @@ export function NotificationsPage() {
           <CheckCheck className="size-4" aria-hidden />
           {markSelectedRead.isPending ? 'Marking selected as read...' : `Mark selected as read (${selectedIds.length})`}
         </Button>
+        <Button variant="outline" className={actionClass} disabled={pending || selectedIds.length === 0} onClick={moveSelection}>
+          {view === 'active' ? <Archive className="size-4" aria-hidden /> : <ArchiveRestore className="size-4" aria-hidden />}
+          {view === 'active' ? archiveSelected.isPending ? 'Archiving selected...' : `Archive selected (${selectedIds.length})` : restoreSelected.isPending ? 'Restoring selected...' : `Restore selected (${selectedIds.length})`}
+        </Button>
         <p role="status" className="w-full text-xs text-muted-foreground sm:text-sm">{selectedIds.length} selected on this page. Changing page or view clears the selection.</p>
       </div> : null}
 
-      <p role="status" className="sr-only">{archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : ''}</p>
+      <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Read state unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored. Read state unchanged.' : archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markSelectedRead.isSuccess ? 'Selected notifications marked as read.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : ''}</p>
       {mutationError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{mutationError}</p> : null}
       {unread.isError ? <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         <p>Unread count could not be updated.</p>
