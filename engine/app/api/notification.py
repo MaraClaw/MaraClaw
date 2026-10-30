@@ -118,6 +118,55 @@ async def get_unread_count(
     return {"unread_count": count}
 
 
+class SelectedNotificationsRequest(BaseModel):
+    """Submitted identifiers; the 200-item bound applies before deduplication."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+
+
+class ReadSelectedRequest(SelectedNotificationsRequest):
+    pass
+
+
+class ArchiveSelectedRequest(SelectedNotificationsRequest):
+    pass
+
+
+class RestoreSelectedRequest(SelectedNotificationsRequest):
+    pass
+
+
+@router.post("/notifications/read-selected")
+async def mark_selected_read(
+    req: ReadSelectedRequest, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    if not await notification_dao.mark_selected_read_for_user(req.ids, current_user.id):
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
+@router.post("/notifications/archive")
+async def archive_selected_notifications(
+    req: ArchiveSelectedRequest, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    """Archive every selected notification, or none if any is missing, foreign or hidden."""
+    if not await notification_dao.archive_selected_for_user(req.ids, current_user.id):
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
+@router.post("/notifications/restore")
+async def restore_selected_notifications(
+    req: RestoreSelectedRequest, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    """Restore every selected notification, or none if any is missing, foreign or hidden."""
+    if not await notification_dao.restore_selected_for_user(req.ids, current_user.id):
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
 @router.post("/notifications/{notification_id}/read")
 async def mark_read(
     notification_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
@@ -154,21 +203,6 @@ async def mark_all_read(
 ) -> NotificationReadResponse:
     """Mark matching notifications as read for the current user."""
     await notification_dao.mark_all_read_for_user(current_user.id, types=_types_for_category(category))
-    return {"ok": True}
-
-
-class ReadSelectedRequest(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
-
-    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
-
-
-@router.post("/notifications/read-selected")
-async def mark_selected_read(
-    req: ReadSelectedRequest, current_user: UserRecord = Depends(get_current_user)
-) -> NotificationReadResponse:
-    if not await notification_dao.mark_selected_read_for_user(req.ids, current_user.id):
-        raise HTTPException(404, "Notification not found")
     return {"ok": True}
 
 
