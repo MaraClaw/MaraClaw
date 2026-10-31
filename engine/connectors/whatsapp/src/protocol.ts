@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Diagnostic } from "./diagnostics.js";
 
 export const MAX_FRAME_BYTES = 1024 * 1024;
 export const jsonValue = z.json();
@@ -22,6 +23,7 @@ export type CloseReason = "logged_out" | "replaced" | "forbidden" | "transport_f
 export type SendOutcome = "accepted" | "rejected" | "uncertain";
 export type AuthBatch = { readonly category: string; readonly values: Readonly<Record<string, Json>> };
 export type ChildPayload =
+  | Diagnostic
   | { readonly type: "auth_get"; readonly category: string; readonly ids: readonly string[] }
   | { readonly type: "auth_set"; readonly batches: readonly AuthBatch[] }
   | { readonly type: "creds_set"; readonly creds: string }

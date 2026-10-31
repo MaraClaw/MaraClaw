@@ -8,6 +8,8 @@ import { assertNever } from './protocol.js';
 import type { ChildPayload, CloseReason, ParentFrame } from './protocol.js';
 import { Sends } from './sends.js';
 import type { Transport, TransportFactory } from './transport.js';
+import { diagnostic } from './diagnostics.js';
+import type { DropReason } from './diagnostics.js';
 
 const disconnectError = z.object({ output: z.object({ statusCode: z.number().int() }) });
 const reconnectMs = [1000, 2000, 4000, 8000, 16000] as const;
@@ -32,7 +34,7 @@ export class Runtime {
   private readonly sends: Sends;
   private pairDeadline = 0;
   constructor(private readonly host: RuntimeHost) {
-    this.sends = new Sends({ emit: payload => this.emit(payload),
+    this.sends = new Sends({ emit: payload => { if (payload.type === 'send_result') diagnostic(this.peer, { type: 'diagnostic', stage: 'send', event: 'finished', outcome: payload.outcome }); this.emit(payload); },
       barrier: async () => { await this.auth?.barrier(); },
       current: () => this.connected && this.socket && this.identity ? { socket: this.socket, identity: this.identity } : null,
       failed: () => { void this.stop('transport_failed'); },
@@ -47,6 +49,7 @@ export class Runtime {
       case 'init':
         if (this.peer) { void this.stop('transport_failed'); return; }
         this.peer = new Peer(frame.token, this.host.write);
+        diagnostic(this.peer, { type: 'diagnostic', stage: 'init', event: 'start' });
         this.renew(frame.lease_ms);
         void this.initialize(frame.creds).catch(() => this.stop('auth_store_failed'));
         return;
@@ -89,13 +92,22 @@ export class Runtime {
     });
     socket.ev.on('messages.upsert', event => {
       if (this.stopped || this.socket !== socket || !this.connected) return;
-      for (const payload of notifyText(event, this.identity)) this.emit(payload);
+      const reasons = new Set<DropReason>();
+      const accepted = notifyText(event, this.identity, reason => { reasons.add(reason); });
+      diagnostic(this.peer, { type: 'diagnostic', stage: 'intake', event: 'finished', count: accepted.length, dropped: event.messages.length - accepted.length,
+        event_kind: event.type, has_request_id: event.requestId !== undefined, ...(reasons.size === 0 ? {} : { drop_reasons: [...reasons] }) });
+      for (const payload of accepted) this.emit(payload);
     });
     socket.ev.on('messages.update', updates => { if (!this.stopped) this.sends.updates(socket, updates); });
     this.emit({ type: 'ready' });
   }
 
   private async connection(socket: Transport, update: BaileysEventMap['connection.update']): Promise<void> {
+    const parsedDisconnect = disconnectError.safeParse(update.lastDisconnect?.error);
+    const statusCode = parsedDisconnect.success && parsedDisconnect.data.output.statusCode >= 0 && parsedDisconnect.data.output.statusCode <= 999
+      ? parsedDisconnect.data.output.statusCode : undefined;
+    diagnostic(this.peer, { type: 'diagnostic', stage: 'connection', event: 'update', connection_state: update.connection ?? 'unknown', qr_available: Boolean(update.qr),
+      ...(statusCode === undefined ? {} : { status_code: statusCode }) });
     // Revoke intake synchronously before awaiting credential commits from this socket.
     if (this.closing.has(socket)) return;
     if (update.connection === 'close') {
@@ -109,6 +121,7 @@ export class Runtime {
       case 'open': {
         if (this.closing.has(socket)) return;
         const identity = socketIdentity(socket.user);
+        diagnostic(this.peer, { type: 'diagnostic', stage: 'identity', event: 'finished', identity_accepted: Boolean(identity) });
         if (!identity) { await this.stop('transport_failed'); return; }
         this.identity = identity;
         this.connected = true;
@@ -147,6 +160,8 @@ export class Runtime {
     clearTimeout(timeout);
     if (this.stopped) return;
     const delay = reconnectMs[this.retries++];
+    diagnostic(this.peer, { type: 'diagnostic', stage: 'reconnect', event: delay === undefined ? 'failure' : 'start',
+      retry_count: this.retries, ...(delay === undefined ? {} : { delay_ms: delay }) });
     if (delay === undefined) { await this.stop('transport_failed'); return; }
     this.reconnect = setTimeout(() => {
       void this.auth?.barrier().then(() => this.open()).catch(() => this.stop('auth_store_failed'));
@@ -159,6 +174,7 @@ export class Runtime {
 
   async stop(reason: CloseReason): Promise<void> {
     if (this.stopped) return;
+    diagnostic(this.peer, { type: 'diagnostic', stage: 'stop', event: 'finished', close_reason: reason });
     this.stopped = true;
     this.connected = false;
     clearTimeout(this.lease); clearTimeout(this.reconnect); clearTimeout(this.pairTimer);

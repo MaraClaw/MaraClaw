@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/protocol.test.js dist/test/auth.test.js dist/test/sends.test.js dist/test/runtime.test.js dist/test/cli.test.js",
+    "test": "npm run build && node --test dist/test/protocol.test.js dist/test/auth.test.js dist/test/sends.test.js dist/test/runtime.test.js dist/test/cli.test.js dist/test/diagnostics.test.js dist/test/intake-diagnostics.test.js dist/test/sdk-recovery.test.js",
     "start": "node dist/src/bridge.js"
   },
   "dependencies": {

@@ -43,6 +43,7 @@ export class ControlledTransport implements Transport {
 
 export class ParentStore {
   readonly frames: Frame[] = [];
+  get businessFrames(): Frame[] { return this.frames.filter(frame => frame.type !== 'diagnostic'); }
   readonly values = new Map<string, Record<string, Json>>();
   readonly peer = new Peer(token, line => this.write(line));
   automatic = true;

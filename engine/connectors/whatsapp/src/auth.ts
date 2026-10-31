@@ -2,7 +2,9 @@ import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap, Signa
 import { z } from 'zod';
 import { decode, decodeCreds, encode, parseKey } from './auth-codec.js';
 import { BridgeFault } from './protocol.js';
+import type { AuthBatch } from './protocol.js';
 import type { Peer } from './peer.js';
+import { diagnostic, failure, safeCategory } from './diagnostics.js';
 
 /** Serializes durable mutations; rejection poisons every subsequent dependent operation. */
 export class ParentAuth {
@@ -10,7 +12,10 @@ export class ParentAuth {
   private tail: Promise<void> = Promise.resolve();
   private closed = false;
   constructor(private readonly pipe: Peer, encoded: string | null, private readonly failed: () => void) {
-    this.state = { creds: decodeCreds(encoded), keys: {
+    let creds: AuthenticationCreds;
+    try { creds = decodeCreds(encoded); }
+    catch (error) { diagnostic(pipe, { type: 'diagnostic', stage: 'auth_initial_decode', event: 'failure', ...failure(error) }); throw error; }
+    this.state = { creds, keys: {
       get: <K extends keyof SignalDataTypeMap>(category: K, ids: string[]) => this.get(category, ids),
       set: data => this.set(data),
     } };
@@ -33,7 +38,9 @@ export class ParentAuth {
 
   save(update: Partial<AuthenticationCreds> = {}): Promise<void> {
     Object.assign(this.state.creds, update);
-    const snapshot = encode(this.state.creds);
+    let snapshot: string;
+    try { snapshot = encode(this.state.creds); }
+    catch (error) { diagnostic(this.pipe, { type: 'diagnostic', stage: 'auth_write_encode', event: 'failure', operation: 'creds_set', category: 'creds', ...failure(error) }); throw error; }
     return this.enqueue(async () => { await this.pipe.request({ type: 'creds_set', creds: snapshot }); });
   }
 
@@ -42,11 +49,16 @@ export class ParentAuth {
     if (this.closed) throw new BridgeFault('auth_store_failed');
     try {
       const value = await this.pipe.request({ type: 'auth_get', category, ids });
-      const record = z.record(z.string(), z.unknown()).parse(decode(JSON.stringify(value)));
+      let record: Record<string, unknown>;
+      try { record = z.record(z.string(), z.unknown()).parse(decode(JSON.stringify(value))); }
+      catch (error) { diagnostic(this.pipe, { type: 'diagnostic', stage: 'auth_read', event: 'failure', operation: 'auth_get', category: safeCategory(category), count: ids.length, ...failure(error, value) }); throw error; }
       const result: Record<string, SignalDataTypeMap[K]> = {};
       for (const id of ids) {
         const entry = record[id];
-        if (entry !== undefined && entry !== null) result[id] = parseKey(category, entry);
+        if (entry !== undefined && entry !== null) {
+          try { result[id] = parseKey(category, entry); }
+          catch (error) { diagnostic(this.pipe, { type: 'diagnostic', stage: 'auth_key_decode', event: 'failure', operation: 'auth_get', category: safeCategory(category), count: ids.length, ...failure(error, entry) }); throw error; }
+        }
       }
       return result;
     } catch { // Parent-store boundary: malformed or failed reads revoke the socket as well.
@@ -55,8 +67,11 @@ export class ParentAuth {
   }
 
   private set(data: SignalDataSet): Promise<void> {
-    const batches = Object.entries(data).map(([category, values]) => ({ category,
-      values: z.record(z.string(), z.json()).parse(JSON.parse(encode(values))) }));
+    const batches: AuthBatch[] = Object.entries(data).map(([category, values]) => {
+      try { return { category, values: z.record(z.string(), z.json()).parse(JSON.parse(encode(values))) }; }
+      catch (error) { diagnostic(this.pipe, { type: 'diagnostic', stage: 'auth_write_encode', event: 'failure',
+        operation: 'auth_set', category: safeCategory(category), ...failure(error, values) }); throw error; }
+    });
     return this.enqueue(async () => {
       if (batches.length > 0) await this.pipe.request({ type: 'auth_set', batches });
     });

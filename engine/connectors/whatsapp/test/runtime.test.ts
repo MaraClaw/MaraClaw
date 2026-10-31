@@ -24,7 +24,9 @@ test('only live self-chat messages are emitted, including fromMe false and non-B
   const event: BaileysEventMap['messages.upsert'] = { type: 'notify', messages: [message] };
   assert.equal(notifyText(event, identity)[0]?.type, 'message');
   assert.deepEqual(notifyText({ ...event, type: 'append' }, identity), []);
-  assert.deepEqual(notifyText({ ...event, requestId: 'history' }, identity), []);
+  assert.deepEqual(notifyText({ ...event, type: 'append', requestId: 'history' }, identity), []);
+  // The SDK emits a phone-recovered live text as notify with a request ID (see sdk-recovery.test.ts).
+  assert.equal(notifyText({ ...event, requestId: 'recovered' }, identity)[0]?.type, 'message');
   assert.deepEqual(notifyText({ ...event, messages: [{ ...message, key: { ...message.key, remoteJid: '123@s.whatsapp.net' } }] }, identity), []);
   assert.deepEqual(notifyText({ ...event, messages: [{ ...message, message: { conversation: '😀'.repeat(4097) } }] }, identity), []);
 });
@@ -41,7 +43,7 @@ test('failed credential commit closes runtime before transport opens', async () 
   await settle();
   assert.equal(opened, 0);
   assert.equal(exited, 1);
-  assert.equal(store.frames.at(-1)?.['reason'], 'auth_store_failed');
+  assert.equal(store.businessFrames.at(-1)?.['reason'], 'auth_store_failed');
   store.peer.close();
 });
 
@@ -58,6 +60,6 @@ test('lease watchdog ends the active transport and exits', async t => {
   await settle();
   assert.equal(socket.ended, 1);
   assert.equal(exited, 1);
-  assert.equal(store.frames.at(-1)?.['reason'], 'lease_expired');
+  assert.equal(store.businessFrames.at(-1)?.['reason'], 'lease_expired');
   store.peer.close();
 });

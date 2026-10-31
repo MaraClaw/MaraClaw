@@ -1,5 +1,6 @@
 import { jidNormalizedUser } from 'baileys';
 import type { BaileysEventMap, Contact } from 'baileys';
+import type { DropReason } from './diagnostics.js';
 import type { ChildPayload } from './protocol.js';
 
 export type Identity = Extract<ChildPayload, { type: 'identity' }>;
@@ -20,24 +21,27 @@ export function socketIdentity(user: Contact | undefined): Identity | null {
 export function selfJid(jid: string | null, identity: Identity | null): boolean {
   return jid !== null && identity !== null && (jid === identity.pn_jid || jid === identity.lid_jid);
 }
-export function notifyText(event: BaileysEventMap['messages.upsert'], identity: Identity | null): ChildPayload[] {
-  if (event.type !== 'notify' || event.requestId !== undefined || identity === null) return [];
+export function notifyText(event: BaileysEventMap['messages.upsert'], identity: Identity | null,
+  drop?: (reason: DropReason) => void): ChildPayload[] {
+  if (event.type !== 'notify') { drop?.('not_notify'); return []; }
+  if (identity === null) { drop?.('identity_unavailable'); return []; }
   const result: ChildPayload[] = [];
   for (const message of event.messages) {
     const remote = normalizeJid(message.key.remoteJid);
     const participant = normalizeJid(message.key.participant);
-    if (!selfJid(remote, identity) || (message.key.participant && !selfJid(participant, identity))) continue;
+    if (!selfJid(remote, identity) || (message.key.participant && !selfJid(participant, identity))) { drop?.('non_self'); continue; }
     const content = message.message;
-    if (!content || !message.key.id || message.messageStubType != null) continue;
+    if (!content || !message.key.id) { drop?.('missing_content'); continue; }
+    if (message.messageStubType != null) { drop?.('stub'); continue; }
     const fields = Object.keys(content).filter(key => key !== 'messageContextInfo');
-    if (fields.length !== 1) continue;
+    if (fields.length !== 1) { drop?.('content_shape'); continue; }
     const text = content.conversation ?? content.extendedTextMessage?.text;
-    if (typeof text !== 'string' || text.length === 0 || Array.from(text).length > 4096) continue;
+    if (typeof text !== 'string' || text.length === 0 || Array.from(text).length > 4096) { drop?.('text'); continue; }
     const context = content.extendedTextMessage?.contextInfo;
-    if (context?.quotedMessage || context?.stanzaId || context?.isForwarded || context?.forwardingScore) continue;
+    if (context?.quotedMessage || context?.stanzaId || context?.isForwarded || context?.forwardingScore) { drop?.('quoted_or_forwarded'); continue; }
     const time = message.messageTimestamp;
     const timestamp = typeof time === 'number' ? time : time?.toNumber();
-    if (timestamp === undefined || !Number.isSafeInteger(timestamp) || timestamp < 0) continue;
+    if (timestamp === undefined || !Number.isSafeInteger(timestamp) || timestamp < 0) { drop?.('timestamp'); continue; }
     result.push({ type: 'message', message_id: message.key.id, remote_jid: remote ?? '',
       participant, from_me: message.key.fromMe === true, timestamp, text, event_kind: 'notify', is_history: false });
   }

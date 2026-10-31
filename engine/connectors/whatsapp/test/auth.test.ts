@@ -42,8 +42,8 @@ test('commits a whole multi-category SignalDataSet through one auth_set RPC', as
     const update = Object.assign({ 'identity-key': { a: Buffer.from([1]) }, 'pre-key': { b: null } },
       { 'future-signal-category': { c: '123@lid' } });
     await auth.state.keys.set(update);
-    assert.deepEqual(store.frames.map(entry => entry.type), ['auth_set']);
-    assert.deepEqual(store.frames[0]?.['batches'], [
+    assert.deepEqual(store.businessFrames.map(entry => entry.type), ['auth_set']);
+    assert.deepEqual(store.businessFrames[0]?.['batches'], [
       { category: 'identity-key', values: { a: { type: 'Buffer', data: 'AQ==' } } },
       { category: 'pre-key', values: { b: null } },
       { category: 'future-signal-category', values: { c: '123@lid' } },
@@ -59,7 +59,7 @@ test('a failed whole-set commit poisons the store and starts no dependent I/O', 
     await assert.rejects(Promise.resolve().then(() => auth.state.keys.set({ session: { a: null }, 'lid-mapping': { b: '1@lid' } })));
     await assert.rejects(Promise.resolve().then(() => auth.state.keys.get('session', ['a'])));
     assert.equal(failures, 1);
-    assert.deepEqual(store.frames.map(entry => entry.type), ['auth_set']);
+    assert.deepEqual(store.businessFrames.map(entry => entry.type), ['auth_set']);
     assert.equal(store.values.size, 0);
   } finally { auth.close(); store.peer.close(); }
 });
@@ -70,7 +70,7 @@ test('saves full merged credentials and restores BufferJSON binary material', as
     const initial = encode(auth.state.creds);
     await auth.save({ registered: true });
     await auth.save({ platform: 'controlled-platform' });
-    const last = store.frames.at(-1);
+    const last = store.businessFrames.at(-1);
     assert.ok(last);
     const restored = decodeCreds(z.string().parse(last['creds']));
     assert.equal(restored.registered, true);
@@ -88,12 +88,12 @@ test('serializes mutation RPCs and holds dependent reads until committed ACK', a
     const second = auth.save({ platform: 'next' });
     const read = auth.state.keys.get('lid-mapping', ['self']);
     await settle();
-    assert.equal(store.frames.length, 1);
-    const frame = store.frames[0]; assert.ok(frame);
+    assert.equal(store.businessFrames.length, 1);
+    const frame = store.businessFrames[0]; assert.ok(frame);
     store.automatic = true;
     store.ack(frame);
     await Promise.all([first, second, read]);
-    assert.deepEqual(store.frames.map(entry => entry.type), ['creds_set', 'creds_set', 'auth_get']);
+    assert.deepEqual(store.businessFrames.map(entry => entry.type), ['creds_set', 'creds_set', 'auth_get']);
   } finally { auth.close(); store.peer.close(); }
 });
 test('poisons the auth barrier and stops dependent work when a commit fails', async () => {
@@ -106,7 +106,7 @@ test('poisons the auth barrier and stops dependent work when a commit fails', as
     await assert.rejects(auth.barrier());
     await assert.rejects(Promise.resolve().then(() => auth.state.keys.get('session', ['a'])));
     assert.equal(failures, 1);
-    assert.equal(store.frames.length, 1);
+    assert.equal(store.businessFrames.length, 1);
   } finally { auth.close(); store.peer.close(); }
 });
 test('fails closed when parent key material has an invalid shape', async () => {
@@ -130,7 +130,7 @@ test('restores SDK protobuf account bytes after a committed paired-credentials s
     deviceSignature: Buffer.alloc(64, 4) });
   try {
     await auth.save({ account });
-    const frame = store.frames.at(-1); assert.ok(frame);
+    const frame = store.businessFrames.at(-1); assert.ok(frame);
     const restored = decodeCreds(z.string().parse(frame['creds']));
     assert.deepEqual(restored.account?.details, details);
     assert.deepEqual(restored.account?.accountSignatureKey, account.accountSignatureKey);

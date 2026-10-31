@@ -4,7 +4,9 @@ import secrets
 import subprocess
 from collections.abc import Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import final
+from uuid import uuid4
 
 import anyio
 from anyio.abc import Process
@@ -20,9 +22,17 @@ from app.db.errors import DbError, UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 from app.services.channels.whatsapp_personal_access import personal_owner
-from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError, handle_frame
+from app.services.channels.whatsapp_personal_diagnostics import (
+    Diagnostic,
+    diagnostic_frame,
+    failed,
+    lifecycle,
+    log_diagnostic,
+    observed_frame,
+)
+from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError
 from app.services.channels.whatsapp_personal_journal import authorize_dispatch
-from app.services.channels.whatsapp_personal_protocol import AuthGet, AuthSet, Closed, CredsSet, child_frame
+from app.services.channels.whatsapp_personal_protocol import AuthGet, AuthSet, Closed, CredsSet
 
 
 class AuthStoreFailedError(Exception):
@@ -39,6 +49,7 @@ class PersonalChild:
     def __init__(self, connection: PersonalConnection) -> None:
         self.connection = connection
         self.token = secrets.token_urlsafe(32)
+        self.run_id = uuid4()
         self.process: Process | None = None
         self.write_lock = anyio.Lock()
 
@@ -58,16 +69,20 @@ class PersonalChild:
             try:
                 pending += await process.stdout.receive(65536)
             except anyio.EndOfStream:
+                lifecycle(self.connection, self.run_id, "parent_eof", "finished")
                 return
             while b"\n" in pending:
                 raw, pending = pending.split(b"\n", 1)
                 if len(raw) > 1048576:
                     raise ValueError("personal_frame_limit")
-                frame = child_frame.validate_json(raw)
+                frame = diagnostic_frame.validate_json(raw)
                 if not secrets.compare_digest(frame.token.encode(), self.token.encode()):
                     raise ValueError("personal_frame_token")
+                if isinstance(frame, Diagnostic):
+                    log_diagnostic(self.connection, self.run_id, frame)
+                    continue
                 try:
-                    result = await handle_frame(self.connection, frame)
+                    result = await observed_frame(self.connection, self.run_id, frame)
                 except HTTPException as error:
                     if isinstance(frame, (AuthGet, AuthSet, CredsSet)):
                         await self.write(
@@ -103,27 +118,41 @@ class PersonalChild:
 
     async def tick(self) -> None:
         while True:
-            async with connection_ctx():
-                agent, _ = await personal_owner(self.connection.agent_id)
-                if is_agent_expired(agent) or agent.status == "stopped":
-                    await revoke(agent.id, purge=False)
-                    return
+            async with connection_ctx() as db:
+                agent, _ = await personal_owner(self.connection.agent_id, authorization_only=True)
                 current = await get_personal(self.connection.agent_id)
-                if current is None or not await renew(self.connection):
-                    return
-                async with connection_ctx() as db:
-                    await db.execute(
-                        "UPDATE whatsapp_personal_sends SET state='uncertain',finished_at=now() "
-                        "WHERE config_id=%(id)s AND claim_token=%(claim)s AND state='dispatch_started' "
-                        "AND dispatched_at<now()-interval '25 seconds'",
-                        {"id": current.config_id, "claim": current.claim_token},
-                    )
-                if current.expires_at is not None:
-                    from datetime import UTC, datetime
-
-                    if current.expires_at <= datetime.now(UTC):
+                stopping = is_agent_expired(agent) or agent.status == "stopped"
+                expiring = (
+                    current is not None and current.expires_at is not None and current.expires_at <= datetime.now(UTC)
+                )
+                if not stopping:
+                    if current is None or not await renew(self.connection):
+                        return
+                    if not expiring:
+                        await db.execute(
+                            "UPDATE whatsapp_personal_sends SET state='uncertain',finished_at=now() "
+                            "WHERE config_id=%(id)s AND claim_token=%(claim)s AND state='dispatch_started' "
+                            "AND dispatched_at<now()-interval '25 seconds'",
+                            {"id": current.config_id, "claim": current.claim_token},
+                        )
+            if stopping or expiring:
+                # Never upgrade shared owner locks: revalidate after a fresh exclusive acquisition.
+                async with connection_ctx():
+                    agent, _ = await personal_owner(self.connection.agent_id)
+                    current = await get_personal(self.connection.agent_id, lock=True)
+                    if is_agent_expired(agent) or agent.status == "stopped":
+                        await revoke(agent.id, purge=False)
+                        return
+                    if (
+                        current is not None
+                        and current.expires_at is not None
+                        and current.expires_at <= datetime.now(UTC)
+                    ):
+                        if not await renew(self.connection):
+                            return
                         await revoke(current.agent_id, purge=True)
                         return
+                continue
             await self.write({"type": "lease", "id": secrets.token_hex(8), "token": self.token, "lease_ms": 30000})
             command = await authorize_dispatch(self.connection)
             if command is not None:
@@ -143,7 +172,9 @@ class PersonalChild:
 
     async def run(self, command: Sequence[str]) -> None:
         try:
+            lifecycle(self.connection, self.run_id, "parent_initial_read", "start")
             creds = await read_auth(self.connection, "creds", ["main"])
+            lifecycle(self.connection, self.run_id, "parent_start", "start")
             with anyio.CancelScope(shield=True):
                 self.process = await spawn_child(command)
             await self.write(
@@ -161,6 +192,9 @@ class PersonalChild:
 
                 tasks.start_soon(owned_read)
                 tasks.start_soon(owned_tick)
+        except Exception as error:
+            failed(self.connection, self.run_id, error)
+            raise
         finally:
             with anyio.CancelScope(shield=True):
                 await self.stop()
@@ -179,6 +213,7 @@ class PersonalChild:
                     process.kill()
                 await process.wait()
             await process.aclose()
+            lifecycle(self.connection, self.run_id, "parent_exit", "finished", process.returncode)
         await reaped(self.connection)
 
 
