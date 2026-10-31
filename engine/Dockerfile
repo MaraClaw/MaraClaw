@@ -3,6 +3,13 @@
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
 FROM docker:29.9.2-cli AS dockercli
 
+FROM node:26.13.0-trixie-slim AS whatsapp
+WORKDIR /bridge
+COPY connectors/whatsapp/package.json connectors/whatsapp/package-lock.json ./
+RUN npm ci
+COPY connectors/whatsapp/ ./
+RUN npm test && npm run build && npm prune --omit=dev
+
 FROM python:3.14.10-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
@@ -76,9 +83,14 @@ RUN useradd --create-home maraclaw && \
 COPY --from=deps /usr/local/lib/python3.14/site-packages/ /usr/local/lib/python3.14/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=whatsapp /usr/local/bin/node /usr/local/bin/node
 
 # Copy application code
 COPY --chown=maraclaw:maraclaw . .
+COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/package.json /app/connectors/whatsapp/package.json
+COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/dist/ /app/connectors/whatsapp/dist/
+COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/node_modules/ /app/connectors/whatsapp/node_modules/
+RUN test "$(node --version)" = "v26.13.0"
 
 # Prove firecrawl-anydoc imports and converts in this image (not host-only).
 RUN python /app/scripts/verify_anydoc.py
