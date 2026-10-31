@@ -125,10 +125,12 @@ class Runtime:
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
+            from app.services.channels.whatsapp_personal_supervisor import personal_supervisor
             from app.services.company_transfer_cleanup import start_transfer_cleanup_reconciler
             from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
+            self.tasks.start("whatsapp_personal", personal_supervisor(), requirement="loop")
             self.tasks.start("ss-local-proxy", self.proxy.start(), requirement="setup")
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
