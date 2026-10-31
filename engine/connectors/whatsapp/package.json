@@ -1,0 +1,27 @@
+{
+  "name": "@maraclaw/whatsapp-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/protocol.test.js dist/test/auth.test.js dist/test/sends.test.js dist/test/runtime.test.js dist/test/cli.test.js",
+    "start": "node dist/src/bridge.js"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "allowScripts": {
+    "baileys@7.0.0-rc14": true,
+    "protobufjs@7.6.6": true
+  }
+}
