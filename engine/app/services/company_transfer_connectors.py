@@ -16,6 +16,11 @@ async def stop_free_transfer_connectors(agent_id: UUID) -> str | None:
     await wecom_stream_manager.stop_client(agent_id)
     await wechat_poll_manager.stop_client(agent_id)
     await discord_gateway_manager.stop_client(agent_id)
+    from app.dao.whatsapp_personal_dao import get_personal
+
+    personal = await get_personal(agent_id)
+    if personal is not None and personal.claim_token is not None:
+        return "connector_cleanup_pending"
     if dingtalk_stream_manager.status().get(str(agent_id), False):
         return "connector_still_running"
     # API/worker singletons cannot attest that the separate connector owner stopped.
