@@ -21,6 +21,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.user import UserRecord
+from app.records.whatsapp_personal import PersonalSource
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channels.binding import bind_channel_conversation, persist_channel_user_message, resolve_bound_sender
@@ -48,9 +49,12 @@ class ChannelEvent:
     provider_timestamp: datetime | None = None
     provider_account_id: str | None = None
     provider_timestamp_source: str | None = None
+    personal_source: PersonalSource | None = None
 
     def fingerprint(self) -> str:
         payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
+        if self.personal_source is not None:
+            payload[1] = str(self.personal_source.auth_epoch)
         if (
             self.provider_account_id is not None
             or self.provider_timestamp_source is not None
@@ -92,12 +96,19 @@ class AcceptedChannelEvent:
 
 async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
     clear_entity_memo()
+    if event.personal_source is not None:
+        from app.services.channels.whatsapp_personal_intake import resolve_personal_sender
+
+        if event.provider != "whatsapp" or event.config_id != event.personal_source.config_id or event.is_group:
+            raise HTTPException(403, "Invalid personal source")
+        return await resolve_personal_sender(event.personal_source, event.agent_id)
     config = await channel_config_dao.get(event.config_id)
     if (
         config is None
         or not config.is_configured
         or config.agent_id != event.agent_id
         or normalize_channel_type(config.channel_type) != normalize_channel_type(event.provider)
+        or (event.provider == "whatsapp" and (config.extra_config or {}).get("mode") == "personal_qr")
     ):
         raise HTTPException(403, "Channel configuration is unavailable")
     agent = await agent_dao.get(event.agent_id)
