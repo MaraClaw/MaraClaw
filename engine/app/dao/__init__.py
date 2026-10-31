@@ -39,6 +39,10 @@ from app.dao.onboarding_dao import user_tenant_onboarding_dao
 from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
+from app.dao.personal_burst_dao import personal_burst_dao
+from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
+from app.dao.personal_burst_input_dao import personal_burst_input_dao
+from app.dao.personal_busy_notice_dao import personal_busy_notice_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.published_page_dao import published_page_dao
 from app.dao.schedule_dao import agent_schedule_dao
@@ -101,6 +105,10 @@ __all__ = [
     "org_department_dao",
     "org_member_dao",
     "participant_dao",
+    "personal_burst_dao",
+    "personal_burst_dispatch_dao",
+    "personal_burst_input_dao",
+    "personal_busy_notice_dao",
     "plaza_comment_dao",
     "plaza_like_dao",
     "plaza_post_dao",

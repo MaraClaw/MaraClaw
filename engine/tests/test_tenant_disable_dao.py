@@ -32,6 +32,9 @@ class _FakeCursor:
         return {"id": params["id"]}
 
     async def fetchall(self) -> list[dict[str, Any]]:
+        query, _ = self._parent.executed[-1]
+        if "FROM personal_burst_batches" in query:
+            return []
         return [{"id": uuid4()}]
 
 

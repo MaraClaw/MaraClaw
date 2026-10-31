@@ -4,7 +4,7 @@ from typing import assert_never
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str_or, json_object_from
@@ -59,8 +59,8 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
 
         if external.startswith("whatsapp_personal:"):
             try:
-                route = PersonalRoute.model_validate_json(external.removeprefix("whatsapp_personal:"))
-            except ValidationError:
+                route = PersonalRoute.from_external_id(external)
+            except ValueError:
                 raise PersonalSendTerminalError("personal_route_invalid") from None
             connection = await get_personal(agent.id)
             if extra.get("mode") != "personal_qr" or connection is None or not route_matches(connection, route):

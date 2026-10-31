@@ -46,6 +46,17 @@ def public_status(connection: PersonalConnection | None) -> PersonalStatus:
 
 async def status(agent_id: UUID, actor_id: UUID) -> PersonalStatus:
     async with connection_ctx():
+        await personal_owner(agent_id, actor_id, authorization_only=True)
+        connection = await get_personal(agent_id)
+        if not (
+            connection
+            and connection.state in {"pending", "qr"}
+            and connection.expires_at
+            and connection.expires_at <= datetime.now(UTC)
+        ):
+            return public_status(connection)
+    # End the shared read transaction before reacquiring mutation locks in owner order.
+    async with connection_ctx() as db:
         await personal_owner(agent_id, actor_id)
         connection = await get_personal(agent_id, lock=True)
         if (
@@ -55,12 +66,11 @@ async def status(agent_id: UUID, actor_id: UUID) -> PersonalStatus:
             and connection.expires_at <= datetime.now(UTC)
         ):
             await revoke(agent_id, purge=True)
-            async with connection_ctx() as db:
-                await db.execute(
-                    "UPDATE whatsapp_personal_connections SET state=CASE WHEN claim_token IS NULL "
-                    "THEN 'expired' ELSE 'disconnecting' END WHERE agent_id=%(id)s",
-                    {"id": agent_id},
-                )
+            await db.execute(
+                "UPDATE whatsapp_personal_connections SET state=CASE WHEN claim_token IS NULL "
+                "THEN 'expired' ELSE 'disconnecting' END WHERE agent_id=%(id)s",
+                {"id": agent_id},
+            )
             connection = await get_personal(agent_id)
         return public_status(connection)
 

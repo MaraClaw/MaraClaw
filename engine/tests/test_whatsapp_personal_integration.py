@@ -22,7 +22,6 @@ from app.services.channels.whatsapp_personal_journal import (
     enqueue,
 )
 from app.services.channels.whatsapp_personal_protocol import Identity, Message, SendResult
-from app.services.quota_guard import QuotaExceeded
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -120,20 +119,22 @@ async def test_canonical_pn_cannot_bind_two_agents(channel_db):
         assert row.account_id is None
 
 
-async def test_owner_quota_failure_rolls_back_personal_receipt_and_guest_work(channel_db):
+async def test_owner_quota_failure_is_a_durable_rejection_without_guest_work(channel_db):
     # Given a linked owner with no remaining quota.
     f = channel_db
     async with transaction(f.db.first):
         owner = await connected(f)
         await f.db.first.execute("UPDATE users SET quota_message_limit=0 WHERE id=%(id)s", {"id": f.db.user.id})
     # When a valid new self-message reaches atomic submission.
-    with pytest.raises(QuotaExceeded):
-        async with transaction(f.db.first):
-            await accept_message(owner, message_for(owner))
-    # Then acceptance leaves neither a receipt nor queued guest work.
+    async with transaction(f.db.first):
+        assert await accept_message(owner, message_for(owner))
+    # Then the native event is terminally rejected: no charge, transcript or queued guest work, only a static notice.
     async with transaction(f.db.second):
-        assert await f.db.second.fetchval("SELECT count(*) FROM channel_event_receipts") == 0
-        assert await f.db.second.fetchval("SELECT count(*) FROM gateway_messages") == 0
+        assert await f.db.second.fetchval("SELECT count(*) FROM channel_event_receipts") == 1
+        assert await f.db.second.fetchval("SELECT outcome FROM personal_burst_inputs") == "quota_rejected"
+        assert await f.db.second.fetchval("SELECT count(*) FROM chat_messages WHERE role='user'") == 0
+        assert await f.db.second.fetchval("SELECT count(*) FROM gateway_messages WHERE status='pending'") == 0
+        assert await f.db.second.fetchval("SELECT routing_reason FROM gateway_messages") == "whatsapp_busy"
 
 
 async def test_config_delete_retains_account_reservation_and_nonresend_journal_until_reap(channel_db):

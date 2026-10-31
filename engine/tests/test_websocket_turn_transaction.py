@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import override
 from unittest.mock import AsyncMock, Mock
@@ -199,6 +200,10 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
     monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent))
     monkeypatch.setattr(
         openclaw_enqueue, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent)
+    )
+    # The fake pool has no shared chat session to lock: the real reservation is proved against PostgreSQL.
+    monkeypatch.setattr(
+        openclaw_enqueue.personal_burst_dao, "next_created_at", AsyncMock(side_effect=lambda *_args: datetime.now(UTC))
     )
     monkeypatch.setattr(routing.gateway_message_dao, "create", create)
     monkeypatch.setattr(routing, "_run_inbox_wake", wake)

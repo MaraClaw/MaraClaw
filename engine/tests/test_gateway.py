@@ -24,6 +24,7 @@ from app.db import session as session_module
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.org import OrgMemberRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
 from app.services import openclaw_gateway_delivery as delivery
@@ -325,9 +326,7 @@ class _DeliveryStore:
         self.intents[key] = record
         return record
 
-    async def claim_shared(
-        self, agent_id: uuid.UUID, session_id: uuid.UUID, *, now: datetime
-    ) -> GatewayMessageRecord | None:
+    async def claim_ready_shared(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
         return None
 
     async def requeue_stale_deliveries(
@@ -378,8 +377,9 @@ class _DeliveryStore:
 @pytest.fixture
 def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
     store = _DeliveryStore()
-    for name in ("claim_shared", "claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
+    for name in ("claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
+    monkeypatch.setattr(delivery, "claim_ready_shared", store.claim_ready_shared)
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
     monkeypatch.setattr(delivery, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(delivery, "load_agent_for_new_work", AsyncMock())

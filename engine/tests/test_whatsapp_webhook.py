@@ -138,7 +138,7 @@ async def test_signed_batch_continues_after_failure_and_redelivery_replays_commi
     send = AsyncMock(side_effect=AssertionError("acceptance must not send an apology"))
     monkeypatch.setattr(whatsapp, "_send_whatsapp_messages", send)
     monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=True))
-    original_accept, original_prepare = submissions.accept_channel_event, submissions.prepare_openclaw_message
+    original_accept, original_prepare = submissions.accept_channel_event, submissions.prepare_shared_openclaw_message
     prepare_calls: list[str] = []
     fail_once = True
 
@@ -155,7 +155,7 @@ async def test_signed_batch_continues_after_failure_and_redelivery_replays_commi
             return await original_accept(event)
 
     monkeypatch.setattr(submissions, "accept_channel_event", accept)
-    monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     async with transaction(fixture.db.first):
         await fixture.db.first.execute("UPDATE users SET quota_message_limit = 10")
 

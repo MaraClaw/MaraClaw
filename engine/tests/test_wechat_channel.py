@@ -101,7 +101,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     monkeypatch.setattr(submissions.chat_message_dao, "insert_message", insert_message)
     monkeypatch.setattr(submissions.chat_session_dao, "get", AsyncMock(return_value=transcript))
     monkeypatch.setattr(submissions.chat_session_dao, "update", AsyncMock())
-    monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(submissions, "enqueue_prepared_openclaw_message", enqueue)
 
     result = await submissions.accept_channel_event(event)

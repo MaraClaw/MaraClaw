@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from uuid import UUID
 
@@ -21,7 +21,7 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.session import connection_ctx, get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.llm import LLMModelRecord
+from app.records.openclaw_dispatch import PreparedOpenClawMessage, SharedDispatchRequest
 from app.runtime.tasks import AdmissionClosedError, TaskAdmission
 from app.services.agent_manager import agent_manager, guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
@@ -29,38 +29,26 @@ from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.guest_bootstrap import GuestBootstrapPendingError
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
-from app.services.llm.turn import Complexity, ModelBundle, ModelSlot
 from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_enqueue import insert_prepared_message as _insert_prepared_message
+from app.services.openclaw_guest_config import GuestConfigWriteError
 from app.services.openclaw_hot_cache import (
     get_cached_bundle,
     mark_ensured,
     recently_ensured,
     set_cached_bundle,
 )
+from app.services.openclaw_model_selection import (
+    NoCompanyModelError,
+    applied_guest_model,
+    bundle_usable,
+    requires_primary,
+)
+from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
-
-
-def _bundle_usable(bundle: ModelBundle | None) -> bool:
-    return bundle is not None and (
-        bundle.primary is not None or bundle.secondary is not None or bundle.fallback is not None
-    )
-
-
-class NoCompanyModelError(RuntimeError):
-    """The tenant pool has no usable model for this OpenClaw guest."""
-
-
-class GuestConfigWriteError(RuntimeError):
-    """Turn preparation failed before the guest configuration was ready."""
-
-
-def requires_primary(messages: Sequence[GatewayMessageRecord]) -> bool:
-    """True when any queued row is missing a slot or is classified primary."""
-    return any((message.selected_slot or "primary") == "primary" for message in messages)
 
 
 def poll_model_hint(messages: Sequence[GatewayMessageRecord]) -> tuple[str | None, str | None]:
@@ -85,30 +73,6 @@ def poll_model_hint(messages: Sequence[GatewayMessageRecord]) -> tuple[str | Non
     return ref, "secondary"
 
 
-def applied_guest_model(
-    choice_slot: ModelSlot,
-    choice_model: LLMModelRecord | None,
-    bundle: ModelBundle,
-    pending: Sequence[GatewayMessageRecord],
-) -> LLMModelRecord | None:
-    """Model to write into ``openclaw.json`` for this enqueue."""
-    if choice_slot == "secondary" and requires_primary(pending):
-        return bundle.primary or choice_model
-    return choice_model
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedOpenClawMessage:
-    """Ensured destination and routing metadata, ready for a queue-only transaction."""
-
-    agent: AgentRecord
-    content: str
-    selected_slot: ModelSlot
-    guest_model_ref: str | None
-    complexity: Complexity | None
-    routing_reason: str
-
-
 async def prepare_openclaw_message(
     *,
     agent: AgentRecord,
@@ -126,7 +90,7 @@ async def prepare_openclaw_message(
     bundle = get_cached_bundle(agent)
     if bundle is None:
         bundle = await load_agent_model_bundle(agent)
-    if not _bundle_usable(bundle):
+    if not bundle_usable(bundle):
         raise NoCompanyModelError(
             "This company has no model assigned. Connect a Grok or ChatGPT subscription or add a model in Admin → Models, "
             "then set it as primary."
@@ -220,6 +184,16 @@ async def enqueue_openclaw_message(
     return created
 
 
+async def _claim_wake(agent_id: UUID, message_id: UUID) -> GatewayMessageRecord | None:
+    """Claim what this wake is for: one nonshared row, or the ready Shared head (never the row it was named for)."""
+    async with connection_ctx():
+        requested = await gateway_message_dao.get_for_agent(message_id, agent_id)
+        if requested is None or requested.conversation_id != str(shared_session_id(agent_id)):
+            return await gateway_message_dao.mark_delivered(message_id, agent_id)
+    # The central claim owns its transaction (flock first), so it runs after this one has ended.
+    return await claim_ready_shared(SharedDispatchRequest(agent_id, datetime.now(UTC)))
+
+
 async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
     try:
         await assert_work_allowed(agent.id)
@@ -235,16 +209,7 @@ async def _run_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | N
         from app.services.openclaw_inbox import wake_openclaw_inbox
 
         if message_id is not None:
-            async with connection_ctx():
-                requested = await gateway_message_dao.get_for_agent(message_id, agent.id)
-                if requested is not None and requested.conversation_id == str(shared_session_id(agent.id)):
-                    from datetime import UTC, datetime
-
-                    claimed = await gateway_message_dao.claim_shared(
-                        agent.id, shared_session_id(agent.id), now=datetime.now(UTC)
-                    )
-                else:
-                    claimed = await gateway_message_dao.mark_delivered(message_id, agent.id)
+            claimed = await _claim_wake(agent.id, message_id)
             if claimed is None:
                 logger.info("[OpenClaw] inbox message {} already taken or completed for {}", message_id, agent.id)
                 return
@@ -317,6 +282,11 @@ def close_wake_admission() -> None:
 async def drain_wake_tasks(grace_seconds: float = 20.0) -> None:
     """Wait for direct and scheduled wakes, then cancel and await the rest; cancelled claims are released."""
     await _wake_admission.drain(grace_seconds)
+
+
+def wake_shared_lane(agent: AgentRecord, message_id: UUID) -> None:
+    """Accelerate dispatch of the agent's ready Shared head; the durable due scan and the gated poll are the fallback."""
+    _schedule_inbox_wake(agent, "", message_id)
 
 
 def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:

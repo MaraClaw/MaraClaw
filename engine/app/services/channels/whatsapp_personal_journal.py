@@ -47,7 +47,10 @@ def route_matches(connection: PersonalConnection, route: PersonalRoute) -> bool:
 
 
 async def enqueue(target: OutboundTarget, chunk: OutboundChunk) -> None:
-    route = PersonalRoute.model_validate_json(target.destination.removeprefix("whatsapp_personal:"))
+    try:
+        route = PersonalRoute.from_external_id(target.destination)
+    except ValueError:
+        raise PersonalSendTerminalError("personal_route_invalid") from None
     async with connection_ctx() as db:
         # Route is immutable; a duplicate worker may only observe the original command.
         await db.execute(
@@ -94,7 +97,7 @@ class PersonalSendPendingError(Exception):
 
 async def authorize_dispatch(connection: PersonalConnection) -> PersonalSend | None:
     async with connection_ctx() as db:
-        await personal_owner(connection.agent_id)
+        await personal_owner(connection.agent_id, authorization_only=True)
         current = await get_personal(connection.agent_id, lock=True)
         if (
             current is None

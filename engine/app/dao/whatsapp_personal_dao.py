@@ -1,5 +1,6 @@
 from uuid import UUID, uuid4
 
+from app.dao.personal_burst_lifecycle import cancel_open_for_agent
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 
@@ -67,6 +68,7 @@ async def revoke(agent_id: UUID, *, purge: bool) -> None:
             "(SELECT config_id FROM whatsapp_personal_connections WHERE agent_id=%(id)s)",
             {"id": agent_id},
         )
+        _ = await cancel_open_for_agent(agent_id, "disconnected")
         if purge:
             await db.execute(
                 "DELETE FROM whatsapp_personal_auth WHERE config_id IN "

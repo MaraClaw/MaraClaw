@@ -70,17 +70,19 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
     async with connection_ctx():
         active = await agent_dao.touch_openclaw(agent, touch_last_seen=should_touch_last_seen(agent.id))
-        if active is None:
-            raise HTTPException(status_code=401, detail="Invalid API key")
-        agent = active
-        try:
-            messages = await claim_poll_batch(agent.id)
-        except OpenClawUpdateGateError:
-            messages = []
+    if active is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    agent = active
+    # The claim owns its transactions (guest flock first, then fresh authorization): none may be open around it.
+    try:
+        messages = await claim_poll_batch(agent.id)
+    except OpenClawUpdateGateError:
+        messages = []
     guest_model, guest_slot = poll_model_hint(messages)
 
     out = []
     for msg in messages:
+        is_shared = msg.conversation_id == str(shared_session_id(agent.id))
         # Resolve sender names
         sender_agent_name = None
         sender_user_name = None
@@ -92,7 +94,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
         # Fetch conversation history (last 10 messages) for context
         history = []
-        if msg.conversation_id == str(shared_session_id(agent.id)):
+        if is_shared:
             history = await completed_history(msg)
         elif msg.conversation_id not in (None, ""):
             hist_msgs = await chat_message_dao.list_for_session(
@@ -125,8 +127,8 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
                 content=msg.content,
                 created_at=msg.created_at,
                 history=history,
-                model=guest_model,
-                model_slot=guest_slot,
+                model=msg.guest_model_ref if is_shared else guest_model,
+                model_slot=msg.selected_slot if is_shared else guest_slot,
                 runtime_session_key=runtime_session_key(msg),
             )
         )

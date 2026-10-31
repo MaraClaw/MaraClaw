@@ -74,7 +74,7 @@ async def persist_channel_user_message(
     participant_id: UUID | None = None,
     touch_last_active: bool = False,
     agent: AgentRecord | None = None,
-) -> None:
+) -> UUID:
     async with connection_ctx():
         message = await chat_message_dao.insert_message(
             agent_id=agent_id,
@@ -109,6 +109,7 @@ async def persist_channel_user_message(
             row = agent if agent is not None else await agent_dao.get(agent_id)
             if row is not None:
                 await agent_dao.update(db_obj=row, obj_in={"last_active_at": datetime.now(UTC)})
+    return message.id
 
 
 async def _publish_shared_user_message(agent_id: UUID, conversation_id: str, event: dict[str, object]) -> None:
