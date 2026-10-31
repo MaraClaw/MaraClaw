@@ -7,11 +7,11 @@ Supported provider keys mitigate that ambiguity, not guarantee exactly-once deli
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from secrets import randbelow
 from typing import assert_never, override
 
 import anyio
 
-from app.core.json_types import uuid_from_row
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_session_dao
@@ -29,6 +29,7 @@ from app.services.channels.outbound_plan import build_plan, configured_outbound
 from app.services.channels.outbound_transport import send_chunk
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
 from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
+from app.services.gateway_report_relay_identity import PresendIdentityContentionError, lock_identity as _lock_identity
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 
 
@@ -47,32 +48,6 @@ class _IdentityError(Exception):
     @override
     def __str__(self) -> str:
         return self.reason
-
-
-async def _lock_identity(claim: GatewayReportDeliveryRecord) -> None:
-    async with gateway_message_dao.session() as db:
-        row = await db.fetchone(
-            "SELECT agent_id FROM gateway_messages WHERE id = %(id)s FOR SHARE NOWAIT",
-            {"id": claim.message_id},
-        )
-        if row is None:
-            return
-        source_id = uuid_from_row(row["agent_id"])
-        match claim.destination_kind:
-            case "agent":
-                ids = {source_id, claim.destination_id}
-            case "im":
-                ids = {source_id}
-                _ = await db.fetchone(
-                    "SELECT id FROM chat_sessions WHERE id = %(id)s FOR SHARE NOWAIT",
-                    {"id": claim.destination_id},
-                )
-            case unreachable:
-                assert_never(unreachable)
-        _ = await db.fetchall(
-            "SELECT id FROM agents WHERE id = ANY(%(ids)s) ORDER BY id FOR SHARE NOWAIT",
-            {"ids": sorted(ids)},
-        )
 
 
 async def _finish_identity(
@@ -230,6 +205,17 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
                     assert_never(unreachable)
     except LostClaimError:
         return
+    except PresendIdentityContentionError as error:
+        logger.warning(
+            "[GatewayReportRelay] identity contention intent={} attempt={} stage={} sqlstate=55P03",
+            claim.id,
+            claim.attempts,
+            error.stage,
+        )
+        now = clock()
+        _ = await gateway_report_delivery_dao.retry(
+            claim, available_at=now + timedelta(milliseconds=1000 + randbelow(1001)), now=now
+        )
     except PersonalSendTerminalError:
         if claim.claim_token is not None:
             _ = await gateway_report_delivery_dao.finish_terminal(
