@@ -15,6 +15,7 @@ class OutboundTarget(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: OutboundProvider
+    mode: Literal["cloud", "personal_qr"] = "cloud"
     config_id: UUID
     account: tuple[str, ...]
     destination: str = Field(min_length=1)

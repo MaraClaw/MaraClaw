@@ -21,6 +21,11 @@ async def send_chunk(
     outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] = utcnow
 ) -> None:
     target, config = outbound.target, outbound.config
+    if target.mode == "personal_qr":
+        from app.services.channels.whatsapp_personal_journal import enqueue
+
+        await enqueue(target, chunk)
+        return
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         match target.provider:

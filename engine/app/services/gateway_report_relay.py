@@ -217,6 +217,8 @@ async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], da
 
 async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], datetime] = _utcnow) -> None:
     """One bounded attempt. Cancellation intentionally leaves the lease untouched."""
+    from app.services.channels.whatsapp_personal_journal import PersonalSendPendingError, PersonalSendTerminalError
+
     try:
         with anyio.fail_after(45):
             match claim.destination_kind:
@@ -228,6 +230,14 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
                     assert_never(unreachable)
     except LostClaimError:
         return
+    except PersonalSendTerminalError:
+        if claim.claim_token is not None:
+            _ = await gateway_report_delivery_dao.finish_terminal(
+                claim.id, claim.claim_token, "payload_rejected", now=clock()
+            )
+    except PersonalSendPendingError:
+        now = clock()
+        _ = await gateway_report_delivery_dao.retry(claim, available_at=now + retry_delay(1), now=now)
     except WhatsAppReplyWindowError as error:
         if claim.claim_token is not None:
             _ = await gateway_report_delivery_dao.finish_terminal(
