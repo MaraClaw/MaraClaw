@@ -11,6 +11,7 @@ from typing import TypedDict
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from app.api.whatsapp_personal import router as personal_router
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
@@ -30,9 +31,13 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
+from app.schemas.whatsapp_personal import WhatsAppChannelOut
+from app.services.channels.redact import channel_config_out
 from app.services.channels.whatsapp_window import provider_timestamp, utcnow
 
 router = APIRouter(tags=["whatsapp"])
+
+router.include_router(personal_router)
 
 WHATSAPP_TEXT_LIMIT = 4096
 DEFAULT_WHATSAPP_API_VERSION = "v23.0"
@@ -145,6 +150,12 @@ async def configure_whatsapp_channel(
 
     extra_config: JsonObject = {"api_version": api_version}
     existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
+    if existing and (existing.extra_config or {}).get("mode") == "personal_qr":
+        from app.dao.whatsapp_personal_dao import revoke
+        from app.services.channels.whatsapp_personal_access import personal_owner
+
+        await personal_owner(agent_id, current_user.id)
+        await revoke(agent_id, purge=True)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -174,15 +185,19 @@ async def configure_whatsapp_channel(
     return ChannelConfigOut.model_validate(config)
 
 
-@router.get("/agents/{agent_id}/whatsapp-channel", response_model=ChannelConfigOut)
+@router.get("/agents/{agent_id}/whatsapp-channel", response_model=WhatsAppChannelOut)
 async def get_whatsapp_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
-) -> ChannelConfigOut:
+) -> WhatsAppChannelOut:
     _ = await check_agent_access(current_user, agent_id)
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
-    return ChannelConfigOut.model_validate(config)
+    safe = channel_config_out(config)
+    output = WhatsAppChannelOut.model_validate(safe.model_dump())
+    return output.model_copy(
+        update={"mode": "personal_qr" if (config.extra_config or {}).get("mode") == "personal_qr" else "cloud"}
+    )
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel/webhook-url", response_model=None)
@@ -202,6 +217,12 @@ async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord 
     config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
+    if (config.extra_config or {}).get("mode") == "personal_qr":
+        from app.dao.whatsapp_personal_dao import revoke
+        from app.services.channels.whatsapp_personal_access import personal_owner
+
+        await personal_owner(agent_id, current_user.id)
+        await revoke(agent_id, purge=True)
     _ = await channel_config_dao.delete(record_id=config.id)
 
 
