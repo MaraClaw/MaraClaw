@@ -58,6 +58,8 @@ AUDITED_HTTP_MODULES = frozenset(
         "schedules",
         "tasks",
         "tools",
+        "whatsapp",
+        "whatsapp_personal",
         "triggers",
         "users",
         "feishu",
