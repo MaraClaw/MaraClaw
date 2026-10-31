@@ -97,7 +97,13 @@ async def test_disable_agents_stops_not_paused(monkeypatch):
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
     tenant_id = uuid4()
     await agent_dao.disable_for_tenant(tenant_id)
-    query, params = raw.executed[0]
+    lock_query, lock_params = raw.executed[0]
+    assert "FROM agents" in lock_query
+    assert "FOR UPDATE" in lock_query
+    assert lock_params["tenant"] == tenant_id
+    update_index = next(i for i, (query, _) in enumerate(raw.executed) if query.startswith("UPDATE agents"))
+    assert any("UPDATE whatsapp_personal_connections" in query for query, _ in raw.executed[:update_index])
+    query, params = raw.executed[update_index]
     assert "status = 'stopped'" in query
     assert "heartbeat_enabled = FALSE" in query
     assert "paused" not in query

@@ -306,6 +306,11 @@ class TenantDAO(BaseDAO[TenantRecord]):
             )
             user_ids = [uuid_from_row(row["id"]) for row in user_rows]
             agent_ids = [uuid_from_row(row["id"]) for row in agent_rows]
+            from app.dao.whatsapp_personal_dao import revoke
+
+            for agent_id in sorted(agent_ids):
+                await db.execute("SELECT id FROM agents WHERE id=%(id)s FOR UPDATE", {"id": agent_id})
+                await revoke(agent_id, purge=True)
             await execute_cleanup(db, TENANT_DELETE_CLEANUP_SQL, params)
             await bump_user_sessions(user_ids)
             for agent_id in agent_ids:
