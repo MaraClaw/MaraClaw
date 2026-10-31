@@ -27,7 +27,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^14.9.0",
     "lru-cache": "^11.5.3",
-    "lucide-react": "^1.65.0",
+    "lucide-react": "^1.66.0",
     "qrcode.react": "4.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
