@@ -1105,6 +1105,71 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 
 CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id);
 
+CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
+    config_id UUID PRIMARY KEY,
+    agent_id UUID NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    owner_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    attempt_id UUID NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','qr','connected','reconnecting','paused','expired',
+                                        'disconnecting','disconnected','failed')),
+    desired BOOLEAN NOT NULL DEFAULT true,
+    claim_token UUID,
+    lease_until TIMESTAMPTZ,
+    account_id TEXT,
+    pn_jid TEXT,
+    lid_jid TEXT,
+    qr_value TEXT,
+    qr_expires_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    activated_at TIMESTAMPTZ,
+    error_code TEXT CHECK (error_code IN ('logged_out','account_in_use','identity_ambiguous',
+                                         'auth_store_failed','transport_failed')),
+    purge_requested BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((claim_token IS NULL) = (lease_until IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_account
+    ON whatsapp_personal_connections(account_id) WHERE account_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_pn
+    ON whatsapp_personal_connections(pn_jid) WHERE pn_jid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
+    ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id);
+
+CREATE TABLE IF NOT EXISTS whatsapp_personal_auth (
+    config_id UUID NOT NULL REFERENCES whatsapp_personal_connections(config_id) ON DELETE CASCADE,
+    auth_epoch UUID NOT NULL,
+    category TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    PRIMARY KEY(config_id, auth_epoch, category, key_id)
+);
+
+CREATE TABLE IF NOT EXISTS whatsapp_personal_sends (
+    command_id UUID PRIMARY KEY,
+    config_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    account_id TEXT NOT NULL,
+    self_jid TEXT NOT NULL,
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4096),
+    message_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending','dispatch_started','accepted','rejected','uncertain','cancelled')),
+    claim_token UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    UNIQUE(account_id,message_id)
+);
+CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_pending ON whatsapp_personal_sends(config_id, created_at)
+    WHERE state='pending';
+
 CREATE TABLE IF NOT EXISTS channel_event_receipts (
     config_id UUID NOT NULL REFERENCES channel_configs (id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
@@ -1142,7 +1207,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	user_id UUID NOT NULL, 
 	role chat_role_enum NOT NULL, 
 	content TEXT NOT NULL, 
-	conversation_id VARCHAR(200) NOT NULL, 
+    conversation_id TEXT NOT NULL,
 	participant_id UUID, 
 	thinking TEXT, 
 	client_submission_id UUID,
@@ -1199,7 +1264,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	user_id UUID NOT NULL, 
 	title VARCHAR(200) NOT NULL, 
 	source_channel VARCHAR(20) NOT NULL DEFAULT 'web',
-	external_conv_id VARCHAR(200), 
+	external_conv_id TEXT,
 	is_group BOOLEAN DEFAULT 'false' NOT NULL, 
 	group_name VARCHAR(200), 
 	participant_id UUID, 
