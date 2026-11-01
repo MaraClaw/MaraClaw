@@ -263,6 +263,7 @@ export async function fetchMyTenant(): Promise<{
   id: string
   name: string
   slug: string
+  is_default_end_user_org: boolean
 }> {
   return apiRequest('/api/tenants/me')
 }
