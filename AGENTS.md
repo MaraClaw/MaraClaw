@@ -1,8 +1,8 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-10-23
-**Commit:** e009080
-**Branch:** 2026Oct
+**Generated:** 2026-11-01
+**Commit:** a591022e
+**Branch:** 2026November
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
 **Product:** MaraClaw - OpenClaw digital employees for teams and companies.
@@ -50,6 +50,8 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Intent | Primary | Also read |
 |--------|---------|-----------|
 | REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
+| Personal QR WhatsApp bridge | `engine` | `engine/connectors/whatsapp/AGENTS.md`; separate Node package and CI job |
+| Generated API contracts | `engine` + clients | `engine/contracts/README.md`; export in engine, generate/check validators in each frontend |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
 | Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup proxy is `linkup/`; bundled skills live in the sibling guest image project (not a function-calling tool) |
 | Inbound office parse (PDF/DOCX/XLSX/PPTX) | `engine` | `app/services/document_parser/` (`firecrawl-anydoc`). Not `document_conversion/` |
@@ -137,6 +139,6 @@ Keep this file a router. New domains get a nested `AGENTS.md`, not more root pro
 
 ## NOTES
 
-Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage). Frontend CI runs lint, TypeScript, `npm test` (Node runner), build, and Docker build. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
+Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, API contract freshness, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage), plus separate PostgreSQL and WhatsApp bridge jobs. Frontend CI runs contract freshness, lint, TypeScript, `npm test` (Node runner), build, and Docker build. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
 
 Who is looking, and does it need a secret or privileged role? Public or member → `web-e`. Operator → `web-a`. Data/policy → `engine`.
