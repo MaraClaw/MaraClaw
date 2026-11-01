@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LogOut } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Link, NavLink, useLocation } from 'react-router-dom'
+import { Link, Navigate, NavLink, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { AdmissionAccessGate } from '@/components/layout/admission-access-gate'
@@ -27,6 +27,8 @@ const nav: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/app/admissions', label: 'Admissions', icon: 'admissions' },
   { to: '/app/settings', label: 'Settings', icon: 'settings' },
 ]
+
+const organizationPaths: readonly string[] = ['/app/okr', '/app/directory']
 
 function WorkspaceNavLink({
   item,
@@ -106,7 +108,12 @@ function AppShellFrame() {
   const unreadQuery = useQuery(notificationUnreadOptions('all'))
   const unread = unreadQuery.data ?? 0
   const { workspaceAllowed } = useAdmissionAccess()
-  const visibleNav = workspaceAllowed ? nav : nav.filter((item) => isAdmissionAccessPath(item.to))
+  const organizationFeaturesAllowed = tenantQuery.isSuccess && !tenantQuery.data.is_default_end_user_org
+  const visibleNav = nav.filter((item) =>
+    (workspaceAllowed || isAdmissionAccessPath(item.to)) &&
+    (organizationFeaturesAllowed || !organizationPaths.includes(item.to)),
+  )
+  const organizationPath = organizationPaths.some((path) => pathname.toLowerCase() === path || pathname.toLowerCase().startsWith(`${path}/`))
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">
@@ -161,6 +168,8 @@ function AppShellFrame() {
             <div role="status" aria-label="Loading workspace" className="flex h-40 items-center justify-center text-sm text-muted-foreground">
               Loading your organization’s workspace…
             </div>
+          ) : workspaceAllowed && !organizationFeaturesAllowed && organizationPath ? (
+            <Navigate to="/app/agents" replace />
           ) : (
             <AdmissionAccessGate />
           )}
