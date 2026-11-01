@@ -4,41 +4,60 @@
 
 This diagram describes the default topology encoded by [engine](../../engine/start-from-docker.sh#L129-L214), [web-e](../../web-e/start-from-docker.sh#L29-L32), and [web-a](../../web-a/start-from-docker.sh#L29-L32) launchers. It is not evidence that these containers, databases, or network paths are running. No cloud, Compose, Kubernetes, TLS terminator, or database provisioning is implied.
 
+![MaraClaw checked-in launcher topology](c4-deployment.svg)
+
+<details>
+<summary>Editable Mermaid C4 source</summary>
+
 ```mermaid
+%%{init: {"c4": {"c4ShapeMargin": 130, "c4ShapePadding": 20, "width": 260, "height": 100, "boxMargin": 30, "diagramMarginX": 60, "diagramMarginY": 60}}}%%
 C4Deployment
   title MaraClaw - Checked-in launcher defaults
 
-  Deployment_Node(browsers, "User browsers", "Browser runtimes", "Applications execute on the client") {
-    Container(memberSpa, "Member SPA instance", "React, TypeScript", "Public and member UI")
-    Container(adminSpa, "Admin SPA instance", "React, TypeScript", "Operator UI")
-  }
+  Container(memberSpa, "Member SPA instance", "Browser: React, TypeScript", "Client-executed public and member UI")
+  ContainerDb(postgres, "PostgreSQL", "Operator-supplied service", "Configured endpoint; durable records")
+  ContainerDb(redis, "Redis", "Operator-supplied service", "Configured endpoint; tickets, presence, Pub/Sub")
+  Container(adminSpa, "Admin SPA instance", "Browser: React, TypeScript", "Client-executed operator UI")
 
   Deployment_Node(host, "Container host", "Docker or Podman launcher", "Shared host paths and container network") {
     Deployment_Node(network, "maraclaw_network", "Configurable container network", "Independent package containers and guests") {
       Container(memberServer, "web-e server", "nginx :8080", "Serves dist; host port 5173")
-      Container(adminServer, "web-a server", "nginx :8080", "Serves dist; host port 5174")
       Container(engine, "maraclaw-engine", "Uvicorn :8000", "Host port 8000; default role all")
-      Container(guests, "OpenClaw guest instances", "OpenClaw gateway containers", "Created dynamically per agent")
+      Container(adminServer, "web-a server", "nginx :8080", "Serves dist; host port 5174")
+      Deployment_Node(guestRuntimes, "Dynamic guest runtimes", "Same container network", "Managed sibling containers") {
+        Container(guests, "OpenClaw guest instances", "OpenClaw gateway containers", "Created dynamically per agent")
+      }
     }
-    ContainerDb(data, "DATA_DIR", "Host filesystem", "Engine data and per-agent bind mounts")
+    Deployment_Node(mounts, "Host mounts", "Host filesystem", "Shared DATA_DIR paths") {
+      ContainerDb(data, "DATA_DIR", "Host filesystem", "Engine data and per-agent bind mounts")
+    }
   }
 
-  Deployment_Node(dependencies, "Operator-supplied dependencies", "Location not prescribed", "Configured endpoints; not launcher-created") {
-    ContainerDb(postgres, "PostgreSQL", "PostgreSQL service", "Durable platform records")
-    ContainerDb(redis, "Redis", "Redis service", "Tickets, cache, presence, Pub/Sub")
-  }
+  Rel(memberSpa, memberServer, "Loads / calls / chats", "HTTP / WS; host :5173")
+  Rel(adminSpa, adminServer, "Loads / calls", "HTTP; host :5174")
+  Rel(memberServer, engine, "Proxies /api, /ws, /p", "HTTP / WS; DNS :8000")
+  Rel(adminServer, engine, "Proxies /api", "HTTP; DNS :8000")
+  Rel(engine, postgres, "Connects to records", "SQL / psycopg")
+  Rel(engine, redis, "Coordinates state", "Redis protocol")
+  Rel(engine, guests, "Creates and execs", "Docker CLI / daemon socket")
+  Rel(guests, engine, "Polls and reports", "HTTP / JSON; DNS :8000")
+  Rel(engine, data, "Mounts /data + host path", "Bind mounts / filesystem")
+  Rel(guests, data, "Mounts agent directory", "Bind: /home/node/.openclaw")
 
-  Rel(memberSpa, memberServer, "Loads assets and sends API/chat requests", "HTTP / WebSocket, host :5173")
-  Rel(adminSpa, adminServer, "Loads assets and sends API requests", "HTTP, host :5174")
-  Rel(memberServer, engine, "Proxies /api, /ws, /p", "HTTP / WS, maraclaw-engine:8000")
-  Rel(adminServer, engine, "Proxies /api", "HTTP, maraclaw-engine:8000")
-  Rel(engine, postgres, "Connects to configured database", "SQL / psycopg")
-  Rel(engine, redis, "Connects to configured coordination store", "Redis protocol")
-  Rel(engine, guests, "Creates and execs sibling guests", "Docker CLI / mounted daemon socket")
-  Rel(guests, engine, "Polls and reports gateway work", "HTTP / JSON, network DNS :8000")
-  Rel(engine, data, "Mounts /data and the same host path", "Bind mounts / filesystem I/O")
-  Rel(guests, data, "Mounts its agent directory", "Bind mount /home/node/.openclaw")
+  UpdateLayoutConfig($c4ShapeInRow="4", $c4BoundaryInRow="1")
+  UpdateRelStyle(memberSpa, memberServer, $offsetX="-140", $offsetY="-100")
+  UpdateRelStyle(adminSpa, adminServer, $offsetX="60", $offsetY="-100")
+  UpdateRelStyle(memberServer, engine, $offsetX="-90", $offsetY="-45")
+  UpdateRelStyle(adminServer, engine, $offsetX="-70", $offsetY="-45")
+  UpdateRelStyle(engine, postgres, $offsetX="-160", $offsetY="-100")
+  UpdateRelStyle(engine, redis, $offsetX="40", $offsetY="-160")
+  UpdateRelStyle(engine, guests, $offsetX="-160", $offsetY="-110")
+  UpdateRelStyle(guests, engine, $offsetX="100", $offsetY="-10")
+  UpdateRelStyle(engine, data, $offsetX="120", $offsetY="240")
+  UpdateRelStyle(guests, data, $offsetX="-180", $offsetY="-40")
 ```
+
+</details>
 
 ## Defaults and prerequisites
 
