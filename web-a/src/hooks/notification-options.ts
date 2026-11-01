@@ -2,7 +2,7 @@ import { queryOptions, type QueryClient } from '@tanstack/react-query'
 
 import {
   fetchNotifications, fetchNotificationUnreadCount, markAllNotificationsRead, markNotificationRead,
-  archiveNotification, restoreNotification, markSelectedNotificationsRead, archiveSelectedNotifications, restoreSelectedNotifications,
+  archiveNotification, restoreNotification, markSelectedNotificationsRead, markSelectedNotificationsUnread, archiveSelectedNotifications, restoreSelectedNotifications,
   type NotificationPage, type NotificationId, type NotificationUnreadCount, type NotificationView,
 } from '../lib/notifications-api.ts'
 
@@ -92,6 +92,10 @@ export function notificationsReadSelectedOptions(client: QueryClient) {
 
 export function notificationsArchiveSelectedOptions(client: QueryClient) {
   return { ...notificationArchiveOptions(client), mutationFn: archiveSelectedNotifications }
+}
+
+export function notificationsUnreadSelectedOptions(client: QueryClient) {
+  return { ...notificationArchiveOptions(client), mutationFn: markSelectedNotificationsUnread }
 }
 
 export function notificationsRestoreSelectedOptions(client: QueryClient) {

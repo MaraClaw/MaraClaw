@@ -6,7 +6,7 @@ import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import {
   fetchNotifications, fetchNotificationUnreadCount, markNotificationRead, markAllNotificationsRead,
-  archiveNotification, restoreNotification, markSelectedNotificationsRead, archiveSelectedNotifications, restoreSelectedNotifications, NotificationKind, notificationSchema,
+  archiveNotification, restoreNotification, markSelectedNotificationsRead, markSelectedNotificationsUnread, archiveSelectedNotifications, restoreSelectedNotifications, NotificationKind, notificationSchema,
 } from '../src/lib/notifications-api.ts'
 
 const notification = {
@@ -132,7 +132,7 @@ test('mark-read preserves a transport failure instead of reporting success', asy
   await assert.rejects(markAllNotificationsRead(), (error) => error instanceof ApiError && error.status === 503)
 })
 
-for (const [endpoint, action] of [['read-selected', markSelectedNotificationsRead], ['archive', archiveSelectedNotifications], ['restore', restoreSelectedNotifications]] as const) {
+for (const [endpoint, action] of [['read-selected', markSelectedNotificationsRead], ['unread-selected', markSelectedNotificationsUnread], ['archive', archiveSelectedNotifications], ['restore', restoreSelectedNotifications]] as const) {
 test(`selected ${endpoint} sends one bounded UUID batch and parses success`, async (t) => {
   // Given
   const ids = Array.from({ length: 200 }, () => notificationSchema.parse(notification).id)
