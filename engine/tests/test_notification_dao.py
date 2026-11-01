@@ -148,3 +148,20 @@ async def test_page_seeks_tuple_with_lookahead_under_every_filter(
         **({"before_created_at": boundary[0], "before_id": boundary[1]} if seek else {}),
     }
     assert result == []
+
+
+async def test_selected_unread_locks_distinct_rows_in_order_before_updating(
+    notification_db: NotificationConnection,
+) -> None:
+    # Given no matching rows: validating even one missing selector must prevent every write.
+    ids = [UUID(int=2), UUID(int=1), UUID(int=2)]
+    # When
+    accepted = await notification_dao.mark_selected_unread_for_user(ids, USER_ID)
+    # Then the ordered lock query binds deduplicated IDs, with ownership and visibility.
+    assert accepted is False
+    assert len(notification_db.executed) == 1
+    query, params = notification_db.executed[0]
+    assert query.startswith("SELECT id FROM notifications WHERE id = ANY(%(ids)s) AND user_id = %(user_id)s AND ")
+    assert RETAINED_SCOPE in query
+    assert query.endswith("ORDER BY id FOR UPDATE")
+    assert params == {"ids": [UUID(int=1), UUID(int=2)], "user_id": USER_ID}

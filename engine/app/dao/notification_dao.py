@@ -152,7 +152,7 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
                 {"id": notification_id, "user_id": user_id},
             )
 
-    async def mark_selected_read_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+    async def _set_selected_read_for_user(self, ids: Sequence[UUID], user_id: UUID, *, is_read: bool) -> bool:
         distinct_ids = sorted(set(ids))
         params = {"ids": distinct_ids, "user_id": user_id}
         where = "id = ANY(%(ids)s) AND user_id = %(user_id)s AND " + VISIBLE_NOTIFICATION_SQL
@@ -163,8 +163,17 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
             )
             if {uuid_from_row(row["id"]) for row in rows} != set(distinct_ids):
                 return False
-            await db.execute(f"UPDATE notifications SET is_read = TRUE WHERE {where}", params)
+            await db.execute(
+                "UPDATE notifications SET is_read = %(is_read)s WHERE id = ANY(%(ids)s)",
+                {"ids": distinct_ids, "is_read": is_read},
+            )
             return True
+
+    async def mark_selected_read_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+        return await self._set_selected_read_for_user(ids, user_id, is_read=True)
+
+    async def mark_selected_unread_for_user(self, ids: Sequence[UUID], user_id: UUID) -> bool:
+        return await self._set_selected_read_for_user(ids, user_id, is_read=False)
 
     async def _set_selected_archive_for_user(self, ids: Sequence[UUID], user_id: UUID, *, archive: bool) -> bool:
         distinct_ids = sorted(set(ids))

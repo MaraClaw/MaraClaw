@@ -8,15 +8,15 @@ from app.dao.notification_dao import notification_dao
 from notification_archive_fixtures import ArchiveScenario
 
 
-@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
+@pytest.mark.parametrize("operation", ["read-selected", "unread-selected", "archive", "restore"])
 @pytest.mark.parametrize("invalid_recipient", ["colleague", "outsider", "missing"])
 async def test_selected_read_rejects_mixed_invalid_ids_atomically(
     archive_scenario: ArchiveScenario, invalid_recipient: str, operation: str
 ) -> None:
     # Given: two valid unread rows and an invalid selector.
     scenario = archive_scenario
-    first = await scenario.notice()
-    second = await scenario.notice()
+    first = await scenario.notice(is_read=operation == "unread-selected")
+    second = await scenario.notice(is_read=operation == "unread-selected")
     foreign = await notification_dao.create(
         obj_in={"user_id": scenario.colleague.id, "type": "broadcast", "title": "Colleague"}
     )
@@ -37,7 +37,7 @@ async def test_selected_read_rejects_mixed_invalid_ids_atomically(
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
-@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
+@pytest.mark.parametrize("operation", ["read-selected", "unread-selected", "archive", "restore"])
 @pytest.mark.parametrize("reference", ["agent_id", "ref_id", "link"])
 @pytest.mark.parametrize("archived", [False, True])
 async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
@@ -45,7 +45,7 @@ async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
 ) -> None:
     # Given: an owned notice hidden by the shared retained-agent visibility predicate.
     scenario = archive_scenario
-    visible = await scenario.notice()
+    visible = await scenario.notice(is_read=operation == "unread-selected")
     agent = await agent_dao.create(
         obj_in={"name": "Retained", "creator_id": scenario.owner.id, "tenant_id": scenario.owner.tenant_id}
     )
@@ -103,11 +103,11 @@ async def test_selected_read_rejects_hidden_rows_even_when_archived_or_read(
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
-@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
+@pytest.mark.parametrize("operation", ["read-selected", "unread-selected", "archive", "restore"])
 async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: ArchiveScenario, operation: str) -> None:
     # Given: a deferred database failure after the batch update executes.
     scenario = archive_scenario
-    notices = [await scenario.notice(), await scenario.notice()]
+    notices = [await scenario.notice(is_read=operation == "unread-selected") for _index in range(2)]
     if operation == "restore":
         for notice in notices:
             await notification_dao.archive_for_user(notice.id, scenario.owner.id)
@@ -131,7 +131,7 @@ async def test_selected_read_rolls_back_when_commit_fails(archive_scenario: Arch
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == before
 
 
-@pytest.mark.parametrize("operation", ["read-selected", "archive", "restore"])
+@pytest.mark.parametrize("operation", ["read-selected", "unread-selected", "archive", "restore"])
 @pytest.mark.parametrize("count", [200, 201])
 @pytest.mark.parametrize("duplicates", [False, True])
 async def test_selected_read_enforces_submitted_upper_bound_in_postgres(
@@ -142,8 +142,8 @@ async def test_selected_read_enforces_submitted_upper_bound_in_postgres(
     ids = [uuid4() for _index in range(count)]
     await scenario.db.executemany(
         "INSERT INTO notifications (id, user_id, type, title, body, is_read) "
-        "VALUES (%(id)s, %(user_id)s, 'broadcast', 'Notice', '', FALSE)",
-        [{"id": note_id, "user_id": scenario.owner.id} for note_id in ids],
+        "VALUES (%(id)s, %(user_id)s, 'broadcast', 'Notice', '', %(is_read)s)",
+        [{"id": note_id, "user_id": scenario.owner.id, "is_read": operation == "unread-selected"} for note_id in ids],
     )
     selected = [ids[0]] * count if duplicates else ids
     # When
@@ -155,5 +155,9 @@ async def test_selected_read_enforces_submitted_upper_bound_in_postgres(
     # Then: the original submitted count, not the distinct count, determines acceptance.
     assert response.status_code == (200 if count == 200 else 422)
     stored = await scenario.db.fetchall("SELECT id, is_read, archived_at FROM notifications")
-    changed = {row["id"] for row in stored if row["is_read"] or row["archived_at"] is not None}
+    changed = {
+        row["id"]
+        for row in stored
+        if row["is_read"] != (operation == "unread-selected") or row["archived_at"] is not None
+    }
     assert changed == (set(selected) if count == 200 and operation != "restore" else set())
