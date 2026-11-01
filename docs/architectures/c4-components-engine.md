@@ -4,42 +4,63 @@
 
 This is a focused runtime/dispatch view inside the engine, not an exhaustive API or service inventory. Components share the engine deployment by default; roles gate startup work in the [lifecycle owner](../../engine/app/runtime/lifecycle.py#L66-L146), while [HTTP/WebSocket routers remain mounted](../../engine/app/main.py#L130-L191).
 
+![MaraClaw engine runtime and dispatch components](c4-components-engine.svg)
+
+<details>
+<summary>Editable Mermaid C4 source</summary>
+
 ```mermaid
+%%{init: {"c4": {"c4ShapeMargin": 170, "c4ShapePadding": 20, "width": 260, "height": 100, "boxMargin": 30, "diagramMarginX": 60, "diagramMarginY": 60}}}%%
 C4Component
   title MaraClaw engine - Runtime and dispatch
 
-  Container(memberApp, "Member application", "React browser client", "Submits authorized chat turns")
-  Container(guests, "OpenClaw guests", "Managed guest containers", "Executes accepted agent work")
-  ContainerDb(postgres, "Durable records", "PostgreSQL", "Transcripts, gateway rows, delivery intents")
-  ContainerDb(redis, "Realtime coordination", "Redis", "Tickets, presence, Pub/Sub")
+  Container(memberApp, "Member application", "React browser client", "Submits turns and receives live events")
   System_Ext(im, "IM platforms", "Configured inbound and reply transports")
+  Container(guests, "OpenClaw guests", "Managed guest containers", "Executes accepted agent work")
 
   Container_Boundary(engine, "engine - one runtime by default") {
-    Component(runtime, "Runtime owner", "Python lifespan", "Owns resources and role-gated tasks")
     Component(intake, "Chat and channel intake", "FastAPI, Python", "Fresh access checks and idempotent acceptance")
-    Component(dispatch, "OpenClaw dispatch", "Python services", "Prepares models, queues work, wakes guests")
+    Component(runtime, "Runtime owner", "Python lifespan", "Owns resources and role-gated tasks")
     Component(gateway, "Gateway settlement", "FastAPI, Python", "Authenticated poll and first-report commit")
     Component(realtime, "Realtime router", "Python", "Local WebSocket and remote-instance delivery")
+    Component(dispatch, "OpenClaw dispatch", "Python services", "Prepares models, queues work, wakes guests")
     Component(relay, "Report relay", "Python worker loop", "Claims durable IM and agent reply intents")
   }
 
-  Rel(memberApp, intake, "Mints tickets and submits turns", "HTTP / JSON, WebSocket")
-  Rel(im, intake, "Delivers native events", "HTTPS, provider streams")
-  Rel(runtime, postgres, "Opens the pool for every role", "SQL / psycopg")
-  Rel(runtime, realtime, "Starts subscriber for API role", "Python calls")
-  Rel(runtime, relay, "Starts worker-owned delivery loop", "Python tasks")
-  Rel(intake, dispatch, "Accepts and enqueues work", "Python calls / shared transaction")
-  Rel(dispatch, postgres, "Persists gateway work with transcript", "SQL / shared transaction")
-  Rel(dispatch, guests, "Attempts guarded post-commit wake", "Docker exec / guest hook")
-  Rel(guests, gateway, "Polls claims and reports completion", "HTTP / JSON, X-Api-Key")
-  Rel(gateway, postgres, "Commits completion and delivery intents", "SQL / transaction")
-  Rel(gateway, realtime, "Attempts live completion delivery", "Python calls")
-  Rel(realtime, redis, "Tracks presence and routes remote events", "Redis protocol / Pub/Sub")
-  Rel(realtime, memberApp, "Delivers authorized live events", "WebSocket / JSON")
-  Rel(relay, postgres, "Claims and checkpoints reply intents", "SQL / leased claims")
-  Rel(relay, im, "Sends configured reply chunks", "Provider API / transport")
-  Rel(relay, dispatch, "Queues agent-destination replies", "Python calls / transaction")
+  Boundary(state, "External state services", "Data boundary") {
+    ContainerDb(redis, "Realtime coordination", "Redis", "Tickets, presence, Pub/Sub")
+    ContainerDb(postgres, "Durable records", "PostgreSQL", "Transcripts, gateway rows, delivery intents")
+  }
+
+  Rel(memberApp, intake, "Submits turns", "HTTP / JSON, WebSocket")
+  Rel(im, intake, "Delivers events", "HTTPS / provider streams")
+  Rel(runtime, realtime, "Starts API subscriber", "Python tasks")
+  Rel(intake, dispatch, "Accepts and enqueues", "Python / transaction")
+  Rel(dispatch, postgres, "Persists accepted work", "SQL / transaction")
+  Rel(dispatch, guests, "Attempts committed wake", "Docker exec / guest hook")
+  Rel(guests, gateway, "Polls and reports", "HTTP / JSON; X-Api-Key")
+  Rel(gateway, realtime, "Attempts live delivery", "Python calls")
+  Rel(realtime, redis, "Routes remote events", "Redis / Pub/Sub")
+  Rel(relay, postgres, "Leases reply intents", "SQL / checkpoints")
+  Rel(relay, im, "Sends reply chunks", "Provider API / transport")
+  Rel(relay, dispatch, "Queues agent replies", "Python / transaction")
+
+  UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+  UpdateRelStyle(memberApp, intake, $offsetX="-130", $offsetY="-70")
+  UpdateRelStyle(im, intake, $offsetX="-90", $offsetY="-130")
+  UpdateRelStyle(runtime, realtime, $offsetX="-160", $offsetY="-60")
+  UpdateRelStyle(intake, dispatch, $offsetX="-70", $offsetY="90")
+  UpdateRelStyle(dispatch, postgres, $offsetX="-170", $offsetY="20")
+  UpdateRelStyle(dispatch, guests, $offsetX="30", $offsetY="-130")
+  UpdateRelStyle(guests, gateway, $offsetX="40", $offsetY="-100")
+  UpdateRelStyle(gateway, realtime, $offsetX="-120", $offsetY="-70")
+  UpdateRelStyle(realtime, redis, $offsetX="-160", $offsetY="20")
+  UpdateRelStyle(relay, postgres, $offsetX="50", $offsetY="100")
+  UpdateRelStyle(relay, im, $offsetX="100", $offsetY="-20")
+  UpdateRelStyle(relay, dispatch, $offsetX="-90", $offsetY="50")
 ```
+
+</details>
 
 ## Runtime ownership
 
