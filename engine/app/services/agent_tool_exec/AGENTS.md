@@ -7,13 +7,20 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - `registry.py` owns `TOOL_HANDLERS`, `register(name)`, `resolve(name)`, and `ToolHandler` typing.
 - Duplicate registration raises `DuplicateToolHandlerError`; do not silently overwrite handlers.
 - Handler arguments are plain JSON-like `ToolArguments`. Keep conversion at the boundary, not inside every handler.
-- `ToolOutputCallback` is async and optional. Preserve streaming/progress callbacks for long-running tools.
+- `ToolHandler` returns `str | Awaitable[str]`; the dispatcher awaits only when the result is not a `str`, so sync and async handlers are both valid.
+- `on_output` is optional (`None`) and `ToolOutputCallback(content, label="stdout", /)` returns `Awaitable[None] | None`. Await it only when the result is awaitable (see `_emit_output` in `sandbox/local/subprocess_backend.py`), and preserve streaming/progress callbacks for long-running tools.
 
 ## Execution Context
 
 - `ToolExecutionContext` carries tenant/workspace data through a contextvar.
 - Use `use_execution_context(...)` around dispatch paths that need tenant or workspace context.
 - Read the context with `current_execution_context()` inside handlers rather than adding global mutable state.
+
+## Dispatch Paths
+
+- Normal path, `dispatcher.execute_tool`: strips invisible characters from the tool name, returns `finish` content directly, applies the autonomy gate for names in `_TOOL_AUTONOMY_MAP` (L3 returns an approval notice; a check failure blocks), checks Take Control for `agentbay_*`, then resolves a registered handler inside `use_execution_context`; unregistered names go to MCP. It logs activity and records failed channel sends in the session.
+- Post-approval path, `dispatcher._execute_tool_direct` (called by `autonomy_service` after an approval): skips the autonomy gate, the registry, MCP, Take Control, `on_output` and activity logging. It is a fixed builtin allowlist: workspace mutations (`delete_file`, `write_file`, `move_file`, `edit_file`), `execute_code` / `execute_code_e2b`, `read_webpage`, `send_feishu_message`, `send_message_to_agent`, `send_file_to_agent`; anything else returns "does not support post-approval execution".
+- A new approval-gated tool needs all three: a registered handler, an `_TOOL_AUTONOMY_MAP` entry, and a `_execute_tool_direct` branch. Do not assume registering the handler makes it runnable after approval.
 
 ## Placement
 
