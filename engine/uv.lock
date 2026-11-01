@@ -1910,7 +1910,7 @@ wheels = [
 
 [[package]]
 name = "maraclaw"
-version = "1.0.3"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -2043,7 +2043,7 @@ requires-dist = [
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.5.0" },
     { name = "python-multipart", specifier = ">=0.0.33" },
     { name = "python-pptx", specifier = ">=1.0.2" },
-    { name = "pywhales", specifier = ">=1.0.8" },
+    { name = "pywhales", specifier = ">=1.1.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", extras = ["hiredis"], specifier = ">=8.1.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.3" },
@@ -3078,7 +3078,7 @@ wheels = [
 
 [[package]]
 name = "pywhales"
-version = "1.0.8"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -3087,9 +3087,9 @@ dependencies = [
     { name = "s3transfer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d7/87/d309a74da4f5a46dac0b233adc22edf6c356bbe2a4c1b042d928ce6b4e3c/pywhales-1.0.8.tar.gz", hash = "sha256:eaabdba3cae87c3e33c6eabc4e04e59f8bc6e7fbfe5a4aa55835f18f5c4571e4", size = 348238, upload-time = "2026-10-31T11:29:52.992Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/23/a2abe466005b187bb3ac87b1fa9909eb48f50e031ca2f97bd4a564841d6f/pywhales-1.1.0.tar.gz", hash = "sha256:b98208e4f6e04eb9a98311ca5a48ce540813cc98b115be49111567f4fdf3a504", size = 368847, upload-time = "2026-11-01T06:27:40.69Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/fe/7ede450816294006664b1e59063c5a3b94da932882bcb341b4dd03d0cb8f/pywhales-1.0.8-py3-none-any.whl", hash = "sha256:0034bd16f276261880fb1b5723ba907885bdc11fb89ad96de94a6e565c98e021", size = 304278, upload-time = "2026-10-31T11:29:51.609Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/2f/9f7735d0ab46feb2bec44b8675393f1ee989f043c8e0a086aab05f0a448e/pywhales-1.1.0-py3-none-any.whl", hash = "sha256:ab60490246f2d04b82061c237caed6d3a19c17f3187a9a3fbf1c9a1d6fdb9804", size = 311983, upload-time = "2026-11-01T06:27:39.537Z" },
 ]
 
 [[package]]
