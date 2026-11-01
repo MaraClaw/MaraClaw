@@ -13,9 +13,9 @@ dependencies = [
     "pydantic-settings>=2.16.2",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
-    "python-multipart>=0.0.32",
+    "python-multipart>=0.0.33",
     "httpx[http2,socks]>=0.28.1",
-    "pywhales>=1.0.0",
+    "pywhales>=1.0.8",
     "websockets>=15.0.1",
     "aiofiles>=24.1.0,<25.0.0",
     "croniter>=6.2.4",
@@ -254,6 +254,11 @@ exclude_lines = [
 [build-system]
 requires = ["setuptools>=82.0.1", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.1",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
