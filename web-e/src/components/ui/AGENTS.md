@@ -1,6 +1,6 @@
 # ui/ - shadcn-style primitives
 
-**Generated:** 2026-08-16 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-11-01 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -10,17 +10,17 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 
 | File | Exports | Used for |
 |------|---------|----------|
-| `button.tsx`, `button-variants.ts` | `Button`, `buttonVariants` (separate modules) | Landing, auth, `/app` (highest fan-in) |
-| `badge.tsx`, `badge-variants.ts` | `Badge`, `badgeVariants` (separate modules) | Landing + directory/tools/tasks |
-| `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter` | Landing + account/settings/agents-list |
+| `button.tsx`, `button-variants.ts` | `Button`, `buttonVariants` (separate modules) | Landing, auth, `/app` |
+| `badge.tsx`, `badge-variants.ts` | `Badge`, `badgeVariants` (separate modules) | Landing, auth chrome, status labels in directory, admissions and agent tabs |
+| `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter` | Landing sections, settings, agents list, directory, update cards |
 | `accordion.tsx` | `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent` | Faq |
 | `separator.tsx` | `Separator` | SiteFooter |
 | `sheet.tsx` | `Sheet`, `SheetTrigger`, `SheetClose`, `SheetContent`, `SheetHeader`, `SheetTitle`, `SheetDescription` | Mobile nav (Dialog-based) |
 | `input.tsx` | `Input` | Auth + workspace forms |
 | `label.tsx` | `Label` | Auth + workspace forms |
-| `textarea.tsx` | `Textarea` | Chat, plaza, OKR, files, settings |
-| `password-field.tsx` | `PasswordField` | reset-password, account |
-| `select.tsx` | `Select` | Native dropdowns; same radius as Input, custom chevron, blurs after pick |
+| `textarea.tsx` | `Textarea` | Chat composer, plaza, OKR, files, agent settings and forms |
+| `password-field.tsx` | `PasswordField` | register, reset-password, settings |
+| `select.tsx` | `Select` | Native dropdowns; same radius as Input, custom chevron, `fit` hugs content; blurs only after a pointer pick |
 
 Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, aliases, Lucide).
 
@@ -36,12 +36,12 @@ Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, 
 ## CONVENTIONS
 
 - Named exports only; `data-slot="…"` on roots.
-- `Select` wraps a native `<select>`: `rounded-xl` like Input/Button, custom chevron, `fit` hugs content. It blurs after a pointer commit only so keyboard users can walk options.
+- `Select` wraps a native `<select>`: `rounded-xl` like Input/Button, custom chevron, `fit` hugs content. `onPointerDown` arms a flag and `onKeyDown` clears it; `onChange` calls the caller's handler, then blurs the element only while the flag is armed. A keyboard change never blurs, so keyboard users can walk the options.
 - Props: `React.ComponentProps<'…'> & VariantProps<…>` (and `asChild` via Slot where needed).
 - Function components (not legacy `forwardRef` wrappers unless required).
 - Project polish already baked in:
   - **Button:** `rounded-xl`, `active:scale-[0.96]`; primary inset/shadow is raw OKLCH (existing exception — do not add more raw color)
-  - **Badge:** extra variant **`soft`** (`border-primary/25 bg-primary/10 text-primary`)
+  - **Badge:** extra variants **`soft`** (`border-primary/25 bg-primary/10 text-primary`) and **`success`**
   - **Card:** `rounded-2xl`, `shadow-card`, titles `font-display`
   - **Sheet:** `@radix-ui/react-dialog`; blur overlay; titles `font-display`
 - Accordion open/close: `animate-accordion-up/down` (tw-animate-css).

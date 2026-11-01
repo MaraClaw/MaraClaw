@@ -1,8 +1,8 @@
 # components/ - family router
 
-**Generated:** 2026-10-23
-**Commit:** e009080
-**Branch:** 2026Oct
+**Generated:** 2026-11-01
+**Commit:** a591022e
+**Branch:** 2026November
 
 Parent: [web-e/AGENTS.md](../../AGENTS.md). Shared components span landing, auth, and member workspace; route and session contracts remain in the package guide.
 
@@ -10,13 +10,15 @@ Parent: [web-e/AGENTS.md](../../AGENTS.md). Shared components span landing, auth
 
 | Family / task | Source and local contract |
 |---------------|---------------------------|
-| `auth/` | `auth-shell.tsx` provides auth chrome; `sso-buttons.tsx` starts provider authorization; `admission-pending.tsx` shows pending admission status and links to the request. Flows: [pages guide](../pages/AGENTS.md). |
+| `auth/` | `auth-shell.tsx` provides auth chrome; `sso-buttons.tsx` starts provider authorization; `admission-pending.tsx` shows pending admission status and links to the request; `invitation-code.tsx` validates a code and shows the destination; `transfer-choice.tsx` is the paid/free confirmation dialog. Flows: [pages guide](../pages/AGENTS.md). |
 | `brand/` | `maraclaw-logo.tsx` exports MaraClawLogo; static counterpart is `public/maraclaw-mark.svg`. |
-| `chat/` | `markdown.tsx` exports ChatMarkdown, escaping text before its limited markup rendering. Socket lifecycle belongs in `lib/chat/`, not here. |
-| `layout/` | Workspace/agent rails, gates, marketing header/footer: [layout/AGENTS.md](./layout/AGENTS.md). |
+| `chat/` | Message bodies, attachment preview/download, history control and the skill-mention composer: [chat/AGENTS.md](./chat/AGENTS.md). Socket lifecycle belongs in `lib/chat/`, not here. |
+| `layout/` | Workspace/agent rails, gates (onboarding, admission access, agent update), marketing header/footer: [layout/AGENTS.md](./layout/AGENTS.md). |
 | `sections/` | Landing blocks and local copy arrays: [sections/AGENTS.md](./sections/AGENTS.md). Read its role/channel truth before copy changes. |
 | `ui/` | Hand-maintained shadcn-style primitives; [ui/AGENTS.md](./ui/AGENTS.md) owns variants, native Select behavior, and Radix conventions. Config: `web-e/components.json`. |
 | Directory and grants | `directory-people.tsx`, `org-departments.tsx`, `org-department-card.tsx`, `agent-department-access.tsx`; behavior: [workspace guide](../pages/app/AGENTS.md), I/O: [lib guide](../lib/AGENTS.md). |
+| Agent status cards | `agent-lifecycle-status.tsx`, `agent-setup-status.tsx`, `agent-openclaw-upgrade.tsx`, `openclaw-update-card.tsx`, `agent-deletion-request.tsx`, `agent-access-explanation.tsx`; lifecycle, setup, upgrade and deletion cards render hook results from the [hooks guide](../hooks/AGENTS.md) in agent Settings; the access explanation shows in the agent layout and list; the update card shows in the update gate and detail page. |
+| Channels and timezone | `whatsapp-channel-card.tsx` (wraps `whatsapp-personal-card.tsx`; the personal QR session stays view-local) for the channels tab; `timezone-select.tsx` for schedules and the Settings timezone card. |
 | OKR helpers | `okr-reports.tsx` provides reports and key-result UI; permissions/API contracts stay with workspace and lib guides. |
 | Motion and theme | `motion.tsx` exports Reveal/Stagger/StaggerItem; `theme-toggle.tsx` consumes `useTheme`. |
 
