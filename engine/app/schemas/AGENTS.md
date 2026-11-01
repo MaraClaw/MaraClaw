@@ -1,6 +1,6 @@
 # app/schemas
 
-Pydantic request/response models live here. This repo currently has a large shared `schemas.py` plus a small number of focused schema modules.
+Pydantic request/response models live here. `schemas.py` is the large shared grab bag; 38 focused modules sit beside it (40 `.py` files including the empty `__init__.py`, so there are no package-level re-exports). Import from the owning module.
 
 ## Pydantic Rules
 
@@ -10,6 +10,7 @@ Pydantic request/response models live here. This repo currently has a large shar
 
 ## Placement
 
+- Focused modules group by owner. Domain request/response: `okr`, `department`, `company_admission`, `company_transfer`, `transfer_policy`, `agent_*` (credential, deletion request, lifecycle, ownership transfer, setup MCP), `openclaw_updates`, `schedule_*`, `trigger_execution`, `tenant_email`, `whatsapp_personal`, `admin_audit`, `admin_metrics`. Audience-split projections: `member_auth` (end-user) beside shared auth DTOs, and the `*_response*` families (`activity`, `auth`, `notification`, `channel`, `collaboration_*`, `content_*`, `operator_*`, `organization_*`). Sockets: `chat_wire.py` owns the closed chat event contract. Reuse a nearby module before opening a new one.
 - OKR HTTP models live in `okr.py` (imported by `app/api/okr.py`).
 - Org department HTTP models live in `department.py`, not `schemas.py`. Provider directory sync is retired; relationship responses retain `department_path` as an empty string, not a provider hierarchy.
 - `schemas.py` is already a cross-domain grab bag. Do not add unrelated schemas to it by default.
@@ -20,6 +21,7 @@ Pydantic request/response models live here. This repo currently has a large shar
 
 - Keep `Create`, `Update`, and `Out`/`Response` suffixes aligned with nearby models.
 - Make tenant/admin-sensitive response names explicit when the same domain has user and admin views.
+- Any HTTP model or `chat_wire.py` change alters the checked `contracts/api-contract.json` (full OpenAPI plus contract registry). Refresh it with `uv run python -m scripts.export_api_contracts` from `engine/`; `--check` is the freshness gate.
 
 ## Auth / admin contract notes
 
