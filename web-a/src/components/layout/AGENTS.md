@@ -13,23 +13,30 @@ Scope: console navigation, notification entry point and shared screen chrome.
 
 1. Desktop and compact mobile navigation share `NavItems` and `navItems`.
    Notifications follows Overview for both admin roles. Visibility filters run before password-lock rendering.
-2. `platformAdminOnly` marks `/companies`, `/search-engine`, `/openclaw-updates`.
+   `tests/admin-navigation.test.ts` regex-parses `navItems` from source; keep flat object literals.
+2. Each gated entry has a flag matching the route guard in `routes/` and the predicate in `src/lib/types/auth.ts`
+   (or `transfer-review-access.ts`). Change entry, guard and predicate together.
+3. `platformAdminOnly` marks `/companies`, `/search-engine`, `/openclaw-updates`.
    `isPlatformAdminUser` accepts the platform flag or the `platform_admin` role.
-3. `/broadcast` uses `canSendBroadcast` from `web-a/src/lib/types/auth.ts`.
-   Requires role `org_admin` and a false `isPlatformAdminUser` result.
-4. `/admission-approvals` uses `canReviewAdmissions` from that same file.
-   Requires role `org_admin` and `is_genesis === true`.
-5. Under `mustChangePassword`, surviving nav entries other than `/account`
+4. `broadcastOnly` (`/broadcast`) uses `canSendBroadcast`: role `org_admin`, not a platform admin.
+   `invitationsOnly` (`/invitations`) uses `canManageInvitations`: the same plus a non-null `tenant_id`.
+5. `admissionReviewOnly` (`/admission-approvals`) uses `canReviewAdmissions`: role `org_admin` and `is_genesis === true`.
+   `agentDeletionReviewOnly` (`/agent-deletion-requests`) uses `canReviewAgentDeletions`:
+   active `org_admin`, not a platform admin, with a `tenant_id`.
+6. `paymentReviewOnly` (`/transfer-payments`) uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
+   Active platform admins pass. An org admin needs an active genesis account whose `/api/tenants/me`
+   is its own active default end-user organization; the entry stays hidden while that lookup is pending or failed.
+7. Under `mustChangePassword`, surviving nav entries other than `/account`
    and `/settings` render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.
-6. The Notifications nav tile links to `/notifications`; positive counts show
+8. The Notifications nav tile links to `/notifications`; positive counts show
    a badge capped at `99+` with the full unread count in its accessible label.
    Locked mode hides the badge.
-7. `SectionRail` items with `to` use `NavLink` and router-derived active state.
+9. `SectionRail` items with `to` use `NavLink` and router-derived active state.
    Others call `onSelect(item.id)` through `SectionRailButton`; without `onSelect`, omit them.
    `itemProps` applies only to the button branch.
-8. Preserve reduced-motion branches: `AuthShell` suppresses entrance motion;
-   `NavIcon` substitutes a plain image for its animated state transition.
+10. Preserve reduced-motion branches: `AuthShell` suppresses entrance motion;
+    `NavIcon` substitutes a plain image for its animated state transition.
 
 ## Gotchas
 

@@ -1,10 +1,10 @@
 # web-a/src/components
 
-**Generated:** 2026-10-23
-**Commit:** e009080
-**Branch:** 2026Oct
+**Generated:** 2026-11-01
+**Commit:** a591022e
+**Branch:** 2026November
 
-Parent: `../../AGENTS.md`. Screens: `../pages/AGENTS.md`. HTTP: `../lib/AGENTS.md`.
+Parent: `../../AGENTS.md`. Screens: `../pages/AGENTS.md`. HTTP: `../lib/AGENTS.md`. Nav/shell detail: `layout/AGENTS.md`; primitives: `ui/AGENTS.md`.
 
 ## OVERVIEW
 
@@ -20,6 +20,7 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 | Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
 | Company UI | `companies/create-company-form.tsx`: company + genesis OA; `companies/company-status-icon.tsx`: active/disabled state |
 | User rows | `users/user-card.tsx`: linked row, toggle action and slots; page owns role/toggle policy |
+| Agent transfer | `users/transfer-agents.tsx`: `TransferAgents` dialog rendered in a `UserCard` slot by `pages/users-departments.tsx` |
 | Brand | `brand/maraclaw-logo.tsx`: `MaraClawLogo`; `brand/maraclaw-mark.tsx`: public SVG mark |
 | Theme | `theme-toggle.tsx`: `useTheme` control; provider/storage live in `../hooks/use-theme.tsx` |
 
@@ -42,4 +43,6 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 - `CreateCompanyForm` uses RHF + Zod, `noValidate`, `useId()`, lowercase trimmed emails and minimum-six-character passwords; preserve its 409/403 error handling.
 - Its requests go through `companies-api.ts`; retain the `useSessionCurrent()` post-await fence before errors, reset or `onCreated`. The caller owns query invalidation.
 - `UserCard` takes `canToggle`, pending state and callbacks; keep the overlay link `z-10` and actions `z-20`, plus the `web-a:users-scroll` handoff.
-- Keep company form/status UI in `companies/`, user rows in `users/`, shared shells in `layout/`, marks in `brand/`, and reusable primitives in `ui/`.
+- `TransferAgents` renders nothing unless `canTransferMemberAgents(user, source)` (active non-PA `org_admin`, same tenant, end-user source), no `mustChangePassword`, and `source.tenant_id`. Its dialog uses Radix Dialog directly, not a `ui/` primitive.
+- Transfer submit stays disabled until source detail and every-cursor recipient list are loaded and settled; source is re-checked against the viewer and selected agents against the fresh non-system list. Recipients must pass `isAgentTransferTarget`; errors map through `agentLifecycleError`. Mutations come from `hooks/agent-transfer-options.ts` via `useSessionMutation`.
+- Keep company form/status UI in `companies/`, user rows and transfer in `users/`, shared shells in `layout/`, marks in `brand/`, and reusable primitives in `ui/`.
