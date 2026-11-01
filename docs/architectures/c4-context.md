@@ -4,6 +4,11 @@
 
 MaraClaw provides a public/member workspace and an operator console around OpenClaw-backed digital employees. The actors and product surfaces follow the [member routes](../../web-e/src/routes/index.tsx#L48-L106) and [admin routes](../../web-a/src/routes/index.tsx#L56-L105).
 
+![MaraClaw system context](c4-context.svg)
+
+<details>
+<summary>Editable Mermaid C4 source</summary>
+
 ```mermaid
 %%{init: {"c4": {"c4ShapeMargin": 150, "c4ShapePadding": 20, "width": 260, "height": 100, "boxMargin": 30, "diagramMarginX": 60, "diagramMarginY": 60}}}%%
 C4Context
@@ -37,6 +42,8 @@ C4Context
   UpdateRelStyle(platform, models, $offsetX="-100", $offsetY="10")
   UpdateRelStyle(platform, search, $offsetX="20", $offsetY="10")
 ```
+
+</details>
 
 ## Sources and boundaries
 
