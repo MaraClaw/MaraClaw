@@ -22,8 +22,16 @@ returns `[]` without starting a CLI. `push([])` returns `None`, even with
 streaming; this is a deliberate asymmetry between the two methods, not a bug
 to normalize away.
 
-`pull([], stream_logs=True)` instead returns an empty plain generator, with no
-CLI launch; use `contextlib.closing` rather than assuming a stream context manager.
+`pull([], stream_logs=True)` instead returns an empty context-managed, closeable
+stream without executable lookup or a CLI launch. Its `close()` is idempotent;
+it no longer needs a `contextlib.closing` wrapper. This doesn't change blocking
+`pull([]) == []` or `push([]) is None`, even with push streaming enabled.
+
+```python
+with docker.pull([], stream_logs=True) as progress:
+    assert list(progress) == []
+progress.close()  # safe after context exit too
+```
 
 `push` batch-inspects every deduplicated reference before starting any
 transfer, including streamed ones, so a missing local image raises
@@ -46,13 +54,32 @@ delivered once through iteration, including after an explicit `close()`.
 Closing cancels only local CLI processes, not registry pushes or daemon-side
 transfers already in progress.
 
-`pull` accepts a keyword-only `timeout` in positive finite seconds, replacing
-`default_timeout` for that call. Each concurrent transfer gets its own
-deadline, and image inspection or executor queueing doesn't consume it. `None`
-inherits the client default rather than disabling it.
-`push` has no `timeout` parameter; its preflight inspection and transfers
-follow the client's `default_timeout` unmodified. `quiet=True` can't be
-combined with `stream_logs=True` on either call.
+`pull` and `push` both accept a keyword-only `timeout` in positive finite
+seconds, timed from each transfer subprocess's own launch and replacing
+`default_timeout` for that call. `None` inherits the client default rather than
+disabling it. Both validate it before anything else, so a boolean, zero,
+negative, or nonfinite value raises `ValueError` before references are consumed
+or inspected, even for `[]`; a valid value with `[]` keeps the empty results
+above. Every blocking pool task gets a fresh deadline, and so does every lazy or
+queued stream child once its worker launches it, never measured from queueing
+or stream creation. Once a child CLI has launched, its deadline keeps advancing
+while nobody iterates. `quiet=True` can't be combined with `stream_logs=True`
+on either call.
+
+`push`'s batch inspection, any image inspection around a pull, and executor
+queueing sit outside the explicit budget; a configured client default still
+governs those inspections as their own launches. Expiry kills and reaps only the
+local transfer CLI and raises `DockerTimeout` with retained partial output, not
+a replay of progress already delivered. It doesn't undo a registry or daemon-side
+change. A child's
+`DockerTimeout` in a multi-reference stream is that stream's first worker error,
+so the delivery rules above apply and the stream stays closeable.
+
+Inside `observation()`, blocking pull/push calls need `quiet=True` so both output
+pipes are captured; `stream_logs=True` instead works with `quiet=False`. Pool
+tasks and stream workers inherit the creating observation, including when a
+multi-image stream is consumed after the scope exits. See
+[Observation budgets and convergence](observation-and-convergence.md).
 
 `docker.manifest.push(..., timeout=30)` and
 `docker.plugin.push(..., timeout=30)` also accept keyword-only local CLI
@@ -84,23 +111,69 @@ with closing(docker.save("alpine:3.22")) as chunks:
             output.write(chunk)
 ```
 
-`save(images, output=None)` inspects every requested image eagerly, raising
-`NoSuchImage` immediately for a missing one, before doing anything else. An
+`save(images, output=None, *, timeout=None)` validates the deadline and rejects
+empty input, then inspects every requested image eagerly, raising
+`NoSuchImage` for a missing one before starting the save CLI. An
 explicit `output` path blocks and returns `None`. Omitted `output` returns a
 lazy generator of raw archive-byte chunks, not `(source, bytes)` progress
 records: its save subprocess starts on first iteration, not on the call
 itself. Exhaust or explicitly close that generator to leave its subprocess
 context; if it's discarded unconsumed, no save subprocess or archive-save
 telemetry starts. The eager inspection can still emit its own telemetry.
+Closing a started generator kills a still-running local save CLI, reaps it, and
+joins its accounting thread. It doesn't undo daemon-side work.
 
-`load(input, quiet=False)` accepts a path, complete bytes, or an iterator of
-byte chunks. Path input runs an eager, process-backed progress stream,
+`load(input, quiet=False, *, timeout=None)` accepts a path, complete bytes, or
+an iterator of byte chunks. Path input runs an eager, process-backed progress stream,
 printing decoded lines unless `quiet=True`. Byte or iterator input is written
 to a local CLI's own stdin and fully consumed during the call; these archive
-bytes aren't progress-log records, so a configured `default_timeout` still
-reaps the local CLI even if the input iterator stalls, though the iterator's
-own Python code can't be interrupted. Both forms return `list[str]` of the
-image tags/IDs parsed from `Loaded image` output lines, in output order.
+bytes aren't progress-log records, so the selected deadline still reaps the
+local CLI even if the input iterator stalls, though the iterator's own Python
+code can't be interrupted. Both forms return `list[str]` of the image tags/IDs
+parsed from `Loaded image` output lines, in output order.
+
+`save` and `load` also accept a keyword-only `timeout`, replacing the client
+default for that call (`None` inherits it) and validated before images are
+inspected or input is read. `save` gives its eager inspection and its save CLI
+separate deadlines; for the lazy generator the save clock starts at first
+iteration, using the default as configured at that moment when `timeout` is
+omitted. Expiry kills and reaps the local CLI only.
+
+## Bound Archive Uploads
+
+To cap bytes sent by byte/iterator `load()`, set
+`InspectionPolicy(max_total_stdin_bytes=...)` inside `observation()`, alongside
+the three required per-command limits. This is an aggregate scope budget, not
+a `load()` keyword or a progress-buffer setting:
+
+```python
+from pywhales import InspectionPolicy, docker, observation
+
+policy = InspectionPolicy(
+    max_references=1,
+    max_argv_bytes=1_048_576,
+    max_response_bytes=1_048_576,
+    max_total_stdin_bytes=64 * 1024 * 1024,
+)
+with open("alpine.tar", "rb") as archive, observation(policy):
+    tags = docker.load(iter(lambda: archive.read(65_536), b""), timeout=60)
+```
+
+Only bytes actually accepted by local stdin-pipe writes count, including partial
+writes; every enclosing stdin account is charged. Exact-budget EOF succeeds.
+The optional stdin total must be a positive integer, never a boolean; `None`
+leaves archive uploads unbounded unless an enclosing scope supplies a limit.
+Further nonempty input raises `ObservationLimitError` with `reason="total_stdin"`
+after local CLI cleanup, without sending bytes beyond the budget. Uploads retain
+their launch-time accounts after scope exit. Output is accounted separately:
+direct archive reads use `max_total_stream_bytes`, not the captured-response
+total. Path-based `load("alpine.tar")` lets the CLI read the file itself, so it
+doesn't charge an upload stdin budget.
+
+Use cooperative chunk producers: deadlines and cancellation can reap the local
+CLI but cannot interrupt arbitrary Python code inside the input iterator. For
+nested limits and observation exceptions, see
+[Observation budgets and convergence](observation-and-convergence.md).
 
 ## Telemetry Families
 
@@ -123,3 +196,9 @@ filesystem and an image; both forward `pull`, defaulting to `"missing"`, to
 container creation. `docker.import_(source, tag=...)` imports a tarball's
 contents as a new filesystem image; it is unrelated to `load`, which restores
 images previously produced by `save`/`docker save`.
+
+Image `copy_from` and `copy_to` also accept keyword-only `timeout=None`: an
+explicit value gives each helper launch its own deadline, including inspection,
+pull, temporary-container creation, copy, commit when needed, and cleanup. It
+isn't one total operation budget. `copy_from` returns `None`; `copy_to` commits
+and returns a new `Image`, leaving the original image unchanged.

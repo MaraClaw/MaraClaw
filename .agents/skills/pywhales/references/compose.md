@@ -49,19 +49,30 @@ deletion choice, not a default cleanup setting.
 | --- | --- |
 | `client.compose.build(...)` | `None`; normal output is displayed |
 | `client.compose.up(...)` | `None`; it doesn't return containers or captured logs |
-| Either with `stream_logs=True` | Owned `(source, bytes)` stream; `None` for an explicit empty service list |
+| `build/create/down/pull/start/stop/up(..., stream_logs=True)` | Typed, owned `ProcessStream` yielding `(source, bytes)`, or `None` for an explicit empty service list |
 | `client.compose.ps()` | `list[Container]` for the selected project |
-| `client.compose.logs(...)` | `str`; use `stream=True` for `(source, bytes)` |
+| `client.compose.logs(...)` | `str`; `stream=True` returns a typed `ProcessStream` yielding `(source, bytes)` |
 | `client.compose.execute(service, command, tty=False)` | `str`; detached or TTY execution returns `None` |
-| `client.compose.run(service, command, tty=False)` | `str`; `detach=True` returns `Container`, `stream=True` returns a tuple stream |
+| `client.compose.run(service, command, tty=False)` | `str`; `detach=True` returns `Container`, `stream=True` returns a typed `ProcessStream` yielding `(source, bytes)` |
 
 `source` is `"stdout"` or `"stderr"`, never `"stdin"`. These streams own local
 CLI processes and support context-manager cleanup; drain them to observe
 failures. Closing them doesn't tear down the project.
 
+```python
+with client.compose.logs(["app"], tail="20", stream=True) as logs:
+    for source, chunk in logs:
+        print(source, chunk.decode(errors="replace"), end="")
+```
+
+Guard a possible `None` before using optional streams in a `with` block. The
+typed return annotations don't change existing empty-selection behavior.
+
 For `build` and `up`, `services=None` means all services while `services=[]`
-means no work. `pull` has the same selection rule; `ps` and `logs` instead
-treat both `None` and `[]` as all services. Don't normalize these differences.
+means no work. `pull` has the same selection rule; `ps` instead treats both
+`None` and `[]` as all services. For `logs`, omit the argument or pass `[]`/`()`,
+not `None`: its signature takes a service string or sequence. Don't normalize
+these differences.
 `up` and `run` enable dependencies by default; `build`'s separate
 `with_dependencies` option defaults to `False`.
 `quiet=True` is incompatible with `stream_logs=True`.
@@ -74,13 +85,22 @@ integer seconds; `restart` and `stop` also accept a `timedelta`, truncated to
 whole seconds. These launches can still raise `DockerTimeout` if the client's
 separate `default_timeout` expires.
 
-`run`, `logs`, `pull`, and `events` instead accept a keyword-only `timeout` in
-positive finite seconds that replaces the client's `default_timeout` for that
-one local CLI launch; `None` inherits it. Expiry kills and reaps the local
-Compose CLI and raises `DockerTimeout`; it does not stop services or guarantee
-that daemon-side work stops. Don't confuse the two: `compose.up(wait_timeout=60)`
-is a third, separate concept, the Compose-side `--wait-timeout` bound on
-service readiness, not a local CLI deadline either.
+`build`, `execute`, `run`, `logs`, `pull`, `push`, `watch`, and `events`
+instead accept a keyword-only `timeout` in positive finite seconds that replaces
+the client's `default_timeout` for that one local CLI launch; `None` inherits it.
+`execute` applies it to detached, TTY, and captured calls alike. Expiry kills and
+reaps the local Compose CLI and raises `DockerTimeout` with retained partial
+output, not a replay of streamed stdout already delivered. It does not stop
+services, undo built, pulled or pushed layers, or guarantee that daemon-side or
+registry work stops. `build`, `pull`,
+`push`, and `watch` validate it before the empty-selection no-op: an invalid
+value raises `ValueError` even for `services=[]`, while a valid one with `[]`
+returns `None` without a launch. A returned stream's deadline keeps advancing
+while nothing consumes it, so drain it or close it on early exit.
+
+Don't confuse the two: `compose.up(wait_timeout=60)` is a third, separate
+concept, the Compose-side `--wait-timeout` bound on service readiness, not a
+local CLI deadline either.
 
 ## One-Off Commands and TTY Defaults
 
@@ -102,6 +122,33 @@ separately started service containers. Use `execute` for a command in an
 already-running service. Collect logs separately from `up`; `follow=True` is
 potentially unbounded, so use `stream=True` with a deliberate stop boundary.
 
+Both methods accept `envs={"GREETING": "hello", "EMPTY": ""}` for container
+values. Eligible values travel through the per-launch CLI environment and
+`--env KEY`, so they can also affect `${NAME}` interpolation elsewhere in the
+Compose configuration. Reserved or colliding names stay literal `KEY=VALUE` unless strict mode rejects
+them; see [Container environment values](containers-and-output.md#container-environment-values).
+Client `environment=...` is separate CLI configuration, not a replacement for
+`envs`, and no temporary env files are created for this forwarding.
+
+## Build And Run Environment
+
+`build(build_args={...})` shares the same transport as `run` and `execute`
+`envs`. An eligible build arg is passed as name-only `--build-arg KEY`, with its
+value in the Compose CLI's child environment. Compose reads that environment for
+`${KEY}` interpolation, so the value can also change interpolated settings and
+name-only `environment:` entries of services, not just the build. Don't reuse a
+build arg name for an unrelated variable the Compose file interpolates.
+
+Reserved or colliding names stay literal `KEY=VALUE` arguments by default. With
+`DockerClient(strict_env_transport=True)` they raise a value-free `ValueError`
+instead; see [Strict environment transport](client-and-errors.md#strict-environment-transport).
+Every `build` branch (blocking and `stream_logs=True`) and every `execute` branch
+(detached, TTY, captured) forwards the same child environment.
+
+`build(services=[])` is a validated no-op: it checks `timeout` and the
+`quiet`/`stream_logs` conflict, then returns `None` without a launch. It never
+evaluates `build_args`, so strict mode raises nothing for an empty selection.
+
 ## Plugin Features and Previews
 
 `wait=True` waits for running/healthy services and implies detached mode in
@@ -112,7 +159,37 @@ still returns `None`; stream it if the output must be consumed.
 
 `compose.watch(...)` itself returns an owned `(source, bytes)` stream; it
 doesn't take `stream_logs=True`. It defaults to `prune=False` (explicitly
-forwarded as `--prune=false`), and an explicit empty service list does no work.
+forwarded as `--prune=false`, and `--prune=true` only when requested), and an
+explicit empty service list returns `None` without invoking the CLI. A watch
+can run until stopped: pass a `timeout` or a deliberate stop boundary, and use
+the stream as a context manager. Closing it reaps the local CLI without
+removing running services.
+
+`wait=True` is a Compose CLI option applied during `up`. To check afterward
+that a chosen set of services settled, use the read-only
+`capture_compose()` and `wait()` from `pywhales.convergence`, documented in
+[Observation budgets and convergence](observation-and-convergence.md). Capture
+takes explicit, distinct service names for the client's configured project, and
+accepts `completion_services=("migrate",)` for selected one-shot services expected
+to exit 0. Every captured completion container must have exited 0 and not be
+restarting; a non-restarting nonzero exit fails as `completion_failed`. Unmarked
+services still require running/healthy containers; an unmarked one-shot that
+exited 0 stays a blocker.
+
+`capture_compose(..., max_restarts=None, policy=..., timeout=...)` leaves restart
+counts unchecked by default. Set a nonnegative integer (never a boolean) to fix
+a budget for each long-running container's current Docker `RestartCount`, not
+the number of restarts since capture. A healthy container above that budget
+still blocks success; a later within-budget reading clears the blocker.
+Completion services ignore this budget. With it enabled, a missing, negative,
+or non-integer count on a long-running container is `malformed`.
+
+The budget is rechecked in the final all-clear pass. On deadline,
+`Deadline.detail.restart_budget_exceeded_containers`, when detail is present,
+counts affected services once each despite its name, not individual containers.
+It describes the latest complete cycle, not fresh state at expiry. See
+[Observation budgets and convergence](observation-and-convergence.md) for the
+capture/wait workflow and typed outcomes.
 
 Preview mode is the client global `compose_dry_run=True`, not an `up()` keyword.
 Use a separate preview client with the same files/project settings. It still
