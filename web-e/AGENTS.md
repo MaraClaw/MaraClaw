@@ -1,8 +1,8 @@
 # web-e - end-user web UI
 
-**Generated:** 2026-10-23
-**Commit:** e009080
-**Branch:** 2026Oct
+**Generated:** 2026-11-01
+**Commit:** a591022e
+**Branch:** 2026November
 
 Parent: [monorepo router](../AGENTS.md). Prefer the deepest guide below; engine routes/tests remain behavior truth.
 
@@ -16,11 +16,14 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 |------|----------------|
 | SPA assembly | `src/main.tsx`, `src/App.tsx` |
 | Routes and gates | `src/routes/index.tsx`, `src/routes/protected.tsx` |
-| Landing, auth, join/transfer | [pages/AGENTS.md](./src/pages/AGENTS.md) |
-| Member screens and agent tabs | [pages/app/AGENTS.md](./src/pages/app/AGENTS.md) |
-| Component families, chrome, brand, primitives | [components/AGENTS.md](./src/components/AGENTS.md), then its layout/sections/ui guides |
-| HTTP, sockets, tickets, domain clients | [lib/AGENTS.md](./src/lib/AGENTS.md) |
+| Landing, auth, invitation join and transfer | [pages/AGENTS.md](./src/pages/AGENTS.md) |
+| Member screens, admissions, agent tabs | [pages/app/AGENTS.md](./src/pages/app/AGENTS.md) |
+| Component families, chrome, brand, primitives | [components/AGENTS.md](./src/components/AGENTS.md), then its chat/layout/sections/ui guides |
+| HTTP, sockets, tickets, domain clients | [lib/AGENTS.md](./src/lib/AGENTS.md), then [lib/chat/AGENTS.md](./src/lib/chat/AGENTS.md) |
+| Query options, session scopes, funnel and chat hooks | [hooks/AGENTS.md](./src/hooks/AGENTS.md) |
 | Session ownership | `src/lib/auth-session.ts`, `auth-session-controller.ts`; `src/hooks/auth-provider.tsx`, `session-workspace.ts`, `session-query-scope.ts` |
+| Admission access gating | `src/lib/admission-access.ts`, `src/hooks/use-admission-access.ts`, `src/components/layout/admission-access-gate.tsx` |
+| Node and browser checks | [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md) |
 | Theme and shared styles | `index.html`, `src/hooks/theme-provider.tsx`, `src/index.css` |
 | Production / verification | `Dockerfile`, `docker/nginx.conf`, `package.json`, `../.github/workflows/frontend-ci.yml` |
 
@@ -29,9 +32,10 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - `main.tsx`: ThemeProvider wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
 - Routing uses BrowserRouter, not a data router. Public auth and session-gated `/join` / `/transfer` stay outside `/app`; landing hashes stay on `/`. No catch-all 404; no `src/routes.tsx`.
 - ProtectedRoute sends anonymous users to `/login`, missing-org sessions to `/join` except their `/app/admissions/*` status views, and `must_change_password` to `/app/settings`. `/app/account` redirects there; settings and admissions stay outside OnboardingGate.
+- Admission access is a separate branch from onboarding. AppShell renders `AdmissionAccessGate`: a session with a pending, non-transfer admission from its current organization may use only Inbox, Settings, Account and admissions routes, and any other path redirects to `/app/notifications`. The Inbox route sits under `AdmissionInboxGate`, which adds OnboardingGate only once workspace access is allowed. Transfer requests are their own route, `/app/admissions/transfers/:id`, beside `/app/admissions/:id`.
 - Member auth uses server-enforced member-audience routes and DTOs. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.
 - Capture the current session owner for async work; discard stale completions after logout, replacement, or tenant switch. Use session-scoped workspace query/mutation hooks; AppShell creates a per-owner QueryClient and cancels/clears retired-owner work.
-- Company join/transfer responses can be pending admission requests: keep the source session and link to `/app/admissions/:id`. Approved requests enter the target only through the existing switch/replacement session flow; KABERs joins/transfers remain immediate.
+- Join is invitation-driven: `/join` previews a code, then accepts it or continues in the default organization. Transfer requires an invitation code plus password, loads a quote and may force an explicit paid or free choice. Results are an immediate join (access token), a pending/approved admission, or a payment-review transfer request. Pending outcomes keep the source session and link to `/app/admissions/:id` or `/app/admissions/transfers/:id`; approved admissions enter the target only through the switch/replacement session flow.
 - Keep the inline FOUC script and ThemeProvider aligned: `maraclaw-theme`, system/light/dark resolution, and theme-color `#faf8f5` / `#1c1612`. ThemeToggle uses the provider, not another theme store.
 
 ## CONVENTIONS AND BOUNDARIES
@@ -39,7 +43,8 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - Prefer `@/` imports (`@/*` maps to `src/*` in Vite and TS). Kebab-case files, named PascalCase component exports; App remains the default-export component. Import concrete files; no new barrels beyond existing ones.
 - Tailwind v4 is CSS-first: `src/index.css` owns `@theme inline`, `:root`, `.dark`; no `tailwind.config.*` or PostCSS setup. Shared visual conventions live in the components guide.
 - Lint is Oxlint (`.oxlintrc.json`), not ESLint/Prettier. TS uses `verbatimModuleSyntax` (`import type`) and `erasableSyntaxOnly` (no enums).
-- Engine I/O goes through `src/lib/http.ts`, never page-level fetch. Add a focused `lib/*-api.ts` for new domains rather than growing `workspace-api.ts`.
+- Engine I/O goes through `src/lib/http.ts`, never page-level fetch. Add a focused `lib/*-api.ts` for new domains rather than growing `workspace-api.ts`; the latter is now a facade that re-exports the agents, work, onboarding, channels and schedule clients.
+- `src/lib/engine-contracts.generated.ts` is generated from `../engine/contracts/api-contract.json`. Regenerate it with `npm run contracts:generate`; never hand-edit it.
 - Chat attempts mint fresh HTTP-authenticated single-use tickets; JWTs stay in headers, never socket/file URLs. Files-tab previews and all native downloads mint per action/mount; redemption URLs stay relative/same-origin. Chat attachment previews alone use authenticated metadata/bytes through `http.ts`, with fresh access/version checks on every opening and an owner-scoped bounded memory cache. Detailed lifetimes and stale-preview rules: lib guide.
 - No member admin screens or `/api/admin/*`; no LLM provider/model names, pickers, key or subscription controls. Org admins manage these in `web-a` `/models`, including Grok/ChatGPT subscriptions; members inherit the company pool.
 - Directory retains People and Org Departments; provider organization sync and the Synced view are retired. Keep org department summaries separate from custom-list agent department grants. Grants are `use`, not `manage`; department creation/membership stays in web-a Users. Member rename/permission rules: workspace and lib guides.
@@ -59,6 +64,8 @@ Run from `web-e/` (no root npm workspace):
 ```bash
 npm ci
 npm run dev
+npm run contracts:generate   # rewrite src/lib/engine-contracts.generated.ts from the engine contract
+npm run contracts:check      # same generator with --check; fails when the file is stale
 npm run lint
 npx tsc -b
 npm test           # tsc -p tsconfig.tests.json && node --test tests/*.test.ts
@@ -69,5 +76,5 @@ docker build -t maraclaw-web-e .
 docker run --rm -p 8080:8080 maraclaw-web-e
 ```
 
-`npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs lint, `tsc -b`, `npm test`, build and Docker build.
-Playwright `test:e2e` is separate: `playwright.config.ts` uses `testDir: './e2e'` (currently 32 `*.spec.ts` files, including workspace, auth, chat, schedules and notifications), with a build + preview webServer at `http://127.0.0.1:4173`. `test:e2e` is not run in `frontend-ci.yml`.
+`npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs `contracts:check`, lint, `tsc -b`, `npm test`, build and Docker build.
+Playwright `test:e2e` is separate: `playwright.config.ts` uses `testDir: './e2e'` with a build + preview webServer at `http://127.0.0.1:4173`, and `test:e2e` is not run in `frontend-ci.yml`. Test layout and conventions: [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md).
