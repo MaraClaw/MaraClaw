@@ -1,13 +1,15 @@
 # chat/ - transport, submissions and transcript reconciliation
 
-Scope: socket attempts, wire validation, submission identity, history merging and rejected-turn recovery.
+Scope: socket attempts, wire validation, submission identity, history merging, skill-mention submission and rejected-turn recovery.
 
 ## Files
 
 - `attachment-submission.ts`: `createAttachmentSubmission`, immutable upload-to-submission conversion.
+- `history.ts`: `ChatHistory`, `joinHistoryRanges`, `refreshHistory`, `prependHistory`; chronological merge of cursor-paged history by entry identity.
 - `message.ts`: `ChatAttachment`, `ChatMessage`, `getChatMessageText`; message shape and attachment-aware display text.
 - `protocol.ts`: outbound types, `inboundSchema`, inbound/receipt types and `isTurnAccepted`/`isTurnRejected` guards.
 - `sessions.ts`: `isWritableSession`, `controlSessionId`; chat/control session eligibility and fallback selection.
+- `skill-mentions.ts`: `resolveSkillMentionSegments`, `findSkillMention`, `filterSkillMentions`, `insertSkillMention`, `buildSkillMentionContent`; installed-skill mention parsing and submission content.
 - `submissions.ts`: `createChatSubmissions`, `ChatSubmissions`; frozen envelopes, pending/accepted tracking and canonical session identity.
 - `transcript.ts`: `ChatLine`, `acceptSubmission`, `mergeServerHistory`, `appendCompletion`; optimistic/history reconciliation.
 - `turn-rejection.ts`: `recoverRejectedTurn`, `restoreComposerDraft`; rejected-row state, recovery notices and draft restoration.
@@ -37,9 +39,13 @@ Scope: socket attempts, wire validation, submission identity, history merging an
 - Attachment submissions generate a UUID, use extracted text or `[Uploaded ${filename}]`, and retain workspace path/name.
   `display_content` and `file_name` hold the filename; freeze both attachment records and their array.
   `getChatMessageText` strips a matching user `[file:name]\n` prefix and hides filename-only attachment text.
-- History merging matches user rows by submission/message ID, not text; deduplicate authoritative rows by `entry_id`.
+- Paged history ranges are chronological. `joinHistoryRanges(earlier, later)` keys rows by `entry_id` and prefers the newer range's row on overlap, never merging on a shared parent `message_id`, because a parent's projected siblings can span two pages.
+  `refreshHistory` joins the latest window onto the retained items and keeps the retained cursor; `prependHistory` takes the older page's cursor and `has_more` and joins it ahead of the retained items.
+- Transcript merging matches user rows by submission/message ID, not text; deduplicate authoritative rows by `entry_id`.
   Preserve order: older local rows, authoritative history, unmatched pending users, remaining live rows.
   Completion deduplication respects entry IDs and already-authoritative parent message IDs.
+- A mention must start the message or follow whitespace; only names matching an installed skill resolve, and a trailing `.` run is tolerated. The picker and chips share `resolveSkillMentionSegments`, so display and submission cannot disagree.
+  `buildSkillMentionContent` trims the draft. With no resolved skill, `content` is just that text; otherwise `content` lists each distinct skill's exact workspace-relative path ahead of the request and `display_content` keeps the user's text.
 - Recover only a matching pending, not-accepted user row; an ID-less rejection produces an onboarding notice without editing rows.
   Invalid submission IDs, submission conflicts and invalid attachments disable retry; other rejection reasons permit it.
   Restore composer text before message content; `restoreComposerDraft` prepends recovered text with a blank-line separator.

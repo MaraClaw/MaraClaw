@@ -1,6 +1,6 @@
 # chat/ - message and attachment rendering
 
-Scope: message bodies, attachment dialogs, native download controls, local preview renderers.
+Scope: message bodies, attachment dialogs, native download controls, local preview renderers, history status control and the skill-mention composer.
 
 ## Files
 
@@ -11,6 +11,7 @@ Scope: message bodies, attachment dialogs, native download controls, local previ
 - `attachment-office.tsx`: `AttachmentOffice`, viewer lifetime, resize fitting, page/slide/sheet navigation.
 - `attachment-pdf.tsx`: `AttachmentPdf`, local PDF worker, single-page display and pagination.
 - `attachment-preview.tsx`: `AttachmentPreviewBody`, request attempts, renderer dispatch and render-error boundary.
+- `history-control.tsx`: `HistoryControl`, conversation loading/error status and the earlier-messages control.
 - `markdown.tsx`: `ChatMarkdown`, limited escaped markup rendering.
 - `message-content.tsx`: `ChatMessageContent`, message text and attachment-card composition.
 - `office-viewer.ts`: `createOfficeViewer` and `NavigableOfficeViewer`, uniform Office adapter.
@@ -19,10 +20,12 @@ Scope: message bodies, attachment dialogs, native download controls, local previ
 ## Invariants
 
 - Chip recognition shares `resolveSkillMentionSegments` with submission resolution. Keep both text layers' metrics, wrapping, padding and scrollbar geometry identical; native textarea owns text, selection, caret and scrolling.
+- `HistoryControl` takes state from `useChatHistory` and has no data fetching of its own. Loading shows a status; a failure shows an alert with Retry conversation (an `ApiError` detail, else a refresh or load message). Once ready, an earlier-page failure shows a non-blocking alert and the button reads Retry earlier messages; with no earlier page it shows Beginning of conversation.
+  A pointer click on Load earlier messages disables the button while loading. A keyboard activation (`event.detail === 0`) uses `aria-disabled` instead, so focus is not lost mid-load; blur clears that mode. A polite live region announces earlier-page loading.
 - Preserve library ownership at the existing import seams:
   card/message-content use `@/lib/chat/message`; download uses `@/lib/workspace-api` and `@/lib/http`;
   image/preview use `@/lib/attachment-preview-api`, preview also uses `@/lib/http`;
-  attachment-office/office-viewer use `@/lib/office-preview`; markdown/PDF import no `lib` modules.
+  attachment-office/office-viewer use `@/lib/office-preview`; history-control uses `@/lib/http` for `ApiError` text; markdown/PDF import no `lib` modules.
 - `ChatMessageContent` normalizes text with `getChatMessageText`; only assistant text uses `ChatMarkdown`.
   Markdown escapes source before substitutions; links match HTTP(S), open a new tab with `noreferrer`.
   Supported blocks: fenced code, heading markers, unordered lists, paragraphs; inline code and bold.
