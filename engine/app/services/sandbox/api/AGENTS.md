@@ -13,6 +13,7 @@ API/cloud sandbox backends call third-party execution services. They must fail c
 - Keep provider SDK imports lazy when the dependency is optional.
 - Network calls must be async, timeout-bounded, and mapped into `ExecutionResult` without leaking provider internals unnecessarily.
 - Respect `SandboxConfig` fields from `app/services/sandbox/config.py`; do not invent separate env parsing in a backend.
+- Endpoint-bound credentials: `api_key` survives only for the origin it was issued for, and private-network authority is server-granted (`../AGENTS.md`). A configurable endpoint (`judge0` `api_url`) must use `SandboxConfig.http_client(base_url=..., timeout=...)` and map `OutboundPolicyError` to `ENDPOINT_BLOCKED_MESSAGE`. `codesandbox_backend.py` calls the fixed `codesandbox.io` origin and E2B uses its SDK; neither takes a user-configured URL, so keep it that way or move them onto `http_client`.
 - Local guest proxy helpers (`resolve_proxy_env`) target subprocess/docker isolation; cloud APIs usually have their own networking - do not assume `SANDBOX_*_PROXY` is sent to third-party providers unless the backend documents that mapping.
 - Preserve supported-language mappings and output truncation when adding provider features.
 - Health checks should prove the provider endpoint is reachable without executing untrusted user code.

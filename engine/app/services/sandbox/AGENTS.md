@@ -41,3 +41,9 @@ The enum member for `codesandbox` is misspelled as `CODEDANDBOX` while its value
 - Use `SandboxConfig.resolve_proxy_env()` as the single injection helper. It returns `{}` when `allow_network` is false.
 - Local backends inject via process/container env; do not put proxy secrets on bwrap argv. See `local/AGENTS.md`.
 - Changing `allow_network` or proxy keys in agent tool config is platform/org admin only (`app/api/tools.py`).
+
+## Endpoint Binding And Private-Network Authority
+
+- An API key is bound to the endpoint it was issued for. `SandboxConfig.from_dict(config, fallback, provenance=...)` keeps `api_key` only when the `api_url` visible at the writing layer has the same origin as the resolved `api_url` (`_bound_api_key`). Otherwise it logs a warning and drops the key; it never substitutes the platform key for an endpoint override.
+- Private-network authority is server-established. `SandboxConfig.operator_url` is a `PrivateAttr` set only by `grant_operator_endpoint()`, so JSON, `model_validate` and dumps cannot create or reveal it. `app.config.get_sandbox_config()` grants it for the platform endpoint; `from_dict` grants it only when `api_url` and `sandbox_type` were written by the built-in global layer, or by the platform default whose operator origin matches. Tenant, agent, untrusted layers and a plain mapping without `ConfigProvenance` never gain it. Provenance rules: `../tool_runtime/AGENTS.md`.
+- Every backend that calls a configurable endpoint (`judge0`, `self_hosted`, `aio_sandbox`) must get its client from `SandboxConfig.http_client(base_url=..., timeout=...)`: the operator origin receives `operator_http_client`; everything else `public_http_client` (public addresses only, origin-bound, no redirects, no environment proxies). Do not open a raw `httpx.AsyncClient` against a configured URL, and return `ENDPOINT_BLOCKED_MESSAGE` for `OutboundPolicyError`.

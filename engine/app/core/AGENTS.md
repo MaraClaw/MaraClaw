@@ -1,6 +1,6 @@
 # app/core
 
-`app/core` contains cross-cutting primitives only: tracing, logging setup, JWT/auth dependencies, permission policy, Redis Pub/Sub lifecycle, and low-level email transport helpers.
+`app/core` contains cross-cutting primitives only: tracing, logging setup, JWT/auth dependencies, permission policy, Redis Pub/Sub lifecycle, and low-level email transport helpers. Canonical closed enum values live in `domain/`; read [`domain/AGENTS.md`](domain/AGENTS.md) before adding or renaming one.
 
 ## Trace And Logging
 
@@ -18,12 +18,12 @@
 - Shared loader: `load_user_from_access_token(token, require_active=..., enforce_password_change=...)` loads `UserRecord` **with identity** and optionally enforces `must_change_password`.
 - Use from route modules:
   - `get_current_user` - active user; **403** with `{must_change_password: true}` when force-change is pending (all privileged REST).
-  - `get_authenticated_user` - allows inactive + force-change; **only** for `GET /auth/me` and password change (not for tenant join mutations).
+  - `get_authenticated_user` - allows inactive + force-change; **only** for `GET /auth/me`, `PUT /auth/me/password` and `member_auth.get_member_user` (`/member/auth/me`). Tenant join/transfer routes (`POST /tenants/join`, `/join-suggested`, `/join-default`) depend on `get_current_user`.
   - `get_current_admin` / `require_role(...)` - built on `get_current_user` (inherit force-change gate).
-  - `raise_if_password_change_required(user)` - explicit check when a handler still uses `get_authenticated_user` but must block force-change users (`POST /tenants/join`).
+  - `raise_if_password_change_required(user)` - explicit re-check where the actor is reloaded or passed outside the `Depends` chain, e.g. services that re-read `get_with_identity(..., fresh=True)` under locks (`org_departments`, `tenant_email_admin`, `agent_provisioning`, `subscription_boundaries`) and `api/departments.py`.
 - Non-Depends JWT auth (file download Bearer header) **must** use `load_user_from_access_token` (not bare `decode_access_token` + `user_dao.get`); file download tickets go through `file_download_tickets.authorize_binding` (`load_user_principal(fresh=True)`). Chat WebSockets redeem single-use tickets and use `load_user_principal(fresh=True)` through `chat_tickets.authorize`. Bare `get` does not join identity, so `must_change_password` would always look false.
 - Use async password helpers from async paths; bcrypt work is intentionally pushed to a thread pool.
-- Token payloads use `sub` for user id and `role` for role. Force-change is **not** in the JWT; it is re-read from identity on each request.
+- Token payloads use `sub` for user id, `role` for role and an integer `gen`; `decode_access_token` rejects a missing or non-integer `gen`, and `check_token_generation` rejects a stale identity auth generation. Force-change is **not** in the JWT; it is re-read from identity on each request.
 
 ## Permissions
 

@@ -1,8 +1,8 @@
 # Engine Platform Guide
 
-**Generated:** 2026-10-23
-**Commit:** e009080
-**Branch:** 2026Oct
+**Generated:** 2026-11-01
+**Commit:** a591022e
+**Branch:** 2026November
 
 Monorepo router: `../AGENTS.md`. This guide owns engine-wide rules; nested guides own local contracts.
 
@@ -26,12 +26,14 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 | OpenClaw upgrades | `docs/openclaw-updates.md`: global notices (`app/api/openclaw_updates.py`, `openclaw_update_service.py`), gates (`openclaw_update_gate.py`, `openclaw_update_exclusion.py`), worker cutover/rollback (`openclaw_update_executor.py`, `openclaw_update_worker.py`, `openclaw_update_docker.py`, `openclaw_update_snapshot.py`, `openclaw_update_store.py`), `dao/openclaw_update_dao.py`. |
 | Documents | `app/services/document_parser/`: inbound local anydoc (`firecrawl-anydoc==0.2.4`), isolated spawn; `app/services/document_conversion/`: outbound conversion. |
 | Shared organization members | `org_members` retains identity/contact/profile fields and agent relationship references; provider department hierarchy and people sync are retired. SSO/auth and IM channels remain separate. |
-| Templates / scripts | `agent_template/` is copied workspace scaffold; `agent_templates/` is DB-seeded role catalog. `app/scripts/` holds bootstrap/one-offs; `scripts/` holds schema/freeze/lint helpers; `docs/` holds operations/refactoring. |
-| Tests | `tests/AGENTS.md`: root-level pytest, no shared `conftest.py`, local fakes/monkeypatch; most API tests call handlers directly, with a separate live-PostgreSQL lifecycle CI job. |
+| Templates / scripts | `agent_template/` is the create-if-absent workspace scaffold (`app/services/agent_workspace.py`); `agent_templates/` is the 22-role DB-seeded catalog (`app/services/template_seeder.py`). `app/scripts/` holds bootstrap/one-offs; `scripts/` holds schema/freeze/lint/contract helpers; `docs/` holds operations/refactoring. |
+| API contracts | `contracts/api-contract.json` is the checked offline artifact from `scripts/export_api_contracts.py` (+ `api_contract_registry.py`, `api_contract_document.py`); `scripts/contract_codegen/` (Node) generates the `web-a` / `web-e` Zod validators. Read `contracts/README.md`. |
+| Personal QR WhatsApp bridge | `connectors/whatsapp/`: separate Node 26 package with its own lockfile and `AGENTS.md`. Python parent: `app/services/channels/whatsapp_personal_*.py` (supervisor spawns `dist/src/bridge.js`). Cloud API webhook is `app/api/whatsapp.py`. |
+| Tests | `tests/AGENTS.md`: root-level pytest, no shared `conftest.py`, local fakes/monkeypatch; most API tests call handlers directly, with a separate live-PostgreSQL lifecycle CI job and a Node bridge job. |
 
 ## Engine-Wide Rules
 
-- Python >=3.14.10 (`.python-version`, image `python:3.14.10-slim-trixie`); Ruff `py314`, line 120, double quotes, LF. Pydantic v2: `model_config`, `Field(default_factory=...)`.
+- Python >=3.14.10; `.python-version` and image `python:3.15.2-slim-trixie` select 3.15.2. The dependency image installs `libc6-dev` for native builds. Ruff `py314`, line 120, double quotes, LF. Pydantic v2: `model_config`, `Field(default_factory=...)`.
 - Env names are case-sensitive; `CORS_ORIGINS` is a JSON list, single-quoted in `.env`. New settings belong in `app/config.py` and `.env.example`.
 - New DB work uses DAOs + `app.db` only; multi-write handlers use `async with connection_ctx():` for one commit. No SQLAlchemy, `app/models/`, Alembic or `create_all`. `check_no_new_sqlalchemy.py` has an empty allowlist and forbids SQLAlchemy in `app/db/`.
 - Schema truth is `scripts/schema_baseline.sql`: fresh-only initialization, idempotent rerun, no upgrade patches. `pyproject.toml` still lists `asyncpg`; add no callers. `docs/refactoring/psycopg-migration.md` is historical dual-stack, not policy.
@@ -43,7 +45,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 - No process-wide connector `start_all` / trigger loops from request handlers or before `init_pool`; existing single `start_client` after save is the exception. WhatsApp webhook is mounted; a proactive sender requires registration in `app/services/agent_tool_exec/channel_messaging`.
 - Schemas (`app/schemas/schemas.py`, `agent_credential`) must not expose secrets/hashes/cookies. Non-admins cannot set `allow_network` or tool proxy fields.
 - Sandbox guests use only `SANDBOX_*_PROXY`, never inherited process `HTTP_PROXY`; never put authenticated proxy URLs on bwrap `--setenv`.
-- Privileged work uses `get_current_user` (`must_change_password` gate); `get_authenticated_user` is only for `/auth/me` and password change. Never bypass force-change on WS/download paths.
+- Privileged work uses `get_current_user` (`must_change_password` gate); `get_authenticated_user` is limited to `/auth/me`, `/member/auth/me` and password change. Never bypass force-change on WS/download paths.
 - Browser downloads use single-use `file_download_tickets`: Bearer `POST /api/agents/{id}/files/download-ticket`; `GET .../files/download` accepts Bearer or `ticket`, never query JWT. Redeem with `load_user_principal(fresh=True)`.
 - Chat WebSockets accept only single-use tickets from `POST /api/auth/chat-ticket`; authorize with `load_user_principal(fresh=True)`.
 - Genesis PA needs usable DB email + password hash; missing credentials seed/repair from `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` (min 6 chars), otherwise fail closed. No email-only bootstrap or open-registration elevation. Genesis PA belongs to MaraClaw for default-agent seeding.
@@ -62,20 +64,22 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 ./start-from-docker.sh
 uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
-uv run --extra dev basedpyright --project pyrightconfig.json app
+uv run --extra dev python -m scripts.export_api_contracts --check   # never writes; drop --check to refresh
+uv run --extra dev basedpyright --project pyrightconfig.json        # project scope, no path argument
 uv run --extra dev ty check --force-exclude .
 uv run python scripts/check_no_new_sqlalchemy.py
 uv run python scripts/check_no_direct_loguru.py
 uv run pytest                                  # no implicit coverage
-bash scripts/test.sh                          # scoped admin/auth/tenant branch gate: 90%
+bash scripts/test.sh                          # whole suite; 90% branch gate on ten admin/auth/tenant modules
 uv run pytest --cov=app --cov-fail-under=0       # optional full-app report, not the scoped gate
 uv run python -m app.scripts.bootstrap_db
+(cd connectors/whatsapp && npm ci && npm test && npm run build)   # Node 26.13.0 bridge
 ```
 
 ## Runtime And Images
 
-- `../.github/workflows/engine-ci.yml` runs Ruff, basedpyright, ty and `scripts/test.sh` with explicit scope/terminal report/90% gate; `PYTEST_ADDOPTS` adds XML/HTML. Separate `lifecycle-postgres` uses PostgreSQL 18.6 for setup/retry/authorization, start recovery, deletion/approval cleanup, ownership transfer and guest-config transaction regressions; it does not validate live Docker guests. Local gates include both freeze scripts; `scripts/lint.sh` skips them and uses `ty check --force-exclude`.
-- `Dockerfile`: pinned `uv==0.13.6`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
+- `../.github/workflows/engine-ci.yml` (uv 0.13.6, `UV_LOCKED`) runs `lint` (Ruff check + format check); `typecheck` (`scripts.export_api_contracts --check`, `basedpyright --project pyrightconfig.json` with no path argument, `ty check --force-exclude .`); `test` (`scripts/test.sh`: explicit ten-module coverage scope, terminal report, 90% gate; `PYTEST_ADDOPTS` adds XML/HTML); and `whatsapp-bridge` (Node 26.13.0, `npm ci`, `npm test`, `npm run build` in `connectors/whatsapp`). Separate `lifecycle-postgres` uses PostgreSQL 18.6 for setup/retry/authorization, start recovery, deletion/approval cleanup, ownership transfer, guest-config transactions, Linkup proxy tokens/revocation, WhatsApp webhook/receipt/reply-window/Personal QR, gateway-report relay contention and shared gateway/burst/model-config regressions; it does not validate live Docker guests. CI does not run the two `check_no_*.py` freeze scripts and `scripts/lint.sh` skips them: run them locally when touching imports or logging.
+- `Dockerfile`: pinned `uv==0.13.6`; `uv export --locked --no-dev --no-emit-project` from `uv.lock`, then `uv pip install --system --require-hashes` (runtime only, no extras). Its `whatsapp` stage (`node:26.13.0-trixie-slim`) runs `npm ci`, `npm test && npm run build && npm prune --omit=dev`; the runtime image copies `node`, `package.json`, `dist/` and `node_modules/` to `/app/connectors/whatsapp` and asserts `v26.13.0`. `.dockerignore` recursively excludes secrets/local data/caches but preserves runtime/build inputs including the anydoc fixture.
 - `start-from-docker.sh` builds `maraclaw-engine:local`, runs `maraclaw-engine`, forwards `.env` via `-e KEY` (not `--env-file`); mounts host Docker socket + Linux Docker CLI for pywhales/OpenClaw, dual-mounts `DATA_DIR` for host bind paths, creates `DOCKER_NETWORK` (default `maraclaw_network`).
 - Bubblewrap 0.12 rejects setuid execution; the image explicitly clears its setuid bit and requires usable host user namespaces for non-root sandboxing. Launcher retains `SYS_ADMIN SETUID SETGID SYS_CHROOT SETPCAP NET_ADMIN SYS_PTRACE` + `seccomp=unconfined`; validate the startup probe and a real backend command, not only file mode. The short probe does not mount `/proc`; a successful probe can still leave the full backend blocked by host permissions. Namespace failure must not trigger host execution.
 - `app/process_roles.py` normalizes roles lowercase in Python and `entrypoint.sh` before its case-sensitive predicate: `Bootstrap` DOES run `app.scripts.bootstrap_db`. Only `all`/`bootstrap` run schema bootstrap; failure aborts unless `ALLOW_MIGRATION_FAILURE=true` explicitly permits continuation (not Alembic).

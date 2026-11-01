@@ -28,14 +28,22 @@ affect only new launches, not a stream already in progress. There's no
 monitoring dependency, global observer, background worker, or network export
 by default.
 
-The vocabulary is closed and currently at `schema_version=3`. `family` is
+The vocabulary is closed and currently at `schema_version=4`. `family` is
 `"captured"`, `"stream"`, `"archive_load"`, or `"archive_save"`, describing
 the shared execution path, never something inferred from argv; see
 [Registry transfers and archives](registry-and-archives.md) for exactly
 which image operations use the archive families. `outcome` on
-`CompletionRecord` is `"success"`, `"failure"`, `"timeout"`, or `"closed"`.
-Each launch attempt has one opaque random `attempt_id`, shared with at most
-one completion.
+`CompletionRecord` is `"success"`, `"failure"`, `"timeout"`, `"closed"`,
+`"cancelled"` (an `ObservationCancelled`), or `"limit"` (an
+`ObservationLimitError` after launch, including a `max_total_stream_bytes`
+overflow, a `max_total_stdin_bytes` refusal, or a `native_argv` refusal).
+`ObservationTimeout` and `DockerTimeout`
+stay `"timeout"` and `KeyboardInterrupt` stays `"failure"`; a rejection before
+launch emits no record. A stream reports the outcome of the error it delivers
+(deadline, then scope stop, then reader error), and `close()` keeps a stop
+recorded before it, such as a set cancel token; with none it reports
+`"closed"`. Each launch attempt has one opaque random `attempt_id`, shared with
+at most one completion.
 
 Records never include commands, arguments, endpoint addresses, environment
 keys or values, stdin/stdout/stderr payloads, or exception text, even with
@@ -52,7 +60,10 @@ this contract.
 CLI's stdin pipe, including partial acceptance before a failure. It doesn't count
 bytes merely yielded by an input iterator and doesn't prove consumption by the
 CLI or Docker daemon. An observed empty pipe is `0`; an unobserved channel is
-`None`.
+`None`. The same accepted-write measurement charges nested observation stdin
+budgets; reaching the exact budget at EOF succeeds, while further nonempty input
+reports `"limit"` without writing past it. See
+[Bound archive uploads](registry-and-archives.md#bound-archive-uploads).
 
 A stream completes only when its consumer exhausts it, observes a terminal
 error, or closes it; a bare loop `break` doesn't promise a completion record.
@@ -138,8 +149,8 @@ no overflow queue.
 `owner.request(...)` returns an inert, single-use handle. Calling `call()` or
 `stream()` on it attempts admission and only then runs the supplied callable.
 `request.cancel()` can stop a still-pending wait from another thread;
-successful cancellation guarantees the callable never starts, but once the
-request has started, `cancel()` returns `False` and can't undo the operation.
+successful cancellation guarantees the callable never starts, but once admitted,
+`cancel()` returns `False` and can't undo the operation.
 
 ```python
 with owner.request(control).stream(
@@ -153,8 +164,12 @@ with owner.request(control).stream(
 iterator; the permit stays held until exhaustion, an observed failure, or an
 explicit close completes source cleanup and any in-flight read unwinds. A bare
 `break`, local child exit, or unobserved source failure doesn't release it.
-A plain generator, such as an empty `image.pull([], ...)`
-result, needs wrapping in `contextlib.closing` inside the factory.
+A plain generator needs wrapping in `contextlib.closing` inside the factory.
+Use `stream()`, not `call()`, when returning an owned stream: `call()` releases
+its permit as soon as the callable returns. One stream permit covers all direct
+children of a composite source, not one permit per transfer worker.
+`image.pull([], stream_logs=True)` is already context-managed and closeable,
+even though it launches nothing; no wrapper is needed for that result.
 
 An active reservation from `call()` or an open `stream()` can resize its
 demand in place with `try_resize(new_total)`, available on both the original

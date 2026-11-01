@@ -11,7 +11,8 @@ Remote sandbox backends call self-hosted or external sandbox services controlled
 ## Endpoint Contract
 
 - Read endpoint, API key, timeout, CPU, memory, and network settings from `SandboxConfig`.
-- Keep all HTTP calls async and timeout-bounded.
+- Keep all HTTP calls async and timeout-bounded, and create the client with `SandboxConfig.http_client(base_url=..., timeout=...)`. The operator-granted origin may resolve privately; any tenant or agent override is public-only. Never raw `httpx.AsyncClient`; map `OutboundPolicyError` to `ENDPOINT_BLOCKED_MESSAGE`.
+- Send `Authorization: Bearer` only with the bound `config.api_key` (`../AGENTS.md`); do not read a key from anywhere else.
 - Map remote responses into `ExecutionResult` consistently with local/API backends.
 - Health checks should verify service availability without running arbitrary user payloads.
 - Preserve caller-visible behavior when remote services return partial fields or provider-specific error bodies.

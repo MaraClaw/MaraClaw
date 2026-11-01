@@ -1,10 +1,10 @@
 # lib/ - engine clients
 
-**Generated:** 2026-10-23 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-11-01 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
-Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.ts`.
+Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.ts`. Chat transport and transcript logic: [chat/AGENTS.md](./chat/AGENTS.md).
 
 ## STRUCTURE
 
@@ -13,13 +13,22 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `api.ts` | `getApiBaseUrl` / `apiUrl` / `wsUrl`. Empty `VITE_API_BASE_URL` = same-origin. Rejects hostname `0.0.0.0`. |
 | `http.ts` | Only fetch wrapper: `apiRequest`, `apiFormRequest`, `apiBinaryRequest`, `ApiError`, `formatApiDetail`, `userFacingRequestError`. Bearer unless `token` overridden. Owner fences cover headers/body awaits; current-owner 401 expires that session. JSON 204 → `undefined`. Binary previews stream with a 20 MiB cap, no-store and no redirects. |
 | `auth-storage.ts` | localStorage `maraclaw-enduser-token` |
-| `auth-api.ts` | `/api/member/auth/*` for member login/register/SSO/current user; shared `/api/auth/*` for password/tickets/tenant selection and `/api/tenants/*` for join/switch. Public calls pass `token: null`. |
-| `types/auth.ts` | Generated member DTO adapters: `UserOut`, `TokenResponse`, `RegisterInitResponse`, `MultiTenantResponse`, `isTokenResponse`. Audience eligibility is enforced by the server. |
-| `company-admissions-api.ts`, `types/company-admissions.ts` | Zod-parsed applicant request summaries/details from `/api/company-admissions/mine` and `/:id`; owner/signal-fenced. Pending join/transfer/register responses reuse the summary schema without installing target membership. |
+| `engine-contracts.generated.ts` | Generated from `../engine/contracts/api-contract.json` by `npm run contracts:generate` (`contracts:check` in CI). Never hand-edit; adapters in `types/*` and `*-api.ts` import from it. |
+| `auth-api.ts` | `/api/member/auth/*` for member login/register/SSO/current user; shared `/api/auth/*` for password/tickets/tenant selection and `/api/tenants/*` for join/switch/transfer. `joinDefaultOrg` and `transferOrg` live here; `lookupOrgByEmail` / `joinSuggestedOrg` are unused by pages. Public calls pass `token: null`. |
+| `invitations-api.ts` | `previewInvitation` (`POST /api/tenants/invitations/preview`, destination tenant only) and `joinInvitation` (`POST /api/tenants/join`); owner-fenced, the preview also signal-fenced. |
+| `types/auth.ts` | Generated member DTO adapters: `UserOut`, `TokenResponse`, `RegisterInitResponse`, `MultiTenantResponse`, `JoinOrgResponse` (immediate token, pending or approved admission), `isTokenResponse`. Audience eligibility is enforced by the server. |
+| `company-admissions-api.ts`, `types/company-admissions.ts` | Zod-parsed applicant request summaries/details from `/api/company-admissions/mine` (plus `/mine/page` for cursor pages) and `/:id`, with withdrawal; owner/signal-fenced. Pending join/transfer/register responses reuse the summary schema without installing target membership. |
+| `admission-access.ts` | `hasPendingAdmission` walks pending admission pages (100 each) for a pending, non-transfer request from the current tenant; `isAdmissionAccessPath` lists the routes a restricted session may open. |
+| `company-transfers-api.ts`, `types/company-transfers.ts`, `format-money.ts` | Transfer quote (`/api/company-admissions/transfer-quote`), own transfer list/detail/withdraw under `/transfers`, and the paid/free choice, quote and payment-review schemas. `formatMoney` renders minor units. |
 | `sso-storage.ts` | sessionStorage `maraclaw-sso-state` / `provider` / `intent` |
 | `auth-highlights.ts` | AuthShell copy for forgot/reset/verify/sso. Login/register inline their own. |
-| `workspace-api.ts` | Leftover mega: agents, sessions, files, skills, tools, tasks, focus, triggers, channels (`CHANNEL_FIELDS`/`CHANNELS`), relationships, permissions, onboarding + `ONBOARDING_SKIP_KEY`. Re-exports schedule operations and `ScheduleOut` from `schedules-api.ts`; notifications live in `notifications-api.ts`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
-| `notifications-api.ts` | Zod-parsed notification lists and unread counts; mark-one/read-all requests under `/api/notifications`. Defines `unreadNotificationCount`. |
+| `workspace-api.ts` | Facade plus leftovers. Defines sessions, files, skills, tools, relationships, approvals, metrics and revisions. Re-exports `agents-api.ts` (agents, permissions), `agent-work-api.ts` (tasks, focus, triggers), `onboarding-api.ts` (incl. `ONBOARDING_SKIP_KEY`), `channels-api.ts` (`CHANNEL_FIELDS`/`CHANNELS`) and `schedules-api.ts`; notifications live in `notifications-api.ts`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
+| `notifications-api.ts` | Zod-parsed notification pages and unread counts; single, all and selected read/unread/archive/restore requests under `/api/notifications`. Defines `unreadNotificationCount`. |
+| `chat-history-api.ts`, `chat-history-query.ts` | Zod-parsed `GET /api/agents/:id/sessions/:id/messages/page` (50 rows, cursor; `has_more` must match `next_cursor`). The latest window bridges back to the previous newest entry; earlier pages are cached per cursor and prepended; a cursor that fails to advance throws `ChatHistoryCursorError`. Merge rules: `chat/history.ts`. `workspace-api.listSessionMessages` (`limit=200`, no cursor) is unused. |
+| `activity-api.ts` | Manager activity pages from `/api/agents/:id/activity/page` (limit 1-200, cursor, `action_type`, `no-store`). |
+| `agent-lifecycle-api.ts`, `agent-lifecycle-policy.ts`, `agent-setup-api.ts`, `agent-deletion-api.ts` | Lifecycle status and optional-MCP retry, setup status/retry, expiry and deletion-request policy, and `/api/agent-deletion-requests`. |
+| `agent-skills-api.ts` | `listInstalledAgentSkills`: skills under the agent's `skills/` folder (`SKILL.md`/`skill.md` entry point or flat `*.md`), owner- and signal-fenced. |
+| `upload-policy-api.ts`, `whatsapp-api.ts`, `whatsapp-personal-session.ts` | `GET /api/chat/upload-policy` limits; WhatsApp channel and personal-QR calls; a view-local personal session whose secrets never enter a query cache. |
 | `schedules-api.ts` | Zod-parsed schedule CRUD, manual runs, run receipts/cancellation and history, including cursor-paginated outcome filters. |
 | `schedule-editor.ts` | `ScheduleDraft`, default draft values and changed-field patches via `scheduleChanges`. |
 | `schedule-time.ts` | IANA timezone validation and next-run formatting in the schedule's timezone. |
@@ -42,20 +51,10 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 
 ## WHERE TO LOOK
 
-| Task | File |
-|------|------|
-| Base / WS URL | `api.ts` |
-| All HTTP | `http.ts` |
-| Persist member token | `auth-storage.ts` |
-| Auth + tenant HTTP | `auth-api.ts` + `types/auth.ts` |
-| SSO OAuth state | `sso-storage.ts` |
-| AuthShell side copy | `auth-highlights.ts` |
-| Agents / files / channels / onboarding | `workspace-api.ts` |
-| Take Control, vault, published pages | `control-api.ts` |
-| Plaza / OKR / directory | `plaza-api.ts` / `okr-api.ts` / `directory-api.ts` |
-| Agent department picker | `agent-departments-api.ts` |
-| Chat socket | `chat/ws-client.ts` |
-| Landing motion presets | `motion.ts` |
+- Join, transfer, admission or tenant switch: `invitations-api.ts`, `company-transfers-api.ts`, `company-admissions-api.ts`, `auth-api.ts`, then `types/*`.
+- Agent files, sessions, skills, tools or channels: the `workspace-api.ts` facade, or the concrete `agents-api.ts` / `agent-work-api.ts` / `channels-api.ts` it re-exports.
+- Take Control, vault, published pages: `control-api.ts`. Plaza, OKR, directory: their own `*-api.ts`.
+- Chat socket: `chat/ws-client.ts`. Chat history, skill mentions, transcripts: `chat-history-*.ts` and the `chat/` guide.
 
 ## CONVENTIONS
 

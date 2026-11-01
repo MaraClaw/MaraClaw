@@ -1,6 +1,6 @@
 # layout/ — workspace + marketing chrome
 
-**Generated:** 2026-10-23 · Parent: `web-e/AGENTS.md`
+**Generated:** 2026-11-01 · Parent: `web-e/AGENTS.md`
 
 ## OVERVIEW
 
@@ -10,8 +10,9 @@ Workspace + marketing chrome.
 
 | File | Role |
 |------|------|
-| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Admissions (`/app/admissions`) / Settings. Desktop aside + mobile top strip. Inbox badge: `notificationUnreadOptions('all')`; `hooks/notification-options.ts` owns the 30s poll and calls `unreadNotificationCount` from `lib/notifications-api.ts`. |
-| `agent-layout.tsx` | Per-agent header + `SectionRail` tabs. `Outlet` context `{ agent }`. Management gates live in `pages/app/agent-settings.tsx` (manage access or creator) and `agent-tools.tsx`, `agent-files.tsx`, `agent-pages.tsx` (manage access). Start/stop controls are in `agent-settings.tsx`, not this layout. |
+| `app-shell.tsx` | **Only** `QueryClientProvider` in the SPA (`staleTime` 30s, `retry` 1, no focus refetch). Workspace rail: Agents / Plaza / OKR / Directory / Inbox / Admissions (`/app/admissions`) / Settings. Desktop aside + mobile top strip. Inbox badge: `notificationUnreadOptions('all')`; `hooks/notification-options.ts` owns the 30s poll and calls `unreadNotificationCount` from `lib/notifications-api.ts`. Until `useAdmissionAccess` confirms workspace access, both rails show only the items `isAdmissionAccessPath` allows (Inbox, Admissions, Settings) and the mobile logo links to `/app/notifications`. `<main>` renders `AdmissionAccessGate` once the tenant query loads. |
+| `admission-access-gate.tsx` | Two separate gates. `AdmissionAccessGate` (in AppShell): access paths pass; otherwise it shows a checking status, an error alert with Retry access check, or redirects to `/app/notifications` when a pending admission exists. `AdmissionInboxGate` (route wrapper for `notifications` in `routes/index.tsx`): wraps OnboardingGate only when workspace access is allowed, else plain Outlet. Both read `hooks/use-admission-access.ts`. |
+| `agent-layout.tsx` | Per-agent header + `SectionRail` tabs. `Outlet` context `{ agent }`. The Activity tab is hidden unless `access_level` is `manage`. Management gates live in `pages/app/agent-settings.tsx` (manage access or creator) and `agent-tools.tsx`, `agent-files.tsx`, `agent-pages.tsx` (manage access). Start/stop controls are in `agent-settings.tsx`, not this layout. |
 | `agent-update-gate.tsx` | AgentLayout fallback when the OpenClaw update gate blocks the outlet; shows update/check status, retry on error and a link to agent Settings. Settings stays accessible through the gate. |
 | `section-rail.tsx` | Shared icon rail. Route `to` (agent tabs) or `onSelect` (directory `?tab=`). Smaller than the workspace rail — do not merge. |
 | `onboarding-gate.tsx` | First-run: no agents + status not `completed` + not skipped → `/app/onboarding`. Skip key `maraclaw-onboarding-skipped` (`wasOnboardingSkipped` in workspace-api). |

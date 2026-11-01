@@ -7,7 +7,9 @@ This directory is not a normal backend service package. It is a bundled skill-cr
 - Flattened names such as `scripts__run_eval.py`, `agents__grader.md`, and `eval-viewer__viewer.html` represent nested upstream paths.
 - Imports may reference generated layout names such as `scripts.run_eval` even though files are flattened here.
 - Do not "fix" flattened imports or filenames unless changing the generation/packaging model intentionally.
-- `app/services/skill_creator_content.py` maps flattened filenames back to logical paths; additions may require updating that map.
+- `app/services/skill_creator_content.py` maps flattened filenames back to logical paths through `_FILE_MAP` (16 files plus the inline `SKILL.md`); a new payload file needs an entry there.
+- `get_skill_creator_files()` includes every mapped path even when its payload is absent: `_load_file` returns `""` for a missing file, so a deleted or renamed payload ships as a blank file instead of failing. `scripts/__init__.py` is intentionally empty and is included on purpose. Keep the file names and the map in step.
+- `content_research_writer__SKILL.md` is not in `_FILE_MAP`; `skill_seeder.py` reads it directly for the `content-research-writer` skill.
 - `pyproject.toml` excludes this directory from `ty`; that is intentional because these files are bundled/generated skill payloads, not normal backend service modules.
 
 ## Script Roles
@@ -15,7 +17,7 @@ This directory is not a normal backend service package. It is a bundled skill-cr
 - Packaging: `scripts__package_skill.py`, `scripts__quick_validate.py`, `scripts__utils.py`.
 - Eval/optimization: `scripts__run_eval.py`, `scripts__run_loop.py`, `scripts__improve_description.py`.
 - Reports/benchmarking: `scripts__generate_report.py`, `scripts__aggregate_benchmark.py`, `eval-viewer__generate_review.py`.
-- Prompts/schemas/examples: `agents__*.md`, `references__schemas.md`, `content_research_writer__SKILL.md`.
+- Prompts/schemas/examples: `agents__*.md`, `references__schemas.md`, `assets__eval_review.html`, `content_research_writer__SKILL.md`.
 
 ## Side Effects
 
@@ -26,5 +28,5 @@ This directory is not a normal backend service package. It is a bundled skill-cr
 
 ## Tests
 
-- There is no focused test coverage for these scripts today.
+- There is no focused test coverage for these scripts or for `get_skill_creator_files()` (so the empty-payload behavior above is unguarded).
 - If adding tests, isolate CLI behavior with temp directories and mocks. Do not require live model/tool execution.

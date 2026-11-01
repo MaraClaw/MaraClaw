@@ -33,7 +33,7 @@ Scope: this directory's styled controls and composition primitives.
 ## Gotchas
 
 - `Button` supplies no default `type`; specify it for non-submit form actions.
-- `Select.className` styles the wrapper; its `ref` targets the native select.
+- `Select.className` styles the wrapper; its `ref` targets the native select. `fit` sizes to content (`w-max`); default is full width.
 - Pointer-committed select changes blur; keyboard-committed changes retain focus.
 - `PasswordField` spreads input props after generated ARIA attributes.
   Caller `aria-describedby` or `aria-invalid` therefore overrides those defaults.
