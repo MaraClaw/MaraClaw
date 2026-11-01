@@ -12875,6 +12875,26 @@
         "title": "SearchAnalyticsTrendingQueryProjection",
         "type": "object"
       },
+      "SelectedNotificationsRequest": {
+        "description": "Submitted identifiers; the 200-item bound applies before deduplication.",
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "SelectedNotificationsRequest",
+        "type": "object"
+      },
       "SessionOut": {
         "properties": {
           "agent_id": {
@@ -16723,6 +16743,22 @@
           },
           {
             "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -16822,6 +16858,22 @@
                 }
               ],
               "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
             }
           },
           {
@@ -33414,6 +33466,53 @@
         ]
       }
     },
+    "/api/notifications/unread-selected": {
+      "post": {
+        "description": "Mark every selected visible notification unread without changing archive state.",
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f756e726561642d73656c6563746564",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectedNotificationsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Selected Unread",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/{notification_id}/archive": {
       "post": {
         "description": "Archive a notification belonging to the authenticated membership.",
@@ -38960,6 +39059,22 @@
           },
           {
             "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -39025,6 +39140,22 @@
                 }
               ],
               "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
             }
           },
           {
@@ -40112,6 +40243,7 @@
       "SearchAnalyticsSummary",
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
+      "SelectedNotificationsRequest",
       "SlackChannelPayload",
       "TaskCreate",
       "TaskLogCreate",
@@ -40388,6 +40520,7 @@
       "SearchAnalyticsSummary",
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
+      "SelectedNotificationsRequest",
       "SlackChannelPayload",
       "StringErrorEvent",
       "SubmissionRejectionReason",

@@ -785,6 +785,9 @@ export type SearchAnalyticsTimeBucket = z.infer<typeof SearchAnalyticsTimeBucket
 export const SearchAnalyticsTrendingQuerySchema = z.looseObject({ ["distinct_agents"]: z.number().refine(Number.isInteger), ["distinct_orgs"]: z.number().refine(Number.isInteger), ["hits"]: z.number().refine(Number.isInteger), ["kind"]: z.string(), ["query_hash"]: z.string(), ["query_normalized"]: z.string() });
 export type SearchAnalyticsTrendingQuery = z.infer<typeof SearchAnalyticsTrendingQuerySchema>;
 
+export const SelectedNotificationsRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type SelectedNotificationsRequest = z.infer<typeof SelectedNotificationsRequestSchema>;
+
 export const SlackChannelPayloadSchema = z.looseObject({ ["bot_token"]: z.string().optional(), ["signing_secret"]: z.string().optional() });
 export type SlackChannelPayload = z.infer<typeof SlackChannelPayloadSchema>;
 
