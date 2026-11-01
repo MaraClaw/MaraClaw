@@ -10,7 +10,7 @@ RUN npm ci
 COPY connectors/whatsapp/ ./
 RUN npm test && npm run build && npm prune --omit=dev
 
-FROM python:3.14.10-slim-trixie AS deps
+FROM python:3.15.2-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
 WORKDIR /app
@@ -22,6 +22,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc=4:14.2.0-1 \
+        libc6-dev=2.41-12+deb13u4 \
         libpq-dev=17.11-0+deb13u1 \
         libcairo2=1.18.4-1+b1 \
         libpango-1.0-0=1.56.3-1 \
@@ -43,7 +44,7 @@ RUN set -eu; set --; \
     rm -f /tmp/requirements.txt
 
 # ─── Production ─────────────────────────────────────────
-FROM python:3.14.10-slim-trixie AS production
+FROM python:3.15.2-slim-trixie AS production
 
 ARG APT_MIRROR=deb.debian.org
 ARG TINI_VERSION=0.19.0-3+b8
@@ -80,7 +81,7 @@ RUN useradd --create-home maraclaw && \
     chown -R maraclaw:maraclaw /data
 
 # Copy installed packages from deps stage
-COPY --from=deps /usr/local/lib/python3.14/site-packages/ /usr/local/lib/python3.14/site-packages/
+COPY --from=deps /usr/local/lib/python3.15/site-packages/ /usr/local/lib/python3.15/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=whatsapp /usr/local/bin/node /usr/local/bin/node

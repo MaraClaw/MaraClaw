@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 DOCKERFILE: Final = Path(__file__).resolve().parents[1] / "Dockerfile"
-PRODUCTION_STAGE: Final = "FROM python:3.14.10-slim-trixie AS production"
+PRODUCTION_STAGE: Final = "FROM python:3.15.2-slim-trixie AS production"
 APT_INSTALL: Final = "apt-get install -y --no-install-recommends"
 APPROVED_DIRECT_PINS: Final = (
     "tini=0.19.0-3+b8",
@@ -125,6 +125,7 @@ def _dependency_run(source: str) -> str:
 
 def _assert_locked_dependencies(source: str) -> None:
     deps, _, production = source.partition(PRODUCTION_STAGE)
+    assert "libc6-dev=2.41-12+deb13u4" in deps
     copies = [shlex.split(line) for line in deps.splitlines() if line.startswith("COPY ")]
     assert ["COPY", "pyproject.toml", "uv.lock", "./"] in copies
     run = _dependency_run(source)
@@ -145,7 +146,7 @@ def _assert_locked_dependencies(source: str) -> None:
     assert cleanup == ["rm", "-f", requirements]
     assert not {"--extra", "--all-extras", "--only-dev", "--all-groups", "--group", "--no-hashes"} & set(export)
     assert not {"--index-url", "--trusted-host", "$@"} & set(export)
-    for path in ("/usr/local/lib/python3.14/site-packages/", "/usr/local/bin/"):
+    for path in ("/usr/local/lib/python3.15/site-packages/", "/usr/local/bin/"):
         assert f"COPY --from=deps {path} {path}" in production
     assert "COPY --chown=maraclaw:maraclaw . ." in production
     assert "RUN python /app/scripts/verify_anydoc.py" in production
@@ -230,6 +231,7 @@ def test_dependencies_are_locked_system_installs() -> None:
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
+        ("libc6-dev=2.41-12+deb13u4", ""),
         ("COPY pyproject.toml uv.lock ./", "COPY pyproject.toml ./"),
         ("--locked", "--frozen"),
         ("--system", ""),
