@@ -43,7 +43,11 @@ interval is `provider_timestamp <= now < provider_timestamp + 24 hours`, not 24 
 from engine receipt. Missing evidence and expiry persist respectively as
 `whatsapp_window_unavailable` and `whatsapp_window_expired`; these terminal intents
 are not retried or revived by subsequent inbound activity. New inbound activity can
-only authorize a new reply turn. No template or proactive sender is added.
+only authorize a new reply turn. The `send_channel_message` tool supports text-only
+WhatsApp follow-ups to an already bound, authorized contact in their exact existing
+non-group reply session. The same receipt window applies, with a 4096-character
+limit and no template sends. Provider acknowledgement means acceptance, not delivery;
+timeouts and accepted-but-unrecorded history failures must not be automatically retried.
 The receipt columns and terminal reasons require a fresh schema baseline; no
 existing-database upgrade is supplied.
 

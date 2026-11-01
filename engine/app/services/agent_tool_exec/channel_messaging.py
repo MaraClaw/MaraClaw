@@ -11,7 +11,7 @@ from app.records.org import OrgMemberRecord
 from app.services import agent_tools
 from app.services.channels.types import outbound_provider_key
 
-from . import channel_providers
+from . import channel_provider_whatsapp, channel_providers
 from .registry import ToolArguments
 
 ChannelSender = Callable[[uuid.UUID, str, str, OrgMemberRecord], Awaitable[str]]
@@ -29,6 +29,7 @@ def _outbound_senders() -> dict[str, ChannelSender]:
     send_teams: ChannelSender = channel_providers._send_teams_channel_message
     send_wechat: ChannelSender = channel_providers._send_wechat_channel_message
     send_google: ChannelSender = channel_providers._send_google_chat_message
+    send_whatsapp: ChannelSender = channel_provider_whatsapp.send_whatsapp_message
     return {
         "feishu": send_feishu,
         "dingtalk": send_dingtalk,
@@ -38,6 +39,7 @@ def _outbound_senders() -> dict[str, ChannelSender]:
         "microsoft_teams": send_teams,
         "wechat": send_wechat,
         "google_chat": send_google,
+        "whatsapp": send_whatsapp,
     }
 
 

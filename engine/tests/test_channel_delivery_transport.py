@@ -77,9 +77,9 @@ async def test_transport_sends_exact_chunk_with_only_supported_stable_keys(monke
         )
     chunk = OutboundChunk(text="  exact\n世界  ", key=uuid4())
 
-    await outbound_transport.send_chunk(outbound, chunk)
-    await outbound_transport.send_chunk(outbound, chunk)
+    acknowledged = [await outbound_transport.send_chunk(outbound, chunk) for _ in range(2)]
 
+    assert acknowledged == [("message" if provider == "whatsapp" else None)] * 2
     sent = [request for request in requests if "app_access_token" not in request.url.path]
     bodies = [json.loads(request.content) for request in sent]
     assert len(sent) == 2
@@ -141,6 +141,35 @@ async def test_whatsapp_checks_strict_window_at_actual_transport_boundary(monkey
         )
     assert len(requests) == (1 if reason is None else 0)
     lookup.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"messages": []},
+        {"messages": [{}]},
+        {"messages": [{"id": "accepted"}, {}]},
+        {"messages": [{"id": "accepted"}], "error": {"code": 1}},
+    ],
+)
+async def test_whatsapp_acknowledgement_requires_every_provider_message_id(monkeypatch, body):
+    monkeypatch.setattr(
+        channel_event_receipt_dao, "latest_eligible_timestamp", AsyncMock(return_value=datetime.now(UTC))
+    )
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=body)
+
+    transport(monkeypatch, respond)
+
+    with pytest.raises(ProviderDeliveryError) as failure:
+        await outbound_transport.send_chunk(configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()))
+
+    assert failure.value.code == "missing_ack"
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("kind", ["seconds", "http_date", "discord_body"])
