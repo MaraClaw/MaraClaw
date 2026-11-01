@@ -38,6 +38,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         tenant_id: UUID | None = None,
         actor_id: UUID | None = None,
         action: str | None = None,
+        target_type: str | None = None,
         limit: int = 100,
     ) -> Sequence[AdminAuditLogRecord]:
         params: dict[str, Any] = {"limit": limit}
@@ -51,6 +52,9 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         if action not in (None, ""):
             clauses.append("action = %(action)s")
             params["action"] = action
+        if target_type not in (None, ""):
+            clauses.append("target_type = %(target_type)s")
+            params["target_type"] = target_type
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.session() as db:
             rows = await db.fetchall(
@@ -66,6 +70,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         tenant_id: UUID | None = None,
         actor_id: UUID | None = None,
         action: str | None = None,
+        target_type: str | None = None,
         limit: int = 100,
         before: tuple[datetime, UUID] | None = None,
         start_at: datetime | None = None,
@@ -83,6 +88,9 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         if action not in (None, ""):
             clauses.append("action = %(action)s")
             params["action"] = action
+        if target_type not in (None, ""):
+            clauses.append("target_type = %(target_type)s")
+            params["target_type"] = target_type
         if before is not None:
             clauses.append("(created_at, id) < (%(before_created_at)s, %(before_id)s)")
             params["before_created_at"], params["before_id"] = before

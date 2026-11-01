@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.core.json_types import json_as_str, object_mapping_from
@@ -486,11 +487,12 @@ async def set_org_admin_active(
 @router.get("/admin-audit-logs/page", response_model=AdminAuditPageOut)
 async def list_org_admin_audit_logs_page(
     action: str | None = None,
+    target_type: str | None = None,
     limit: int = 100,
     cursor: str | None = None,
     start_at: str | None = None,
     end_at: str | None = None,
-    current_user: UserRecord = Depends(require_role("org_admin")),
+    current_user: UserRecord = Depends(require_admin_audit_role("org_admin")),
 ) -> AdminAuditPageOut:
     """Seek only the current principal's company trail, never cursor-supplied scope."""
     if not current_user.tenant_id:
@@ -500,6 +502,7 @@ async def list_org_admin_audit_logs_page(
             role="org_admin",
             tenant_id=current_user.tenant_id,
             action=action,
+            target_type=target_type or None,
             start_at=parse_admin_audit_bound(start_at),
             end_at=parse_admin_audit_bound(end_at),
         ),
@@ -511,8 +514,9 @@ async def list_org_admin_audit_logs_page(
 @router.get("/admin-audit-logs", response_model=list[AdminAuditLogOut])
 async def list_org_admin_audit_logs(
     action: str | None = None,
+    target_type: str | None = None,
     limit: int = 100,
-    current_user: UserRecord = Depends(require_role("org_admin")),
+    current_user: UserRecord = Depends(require_admin_audit_role("org_admin")),
 ) -> list[AdminAuditLogOut]:
     """List admin action logs for the caller's company."""
     if not current_user.tenant_id:
@@ -520,6 +524,7 @@ async def list_org_admin_audit_logs(
     logs = await admin_audit_log_dao.list_recent(
         tenant_id=current_user.tenant_id,
         action=action,
+        target_type=target_type or None,
         limit=min(max(limit, 1), 500),
     )
     return [AdminAuditLogOut.model_validate(log) for log in logs]
