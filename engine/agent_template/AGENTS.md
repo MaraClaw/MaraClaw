@@ -1,23 +1,25 @@
 # agent_template
 
-This is the singular runtime workspace scaffold copied into each new agent's storage prefix. It is not the plural `agent_templates/` role catalog.
+This is the singular runtime workspace scaffold used to initialize each new agent's storage prefix. It is not the plural `agent_templates/` role catalog.
 
-## Copy Path
+## Initialization Path
 
 - `Settings.AGENT_TEMPLATE_DIR` defaults to `<repo>/agent_template` from source and `/app/agent_template` in containers.
-- `AgentManager.initialize_agent_files()` uploads every file here into `<agent_id>/...` through the configured storage backend on first agent setup.
-- The copy loop is file-based, so empty directories need a placeholder such as `.gitkeep` to survive.
-- Existing agent storage is not rewritten when the prefix already exists. Template edits affect newly initialized agents unless a separate backfill is run.
-- Files named `tasks.json` or `todo.json`, and paths under `enterprise_info/`, are skipped during the copy.
+- `render_agent_files()` in `app/services/agent_workspace.py` reads every file here except `tasks.json`, `todo.json`, `.maraclaw-gateway-key` and anything under `enterprise_info/`, then renders `soul.md` and `state.json`. The loop is file-based, so empty directories need a placeholder such as `.gitkeep`.
+- `write_missing_agent_files()` creates each rendered object at `<agent_id>/...` with `create_bytes_if_absent`, under the per-agent `setup_workspace_lock`. Callers: `AgentManager.initialize_agent_files()` (seeders, onboarding) and worker-owned setup in `app/services/agent_setup.py`, which stores the rendered files first and writes them later.
+- Initialization is resumable: every missing object is created even when the agent prefix already exists, and an existing prefix never causes an early return. Existing objects are never overwritten, so user edits survive a re-run.
+- A template edit therefore reaches an existing agent only for objects it lacks. Pushing changed content to existing workspaces needs a separate backfill.
+- `.maraclaw-gateway-key` is never copied from here; the runtime writes it.
+- `tasks.json` containing `[]` exists only as the fallback when the template directory itself is missing (with `.gitkeep` under `workspace`, `workspace/knowledge_base`, `memory`, `skills`). A present template never produces `tasks.json`.
 
 ## Runtime Files
 
-- `soul.md` is customized after copy. Preserve `{{agent_name}}`, `{{role_description}}`, `{{creator_name}}`, and `{{created_at}}`.
-- `HEARTBEAT.md` is the periodic awareness contract copied from this directory when present.
-- `state.json` is rewritten with the agent id and name after copy; keep it JSON-object shaped.
-- `memory/`, `workspace/`, `skills/`, and `daily_reports/` seed runtime directories/assets.
-- If `memory/memory.md`, `memory/reflections.md`, or `HEARTBEAT.md` is missing after copy, `AgentManager` creates/fills it from app templates or fallbacks.
-- Placeholder style here is double-brace runtime substitution, not the single-brace role-template style used in `agent_templates/`.
+- `soul.md` is rendered after read. Preserve `{{agent_name}}`, `{{role_description}}`, `{{creator_name}}` and `{{created_at}}`, and keep the `## Personality` and `## Boundaries` headings: creation-time text replaces them, or is appended when absent.
+- `state.json` must stay a JSON object. `agent_id` and `name` are overwritten after read; other keys are kept.
+- `HEARTBEAT.md` is the periodic awareness contract.
+- `memory/` (`MEMORY_INDEX.md`, `curiosity_journal.md`), `workspace/archived/`, `skills/` and `daily_reports/` seed runtime directories and assets. `skills/mcp-installer/SKILL.md` is also read by `skill_seeder`, so edits change the seeded skill.
+- When absent here, `memory/memory.md` gets an inline default, and `memory/reflections.md` and `HEARTBEAT.md` come from `app/templates/` (inline fallback if that is missing). A file present here wins.
+- Placeholder style here is double-brace runtime substitution, not the single-brace style used in `agent_templates/`.
 
 ## Editing Rules
 
@@ -32,5 +34,5 @@ This is the singular runtime workspace scaffold copied into each new agent's sto
 
 - Do not add backend-only contributor docs here; use the repo or app-level `AGENTS.md` files.
 - Do not add role `meta.yaml`, `bootstrap.md`, or catalog persona files here; those belong in `agent_templates/`.
-- Do not rely on this template to update existing workspaces. `initialize_agent_files()` returns early when the agent prefix already exists.
-- Do not put live task state in this directory. `tasks.json` and `todo.json` are skipped during the copy.
+- Do not rely on this template to update existing workspaces; initialization only fills in missing objects.
+- Do not put live task state in this directory, and do not add a `tasks.json` or `todo.json`: they are skipped during the copy.
