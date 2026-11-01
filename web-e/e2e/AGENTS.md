@@ -1,6 +1,6 @@
 # web-e/e2e
 
-Scope: browser scenarios and explicitly imported fixtures. Inventory excludes this guide: 42 TypeScript files, comprising 32 specs, nine fixtures and one case registrar.
+Scope: browser scenarios and explicitly imported fixtures, data modules and case registrars. Discover the current set with `ls e2e/*.spec.ts` (Playwright runs these), `ls e2e/*-fixture.ts`, `ls e2e/*-data.ts` and `ls e2e/*-cases.ts`.
 
 ## How to run
 
@@ -25,20 +25,10 @@ npm run test:e2e
 
 - Scenario filenames: kebab-case `*.spec.ts`; import `test`/`expect` from `@playwright/test`.
 - No conftest-style auto setup, global setup module or shared extended `test` instance.
-- Fixtures are ordinary explicit imports, named `*-fixture.ts`:
-  - `admission-withdraw-fixture.ts`
-  - `chat-identity-fixture.ts`
-  - `notifications-fixture.ts`
-  - `org-departments-fixture.ts`
-  - `schedule-history-fixture.ts`
-  - `schedule-run-fixture.ts`
-  - `schedules-fixture.ts`
-  - `session-fencing-fixture.ts`
-  - `trigger-executions-fixture.ts`
+- Fixtures are ordinary explicit imports, one per domain, named `*-fixture.ts`; plain scenario data lives in `*-data.ts`. Read the fixture a spec imports before adding a route handler.
 - `session-fencing-fixture.ts`: shared `prepareWorkspace`, synthetic identities, cross-tab writes and deferred creation barriers.
-- Domain fixtures compose that helper; preserve strict synthetic HTTP and WebSocket routing.
-- `org-department-rosters-cases.ts` registers cases through `registerOrgDepartmentRosterTests()`.
-- `org-departments.spec.ts` invokes that registrar; the cases file is not an independent spec.
+- Most domain fixtures compose that helper; preserve strict synthetic HTTP and WebSocket routing.
+- Files that export a `register…Tests()` function (for example `*-cases.ts`, `selected-notification-moves.ts`) are case registrars. The owning `*.spec.ts` invokes them at top level; they are not independent specs.
 - Screenshot evidence uses `testInfo.outputPath(...)`, not a shared fixed output filename.
 - `chat-receipt-visual.spec.ts`: widths 390/1440/1920, light/dark, controlled clock and reduced motion.
 
