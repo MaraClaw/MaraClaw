@@ -12,11 +12,13 @@
     "start": "node dist/src/bridge.js"
   },
   "dependencies": {
-    "baileys": "7.0.0-rc14",
+    "baileys": "^7.0.0-rc14",
     "pino": "10.4.0",
+    "qrcode-terminal": "^0.12.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@tsconfig/node26": "^26.0.1",
     "@types/node": "26.6.6",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
