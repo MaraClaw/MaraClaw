@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { z } from 'zod'
 
-import { archiveNotification, archiveSelectedNotifications, listNotifications, markAllNotificationsRead, markSelectedNotificationsRead, NotificationKind, restoreNotification, restoreSelectedNotifications, unreadNotificationCount } from '../src/lib/notifications-api.ts'
+import { archiveNotification, archiveSelectedNotifications, listNotifications, markAllNotificationsRead, markSelectedNotificationsRead, markSelectedNotificationsUnread, NotificationKind, restoreNotification, restoreSelectedNotifications, unreadNotificationCount } from '../src/lib/notifications-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 const page = (items: readonly unknown[], next_cursor: string | null = null) => ({ items, next_cursor })
 
@@ -151,7 +151,7 @@ test('bulk notification read carries the selected category in the POST request',
 })
 
 const selectedId = '11111111-1111-4111-8111-111111111111'
-for (const [endpoint, action] of [['read-selected', markSelectedNotificationsRead], ['archive', archiveSelectedNotifications], ['restore', restoreSelectedNotifications]] as const) {
+for (const [endpoint, action] of [['read-selected', markSelectedNotificationsRead], ['unread-selected', markSelectedNotificationsUnread], ['archive', archiveSelectedNotifications], ['restore', restoreSelectedNotifications]] as const) {
 for (const ids of [[], Array.from({ length: 201 }, () => selectedId), ['invalid-id']]) {
   test(`selected ${endpoint} rejects invalid submitted IDs before transport (${ids.length})`, async (t) => {
     // Given
