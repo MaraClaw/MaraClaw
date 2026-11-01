@@ -4,6 +4,11 @@
 
 The three packages are independently built and launched, not a root npm workspace. The frontend containers below represent separately shipped SPA applications with nginx delivery; React executes in the browser, not on the nginx server. Node/Vite are build-time tools in the [web-e image](../../web-e/Dockerfile#L25-L71) and [web-a image](../../web-a/Dockerfile#L32-L83). The [deployment view](c4-deployment.md) separates browser instances from servers.
 
+![MaraClaw containers and state boundaries](c4-containers.svg)
+
+<details>
+<summary>Editable Mermaid C4 source</summary>
+
 ```mermaid
 %%{init: {"c4": {"c4ShapeMargin": 150, "c4ShapePadding": 20, "width": 260, "height": 100, "boxMargin": 30, "diagramMarginX": 60, "diagramMarginY": 60}}}%%
 C4Container
@@ -36,8 +41,8 @@ C4Container
   Rel(engine, objects, "Stores selected files", "S3 / HTTP(S)")
 
   UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
-  UpdateRelStyle(member, memberApp, $offsetX="-100", $offsetY="-20")
-  UpdateRelStyle(operator, adminApp, $offsetX="30", $offsetY="-20")
+  UpdateRelStyle(member, memberApp, $offsetX="-100", $offsetY="-90")
+  UpdateRelStyle(operator, adminApp, $offsetX="30", $offsetY="-90")
   UpdateRelStyle(engine, objects, $offsetX="30", $offsetY="-20")
   UpdateRelStyle(memberApp, engine, $offsetX="-70", $offsetY="-45")
   UpdateRelStyle(adminApp, engine, $offsetX="-75", $offsetY="-45")
@@ -48,6 +53,8 @@ C4Container
   UpdateRelStyle(engine, files, $offsetX="-180", $offsetY="75")
   UpdateRelStyle(guests, files, $offsetX="-100", $offsetY="20")
 ```
+
+</details>
 
 ## Sources and interpretation
 
