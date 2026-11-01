@@ -16,9 +16,9 @@ import { ApiError } from '@/lib/http'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 
 const filterId = z.string().trim().pipe(z.union([z.literal(''), z.uuid('Enter a valid UUID or leave this blank.')]))
-const filterSchema = adminAuditWindowSchema.safeExtend({ action: z.string().trim(), tenant_id: filterId, actor_id: filterId })
+const filterSchema = adminAuditWindowSchema.safeExtend({ action: z.string().trim(), target_type: z.string(), tenant_id: filterId, actor_id: filterId })
 type Filters = z.infer<typeof filterSchema>
-const emptyFilters = { action: '', tenant_id: '', actor_id: '', start_at: '', end_at: '' }
+const emptyFilters = { action: '', target_type: '', tenant_id: '', actor_id: '', start_at: '', end_at: '' }
 const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 const buttonClass = 'h-auto min-h-11 max-w-full whitespace-normal'
 const pageButtonClass = `${buttonClass} aria-disabled:pointer-events-none aria-disabled:opacity-50`
@@ -33,7 +33,7 @@ export function AdminAuditPage() {
   const form = useForm<z.input<typeof filterSchema>, unknown, Filters>({ resolver: zodResolver(filterSchema), defaultValues: emptyFilters })
   const scope: AdminAuditPageScope = platformAdmin
     ? { role: 'platform_admin', ...filters }
-    : { role: 'org_admin', action: filters.action, start_at: filters.start_at, end_at: filters.end_at }
+    : { role: 'org_admin', action: filters.action, target_type: filters.target_type, start_at: filters.start_at, end_at: filters.end_at }
   const activity = useQuery(adminAuditPageOptions({ ...scope, cursor: cursors.at(-1) }, refresh))
   const hasFilters = Object.values(filters).some(Boolean)
 
@@ -64,10 +64,14 @@ export function AdminAuditPage() {
         <CardHeader><CardTitle>Filter activity</CardTitle></CardHeader>
         <CardContent>
           <form noValidate onSubmit={form.handleSubmit(applyFilters)} className="flex flex-col gap-4">
-            <div className={`grid gap-4 ${platformAdmin ? 'sm:grid-cols-3' : ''}`}>
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex min-w-0 flex-col gap-2">
                 <Label htmlFor={`${id}-action`}>Action</Label>
                 <Input id={`${id}-action`} placeholder="Exact action, e.g. company.create" {...form.register('action')} />
+              </div>
+              <div className="flex min-w-0 flex-col gap-2">
+                <Label htmlFor={`${id}-target-type`}>Target type</Label>
+                <Input id={`${id}-target-type`} placeholder="Exact target type, e.g. tenant" {...form.register('target_type')} />
               </div>
               {platformAdmin ? (['tenant_id', 'actor_id'] as const).map((field) => (
                 <div key={field} className="flex min-w-0 flex-col gap-2">

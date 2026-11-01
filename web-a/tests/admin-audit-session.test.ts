@@ -17,6 +17,8 @@ test('every supported role and server filter participates in query identity', ()
     { role: 'org_admin' }, { role: 'platform_admin' },
     { role: 'platform_admin', tenant_id: tenantId }, { role: 'platform_admin', actor_id: actorId },
     { role: 'platform_admin', action: 'user.activate' }, { role: 'platform_admin', limit: 500 },
+    { role: 'platform_admin', target_type: 'tenant' }, { role: 'org_admin', target_type: 'tenant' },
+    { role: 'org_admin', target_type: 'Tenant' }, { role: 'org_admin', target_type: ' tenant ' },
   ]
   // When
   const identities = scopes.map((scope) => JSON.stringify(adminAuditOptions(scope).queryKey))
@@ -24,6 +26,7 @@ test('every supported role and server filter participates in query identity', ()
   assert.equal(new Set(identities).size, scopes.length)
   assert.deepEqual(adminAuditOptions({ role: 'platform_admin', action: '  user.activate ' }).queryKey,
     adminAuditOptions({ role: 'platform_admin', action: 'user.activate', limit: 100 }).queryKey)
+  assert.equal(hashKey(adminAuditOptions({ role: 'org_admin', target_type: '' }).queryKey), hashKey(adminAuditOptions({ role: 'org_admin' }).queryKey))
 })
 
 test('changing filters aborts the old query and does not display its late records', async (context) => {
@@ -107,6 +110,8 @@ test('page identity separates role, filters, limit, opaque cursor and refreshed 
     { role: 'org_admin' }, { role: 'platform_admin' },
     { role: 'platform_admin', tenant_id: tenantId }, { role: 'platform_admin', actor_id: actorId },
     { role: 'platform_admin', action: 'user.activate' }, { role: 'platform_admin', limit: 500 },
+    { role: 'platform_admin', target_type: 'tenant' }, { role: 'org_admin', target_type: 'tenant' },
+    { role: 'org_admin', target_type: 'Tenant' }, { role: 'org_admin', target_type: ' tenant ' },
     { role: 'org_admin', cursor: 'opaque-a' }, { role: 'org_admin', cursor: 'opaque-b' },
     { role: 'org_admin', start_at: '2026-10-21T00:00:00Z' }, { role: 'org_admin', end_at: '2026-10-22T00:00:00Z' },
     { role: 'platform_admin', start_at: '2026-10-21T00:00:00Z' }, { role: 'platform_admin', end_at: '2026-10-22T00:00:00Z' },
@@ -122,9 +127,10 @@ test('page identity separates role, filters, limit, opaque cursor and refreshed 
   assert.deepEqual(adminAuditPageOptions({ role: 'org_admin', start_at: '2026-10-21T08:00:00+08:00', end_at: '2026-10-22T00:00:00.1234560Z' }).queryKey,
     adminAuditPageOptions({ role: 'org_admin', start_at: '2026-10-21T00:00:00Z', end_at: '2026-10-21T19:00:00.123456-05:00' }).queryKey)
   assert.equal(hashKey(adminAuditPageOptions({ role: 'org_admin', start_at: '', end_at: ' ' }).queryKey), hashKey(adminAuditPageOptions({ role: 'org_admin' }).queryKey))
+  assert.equal(hashKey(adminAuditPageOptions({ role: 'org_admin', target_type: '' }).queryKey), hashKey(adminAuditPageOptions({ role: 'org_admin' }).queryKey))
 })
 
-for (const role of ['platform_admin', 'org_admin'] as const) for (const next of ['filter', 'window', 'back', 'refresh'] as const) {
+for (const role of ['platform_admin', 'org_admin'] as const) for (const next of ['filter', 'target', 'window', 'back', 'refresh'] as const) {
   test(`${next} abandons an in-flight older page without leaking its records or continuation`, async (context) => {
     // Given
     const session = ownAuditSession(context)
@@ -140,7 +146,7 @@ for (const role of ['platform_admin', 'org_admin'] as const) for (const next of 
     const observer = new QueryObserver(client, old)
     context.after(observer.subscribe(() => undefined))
     // When
-    observer.setOptions(adminAuditPageOptions({ role, start_at: next === 'window' ? '2026-10-21T12:00:00Z' : '2026-10-21T00:00:00Z', end_at: '2026-10-22T00:00:00Z', ...(next === 'filter' ? { action: 'new.filter' } : {}) }, next === 'refresh' ? 1 : 0))
+    observer.setOptions(adminAuditPageOptions({ role, start_at: next === 'window' ? '2026-10-21T12:00:00Z' : '2026-10-21T00:00:00Z', end_at: '2026-10-22T00:00:00Z', ...(next === 'filter' ? { action: 'new.filter' } : {}), ...(next === 'target' ? { target_type: 'tenant' } : {}) }, next === 'refresh' ? 1 : 0))
     assert.equal(observer.getCurrentResult().data, undefined)
     const result = await observer.refetch()
     response.resolve(Response.json({ items: [pageEvent], next_cursor: 'retired-next' }))
