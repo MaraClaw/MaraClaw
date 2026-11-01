@@ -23,6 +23,25 @@ Start with context and containers. Use deployment to distinguish a browser appli
 
 ## Preview and validation
 
-Mermaid's **C4 support is experimental**. A Markdown renderer without the relevant C4 support may display the fenced source or reject a view. Before publishing, preview/render all five diagrams locally with a C4-capable Mermaid integration and inspect node placement, arrow labels, clipping, and readability. Text/source review alone does not establish rendered layout quality; adjust layout only after viewing the render. No SVG artifacts are included in this snapshot.
+Each view includes an SVG preview and expandable editable Mermaid source. Mermaid's **C4 support is experimental**, and its layout depends on the rendering environment. The SVG previews preserve the inspected layout even when a Markdown viewer cannot render C4 or uses a narrower screen.
 
-Sources are linked relative to this directory (`../../` reaches the repository root); line fragments locate the reviewed ranges and can drift as code changes. The source review used the best-effort code graph plus direct reads, including nginx files that the graph could not parse and changed source where graph metadata was stale. No services, builds, tests, or live integrations were exercised for these documents; rendering and visual review are a separate follow-up.
+All five diagrams were rendered with Mermaid CLI **12.0.0** and Chrome, then visually inspected for overlapping labels and clipping. All relative documentation and source paths were checked. To regenerate a preview, save its Mermaid block without the fence markers as `diagram.mmd`, then run:
+
+```sh
+npx --yes --package=@mermaid-js/mermaid-cli@12.0.0 mmdc \
+  -i diagram.mmd -o diagram.svg -p puppeteer.json
+```
+
+Use a Puppeteer configuration like this, adjusting `executablePath` for your installed Chrome. The screen size is needed as well as the viewport to preserve the intended C4 columns:
+
+```json
+{
+  "executablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "args": ["--window-size=4000,2600", "--screen-info={4000x2600}"],
+  "defaultViewport": {"width": 4000, "height": 2600}
+}
+```
+
+After changing a diagram, regenerate its matching SVG and inspect the result before publishing.
+
+Sources are linked relative to this directory (`../../` reaches the repository root); line fragments locate the reviewed ranges and can drift as code changes. The source review used the best-effort code graph plus direct reads, including nginx files that the graph could not parse and changed source where graph metadata was stale. No application services, application builds, application tests, or live integrations were exercised for this documentation-only change.
