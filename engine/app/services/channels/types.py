@@ -45,7 +45,8 @@ CHANNEL_TYPES: Final[dict[str, ChannelKind]] = {
         "whatsapp",
         "WhatsApp",
         "webhook",
-        supports_proactive=False,  # inbound exists; proactive sender not registered yet
+        # Policy-constrained: follow-ups only reach a linked contact's existing session inside the 24h reply window.
+        supports_proactive=True,
     ),
     "dingtalk": ChannelKind(ChannelType.DINGTALK, "dingtalk", "DingTalk", "stream"),
     "slack": ChannelKind(ChannelType.SLACK, "slack", "Slack", "webhook"),

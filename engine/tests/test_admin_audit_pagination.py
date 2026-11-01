@@ -3,6 +3,7 @@ from base64 import b64decode, urlsafe_b64encode
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -12,10 +13,12 @@ from fastapi import HTTPException
 from app.core.json_types import json_loads_object
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.records.audit import AdminAuditLogRecord
-from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page
+from app.services.admin_audit_pagination import MAX_CURSOR_LENGTH, AdminAuditScope, list_admin_audit_page
 
 _NOW = datetime(2026, 10, 24, 12, 0, 0, 123456, tzinfo=UTC)
-_SCOPE = AdminAuditScope(role="platform_admin", tenant_id=uuid4(), actor_id=uuid4(), action="tenant_create")
+_SCOPE = AdminAuditScope(
+    role="platform_admin", tenant_id=uuid4(), actor_id=uuid4(), action="tenant_create", target_type="tenant"
+)
 
 
 @pytest.fixture
@@ -40,11 +43,13 @@ async def test_cursor_uses_last_visible_row_and_preserves_microseconds(monkeypat
     # Given a full page with one lookahead row at the same timestamp.
     query = AsyncMock(side_effect=[rows, rows[2:]])
     monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
-    first = await list_admin_audit_page(_SCOPE, limit=2)
+    scope = replace(_SCOPE, start_at=_NOW - timedelta(days=1), end_at=_NOW + timedelta(days=1))
+    first = await list_admin_audit_page(scope, limit=2)
     assert first.next_cursor is not None
+    assert len(first.next_cursor) <= MAX_CURSOR_LENGTH
 
     # When the next page is requested.
-    older = await list_admin_audit_page(_SCOPE, cursor=first.next_cursor, limit=2)
+    older = await list_admin_audit_page(scope, cursor=first.next_cursor, limit=2)
 
     # Then the boundary excludes neither a tied row nor microsecond precision.
     assert [item.id for item in first.items] == [UUID(int=3), UUID(int=2)]
@@ -101,9 +106,14 @@ async def test_malformed_cursor_fails_before_query(monkeypatch, cursor):
         {"actor_id": None},
         {"action": "tenant_delete"},
         {"action": None},
+        {"target_type": "user"},
+        {"target_type": "Tenant"},
+        {"target_type": "tenant "},
+        {"target_type": None},
+        {"target_type": ""},
     ],
 )
-async def test_cursor_is_bound_to_effective_role_tenant_actor_and_action(monkeypatch, rows, changes):
+async def test_cursor_is_bound_to_effective_role_tenant_actor_action_and_target(monkeypatch, rows, changes):
     # Given a cursor issued for one effective query scope.
     query = AsyncMock(return_value=rows)
     monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
@@ -114,6 +124,7 @@ async def test_cursor_is_bound_to_effective_role_tenant_actor_and_action(monkeyp
         await list_admin_audit_page(replace(_SCOPE, **changes), cursor=page.next_cursor)
     # Then it is rejected before querying the new scope.
     assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid cursor"
     query.assert_not_awaited()
 
 
@@ -122,12 +133,15 @@ async def test_cursor_is_bound_to_effective_role_tenant_actor_and_action(monkeyp
     [
         ("version", 0),
         ("version", 1),
+        ("version", 2),
         ("version", True),
         ("version", "1"),
         ("created_at", "2026-10-24T12:00:00.123456"),
         ("created_at", None),
         ("id", "not-a-uuid"),
         ("extra", "forbidden"),
+        ("target_type_digest", "invalid"),
+        ("target_type_digest", "a" * 64),
     ],
 )
 async def test_cursor_schema_is_strict_and_versioned(monkeypatch, rows, field, value):
@@ -137,8 +151,13 @@ async def test_cursor_schema_is_strict_and_versioned(monkeypatch, rows, field, v
     page = await list_admin_audit_page(_SCOPE, limit=2)
     assert page.next_cursor is not None
     payload = json_loads_object(b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_"))
-    assert payload["version"] == 2
-    payload[field] = value
+    assert payload["version"] == 3
+    if field == "target_type_digest":
+        scope = payload["scope"]
+        assert isinstance(scope, dict)
+        scope[field] = value
+    else:
+        payload[field] = value
     cursor = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     query.reset_mock()
     # When the corrupted cursor is presented.
@@ -149,14 +168,47 @@ async def test_cursor_schema_is_strict_and_versioned(monkeypatch, rows, field, v
     query.assert_not_awaited()
 
 
-async def test_absent_and_empty_action_have_the_same_effective_scope(monkeypatch, rows):
-    # Given no effective action filter.
-    monkeypatch.setattr(admin_audit_log_dao, "list_page", AsyncMock(return_value=rows))
-    page = await list_admin_audit_page(replace(_SCOPE, action=None), limit=2)
+@pytest.mark.parametrize("field", ["target_type", "created_at", "id"])
+async def test_structurally_valid_cursor_tampering_is_rejected(monkeypatch, rows, field):
+    # Given an issued cursor whose public JSON and digests can be recomputed.
+    query = AsyncMock(return_value=rows)
+    monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
+    page = await list_admin_audit_page(_SCOPE, limit=2)
+    assert page.next_cursor is not None
+    payload = json_loads_object(b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_"))
+    scope = _SCOPE
+    if field == "target_type":
+        scope = replace(scope, target_type="user")
+        cursor_scope = payload["scope"]
+        assert isinstance(cursor_scope, dict)
+        cursor_scope["target_type_digest"] = sha256(b"user").hexdigest()
+    else:
+        payload[field] = "2026-10-24T12:00:01.123456Z" if field == "created_at" else str(UUID(int=99))
+    cursor = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    query.reset_mock()
+    # When a validly shaped altered cursor is used with its matching new scope.
+    with pytest.raises(HTTPException) as exc:
+        await list_admin_audit_page(scope, cursor=cursor)
+    # Then neither scope nor seek position can be rewritten without detection.
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid cursor"
+    query.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ["action", "target_type"])
+@pytest.mark.parametrize(("first", "second"), [(None, ""), ("", None)])
+async def test_absent_and_empty_filters_have_the_same_effective_scope(monkeypatch, rows, field, first, second):
+    # Given no effective filter.
+    query = AsyncMock(return_value=rows)
+    monkeypatch.setattr(admin_audit_log_dao, "list_page", query)
+    page = await list_admin_audit_page(replace(_SCOPE, **{field: first}), limit=2)
     # When the next request uses the equivalent empty filter and another page size.
-    result = await list_admin_audit_page(replace(_SCOPE, action=""), cursor=page.next_cursor, limit=3)
+    result = await list_admin_audit_page(replace(_SCOPE, **{field: second}), cursor=page.next_cursor, limit=3)
     # Then the cursor remains valid and page size is not a scope filter.
     assert len(result.items) == 3
+    if field == "target_type":
+        assert query.await_args is not None
+        assert query.await_args.kwargs[field] is None
 
 
 @pytest.mark.parametrize("field", ["start_at", "end_at"])
@@ -182,7 +234,8 @@ async def test_cursor_rejects_changed_or_absent_window_bounds(monkeypatch, rows,
 
 @pytest.mark.parametrize("start_at", [None, _NOW - timedelta(days=1)])
 @pytest.mark.parametrize("end_at", [None, _NOW + timedelta(days=1)])
-async def test_dao_parameterizes_present_inclusive_start_and_exclusive_end(monkeypatch, start_at, end_at):
+@pytest.mark.parametrize("target_type", [None, "", "tenant", " Tenant%_' OR 1=1 -- "])
+async def test_dao_parameterizes_target_and_half_open_bounds(monkeypatch, start_at, end_at, target_type):
     # Given a connection seam that captures the actual DAO statement.
     queries: list[tuple[str, dict[str, object]]] = []
 
@@ -197,12 +250,18 @@ async def test_dao_parameterizes_present_inclusive_start_and_exclusive_end(monke
 
     monkeypatch.setattr(admin_audit_log_dao, "session", session)
     # When any combination of optional bounds is queried.
-    await admin_audit_log_dao.list_page(start_at=start_at, end_at=end_at)
+    await admin_audit_log_dao.list_page(start_at=start_at, end_at=end_at, target_type=target_type)
+    await admin_audit_log_dao.list_recent(target_type=target_type)
     # Then date values are parameters, not SQL literals, with half-open semantics.
-    [(sql, params)] = queries
+    [(sql, params), (recent_sql, recent_params)] = queries
     assert ("created_at >= %(start_at)s" in sql) == (start_at is not None)
     assert ("created_at < %(end_at)s" in sql) == (end_at is not None)
     assert params.get("start_at") == start_at
     assert params.get("end_at") == end_at
     assert "ORDER BY created_at DESC, id DESC" in sql
     assert "OFFSET" not in sql
+    for statement, values in ((sql, params), (recent_sql, recent_params)):
+        assert ("target_type = %(target_type)s" in statement) == bool(target_type)
+        assert values.get("target_type") == (target_type or None)
+        if target_type:
+            assert f"'{target_type}'" not in statement

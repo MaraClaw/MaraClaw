@@ -11,17 +11,18 @@ export const ADMIN_AUDIT_MAX_CURSOR_LENGTH = 4096
 const optionalId = z.string().trim().pipe(z.union([z.literal(''), z.uuid()]))
   .transform((value) => value || undefined).optional()
 const action = z.string().trim().transform((value) => value || undefined).optional()
+const target_type = z.string().transform((value) => value || undefined).optional()
 const limit = z.number().int().min(1).max(ADMIN_AUDIT_MAX_LIMIT).default(ADMIN_AUDIT_DEFAULT_LIMIT)
 
 export const adminAuditScopeSchema = z.discriminatedUnion('role', [
-  z.strictObject({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, limit }).readonly(),
-  z.strictObject({ role: z.literal('org_admin'), action, limit }).readonly(),
+  z.strictObject({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, target_type, limit }).readonly(),
+  z.strictObject({ role: z.literal('org_admin'), action, target_type, limit }).readonly(),
 ])
 
 const cursor = z.string().min(1).max(ADMIN_AUDIT_MAX_CURSOR_LENGTH)
 export const adminAuditPageScopeSchema = z.discriminatedUnion('role', [
-  adminAuditWindowSchema.safeExtend({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, limit, cursor: cursor.optional() }).strict().readonly(),
-  adminAuditWindowSchema.safeExtend({ role: z.literal('org_admin'), action, limit, cursor: cursor.optional() }).strict().readonly(),
+  adminAuditWindowSchema.safeExtend({ role: z.literal('platform_admin'), tenant_id: optionalId, actor_id: optionalId, action, target_type, limit, cursor: cursor.optional() }).strict().readonly(),
+  adminAuditWindowSchema.safeExtend({ role: z.literal('org_admin'), action, target_type, limit, cursor: cursor.optional() }).strict().readonly(),
 ])
 
 export const adminAuditLogSchema = AdminAuditLogOutSchema.strip().extend({
@@ -53,6 +54,7 @@ export async function fetchAdminAudit(scope: AdminAuditScope, signal?: AbortSign
   const parsed = adminAuditScopeSchema.parse(scope)
   const params = new URLSearchParams({ limit: String(parsed.limit) })
   if (parsed.action) params.set('action', parsed.action)
+  if (parsed.target_type !== undefined) params.set('target_type', parsed.target_type)
   switch (parsed.role) {
     case 'platform_admin':
       if (parsed.tenant_id) params.set('tenant_id', parsed.tenant_id)
@@ -71,6 +73,7 @@ export async function fetchAdminAuditPage(scope: AdminAuditPageScope, signal?: A
   const parsed = adminAuditPageScopeSchema.parse(scope)
   const params = new URLSearchParams({ limit: String(parsed.limit) })
   if (parsed.action) params.set('action', parsed.action)
+  if (parsed.target_type !== undefined) params.set('target_type', parsed.target_type)
   if (parsed.cursor !== undefined) params.set('cursor', parsed.cursor)
   if (parsed.start_at !== undefined) params.set('start_at', parsed.start_at)
   if (parsed.end_at !== undefined) params.set('end_at', parsed.end_at)

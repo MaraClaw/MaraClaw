@@ -8,6 +8,7 @@ import anyio
 import pytest
 
 from app.config import get_settings
+from app.dao import whatsapp_personal_dao
 from app.services import company_transfer_connectors as connectors
 from app.services.dingtalk_stream import dingtalk_stream_manager
 from app.services.discord_gateway import discord_gateway_manager
@@ -21,6 +22,14 @@ class ActiveConnectors:
     agent_id: UUID
     tasks: list[asyncio.Task[None]]
     thread: threading.Thread
+
+
+@pytest.fixture(autouse=True)
+def personal_connection_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def absent(_agent_id: UUID) -> None:
+        return None
+
+    monkeypatch.setattr(whatsapp_personal_dao, "get_personal", absent)
 
 
 @pytest.fixture

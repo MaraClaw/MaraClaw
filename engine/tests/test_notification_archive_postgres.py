@@ -220,14 +220,17 @@ async def test_bulk_read_covers_all_active_matches_without_reading_archived_or_o
     }
 
 
+@pytest.mark.parametrize("operation", ["read-selected", "unread-selected"])
 async def test_selected_read_is_idempotent_for_archived_and_already_read_notices(
     archive_scenario: ArchiveScenario,
+    operation: str,
 ) -> None:
     # Given: selected active, archived, already-read rows plus an unselected unread row.
     scenario = archive_scenario
-    active = await scenario.notice()
-    archived = await scenario.notice()
-    read = await scenario.notice(is_read=True)
+    is_read = operation == "read-selected"
+    active = await scenario.notice(is_read=not is_read)
+    archived = await scenario.notice(is_read=not is_read)
+    read = await scenario.notice(is_read=is_read)
     await scenario.notice()
     assert await notification_dao.archive_for_user(archived.id, scenario.owner.id)
     before = await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id")
@@ -235,7 +238,7 @@ async def test_selected_read_is_idempotent_for_archived_and_already_read_notices
     # When: the same duplicate-containing selection is submitted twice.
     responses = [
         await scenario.client.post(
-            "/api/notifications/read-selected",
+            f"/api/notifications/{operation}",
             headers=scenario.headers(scenario.owner),
             json={"ids": [str(note_id) for note_id in [*selected, archived.id]]},
         )
@@ -245,5 +248,10 @@ async def test_selected_read_is_idempotent_for_archived_and_already_read_notices
     assert [response.status_code for response in responses] == [200, 200]
     assert all(response.json() == {"ok": True} for response in responses)
     assert await scenario.db.fetchall("SELECT * FROM notifications ORDER BY id") == [
-        {**row, "is_read": True} if row["id"] in selected else row for row in before
+        {**row, "is_read": is_read} if row["id"] in selected else row for row in before
     ]
+    for category in ("all", "social", "broadcast"):
+        count = await scenario.client.get(
+            f"/api/notifications/unread-count?category={category}", headers=scenario.headers(scenario.owner)
+        )
+        assert count.json() == {"unread_count": 1 if is_read else 3}

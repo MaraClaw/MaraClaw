@@ -676,6 +676,26 @@ export type PermissionGrantScope = z.infer<typeof PermissionGrantScopeSchema>;
 export const PersonalAssistantRequestSchema = z.looseObject({ ["boundaries"]: z.string().refine(value => [...value].length <= 1000).optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100), ["personality"]: z.string().refine(value => [...value].length <= 64).optional(), ["work_style"]: z.string().refine(value => [...value].length <= 64).optional() });
 export type PersonalAssistantRequest = z.infer<typeof PersonalAssistantRequestSchema>;
 
+export const PersonalRelinkSchema = z.strictObject({ ["expected_generation"]: z.guid() });
+export type PersonalRelink = z.infer<typeof PersonalRelinkSchema>;
+
+export const PersonalStartSchema = z.strictObject({ ["expected_generation"]: z.union([z.guid(), z.null()]) });
+export type PersonalStart = z.infer<typeof PersonalStartSchema>;
+
+export const PersonalErrorValues = ["logged_out","account_in_use","identity_ambiguous","auth_store_failed","transport_failed"] as const;
+export const PersonalErrorSchema = z.intersection(z.union([z.literal("logged_out"), z.literal("account_in_use"), z.literal("identity_ambiguous"), z.literal("auth_store_failed"), z.literal("transport_failed")]), z.string());
+export type PersonalError = z.infer<typeof PersonalErrorSchema>;
+
+export const PersonalQRSchema = z.strictObject({ ["expires_at"]: z.iso.datetime({ offset: true, local: true }), ["value"]: z.string() });
+export type PersonalQR = z.infer<typeof PersonalQRSchema>;
+
+export const PersonalStateValues = ["pending","qr","connected","reconnecting","paused","expired","disconnecting","disconnected","failed"] as const;
+export const PersonalStateSchema = z.intersection(z.union([z.literal("pending"), z.literal("qr"), z.literal("connected"), z.literal("reconnecting"), z.literal("paused"), z.literal("expired"), z.literal("disconnecting"), z.literal("disconnected"), z.literal("failed")]), z.string());
+export type PersonalState = z.infer<typeof PersonalStateSchema>;
+
+export const PersonalStatusSchema = z.strictObject({ ["account_hint"]: z.union([z.string(), z.null()]).optional(), ["attempt_id"]: z.union([z.guid(), z.null()]).optional(), ["error_code"]: z.union([PersonalErrorSchema, z.null()]).optional(), ["expires_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["generation"]: z.union([z.guid(), z.null()]).optional(), ["mode"]: z.intersection(z.literal("personal_qr"), z.string()).optional(), ["qr"]: z.union([PersonalQRSchema, z.null()]).optional(), ["revision"]: z.number().refine(Number.isInteger).optional(), ["state"]: PersonalStateSchema.optional() });
+export type PersonalStatus = z.infer<typeof PersonalStatusSchema>;
+
 export const PressKeysRequestSchema = z.looseObject({ ["keys"]: z.array(z.string()), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type PressKeysRequest = z.infer<typeof PressKeysRequestSchema>;
 
@@ -764,6 +784,9 @@ export type SearchAnalyticsTimeBucket = z.infer<typeof SearchAnalyticsTimeBucket
 
 export const SearchAnalyticsTrendingQuerySchema = z.looseObject({ ["distinct_agents"]: z.number().refine(Number.isInteger), ["distinct_orgs"]: z.number().refine(Number.isInteger), ["hits"]: z.number().refine(Number.isInteger), ["kind"]: z.string(), ["query_hash"]: z.string(), ["query_normalized"]: z.string() });
 export type SearchAnalyticsTrendingQuery = z.infer<typeof SearchAnalyticsTrendingQuerySchema>;
+
+export const SelectedNotificationsRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
+export type SelectedNotificationsRequest = z.infer<typeof SelectedNotificationsRequestSchema>;
 
 export const SlackChannelPayloadSchema = z.looseObject({ ["bot_token"]: z.string().optional(), ["signing_secret"]: z.string().optional() });
 export type SlackChannelPayload = z.infer<typeof SlackChannelPayloadSchema>;
@@ -909,6 +932,9 @@ export type WeChatQRCodePayload = z.infer<typeof WeChatQRCodePayloadSchema>;
 
 export const WeComChannelPayloadSchema = z.looseObject({ ["bot_id"]: z.string().optional(), ["bot_secret"]: z.string().optional(), ["corp_id"]: z.string().optional(), ["encoding_aes_key"]: z.string().optional(), ["secret"]: z.string().optional(), ["token"]: z.string().optional(), ["wecom_agent_id"]: z.string().optional() });
 export type WeComChannelPayload = z.infer<typeof WeComChannelPayloadSchema>;
+
+export const WhatsAppChannelOutSchema = z.looseObject({ ["agent_id"]: z.guid(), ["app_id"]: z.union([z.string(), z.null()]).optional(), ["app_secret"]: z.union([z.string(), z.null()]).optional(), ["channel_type"]: ChannelTypeSchema, ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["encrypt_key"]: z.union([z.string(), z.null()]).optional(), ["extra_config"]: z.union([JsonOutputObjectSchema, z.null()]).optional(), ["id"]: z.guid(), ["is_configured"]: z.boolean(), ["is_connected"]: z.boolean(), ["last_tested_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["mode"]: z.intersection(z.union([z.literal("cloud"), z.literal("personal_qr")]), z.string()).optional(), ["verification_token"]: z.union([z.string(), z.null()]).optional() });
+export type WhatsAppChannelOut = z.infer<typeof WhatsAppChannelOutSchema>;
 
 export const WhatsAppChannelPayloadSchema = z.looseObject({ ["access_token"]: z.string().optional(), ["api_version"]: z.string().optional(), ["app_secret"]: z.string().optional(), ["phone_number_id"]: z.string().optional(), ["verify_token"]: z.string().optional() });
 export type WhatsAppChannelPayload = z.infer<typeof WhatsAppChannelPayloadSchema>;

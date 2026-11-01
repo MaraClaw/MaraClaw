@@ -73,6 +73,11 @@ export async function markSelectedNotificationsRead(ids: readonly NotificationId
   return apiRequest('/api/notifications/read-selected', { schema: readResultSchema, method: 'POST', body: input })
 }
 
+export async function markSelectedNotificationsUnread(ids: readonly NotificationId[]) {
+  const body = ReadSelectedRequestSchema.parse({ ids })
+  return apiRequest('/api/notifications/unread-selected', { schema: readResultSchema, method: 'POST', body })
+}
+
 export async function archiveSelectedNotifications(ids: readonly NotificationId[]) {
   const body = ReadSelectedRequestSchema.parse({ ids })
   return apiRequest('/api/notifications/archive', { schema: readResultSchema, method: 'POST', body })

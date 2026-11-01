@@ -167,7 +167,7 @@ async def test_replay_survives_completion_cleanup_quota_exhaustion_and_expiry(ch
         await fixture.db.first.execute("UPDATE users SET quota_message_limit = 1")
         await fixture.db.first.execute("UPDATE agents SET is_expired = TRUE, expires_at = now() - interval '1 day'")
     prepare = AsyncMock(side_effect=AssertionError("replay must not select a model"))
-    monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     # When the native event is redelivered after expiry and quota exhaustion.
     async with transaction(fixture.db.second):
         result = await accept_channel_event(fixture.event, content="changed enrichment", saved_content="new local path")

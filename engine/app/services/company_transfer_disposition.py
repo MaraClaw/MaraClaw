@@ -26,6 +26,9 @@ async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, f
         return
     async with connection_ctx() as db:
         for agent in sorted(agents, key=lambda item: item.id):
+            from app.dao.whatsapp_personal_dao import revoke
+
+            await revoke(agent.id, purge=True)
             match transfer.choice:
                 case TransferChoice.PAID:
                     await migrate_agent(agent, transfer)

@@ -63,24 +63,26 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
     Also updates openclaw_last_seen for online status tracking.
     """
-    logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
     agent = await _get_agent_by_key(x_api_key)
+    logger.debug("[Gateway] poll called agent={}", agent.id)
 
     from app.services.openclaw_hot_cache import should_touch_last_seen
 
     async with connection_ctx():
         active = await agent_dao.touch_openclaw(agent, touch_last_seen=should_touch_last_seen(agent.id))
-        if active is None:
-            raise HTTPException(status_code=401, detail="Invalid API key")
-        agent = active
-        try:
-            messages = await claim_poll_batch(agent.id)
-        except OpenClawUpdateGateError:
-            messages = []
+    if active is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    agent = active
+    # The claim owns its transactions (guest flock first, then fresh authorization): none may be open around it.
+    try:
+        messages = await claim_poll_batch(agent.id)
+    except OpenClawUpdateGateError:
+        messages = []
     guest_model, guest_slot = poll_model_hint(messages)
 
     out = []
     for msg in messages:
+        is_shared = msg.conversation_id == str(shared_session_id(agent.id))
         # Resolve sender names
         sender_agent_name = None
         sender_user_name = None
@@ -92,7 +94,7 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
         # Fetch conversation history (last 10 messages) for context
         history = []
-        if msg.conversation_id == str(shared_session_id(agent.id)):
+        if is_shared:
             history = await completed_history(msg)
         elif msg.conversation_id not in (None, ""):
             hist_msgs = await chat_message_dao.list_for_session(
@@ -125,8 +127,8 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
                 content=msg.content,
                 created_at=msg.created_at,
                 history=history,
-                model=guest_model,
-                model_slot=guest_slot,
+                model=msg.guest_model_ref if is_shared else guest_model,
+                model_slot=msg.selected_slot if is_shared else guest_slot,
                 runtime_session_key=runtime_session_key(msg),
             )
         )
@@ -180,8 +182,8 @@ async def report_result(
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
-    logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
     agent = await _get_agent_by_key(x_api_key)
+    logger.info("[Gateway] report called agent={} msg_id={}", agent.id, body.message_id)
 
     async with connection_ctx():
         active = await agent_dao.lock_openclaw(agent)

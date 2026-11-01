@@ -21,6 +21,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  whatsapp-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: engine/connectors/whatsapp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.0"
+          cache: npm
+          cache-dependency-path: engine/connectors/whatsapp/package-lock.json
+      - name: Install locked bridge dependencies
+        run: npm ci
+      - name: Test bridge contracts
+        run: npm test
+      - name: Build bridge
+        run: npm run build
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -134,7 +156,7 @@ jobs:
           enable-cache: true
       - name: Sync dependencies
         run: uv sync --locked --extra dev
-      - name: Test agent lifecycle with PostgreSQL
+      - name: Test agent lifecycle and WhatsApp channels with PostgreSQL
         run: >-
           uv run --no-sync python -m pytest
           tests/test_agent_setup_postgres.py
@@ -148,4 +170,15 @@ jobs:
           tests/test_agent_start_postgres.py
           tests/test_linkup_proxy_tokens_postgres.py
           tests/test_linkup_proxy_revocation.py
+          tests/test_whatsapp_webhook.py
+          tests/test_channel_event_receipts_postgres.py
+          tests/test_channel_delivery_transport.py
+          tests/test_whatsapp_reply_window_postgres.py
+          tests/test_gateway_report_relay_contention_postgres.py
+          tests/test_shared_gateway_postgres.py
+          tests/test_shared_gateway_surface.py
+          tests/test_shared_burst_dispatch_postgres.py
+          tests/test_shared_burst_scope_postgres.py
+          tests/test_shared_model_config_postgres.py
+          tests/test_whatsapp_personal*.py
           -q

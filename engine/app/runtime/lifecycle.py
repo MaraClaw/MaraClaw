@@ -112,6 +112,7 @@ class Runtime:
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.linkup.export import start_web_search_export_daemon
             from app.services.openclaw_update_worker import start_openclaw_update_worker
+            from app.services.personal_burst_reconciler import personal_burst_reconciler_loop
             from app.services.scheduler import start_scheduler
             from app.services.trigger_daemon import start_trigger_daemon
 
@@ -123,12 +124,15 @@ class Runtime:
             self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
+            self.tasks.start("personal_burst", personal_burst_reconciler_loop(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
+            from app.services.channels.whatsapp_personal_supervisor import personal_supervisor
             from app.services.company_transfer_cleanup import start_transfer_cleanup_reconciler
             from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
+            self.tasks.start("whatsapp_personal", personal_supervisor(), requirement="loop")
             self.tasks.start("ss-local-proxy", self.proxy.start(), requirement="setup")
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager

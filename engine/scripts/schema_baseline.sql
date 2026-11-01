@@ -1105,6 +1105,71 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 
 CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id);
 
+CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
+    config_id UUID PRIMARY KEY,
+    agent_id UUID NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    owner_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    attempt_id UUID NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','qr','connected','reconnecting','paused','expired',
+                                        'disconnecting','disconnected','failed')),
+    desired BOOLEAN NOT NULL DEFAULT true,
+    claim_token UUID,
+    lease_until TIMESTAMPTZ,
+    account_id TEXT,
+    pn_jid TEXT,
+    lid_jid TEXT,
+    qr_value TEXT,
+    qr_expires_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    activated_at TIMESTAMPTZ,
+    error_code TEXT CHECK (error_code IN ('logged_out','account_in_use','identity_ambiguous',
+                                         'auth_store_failed','transport_failed')),
+    purge_requested BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((claim_token IS NULL) = (lease_until IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_account
+    ON whatsapp_personal_connections(account_id) WHERE account_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_pn
+    ON whatsapp_personal_connections(pn_jid) WHERE pn_jid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
+    ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id);
+
+CREATE TABLE IF NOT EXISTS whatsapp_personal_auth (
+    config_id UUID NOT NULL REFERENCES whatsapp_personal_connections(config_id) ON DELETE CASCADE,
+    auth_epoch UUID NOT NULL,
+    category TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    PRIMARY KEY(config_id, auth_epoch, category, key_id)
+);
+
+CREATE TABLE IF NOT EXISTS whatsapp_personal_sends (
+    command_id UUID PRIMARY KEY,
+    config_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    account_id TEXT NOT NULL,
+    self_jid TEXT NOT NULL,
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4096),
+    message_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending','dispatch_started','accepted','rejected','uncertain','cancelled')),
+    claim_token UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    UNIQUE(account_id,message_id)
+);
+CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_pending ON whatsapp_personal_sends(config_id, created_at)
+    WHERE state='pending';
+
 CREATE TABLE IF NOT EXISTS channel_event_receipts (
     config_id UUID NOT NULL REFERENCES channel_configs (id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
@@ -1142,7 +1207,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	user_id UUID NOT NULL, 
 	role chat_role_enum NOT NULL, 
 	content TEXT NOT NULL, 
-	conversation_id VARCHAR(200) NOT NULL, 
+    conversation_id TEXT NOT NULL,
 	participant_id UUID, 
 	thinking TEXT, 
 	client_submission_id UUID,
@@ -1199,7 +1264,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	user_id UUID NOT NULL, 
 	title VARCHAR(200) NOT NULL, 
 	source_channel VARCHAR(20) NOT NULL DEFAULT 'web',
-	external_conv_id VARCHAR(200), 
+	external_conv_id TEXT,
 	is_group BOOLEAN DEFAULT 'false' NOT NULL, 
 	group_name VARCHAR(200), 
 	participant_id UUID, 
@@ -1348,6 +1413,142 @@ CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
     ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
     ON gateway_report_deliveries (tenant_id);
+
+CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
+    ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending';
+
+-- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
+-- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,
+-- receipt, connector or user removal cannot turn a batched pending gateway into an apparently legacy ready row.
+CREATE TABLE IF NOT EXISTS personal_burst_batches (
+    gateway_id UUID PRIMARY KEY REFERENCES gateway_messages(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    shared_session_id UUID NOT NULL,
+    reply_session_id UUID NOT NULL,
+    sender_user_id UUID NOT NULL,
+    config_id UUID NOT NULL,
+    provider TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    peer_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sealed','claimed','completed','cancelled')),
+    first_at TIMESTAMPTZ NOT NULL,
+    last_at TIMESTAMPTZ NOT NULL,
+    ready_at TIMESTAMPTZ NOT NULL,
+    member_count INTEGER NOT NULL CHECK (member_count >= 1),
+    member_bytes INTEGER NOT NULL CHECK (member_bytes >= member_count),
+    frozen_body TEXT,
+    cancel_reason TEXT CHECK (cancel_reason IN ('route_stale','disconnected','ownership_lost','agent_unavailable',
+                                                'members_lost','operator')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    sealed_at TIMESTAMPTZ,
+    claimed_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    CHECK (first_at <= last_at AND first_at <= ready_at),
+    CHECK ((state = 'cancelled') = (cancel_reason IS NOT NULL)),
+    CHECK (state NOT IN ('sealed','claimed','completed') OR (frozen_body IS NOT NULL AND sealed_at IS NOT NULL)),
+    CHECK (state NOT IN ('claimed','completed') OR claimed_at IS NOT NULL),
+    CHECK (state NOT IN ('completed','cancelled') OR finished_at IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_open
+    ON personal_burst_batches (agent_id, shared_session_id) WHERE state IN ('pending','sealed');
+CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_due
+    ON personal_burst_batches (ready_at, gateway_id) WHERE state IN ('pending','sealed');
+
+CREATE OR REPLACE FUNCTION protect_personal_burst_batch() RETURNS trigger AS $$
+BEGIN
+    IF ROW(NEW.gateway_id, NEW.agent_id, NEW.tenant_id, NEW.shared_session_id, NEW.reply_session_id,
+           NEW.sender_user_id, NEW.config_id, NEW.provider, NEW.account_id, NEW.auth_epoch, NEW.generation,
+           NEW.peer_id, NEW.created_at) IS DISTINCT FROM
+       ROW(OLD.gateway_id, OLD.agent_id, OLD.tenant_id, OLD.shared_session_id, OLD.reply_session_id,
+           OLD.sender_user_id, OLD.config_id, OLD.provider, OLD.account_id, OLD.auth_epoch, OLD.generation,
+           OLD.peer_id, OLD.created_at) THEN
+        RAISE EXCEPTION 'Personal burst scope is immutable' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.state IS DISTINCT FROM OLD.state AND (OLD.state, NEW.state) NOT IN
+       (('pending','sealed'),('pending','cancelled'),('sealed','claimed'),('sealed','cancelled'),
+        ('claimed','completed')) THEN
+        RAISE EXCEPTION 'Personal burst state is permanent' USING ERRCODE = '23514';
+    END IF;
+    IF OLD.state <> 'pending' AND ROW(NEW.first_at, NEW.last_at, NEW.ready_at, NEW.member_count, NEW.member_bytes)
+       IS DISTINCT FROM ROW(OLD.first_at, OLD.last_at, OLD.ready_at, OLD.member_count, OLD.member_bytes) THEN
+        RAISE EXCEPTION 'Personal burst membership is frozen' USING ERRCODE = '23514';
+    END IF;
+    IF OLD.frozen_body IS NOT NULL AND NEW.frozen_body IS DISTINCT FROM OLD.frozen_body THEN
+        RAISE EXCEPTION 'Personal burst body is frozen' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER personal_burst_batch_protected
+BEFORE UPDATE ON personal_burst_batches FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_batch();
+
+-- Static busy/rejection notice sources: completed gateway rows without a conversation, senders or content.
+CREATE TABLE IF NOT EXISTS personal_busy_notices (
+    id UUID PRIMARY KEY,
+    gateway_id UUID NOT NULL UNIQUE REFERENCES gateway_messages(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    shared_session_id UUID NOT NULL,
+    reply_session_id UUID NOT NULL,
+    sender_user_id UUID NOT NULL,
+    config_id UUID NOT NULL,
+    provider TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    peer_id TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('capacity','quota','oversize')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS ix_personal_busy_notices_cooldown
+    ON personal_busy_notices (shared_session_id, config_id, created_at DESC);
+
+-- One row per native receipt outcome. The identity is the EXISTING composite receipt key (no second dedupe
+-- authority). Accepted members keep their original text and transcript link; rejections retain no body.
+-- Deleting a receipt (connector removal) removes its outcome; the batch header stays and seals as cancelled.
+CREATE TABLE IF NOT EXISTS personal_burst_inputs (
+    id UUID PRIMARY KEY,
+    config_id UUID NOT NULL,
+    provider TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('accepted','capacity_rejected','oversize_rejected','quota_rejected')),
+    batch_id UUID REFERENCES personal_burst_batches(gateway_id) ON DELETE CASCADE,
+    ordinal INTEGER CHECK (ordinal >= 1),
+    text TEXT CHECK (char_length(text) >= 1),
+    text_bytes INTEGER CHECK (text_bytes >= 1),
+    chat_message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
+    notice_id UUID REFERENCES personal_busy_notices(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    FOREIGN KEY (config_id, provider, event_key)
+        REFERENCES channel_event_receipts (config_id, provider, event_key) ON DELETE CASCADE,
+    UNIQUE (config_id, provider, event_key),
+    UNIQUE (batch_id, ordinal),
+    CHECK (text_bytes IS NULL OR text_bytes = octet_length(text)),
+    CHECK ((outcome = 'accepted') = (batch_id IS NOT NULL AND ordinal IS NOT NULL AND text IS NOT NULL
+                                      AND text_bytes IS NOT NULL)),
+    CHECK (outcome = 'accepted' OR (batch_id IS NULL AND ordinal IS NULL AND text IS NULL
+                                    AND text_bytes IS NULL AND chat_message_id IS NULL)),
+    CHECK (outcome <> 'accepted' OR notice_id IS NULL)
+);
+
+CREATE OR REPLACE FUNCTION protect_personal_burst_input() RETURNS trigger AS $$
+BEGIN
+    IF ROW(NEW.id, NEW.config_id, NEW.provider, NEW.event_key, NEW.outcome, NEW.batch_id, NEW.ordinal, NEW.text,
+           NEW.text_bytes, NEW.created_at) IS DISTINCT FROM
+       ROW(OLD.id, OLD.config_id, OLD.provider, OLD.event_key, OLD.outcome, OLD.batch_id, OLD.ordinal, OLD.text,
+           OLD.text_bytes, OLD.created_at) THEN
+        RAISE EXCEPTION 'Personal burst outcome is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER personal_burst_input_protected
+BEFORE UPDATE ON personal_burst_inputs FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_input();
 
 CREATE TABLE IF NOT EXISTS gogcli_credential_states (
 	id UUID DEFAULT gen_random_uuid() NOT NULL, 

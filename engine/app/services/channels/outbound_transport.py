@@ -19,9 +19,16 @@ def require_ack(response: httpx.Response, provider: OutboundProvider, acknowledg
 
 async def send_chunk(
     outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] = utcnow
-) -> None:
+) -> str | None:
+    """Send one chunk; return the provider message id only where the acknowledgement carries one (WhatsApp)."""
     target, config = outbound.target, outbound.config
+    if target.mode == "personal_qr":
+        from app.services.channels.whatsapp_personal_journal import enqueue
+
+        await enqueue(target, chunk)
+        return None
     app_id, app_secret = config.app_id or "", config.app_secret or ""
+    provider_message_id: str | None = None
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         match target.provider:
             case "slack":
@@ -64,6 +71,8 @@ async def send_chunk(
                     and not bool(body.get("error"))
                 )
                 require_ack(response, target.provider, accepted, "missing_ack")
+                if isinstance(messages, list):
+                    provider_message_id = json_as_str_or(json_object_from(messages[0]).get("id"))
             case "google_chat":
                 from app.services.channels.google_chat import (
                     CHAT_API_BASE,
@@ -121,3 +130,4 @@ async def send_chunk(
                 await send_enterprise_chunk(client, outbound, chunk)
             case unreachable:
                 assert_never(unreachable)
+    return provider_message_id

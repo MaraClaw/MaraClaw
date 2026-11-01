@@ -4,9 +4,11 @@ import { NotificationKind } from '../src/lib/notifications-api'
 import { inboxPath, notice, prepareNotifications, replacementNotice } from './notifications-fixture'
 import { replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 import { registerSelectedNotificationTests } from './selected-notification-cases'
+import { registerSelectedUnreadNotificationTests } from './selected-unread-notification-cases'
 import { registerSelectedNotificationMoveTests } from './selected-notification-moves'
 
 registerSelectedNotificationTests()
+registerSelectedUnreadNotificationTests()
 registerSelectedNotificationMoveTests()
 
 test('bulk mutation retains its submitted category while the selected category changes', async ({ page }) => {

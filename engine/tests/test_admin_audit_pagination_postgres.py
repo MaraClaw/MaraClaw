@@ -30,7 +30,9 @@ async def audit_client(admission_scenario: AdmissionScenario) -> AsyncIterator[A
         yield client
 
 
-async def seed_audit(scenario: AdmissionScenario, positions: list[tuple[int, datetime]]) -> None:
+async def seed_audit(
+    scenario: AdmissionScenario, positions: list[tuple[int, datetime]], target_type: str = "tenant"
+) -> None:
     for number, created_at in positions:
         await admin_audit_log_dao.create(
             obj_in={
@@ -38,7 +40,7 @@ async def seed_audit(scenario: AdmissionScenario, positions: list[tuple[int, dat
                 "actor_id": scenario.outsider.id,
                 "actor_role": "platform_admin",
                 "action": "fixture.audit",
-                "target_type": "tenant",
+                "target_type": target_type,
                 "target_id": scenario.target_id,
                 "tenant_id": scenario.target_id,
                 "created_at": created_at,
@@ -47,8 +49,9 @@ async def seed_audit(scenario: AdmissionScenario, positions: list[tuple[int, dat
 
 
 @pytest.mark.parametrize("path", [_PLATFORM, _ORG])
+@pytest.mark.parametrize("target_type", ["tenant", " Tenant%_' OR 1=1 -- "])
 async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page(
-    admission_scenario: AdmissionScenario, audit_client: AsyncClient, path: str
+    admission_scenario: AdmissionScenario, audit_client: AsyncClient, path: str, target_type: str
 ):
     # Given six matching rows, including three UUID ties and adjacent microseconds.
     scenario = admission_scenario
@@ -64,9 +67,18 @@ async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page
             (8, _NOW + timedelta(microseconds=1)),
             (11, _NOW + timedelta(microseconds=2)),
         ],
+        target_type,
     )
     for number, different in enumerate(
-        [{"tenant_id": scenario.source_id}, {"actor_id": scenario.genesis.id}, {"action": "other"}], start=20
+        [
+            {"tenant_id": scenario.source_id},
+            {"action": "other"},
+            {"target_type": "user"},
+            {"target_type": target_type.lower() + "x"},
+            {"target_type": target_type.upper()},
+        ]
+        + ([{"actor_id": scenario.genesis.id}] if path == _PLATFORM else []),
+        start=20,
     ):
         await admin_audit_log_dao.create(
             obj_in={
@@ -74,9 +86,9 @@ async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page
                 "actor_id": scenario.outsider.id,
                 "actor_role": "platform_admin",
                 "action": "fixture.audit",
-                "target_type": "tenant",
+                "target_type": target_type,
                 "tenant_id": scenario.target_id,
-                "created_at": _NOW + timedelta(seconds=1),
+                "created_at": _NOW,
                 **different,
             }
         )
@@ -84,15 +96,16 @@ async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page
         "tenant_id": str(scenario.target_id),
         "actor_id": str(scenario.outsider.id),
         "action": "fixture.audit",
+        "target_type": target_type,
         "start_at": "2026-10-24T14:00:00.123454+02:00",
         "end_at": "2026-10-24T07:00:00.123458-05:00",
         "limit": 2,
     }
     observed: list[UUID] = []
     pages: list[AdminAuditPageOut] = []
+    user = scenario.outsider if path == _PLATFORM else scenario.genesis
     # When the authenticated platform administrator follows every continuation.
     for _ in range(4):
-        user = scenario.outsider if path == _PLATFORM else scenario.genesis
         response = await audit_client.get(path, params=params, headers=scenario.headers(user))
         assert response.status_code == 200, response.text
         page = AdminAuditPageOut.model_validate_json(response.content)
@@ -108,6 +121,13 @@ async def test_postgres_seek_walks_window_ties_once_and_exhausts_exact_full_page
     assert len(pages) == 3
     assert pages[0].items[-1].created_at == _NOW
     assert pages[-1].next_cursor is None
+    legacy = await audit_client.get(
+        path.removesuffix("/page"),
+        params={key: value for key, value in params.items() if key != "cursor"},
+        headers=scenario.headers(user),
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert [item["id"] for item in legacy.json()] == [str(UUID(int=number)) for number in (11, 8)]
 
 
 async def test_postgres_org_scope_ignores_client_tenant_and_actor(admission_scenario, audit_client):
@@ -137,7 +157,9 @@ async def test_postgres_org_scope_ignores_client_tenant_and_actor(admission_scen
     assert page.next_cursor is None
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "action", "role", "principal_tenant", "start_at", "end_at"])
+@pytest.mark.parametrize(
+    "field", ["tenant_id", "actor_id", "action", "target_type", "role", "principal_tenant", "start_at", "end_at"]
+)
 async def test_postgres_cursor_rejects_scope_changes(admission_scenario, audit_client, field):
     # Given an actual cursor from a two-row company trail.
     scenario = admission_scenario
@@ -155,7 +177,7 @@ async def test_postgres_cursor_rejects_scope_changes(admission_scenario, audit_c
             params[field] = str(scenario.source_id)
         case "actor_id":
             params[field] = str(scenario.genesis.id)
-        case "action":
+        case "action" | "target_type":
             params[field] = "other"
         case "role":
             path, user = _ORG, scenario.genesis

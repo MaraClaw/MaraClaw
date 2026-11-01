@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { WhatsAppChannelCard } from '@/components/whatsapp-channel-card'
 import {
   CHANNEL_FIELDS, CHANNELS, channelDraftBody, deleteChannel, getChannel, getChannelCatalog,
   getChannelWebhook, getWechatQr, googleChatCredentialsConfigured, saveChannel, type ChannelCapability,
@@ -53,10 +54,11 @@ function ChannelSetup({ agentId, channel, creator }: { readonly agentId: string;
   if (channel.channel_type === 'wechat') return <WechatCard agentId={agentId} />
   const provider = CHANNELS.find((item) => item.key === channel.channel_type)
   if (!provider) return <p className="text-sm text-muted-foreground">This integration has no setup form in this client.</p>
+  if (channel.channel_type === 'whatsapp') return <WhatsAppChannelCard agentId={agentId} cloud={(onSaved) => <ChannelCard agentId={agentId} channel={channel} path={provider.path} onSaved={onSaved} />} />
   return <ChannelCard agentId={agentId} channel={channel} path={provider.path} />
 }
 
-function ChannelCard({ agentId, channel, path }: { readonly agentId: string; readonly channel: ChannelCapability; readonly path: string }) {
+function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: string; readonly channel: ChannelCapability; readonly path: string; readonly onSaved?: () => void }) {
   const scope = useWorkspaceSession()
   const fields = CHANNEL_FIELDS[channel.channel_type] ?? []
   const [values, setValues] = useState<Record<string, string>>({})
@@ -78,6 +80,7 @@ function ChannelCard({ agentId, channel, path }: { readonly agentId: string; rea
       setValues({})
       toast.success(`${channel.display_name} saved`)
       void refresh()
+      onSaved?.()
     },
   })
   const remove = useMutation({

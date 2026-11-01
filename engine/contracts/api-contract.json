@@ -10999,6 +10999,176 @@
         "title": "PersonalAssistantRequest",
         "type": "object"
       },
+      "PersonalError": {
+        "enum": [
+          "logged_out",
+          "account_in_use",
+          "identity_ambiguous",
+          "auth_store_failed",
+          "transport_failed"
+        ],
+        "type": "string"
+      },
+      "PersonalQR": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "expires_at"
+        ],
+        "title": "PersonalQR",
+        "type": "object"
+      },
+      "PersonalRelink": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "format": "uuid",
+            "title": "Expected Generation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_generation"
+        ],
+        "title": "PersonalRelink",
+        "type": "object"
+      },
+      "PersonalStart": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Generation"
+          }
+        },
+        "required": [
+          "expected_generation"
+        ],
+        "title": "PersonalStart",
+        "type": "object"
+      },
+      "PersonalState": {
+        "enum": [
+          "pending",
+          "qr",
+          "connected",
+          "reconnecting",
+          "paused",
+          "expired",
+          "disconnecting",
+          "disconnected",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "PersonalStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonalError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "mode": {
+            "const": "personal_qr",
+            "default": "personal_qr",
+            "title": "Mode",
+            "type": "string"
+          },
+          "qr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonalQR"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PersonalState",
+            "default": "disconnected"
+          }
+        },
+        "title": "PersonalStatus",
+        "type": "object"
+      },
       "PlatformAdminCreateRequest": {
         "properties": {
           "admin_display_name": {
@@ -12703,6 +12873,26 @@
           "distinct_orgs"
         ],
         "title": "SearchAnalyticsTrendingQueryProjection",
+        "type": "object"
+      },
+      "SelectedNotificationsRequest": {
+        "description": "Submitted identifiers; the 200-item bound applies before deduplication.",
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "SelectedNotificationsRequest",
         "type": "object"
       },
       "SessionOut": {
@@ -16216,6 +16406,127 @@
         "title": "WeComChannelPayload",
         "type": "object"
       },
+      "WhatsAppChannelOut": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Id"
+          },
+          "app_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Secret"
+          },
+          "channel_type": {
+            "$ref": "#/components/schemas/ChannelType"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "encrypt_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Encrypt Key"
+          },
+          "extra_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_configured": {
+            "title": "Is Configured",
+            "type": "boolean"
+          },
+          "is_connected": {
+            "title": "Is Connected",
+            "type": "boolean"
+          },
+          "last_tested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tested At"
+          },
+          "mode": {
+            "default": "cloud",
+            "enum": [
+              "cloud",
+              "personal_qr"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "verification_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Token"
+          }
+        },
+        "required": [
+          "id",
+          "agent_id",
+          "channel_type",
+          "is_configured",
+          "is_connected"
+        ],
+        "title": "WhatsAppChannelOut",
+        "type": "object"
+      },
       "WhatsAppChannelPayload": {
         "properties": {
           "access_token": {
@@ -16432,6 +16743,22 @@
           },
           {
             "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -16531,6 +16858,22 @@
                 }
               ],
               "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
             }
           },
           {
@@ -25842,7 +26185,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChannelConfigOut"
+                  "$ref": "#/components/schemas/WhatsAppChannelOut"
                 }
               }
             },
@@ -25922,6 +26265,230 @@
         ],
         "summary": "Configure Whatsapp Channel",
         "tags": [
+          "whatsapp"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/whatsapp-channel/personal": {
+      "delete": {
+        "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f77686174736170702d6368616e6e656c2f706572736f6e616c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_generation",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Expected Generation",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disconnect Personal",
+        "tags": [
+          "whatsapp",
+          "whatsapp"
+        ]
+      },
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f77686174736170702d6368616e6e656c2f706572736f6e616c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Personal",
+        "tags": [
+          "whatsapp",
+          "whatsapp"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/whatsapp-channel/personal/relink": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f77686174736170702d6368616e6e656c2f706572736f6e616c2f72656c696e6b",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalRelink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Relink Personal",
+        "tags": [
+          "whatsapp",
+          "whatsapp"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/whatsapp-channel/personal/start": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f77686174736170702d6368616e6e656c2f706572736f6e616c2f7374617274",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Personal",
+        "tags": [
+          "whatsapp",
           "whatsapp"
         ]
       }
@@ -32899,6 +33466,53 @@
         ]
       }
     },
+    "/api/notifications/unread-selected": {
+      "post": {
+        "description": "Mark every selected visible notification unread without changing archive state.",
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f756e726561642d73656c6563746564",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectedNotificationsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Selected Unread",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/{notification_id}/archive": {
       "post": {
         "description": "Archive a notification belonging to the authenticated membership.",
@@ -38445,6 +39059,22 @@
           },
           {
             "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -38510,6 +39140,22 @@
                 }
               ],
               "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
             }
           },
           {
@@ -39568,6 +40214,9 @@
       "PermissionAccessLevel",
       "PermissionGrantScope",
       "PersonalAssistantRequest",
+      "PersonalRelink",
+      "PersonalStart",
+      "PersonalStatus",
       "PressKeysRequest",
       "ProgressUpdate",
       "ReadSelectedRequest",
@@ -39594,6 +40243,7 @@
       "SearchAnalyticsSummary",
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
+      "SelectedNotificationsRequest",
       "SlackChannelPayload",
       "TaskCreate",
       "TaskLogCreate",
@@ -39635,6 +40285,7 @@
       "VerifyEmailRequest",
       "WeChatQRCodePayload",
       "WeComChannelPayload",
+      "WhatsAppChannelOut",
       "WhatsAppChannelPayload",
       "WorkReportOut"
     ],
@@ -39835,6 +40486,12 @@
       "PermissionGrantScope",
       "PersonRef",
       "PersonalAssistantRequest",
+      "PersonalError",
+      "PersonalQR",
+      "PersonalRelink",
+      "PersonalStart",
+      "PersonalState",
+      "PersonalStatus",
       "PressKeysRequest",
       "ProgressUpdate",
       "ReadSelectedRequest",
@@ -39863,6 +40520,7 @@
       "SearchAnalyticsSummary",
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
+      "SelectedNotificationsRequest",
       "SlackChannelPayload",
       "StringErrorEvent",
       "SubmissionRejectionReason",
@@ -39917,6 +40575,7 @@
       "VerifyEmailRequest",
       "WeChatQRCodePayload",
       "WeComChannelPayload",
+      "WhatsAppChannelOut",
       "WhatsAppChannelPayload",
       "WorkReportOut",
       "WorkspaceDraftEvent",

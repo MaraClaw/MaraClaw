@@ -44,7 +44,7 @@ try {
         const url = new URL(request.url, 'http://synthetic.invalid'), path = url.pathname, method = request.method
         const call = { scenario: active?.name, path, method, query: url.search }
         receipt.requests.push(call)
-        let body, status = 200
+        let body, heldRequest, status = 200
         if (method === 'GET' && path === '/api/auth/me') body = admin
         else if (active && method === 'GET' && path === '/api/notifications/unread-count') body = { unread_count: active.items.filter((item) => !item.is_read && item.archived_at === null).length }
         else if (active && method === 'GET' && path === '/api/notifications/page' && ['active', 'archived'].includes(url.searchParams.get('view')) && url.searchParams.get('limit') === '50') {
@@ -58,13 +58,14 @@ try {
             const items = rows.slice(start, start + 50)
             body = { items, next_cursor: rows.length > start + 50 ? items.at(-1).id : null }
           }
-        } else if (active && method === 'POST' && ['/api/notifications/read-selected', '/api/notifications/archive', '/api/notifications/restore'].includes(path)) {
+        } else if (active && method === 'POST' && ['/api/notifications/read-selected', '/api/notifications/unread-selected', '/api/notifications/archive', '/api/notifications/restore'].includes(path)) {
           const owner = active, chunks = []
           for await (const chunk of request) chunks.push(chunk)
           const input = JSON.parse(Buffer.concat(chunks).toString())
           assert.ok(Array.isArray(input.ids) && input.ids.length > 0 && input.ids.length <= 200)
           call.ids = [...input.ids]
           const held = owner.hold
+          heldRequest = held
           if (held) { held.started.resolve(); await held.released.promise }
           if (owner.failSelected) { status = owner.failSelected; owner.failSelected = undefined; body = { detail: 'Unavailable' } }
           else {
@@ -72,6 +73,7 @@ try {
               if (!input.ids.includes(item.id)) return item
               switch (path) {
                 case '/api/notifications/read-selected': return { ...item, is_read: true }
+                case '/api/notifications/unread-selected': return { ...item, is_read: false }
                 case '/api/notifications/archive': return { ...item, archived_at: item.archived_at ?? '2026-10-24T00:00:00Z' }
                 case '/api/notifications/restore': return { ...item, archived_at: null }
                 default: throw new Error(`Unsupported batch action ${path}`)
@@ -93,6 +95,8 @@ try {
           }
         } else { receipt.violations.push({ path, method }); status = 502; body = { detail: 'Unexpected synthetic API request' } }
         response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(body))
+        call.completed = true
+        heldRequest?.finished?.resolve()
       }) },
     }],
   })

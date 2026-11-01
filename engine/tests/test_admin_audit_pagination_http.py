@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -74,7 +75,10 @@ async def test_app_auth_and_force_change_precede_cursor_decoding(
 
 
 @pytest.mark.parametrize(("path", "role"), [(_PLATFORM, "platform_admin"), (_ORG, "org_admin")])
-async def test_array_endpoints_are_unchanged_and_page_items_match(client, principal, monkeypatch, path, role):
+@pytest.mark.parametrize("target_type", [None, "", "tenant", " Tenant%_' OR 1=1 -- "])
+async def test_array_endpoints_are_unchanged_and_page_items_match(
+    client, principal, monkeypatch, path, role, target_type
+):
     # Given one persisted-shaped event and an authorized caller.
     principal.role = role
     row = AdminAuditLogRecord(
@@ -96,6 +100,8 @@ async def test_array_endpoints_are_unchanged_and_page_items_match(client, princi
     monkeypatch.setattr(admin_audit_log_dao, "list_page", page_query)
     headers = {"Authorization": "Bearer fixture-token"}
     params = {"action": "tenant_create", "limit": 0, "tenant_id": str(uuid4()), "actor_id": str(principal.id)}
+    if target_type is not None:
+        params["target_type"] = target_type
     # When existing and additive clients request the same event.
     legacy = await client.get(path, params={**params, "start_at": "invalid", "end_at": "0"}, headers=headers)
     page = await client.get(path + "/page", params=params, headers=headers)
@@ -108,6 +114,9 @@ async def test_array_endpoints_are_unchanged_and_page_items_match(client, princi
     expected_tenant = principal.tenant_id if role == "org_admin" else UUID(params["tenant_id"])
     assert recent.await_args.kwargs["tenant_id"] == page_query.await_args.kwargs["tenant_id"] == expected_tenant
     assert recent.await_args.kwargs["limit"] == page_query.await_args.kwargs["limit"] == 1
+    assert (
+        recent.await_args.kwargs["target_type"] == page_query.await_args.kwargs["target_type"] == (target_type or None)
+    )
     assert page_query.await_args.kwargs["actor_id"] == (None if role == "org_admin" else principal.id)
 
 
@@ -121,6 +130,46 @@ async def test_identity_platform_admin_uses_effective_platform_cursor_scope(clie
     # Then the existing identity-based role exception remains supported.
     assert response.status_code == 200
     assert response.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.parametrize(("path", "role"), [(_PLATFORM, "platform_admin"), (_ORG, "org_admin")])
+@pytest.mark.parametrize("suffix", ["", "/page"])
+@pytest.mark.parametrize(("state", "status"), [("moved", 200), ("demoted", 403), ("inactive_identity", 401)])
+async def test_audit_endpoints_use_fresh_role_identity_and_tenant(
+    client, principal, monkeypatch, path, role, suffix, state, status
+):
+    # Given a cached authorized principal and different persisted authority.
+    principal.role = role
+    assert principal.identity is not None
+    fresh_user = replace(
+        principal,
+        tenant_id=uuid4(),
+        role="member" if state == "demoted" else role,
+        identity=replace(principal.identity, is_active=state != "inactive_identity"),
+    )
+
+    async def load_principal(_uid, *, fresh=False):
+        return fresh_user if fresh else principal
+
+    loader = AsyncMock(side_effect=load_principal)
+    monkeypatch.setattr(security.user_dao, "get_with_identity", loader)
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(admin_audit_log_dao, "list_page" if suffix else "list_recent", query)
+    # When either endpoint receives an attempted stale-tenant override.
+    response = await client.get(
+        path + suffix,
+        params={"target_type": "tenant", "tenant_id": str(principal.tenant_id)},
+        headers={"Authorization": "Bearer fixture-token"},
+    )
+    # Then fresh eligibility wins, and org SQL uses only the new tenant.
+    assert response.status_code == status, response.text
+    loader.assert_awaited_once_with(principal.id, fresh=True)
+    if status == 200:
+        assert query.await_args is not None
+        expected_tenant = fresh_user.tenant_id if role == "org_admin" else principal.tenant_id
+        assert query.await_args.kwargs["tenant_id"] == expected_tenant
+    else:
+        query.assert_not_awaited()
 
 
 @pytest.mark.parametrize(("path", "role"), [(_PLATFORM, "platform_admin"), (_ORG, "org_admin")])

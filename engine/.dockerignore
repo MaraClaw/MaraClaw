@@ -8,3 +8,5 @@
 **/.ruff_cache
 **/__pycache__
 **/*.egg-info
+connectors/whatsapp/node_modules
+connectors/whatsapp/dist

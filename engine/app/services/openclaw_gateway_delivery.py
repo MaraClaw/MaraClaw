@@ -13,13 +13,16 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.dao.participant_dao import participant_dao
+from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.schemas.chat_wire import ChatEventType
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import normalize_channel_type
-from app.services.openclaw_update_gate import assert_work_allowed
+from app.services.openclaw_shared_dispatch import claim_ready_shared
+from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
 
@@ -40,6 +43,10 @@ def delivery_cutoff(now: datetime) -> datetime:
 async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> list[GatewayMessageRecord]:
     """Requeue expired deliveries and atomically claim the pending batch.
 
+    The Shared head comes only from the central claim (actual oldest head, readiness, fresh scope, exact model), which
+    owns its transaction and therefore must be called outside any other. It runs last, so a failure before it can
+    never strand a delivered Shared turn that no response carried (those are never requeued).
+
     Raises ``OpenClawUpdateGateError`` before any requeue or claim.
     """
     await assert_work_allowed(agent_id)
@@ -47,15 +54,19 @@ async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> li
     at = now or _utcnow()
     shared_id = shared_session_id(agent_id)
     async with connection_ctx():
-        shared = await gateway_message_dao.claim_shared(agent_id, shared_id, now=at)
         requeued = await gateway_message_dao.requeue_stale_deliveries(
             agent_id, stale_before=delivery_cutoff(at), exclude_conversation=str(shared_id)
         )
         messages = await gateway_message_dao.claim_pending(agent_id, now=at, exclude_conversation=str(shared_id))
-        if shared is not None:
-            messages.append(shared)
     if requeued:
         logger.info("[Gateway] Requeued stale deliveries agent={} ids={}", agent_id, requeued)
+    try:
+        shared = await claim_ready_shared(SharedDispatchRequest(agent_id, at))
+    except OpenClawUpdateGateError as gate:
+        logger.info("[Gateway] shared claim left pending for {}: {}", agent_id, gate.code)
+        return messages
+    if shared is not None:
+        messages.append(shared)
     return messages
 
 
@@ -64,14 +75,17 @@ async def record_report(
 ) -> RecordedReport | None:
     """Commit the winning completion, chat, last-seen touch, and delivery intents."""
     at = now or _utcnow()
+    shared_id = shared_session_id(agent.id)
     async with connection_ctx():
         candidate = await gateway_message_dao.get_for_agent(message_id, agent.id)
-        if (
-            candidate is not None
-            and candidate.conversation_id == str(shared_session_id(agent.id))
-            and candidate.status != "delivered"
-        ):
-            return None
+        if candidate is not None and candidate.conversation_id == str(shared_id):
+            # Settlement joins claims, appends and cancellations under the lane lock, and marks the burst batch
+            # completed before the gateway row moves, so no path ever takes the batch and the lane in reverse.
+            _ = await gateway_message_dao.lock_shared_lane(agent.id, shared_id)
+            candidate = await gateway_message_dao.get_for_agent(message_id, agent.id)
+            if candidate is None or candidate.status != "delivered":
+                return None
+            _ = await personal_burst_dispatch_dao.mark_completed(message_id)
         won = await gateway_message_dao.complete(message_id, agent.id, result=result, now=at)
         if won is None:
             return None
@@ -117,9 +131,9 @@ async def record_report(
                     tenant_id=agent.tenant_id,
                 )
         if won.conversation_id == str(shared_session_id(agent.id)):
-            from app.services.openclaw_routing import _schedule_inbox_wake
+            from app.services.openclaw_routing import wake_shared_lane
 
-            _schedule_inbox_wake(agent, "", won.id)
+            wake_shared_lane(agent, won.id)
     return RecordedReport(message=won, assistant_message_id=assistant_message_id)
 
 

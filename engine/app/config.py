@@ -183,6 +183,23 @@ class Settings(BaseSettings):
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Requeue a gateway message the guest took but has not reported after this many seconds.
     OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
+    # Personal WhatsApp burst batching: originals join one turn after a quiet window, bounded by the max window.
+    # Pending limits exclude the one in-flight batch; the body limit is the joined UTF-8 size of one batch.
+    WHATSAPP_PERSONAL_BURST_QUIET_SECONDS: float = Field(default=2.0, gt=0, le=3600, allow_inf_nan=False)
+    WHATSAPP_PERSONAL_BURST_MAX_SECONDS: float = Field(default=5.0, gt=0, le=3600, allow_inf_nan=False)
+    WHATSAPP_PERSONAL_BURST_PENDING_COUNT: int = Field(default=50, gt=0, le=100000)
+    WHATSAPP_PERSONAL_BURST_PENDING_BYTES: int = Field(default=65536, gt=0, le=268435456)
+    WHATSAPP_PERSONAL_BURST_BODY_BYTES: int = Field(default=16384, gt=0, le=268435456)
+    WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_personal_burst_limits(self) -> Settings:
+        if self.WHATSAPP_PERSONAL_BURST_QUIET_SECONDS > self.WHATSAPP_PERSONAL_BURST_MAX_SECONDS:
+            raise ValueError("WhatsApp burst quiet window must not exceed the maximum collection window")
+        if self.WHATSAPP_PERSONAL_BURST_BODY_BYTES > self.WHATSAPP_PERSONAL_BURST_PENDING_BYTES:
+            raise ValueError("WhatsApp burst body limit must not exceed the pending byte backlog")
+        return self
+
     GOGCLI_ENABLED: bool = True
     # Optional OpenAI-compatible memory embeddings for guests. Active only when all four are non-blank.
     EMBEDDING_MODEL: str = ""

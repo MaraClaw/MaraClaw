@@ -147,6 +147,16 @@ async def mark_selected_read(
     return {"ok": True}
 
 
+@router.post("/notifications/unread-selected")
+async def mark_selected_unread(
+    req: SelectedNotificationsRequest, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationReadResponse:
+    """Mark every selected visible notification unread without changing archive state."""
+    if not await notification_dao.mark_selected_unread_for_user(req.ids, current_user.id):
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
 @router.post("/notifications/archive")
 async def archive_selected_notifications(
     req: ArchiveSelectedRequest, current_user: UserRecord = Depends(get_current_user)

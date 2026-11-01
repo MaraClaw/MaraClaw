@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { MutationObserver, QueryClient, type InfiniteData } from '@tanstack/react-query'
 
-import { notificationKeys, notificationListOptions, notificationsArchiveSelectedOptions, notificationsReadSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
+import { notificationKeys, notificationListOptions, notificationsArchiveSelectedOptions, notificationsReadSelectedOptions, notificationsUnreadSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
 import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { ReadSelectedRequestSchema } from '../src/lib/engine-contracts.generated.ts'
@@ -16,9 +16,9 @@ const initial: readonly NotificationRow[] = [
   { id: otherId, title: 'Archived announcement', type: 'broadcast', is_read: false, archived_at: '2030-01-01T00:00:00Z' },
 ]
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, isRead = false) {
   let token: string | null = null
-  let rows = initial
+  let rows = initial.map((row) => ({ ...row, is_read: isRead }))
   let writes = 0
   const store = createAuthSessionStore({ read: () => token, write: (value) => { token = value }, clear: () => { token = null } })
   const user = { id, email: 'fixture@example.test', display_name: 'Fixture', role: 'member', tenant_id: id, email_verified: true } as const
@@ -38,6 +38,7 @@ async function fixture(t: TestContext) {
           case '/api/notifications/archive': return { ...row, archived_at: row.archived_at ?? '2030-01-02T00:00:00Z' }
           case '/api/notifications/restore': return { ...row, archived_at: null }
           case '/api/notifications/read-selected': return { ...row, is_read: true }
+          case '/api/notifications/unread-selected': return { ...row, is_read: false }
           default: throw new Error(`Unexpected batch endpoint ${url.pathname}`)
         }
       })
@@ -70,7 +71,20 @@ test('selected read refreshes every overlapping category and archived list witho
   }
 })
 
-for (const options of [notificationsReadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions]) {
+test('selected unread refreshes every overlapping category and preserves archived timestamps', async (t) => {
+  const { client, scope, list, count, writes } = await fixture(t, true)
+  const mutation = new MutationObserver(client, fenceMutationOptions(scope, notificationsUnreadSelectedOptions(client)))
+  await mutation.mutate([id, otherId, id])
+  assert.equal(writes(), 1)
+  for (const category of ['all', 'social', 'broadcast'] as const) {
+    assert.equal(count(category), 1)
+    assert.deepEqual(list(category, 'active'), [initial[0]])
+    assert.deepEqual(list(category, 'archived'), [initial[1]])
+  }
+  assert.equal(count('tool'), 0)
+})
+
+for (const options of [notificationsReadSelectedOptions, notificationsUnreadSelectedOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions]) {
 test(`${options.name} failed mixed batch keeps all cached rows and badges unchanged`, async (t) => {
   // Given
   const { client, scope, list, count } = await fixture(t)
@@ -124,7 +138,7 @@ for (const [options, selected, activeIds, countValue] of [
   })
 }
 
-test('queued selected restore is fenced before transport after the archive owner retires', async (t) => {
+test('queued selected unread and restore are fenced before transport after the archive owner retires', async (t) => {
   // Given
   const { client, scope, store, user } = await fixture(t)
   const response = Promise.withResolvers<Response>()
@@ -132,13 +146,15 @@ test('queued selected restore is fenced before transport after the archive owner
   const fetch = t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
   const archive = new MutationObserver(client, fenceMutationOptions(scope, notificationsArchiveSelectedOptions(client)))
   const restore = new MutationObserver(client, fenceMutationOptions(scope, notificationsRestoreSelectedOptions(client)))
+  const unread = new MutationObserver(client, fenceMutationOptions(scope, notificationsUnreadSelectedOptions(client)))
   const archived = assert.rejects(archive.mutate([id]), RetiredWorkspaceError)
   await started.promise
   const restored = assert.rejects(restore.mutate([id]), RetiredWorkspaceError)
+  const unreadResult = assert.rejects(unread.mutate([id]), RetiredWorkspaceError)
   // When
   store.applySession(store.capture(), { access_token: 'replacement', user })
   response.resolve(Response.json({ ok: true }))
-  await Promise.all([archived, restored])
+  await Promise.all([archived, restored, unreadResult])
   // Then
   assert.equal(fetch.mock.callCount(), 1)
 })

@@ -51,10 +51,11 @@ async def test_selected_archive_rejects_invalid_input(
     assert response.status_code == 422
 
 
-async def test_overlapping_selected_batches_are_consistent(archive_scenario: ArchiveScenario) -> None:
+@pytest.mark.parametrize("operation", ["archive", "unread-selected"])
+async def test_overlapping_selected_batches_are_consistent(archive_scenario: ArchiveScenario, operation: str) -> None:
     # Given separate pool connections and overlapping selections in opposite order.
     scenario = archive_scenario
-    notices = [await scenario.notice(), await scenario.notice(is_read=True)]
+    notices = [await scenario.notice(is_read=operation == "unread-selected"), await scenario.notice(is_read=True)]
     await get_pool().resize(min_size=2, max_size=2)
     ids = [str(notice.id) for notice in notices]
     # When concurrent archive requests select the same rows in opposite order.
@@ -62,7 +63,7 @@ async def test_overlapping_selected_batches_are_consistent(archive_scenario: Arc
         responses = await asyncio.gather(
             *(
                 scenario.client.post(
-                    "/api/notifications/archive", headers=scenario.headers(scenario.owner), json={"ids": batch}
+                    f"/api/notifications/{operation}", headers=scenario.headers(scenario.owner), json={"ids": batch}
                 )
                 for batch in (ids, list(reversed(ids)))
             )
@@ -70,5 +71,5 @@ async def test_overlapping_selected_batches_are_consistent(archive_scenario: Arc
     # Then both complete without deadlock and both rows retain their read states.
     assert [response.status_code for response in responses] == [200, 200]
     rows = await scenario.db.fetchall("SELECT id, is_read, archived_at FROM notifications")
-    assert {row["id"]: row["is_read"] for row in rows} == {notices[0].id: False, notices[1].id: True}
-    assert all(row["archived_at"] is not None for row in rows)
+    assert {row["id"]: row["is_read"] for row in rows} == {notices[0].id: False, notices[1].id: operation == "archive"}
+    assert all((row["archived_at"] is not None) is (operation == "archive") for row in rows)

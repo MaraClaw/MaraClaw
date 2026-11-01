@@ -76,7 +76,7 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
     async def acl_version(_agent_id: UUID):
         return 0
 
-    monkeypatch.setattr(submissions, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(access_cache, "read_acl_version", acl_version)
     monkeypatch.setattr(background_tasks, "schedule_background_task", lambda coroutine, _description: coroutine.close())
     event = ChannelEvent(

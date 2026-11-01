@@ -44,10 +44,40 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=channel_type)
     if config is None and provider == "feishu" and agent.tenant_id is not None:
         config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=channel_type)
+    external = (session.external_conv_id or "").strip()
     if config is None:
+        if provider == "whatsapp" and external.startswith("whatsapp_personal:"):
+            from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+
+            raise PersonalSendTerminalError("personal_route_revoked")
         raise ValueError("IM configuration is unavailable")
     extra = json_object_from(config.extra_config)
-    external = (session.external_conv_id or "").strip()
+    if provider == "whatsapp":
+        from app.dao.whatsapp_personal_dao import get_personal
+        from app.records.whatsapp_personal import PersonalRoute
+        from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError, route_matches
+
+        if external.startswith("whatsapp_personal:"):
+            try:
+                route = PersonalRoute.from_external_id(external)
+            except ValueError:
+                raise PersonalSendTerminalError("personal_route_invalid") from None
+            connection = await get_personal(agent.id)
+            if extra.get("mode") != "personal_qr" or connection is None or not route_matches(connection, route):
+                raise PersonalSendTerminalError("personal_route_revoked")
+            return ConfiguredOutbound(
+                OutboundTarget(
+                    provider="whatsapp",
+                    mode="personal_qr",
+                    config_id=config.id,
+                    account=(route.account_id, str(route.auth_epoch), str(route.generation)),
+                    destination=external,
+                ),
+                config,
+                agent.tenant_id,
+            )
+        if extra.get("mode") == "personal_qr":
+            raise PersonalSendTerminalError("personal_cloud_route_forbidden")
     destination, thread, recipient_type, endpoint, enterprise_agent_id = external, None, "", "", ""
     account: tuple[str, ...] = (config.app_id or "",)
     match provider:

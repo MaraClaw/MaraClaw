@@ -19,11 +19,13 @@ from pydantic import ValidationError
 
 from app.api import gateway
 from app.config import Settings
+from app.core.logging import configure_logging
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db import session as session_module
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.org import OrgMemberRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
 from app.services import openclaw_gateway_delivery as delivery
@@ -325,9 +327,7 @@ class _DeliveryStore:
         self.intents[key] = record
         return record
 
-    async def claim_shared(
-        self, agent_id: uuid.UUID, session_id: uuid.UUID, *, now: datetime
-    ) -> GatewayMessageRecord | None:
+    async def claim_ready_shared(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
         return None
 
     async def requeue_stale_deliveries(
@@ -378,8 +378,9 @@ class _DeliveryStore:
 @pytest.fixture
 def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
     store = _DeliveryStore()
-    for name in ("claim_shared", "claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
+    for name in ("claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
+    monkeypatch.setattr(delivery, "claim_ready_shared", store.claim_ready_shared)
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
     monkeypatch.setattr(delivery, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(delivery, "load_agent_for_new_work", AsyncMock())
@@ -941,3 +942,53 @@ async def test_report_http_done_identity_matches_persisted_assistant(
     event = env.calls["ws"][0][0][2]
     assert event["content"] == delivery_store.chat[0]["content"] == "answer"
     assert event["message_id"] == event["entry_id"] == str(env.inserted_id)
+
+
+API_KEY_CANARY = "gwk_canary_9f2e1d4c"
+
+
+@pytest.fixture
+def app_log() -> Iterator[list[str]]:
+    chunks: list[str] = []
+    configure_logging(level="DEBUG", fmt="text", enqueue=False, color=False, sink=chunks.append)
+    yield chunks
+    configure_logging()
+
+
+def _app_output(chunks: list[str]) -> str:
+    """Records from app modules only; the HTTP test client's own request log is not under test."""
+    return "\n".join(line for line in "".join(chunks).splitlines() if " | app." in line)
+
+
+async def test_poll_and_report_diagnostics_identify_the_agent_never_the_api_key(
+    monkeypatch: pytest.MonkeyPatch, report_env: SimpleNamespace, app_log: list[str]
+) -> None:
+    env = report_env
+    monkeypatch.setattr("app.services.openclaw_hot_cache.should_touch_last_seen", lambda _id: False)
+    monkeypatch.setattr(gateway, "_poll_relationships", AsyncMock(return_value=[]))
+
+    reported = await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="answer"), API_KEY_CANARY)
+    polled = await gateway.poll_messages(API_KEY_CANARY)
+
+    output = _app_output(app_log)
+    assert reported == {"status": "ok"}
+    assert polled.messages == []
+    assert f"[Gateway] report called agent={env.agent.id} msg_id={env.row.id}" in output
+    assert f"[Gateway] poll called agent={env.agent.id}" in output
+    assert API_KEY_CANARY[:8] not in output
+
+
+async def test_rejected_api_key_is_unauthorized_and_absent_from_logs(
+    monkeypatch: pytest.MonkeyPatch, app_log: list[str]
+) -> None:
+    from app.main import app
+
+    monkeypatch.setattr(gateway.agent_dao, "get_openclaw_by_api_key", AsyncMock(return_value=None))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/gateway/poll", headers={"X-Api-Key": API_KEY_CANARY})
+
+    output = _app_output(app_log)
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid API key"}
+    assert "<-- GET /api/gateway/poll 401" in output
+    assert API_KEY_CANARY[:8] not in output

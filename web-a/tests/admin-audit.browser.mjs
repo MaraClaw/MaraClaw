@@ -4,6 +4,7 @@ import { expect as playwrightExpect } from '@playwright/test'
 import { actorId, createHarness, event, flush, nullableEvent, signInReplacement, tenantId } from './admin-audit-browser-harness.mjs'
 import { runPagingScenarios } from './admin-audit-paging.browser.mjs'
 import { runWindowScenarios } from './admin-audit-window.browser.mjs'
+import { runTargetScenarios } from './admin-audit-target.browser.mjs'
 
 const expect = playwrightExpect.configure({ timeout: 15_000 })
 const harness = await createHarness()
@@ -116,6 +117,7 @@ try {
   for (const sameToken of [true, false]) for (const status of [200, 401, 403]) await scenario({ name: `late older-page ${status} after ${sameToken ? 'same' : 'different'} token session replacement`, nextCursor: 'retired-owner-page-2', user: { role: 'platform_admin', is_platform_admin: true } }, async (page, state) => {
     await expect(page.getByRole('heading', { name: '2 recent events' })).toBeVisible()
     await page.getByLabel('Action', { exact: true }).fill('retired.owner.filter')
+    await page.getByLabel('Target type', { exact: true }).fill('tenant')
     await page.getByLabel('Start time', { exact: true }).fill('2026-10-21T08:00:00+08:00')
     await page.getByLabel('End time', { exact: true }).fill('2026-10-22T00:00:00Z')
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
@@ -128,6 +130,7 @@ try {
     await expect.poll(() => state.exchanges.length).toBe(initialCount + 1)
     const pending = state.exchanges.at(-1)
     assert.equal(pending.params.cursor, 'retired-owner-page-2')
+    assert.equal(pending.params.target_type, 'tenant')
     assert.equal(pending.params.start_at, '2026-10-21T00:00:00.000000Z')
     assert.equal(pending.params.end_at, '2026-10-22T00:00:00.000000Z')
     state.user = { ...state.user, id: tenantId, tenant_id: actorId, role: 'org_admin', is_platform_admin: false }
@@ -139,6 +142,7 @@ try {
     await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeDisabled()
     assert.equal(state.exchanges.at(-1).path, '/api/users/admin-audit-logs/page')
     assert.deepEqual(state.exchanges.at(-1).params, { limit: '100' })
+    await expect(page.getByLabel('Target type', { exact: true })).toHaveValue('')
     pending.gate.resolve(); await pending.delivered.promise; await flush(page)
     await expect(page.getByRole('heading', { name: 'retired.owner.result', exact: true })).toHaveCount(0)
     await expect(page.getByRole('alert')).toHaveCount(0)
@@ -148,6 +152,7 @@ try {
 
   await runPagingScenarios(harness)
   await runWindowScenarios(harness)
+  await runTargetScenarios(harness)
 
   for (const mobile of [false, true]) await scenario({ name: `${mobile ? 'phone' : 'desktop'} password requirement locks direct route and navigation`, mobile, user: { must_change_password: true } }, async (page, state) => {
     await expect(page).toHaveURL(`${base}account`)

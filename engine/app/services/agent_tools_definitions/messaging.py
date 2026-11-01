@@ -64,8 +64,11 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
             "name": "send_channel_message",
             "description": (
                 "Send a message to a colleague via their configured external channel "
-                "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat). "
+                "(Feishu, DingTalk, WeCom, Slack, MS Teams, Google Chat, WeChat, WhatsApp). "
                 "Automatically detects the recipient's channel based on their org relationship. "
+                "WhatsApp only follows up with an already linked contact who messaged within the last 24 hours, "
+                "as plain text of at most 4096 characters; it never starts a new conversation, and its result "
+                "reports acceptance by WhatsApp, not delivery. "
                 "Use this only for channel users. "
                 "For relationships labeled Platform User / 平台用户, use send_platform_message instead."
             ),
@@ -85,7 +88,7 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
                         "description": (
                             "Optional: Specific channel to use when the recipient exists on multiple channels. "
                             "Accepted values: feishu, dingtalk, wecom, slack, teams, microsoft_teams, "
-                            "google_chat, gchat, wechat."
+                            "google_chat, gchat, wechat, whatsapp."
                         ),
                         "enum": [
                             "feishu",
@@ -97,6 +100,7 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
                             "google_chat",
                             "gchat",
                             "wechat",
+                            "whatsapp",
                         ],
                     },
                 },

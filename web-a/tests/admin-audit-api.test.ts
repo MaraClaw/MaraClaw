@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { z } from 'zod'
 
-import { ADMIN_AUDIT_MAX_CURSOR_LENGTH, adminAuditPageScopeSchema, fetchAdminAudit, fetchAdminAuditPage } from '../src/lib/admin-audit-api.ts'
+import { ADMIN_AUDIT_MAX_CURSOR_LENGTH, adminAuditPageScopeSchema, adminAuditScopeSchema, fetchAdminAudit, fetchAdminAuditPage } from '../src/lib/admin-audit-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { actorId, auditEvent, ownAuditSession, tenantId } from './admin-audit-fixtures.ts'
 
@@ -30,19 +30,19 @@ test('platform filters are trimmed and encoded without adding query parameters',
   // Given
   const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json([]))
   // When
-  await fetchAdminAudit({ role: 'platform_admin', tenant_id: ` ${tenantId} `, actor_id: actorId, action: ' user.activate&limit=501 ', limit: 500 })
+  await fetchAdminAudit({ role: 'platform_admin', tenant_id: ` ${tenantId} `, actor_id: actorId, action: ' user.activate&limit=501 ', target_type: " Tenant%_'&limit=0 ", limit: 500 })
   // Then
   const url = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
-  assert.deepEqual([...url.searchParams], [['limit', '500'], ['action', 'user.activate&limit=501'], ['tenant_id', tenantId], ['actor_id', actorId]])
+  assert.deepEqual([...url.searchParams], [['limit', '500'], ['action', 'user.activate&limit=501'], ['target_type', " Tenant%_'&limit=0 "], ['tenant_id', tenantId], ['actor_id', actorId]])
 })
 
-test('org filters send only action and limit', async (context) => {
+test('org filters send action, exact target type and limit', async (context) => {
   // Given
   const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json([]))
   // When
-  await fetchAdminAudit({ role: 'org_admin', action: ' user.activate ', limit: 1 })
+  await fetchAdminAudit({ role: 'org_admin', action: ' user.activate ', target_type: 'tenant', limit: 1 })
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/users/admin-audit-logs?limit=1&action=user.activate')
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/users/admin-audit-logs?limit=1&action=user.activate&target_type=tenant')
 })
 
 test('org requests reject smuggled tenant or actor overrides before transport', async (context) => {
@@ -68,7 +68,7 @@ test('blank filters are omitted rather than submitted as identifiers', async (co
   // Given
   const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json([]))
   // When
-  await fetchAdminAudit({ role: 'platform_admin', action: '  ', tenant_id: '', actor_id: ' ' })
+  await fetchAdminAudit({ role: 'platform_admin', action: '  ', target_type: '', tenant_id: '', actor_id: ' ' })
   // Then
   assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/admin/audit-logs?limit=100')
 })
@@ -125,12 +125,12 @@ for (const [role, path] of [
     const item = { ...auditEvent, created_at: '2026-10-21T12:30:00.123456+08:00' }
     const fetch = context.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json({ items: [item], next_cursor: cursor }))
     // When
-    const result = await fetchAdminAuditPage({ role, cursor, action: ' user.activate ', limit: 1 })
+    const result = await fetchAdminAuditPage({ role, cursor, action: ' user.activate ', target_type: " Tenant%_'&cursor=other ", limit: 1 })
     // Then
     const [request, options] = fetch.mock.calls[0]?.arguments ?? []
     const url = new URL(String(request), 'https://example.test')
     assert.equal(url.pathname, path)
-    assert.deepEqual([...url.searchParams], [['limit', '1'], ['action', 'user.activate'], ['cursor', cursor]])
+    assert.deepEqual([...url.searchParams], [['limit', '1'], ['action', 'user.activate'], ['target_type', " Tenant%_'&cursor=other "], ['cursor', cursor]])
     assert.equal(options?.method, 'GET')
     assert.deepEqual(result, { items: [item], next_cursor: cursor })
     assert.equal(Object.isFrozen(result), true)
@@ -142,7 +142,7 @@ test('platform root page omits cursor and preserves effective server filters', a
   // Given
   const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
   // When
-  const result = await fetchAdminAuditPage({ role: 'platform_admin', tenant_id: ` ${tenantId} `, actor_id: actorId, action: '  ' })
+  const result = await fetchAdminAuditPage({ role: 'platform_admin', tenant_id: ` ${tenantId} `, actor_id: actorId, action: '  ', target_type: '' })
   // Then
   const url = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
   assert.deepEqual([...url.searchParams], [['limit', '100'], ['tenant_id', tenantId], ['actor_id', actorId]])
@@ -256,5 +256,13 @@ test('numeric and null window bounds are rejected without datetime coercion', ()
   // Given / When / Then
   for (const value of [1700000000, null]) for (const field of ['start_at', 'end_at']) {
     assert.throws(() => adminAuditPageScopeSchema.parse({ role: 'org_admin', [field]: value }), z.ZodError)
+  }
+})
+
+test('target type accepts only exact strings in either strict scope', () => {
+  for (const role of ['platform_admin', 'org_admin']) for (const schema of [adminAuditScopeSchema, adminAuditPageScopeSchema]) {
+    for (const target_type of [null, 1, true, [], {}]) assert.throws(() => schema.parse({ role, target_type }), z.ZodError)
+    assert.equal(schema.parse({ role, target_type: '' }).target_type, undefined)
+    assert.equal(schema.parse({ role, target_type: ' Tenant ' }).target_type, ' Tenant ')
   }
 })

@@ -10,12 +10,14 @@ from binascii import Error as Base64Error
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+from hmac import compare_digest, digest
 from typing import ClassVar, Final, Literal
 from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from app.config import get_settings
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.schemas.admin_audit import AdminAuditPageItem, AdminAuditPageOut
 
@@ -43,6 +45,7 @@ class AdminAuditScope:
     tenant_id: UUID | None = None
     actor_id: UUID | None = None
     action: str | None = None
+    target_type: str | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
 
@@ -54,6 +57,7 @@ class _CursorScope(BaseModel):
     tenant_id: UUID | None
     actor_id: UUID | None
     action_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_type_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     start_at: AwareDatetime | None
     end_at: AwareDatetime | None
 
@@ -61,10 +65,16 @@ class _CursorScope(BaseModel):
 class _AuditCursor(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
-    version: int = Field(strict=True, ge=2, le=2)
+    version: int = Field(strict=True, ge=3, le=3)
     scope: _CursorScope
     created_at: AwareDatetime
     id: UUID
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def _cursor_signature(scope: _CursorScope, created_at: datetime, row_id: UUID) -> str:
+    payload = f"admin-audit-v3:{scope.model_dump_json()}:{created_at.isoformat()}:{row_id}".encode()
+    return digest(get_settings().JWT_SECRET_KEY.encode(), payload, "sha256").hex()
 
 
 def _decode_cursor(value: str, scope: _CursorScope) -> _AuditCursor:
@@ -75,7 +85,9 @@ def _decode_cursor(value: str, scope: _CursorScope) -> _AuditCursor:
         cursor = _AuditCursor.model_validate_json(raw, strict=True)
     except (Base64Error, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Invalid cursor") from exc
-    if cursor.scope != scope:
+    if cursor.scope != scope or not compare_digest(
+        cursor.signature, _cursor_signature(cursor.scope, cursor.created_at, cursor.id)
+    ):
         raise HTTPException(status_code=400, detail="Invalid cursor")
     return cursor
 
@@ -94,6 +106,7 @@ async def list_admin_audit_page(
         tenant_id=scope.tenant_id,
         actor_id=scope.actor_id,
         action_digest=sha256((scope.action or "").encode()).hexdigest(),
+        target_type_digest=sha256((scope.target_type or "").encode()).hexdigest(),
         start_at=start_at,
         end_at=end_at,
     )
@@ -102,6 +115,7 @@ async def list_admin_audit_page(
         tenant_id=scope.tenant_id,
         actor_id=scope.actor_id,
         action=scope.action,
+        target_type=scope.target_type or None,
         start_at=start_at,
         end_at=end_at,
         limit=page_size,
@@ -111,6 +125,12 @@ async def list_admin_audit_page(
     next_cursor = None
     if len(rows) > page_size:
         last = items[-1]
-        boundary = _AuditCursor(version=2, scope=cursor_scope, created_at=last.created_at, id=last.id)
+        boundary = _AuditCursor(
+            version=3,
+            scope=cursor_scope,
+            created_at=last.created_at,
+            id=last.id,
+            signature=_cursor_signature(cursor_scope, last.created_at, last.id),
+        )
         next_cursor = urlsafe_b64encode(boundary.model_dump_json().encode()).decode().rstrip("=")
     return AdminAuditPageOut(items=items, next_cursor=next_cursor)

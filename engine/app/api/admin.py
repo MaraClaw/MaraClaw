@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
+from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.api.admin_transfer_policy import router as transfer_policy_router
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
@@ -363,11 +364,12 @@ async def list_admin_audit_logs_page(
     tenant_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = None,
     action: str | None = None,
+    target_type: str | None = None,
     limit: int = 100,
     cursor: str | None = None,
     start_at: str | None = None,
     end_at: str | None = None,
-    current_user: UserRecord = Depends(require_role("platform_admin")),
+    current_user: UserRecord = Depends(require_admin_audit_role("platform_admin")),
 ) -> AdminAuditPageOut:
     """Seek older events; refresh without a cursor to include newly committed events."""
     _ = current_user
@@ -377,6 +379,7 @@ async def list_admin_audit_logs_page(
             tenant_id=tenant_id,
             actor_id=actor_id,
             action=action,
+            target_type=target_type or None,
             start_at=parse_admin_audit_bound(start_at),
             end_at=parse_admin_audit_bound(end_at),
         ),
@@ -390,8 +393,9 @@ async def list_admin_audit_logs(
     tenant_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = None,
     action: str | None = None,
+    target_type: str | None = None,
     limit: int = 100,
-    current_user: UserRecord = Depends(require_role("platform_admin")),
+    current_user: UserRecord = Depends(require_admin_audit_role("platform_admin")),
 ):
     """List admin action logs (who / what / when / field changes)."""
     _ = current_user
@@ -399,6 +403,7 @@ async def list_admin_audit_logs(
         tenant_id=tenant_id,
         actor_id=actor_id,
         action=action,
+        target_type=target_type or None,
         limit=min(max(limit, 1), 500),
     )
     return [AdminAuditLogOut.model_validate(log) for log in logs]

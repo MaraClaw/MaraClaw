@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from typing import override
 
+import httpx
 import pytest
+from fastapi import APIRouter, FastAPI, Response
 
 from app.core.logging import (
     configure_logging,
@@ -20,6 +23,7 @@ from app.core.logging import (
 )
 from app.core.logging.levels import DEBUG, INFO
 from app.core.logging.service import LoggingService
+from app.core.middleware import TraceIdMiddleware
 
 
 class ListSink:
@@ -175,3 +179,83 @@ def test_sandbox_config_import_does_not_cycle() -> None:
 
 def test_debug_constant_is_below_info() -> None:
     assert DEBUG < INFO
+
+
+CANARY = "canary-secret-7f3a91"
+TRACE_ID = "tracecanary1"
+
+
+def _traced_app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(TraceIdMiddleware)
+
+    @app.get("/api/webhooks/t/{token}")
+    async def receive(token: str) -> dict[str, str]:
+        return {"token": token}
+
+    @app.get("/api/boom/{token}")
+    async def boom(token: str) -> None:
+        raise RuntimeError(f"upstream rejected credential {token}")
+
+    @app.get("/api/health")
+    async def health(status: int = 200) -> Response:
+        return Response(status_code=status)
+
+    prefixed = APIRouter(prefix="/gateway")
+
+    @prefixed.get("/poll/{key}")
+    async def poll(key: str) -> dict[str, str]:
+        return {"key": key}
+
+    app.include_router(prefixed, prefix="/api")
+    return app
+
+
+def _access_text(sink: ListSink) -> str:
+    return "\n".join(line for line in sink.lines if "app.core.middleware:" in line)
+
+
+async def _get(url: str) -> httpx.Response:
+    transport = httpx.ASGITransport(app=_traced_app(), raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(url, headers={"X-Trace-Id": TRACE_ID})
+
+
+@pytest.mark.parametrize(
+    ("url", "status", "expected"),
+    [
+        (f"/api/webhooks/t/{CANARY}?callback={CANARY}", 200, "<-- GET /api/webhooks/t/{token} 200"),
+        (f"/api/gateway/poll/{CANARY}", 200, "<-- GET /api/gateway/poll/{key} 200"),
+        (f"/api/missing/{CANARY}?token={CANARY}", 404, "<-- GET unmatched-route 404"),
+        (f"/api/boom/{CANARY}", 500, "<-- GET /api/boom/{token} ERROR"),
+    ],
+)
+async def test_access_lines_name_the_route_template_never_the_request_target(
+    url: str, status: int, expected: str
+) -> None:
+    # Given: credential canaries in the path and the query string
+    sink = _capture(level="INFO")
+
+    # When: the request is matched, unmatched, or raises from its handler
+    response = await _get(url)
+
+    # Then: method, status, timing and trace id survive while no canary or exception text is logged
+    access = _access_text(sink)
+    assert response.status_code == status
+    assert expected in access
+    assert re.search(r"\d+\.\d{3}s", access)
+    assert all(TRACE_ID in line for line in access.splitlines())
+    assert CANARY not in access
+    assert ("error_type=RuntimeError" in access) is (status == 500)
+
+
+async def test_quiet_probes_stay_off_info_until_they_fail() -> None:
+    sink = _capture(level="INFO")
+
+    healthy = await _get("/api/health")
+    assert healthy.status_code == 200
+    assert _access_text(sink) == ""
+
+    down = await _get("/api/health?status=503")
+    assert down.status_code == 503
+    assert "<-- GET /api/health 503" in _access_text(sink)

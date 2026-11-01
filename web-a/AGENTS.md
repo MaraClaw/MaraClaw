@@ -68,6 +68,6 @@ No npm e2e script exists; the 14 `tests/*.browser.mjs` files include standalone 
 ## DEVELOPMENT AND PRODUCTION
 
 - `vite.config.ts`: dev `:5174`; `/api` proxies to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. This is dev-only.
-- `Dockerfile` + `docker/nginx.conf`: Node 26.12.1 build, nginx-unprivileged SPA on `:8080`, CSP and `/healthz`; `/api/` proxies to `http://maraclaw-engine:8000` preserving `/api`. Engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
+- `Dockerfile` + `docker/nginx.conf`: Node 26.13.0 build, nginx-unprivileged SPA on `:8080`, CSP and `/healthz`; `/api/` proxies to `http://maraclaw-engine:8000` preserving `/api`. Engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
 - `.env.example`: empty `VITE_API_BASE_URL` = same-origin; image override is `--build-arg VITE_API_BASE_URL=...`.
 - Reset emails: engine `public_base_url` must point at this admin app.

@@ -9,13 +9,14 @@ from app.core.logging import logger
 from app.dao.chat_dao import chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
+from app.dao.personal_burst_dao import personal_burst_dao
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
 from app.services.shared_chat import shared_session_id
 
 if TYPE_CHECKING:
-    from app.services.openclaw_routing import PreparedOpenClawMessage
+    from app.records.openclaw_dispatch import PreparedOpenClawMessage
 
 
 async def insert_prepared_message(
@@ -53,20 +54,22 @@ async def insert_prepared_message(
     if duplicate is not None:
         logger.info("[OpenClaw] skip duplicate pending inbox item agent={} id={}", agent.id, duplicate.id)
         return duplicate
-    created = await gateway_message_dao.create(
-        obj_in={
-            "agent_id": agent.id,
-            "sender_user_id": sender_user_id,
-            "sender_agent_id": sender_agent_id,
-            "conversation_id": conversation_id,
-            "content": content,
-            "status": "pending",
-            "selected_slot": prepared.selected_slot,
-            "guest_model_ref": prepared.guest_model_ref,
-            "complexity": prepared.complexity,
-            "routing_reason": prepared.routing_reason,
-        }
-    )
+    row: dict[str, object] = {
+        "agent_id": agent.id,
+        "sender_user_id": sender_user_id,
+        "sender_agent_id": sender_agent_id,
+        "conversation_id": conversation_id,
+        "content": content,
+        "status": "pending",
+        "selected_slot": prepared.selected_slot,
+        "guest_model_ref": prepared.guest_model_ref,
+        "complexity": prepared.complexity,
+        "routing_reason": prepared.routing_reason,
+    }
+    if shared:
+        # Every Shared INSERT takes the lane lock first and lands strictly after the current tail (all statuses).
+        row["created_at"] = await personal_burst_dao.next_created_at(agent.id, shared_session_id(agent.id))
+    created = await gateway_message_dao.create(obj_in=row)
     if reply_session_id is not None:
         destination = await chat_session_dao.lock_for_agent(reply_session_id, agent.id)
         channel = CHANNEL_TYPES.get(normalize_channel_type(destination.source_channel) or "") if destination else None

@@ -17,7 +17,10 @@ __all__ = ["producer_admission"]
 @pytest.mark.parametrize(
     "role", ["api", "worker", "connector", "api,connector", "worker,connector", "all", "bootstrap"]
 )
-@pytest.mark.parametrize("failed_worker", ["trigger_daemon", "agent_setup", "agent_start_reconciler"])
+@pytest.mark.parametrize(
+    "failed_worker",
+    ["trigger_daemon", "agent_setup", "agent_start_reconciler", "personal_burst", "whatsapp_personal"],
+)
 async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
 ) -> None:
@@ -29,9 +32,11 @@ async def test_actual_start_registers_required_role_evidence(
         company_transfer_cleanup,
         gateway_report_relay,
         openclaw_update_worker,
+        personal_burst_reconciler,
         scheduler,
         trigger_daemon,
     )
+    from app.services.channels import whatsapp_personal_supervisor
     from app.services.linkup import export
 
     runtime = lifecycle.Runtime()
@@ -79,7 +84,9 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
+    monkeypatch.setattr(personal_burst_reconciler, "personal_burst_reconciler_loop", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
+    monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
     monkeypatch.setattr(runtime.incidents, "start", lambda: None)
     monkeypatch.setattr(runtime.incidents, "stop", noop)
@@ -98,7 +105,11 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "worker"):
             assert required["agent_start_reconciler"][1] is False
         assert ("gateway_report_relay" in required) == role_enabled(roles, "worker")
+        assert ("personal_burst" in required) == role_enabled(roles, "worker")
+        if role_enabled(roles, "worker"):
+            assert required["personal_burst"][1] is False
         assert ("Connector" in required) == role_enabled(roles, "connector")
+        assert ("whatsapp_personal" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])
         if role_enabled(roles, "api") or role_enabled(roles, "connector") or role == "bootstrap":
             assert not await runtime.readiness.check()
@@ -112,7 +123,7 @@ async def test_actual_start_registers_required_role_evidence(
             subscriber.ready = False
             assert not await runtime.readiness.check()
             subscriber.ready = True
-        if role_enabled(roles, "worker"):
+        if failed_worker in required:
             required[failed_worker][0].cancel()
             await asyncio.wait_for(asyncio.gather(required[failed_worker][0], return_exceptions=True), 5)
             assert not await runtime.readiness.check()

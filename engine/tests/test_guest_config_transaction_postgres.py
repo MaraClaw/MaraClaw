@@ -16,7 +16,12 @@ from tests.test_chat_submission_postgres import (
 from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
-from app.services import chat_submissions, openclaw_routing as routing, openclaw_update_exclusion as exclusion
+from app.services import (
+    chat_submissions,
+    openclaw_model_selection as selection,
+    openclaw_routing as routing,
+    openclaw_update_exclusion as exclusion,
+)
 from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.channels import submissions
 from app.services.chat_submissions import ChatSubmission
@@ -76,25 +81,32 @@ async def test_config_failure_rolls_back_session_acceptance(
         }
 
 
-@pytest.mark.parametrize("failure", ["write", "timeout", "upgrade"])
-async def test_config_failure_rolls_back_channel_receipt_quota_sessions_and_intent(
-    channel_db: ChannelDatabase, config_failure: type[Exception], monkeypatch: pytest.MonkeyPatch
+async def test_channel_acceptance_commits_without_touching_the_guest_configuration(
+    channel_db: ChannelDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given real channel authorization, receipt reservation, session creation, and quota writes.
+    # Given real read-only model selection and a guest configuration writer that would fail.
     fixture = channel_db
-    monkeypatch.setattr(submissions, "prepare_openclaw_message", routing.prepare_openclaw_message)
-    # When the fenced preparation rejects before enqueueing.
-    with pytest.raises(config_failure):
-        async with transaction(fixture.db.first):
-            await submissions.accept_channel_event(fixture.event)
-    # Then every acceptance side effect is rolled back, including the native replay receipt.
+    model = LLMModelRecord(uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
+    write = Mock(side_effect=OSError("private config path"))
+    monkeypatch.setattr(selection, "assert_work_allowed", AsyncMock())
+    monkeypatch.setattr(selection, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
+    monkeypatch.setattr(routing.agent_manager, "write_guest_config", write)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", selection.prepare_shared_openclaw_message)
+    # When the native event is accepted.
+    async with transaction(fixture.db.first):
+        accepted = await submissions.accept_channel_event(fixture.event)
+    # Then it commits with its stored selection, and only dispatch may ever apply the guest configuration.
+    assert not accepted.replayed
+    write.assert_not_called()
     assert await counts(fixture) == {
-        "receipts": 0,
-        "messages": 0,
-        "enqueued": 0,
-        "intents": 0,
-        "charged": 0,
+        "receipts": 1,
+        "messages": 1,
+        "enqueued": 1,
+        "intents": 1,
+        "charged": 1,
         "creator_charged": 0,
     }
     async with transaction(fixture.db.first):
-        assert await fixture.db.first.fetchval("SELECT count(*) FROM chat_sessions") == 1
+        row = await fixture.db.first.fetchone("SELECT selected_slot, guest_model_ref FROM gateway_messages")
+        assert row is not None
+        assert (row["selected_slot"], row["guest_model_ref"]) == ("primary", "anthropic/opus")

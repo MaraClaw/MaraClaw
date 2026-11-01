@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-query'
 
-import { notificationKeys, notificationsArchiveSelectedOptions, notificationsOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
+import { notificationKeys, notificationsArchiveSelectedOptions, notificationsUnreadSelectedOptions, notificationsOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { notificationSchema, type NotificationPage } from '../src/lib/notifications-api.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
@@ -11,12 +11,12 @@ import { createFixture } from './helpers.ts'
 const first = notificationSchema.parse({ id: '11111111-1111-4111-8111-111111111111', type: 'broadcast', title: 'First', body: '', link: null, ref_id: null, sender_name: null, is_read: false, created_at: '2030-01-01T00:00:00Z', archived_at: null })
 const second = notificationSchema.parse({ ...first, id: '22222222-2222-4222-8222-222222222222', archived_at: '2030-01-02T00:00:00Z' })
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, isRead = false) {
   const { policy } = createFixture()
   t.after(() => policy.logout())
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   t.after(() => client.clear())
-  let rows = [first, second]
+  let rows = [first, second].map((row) => ({ ...row, is_read: isRead }))
   let writes = 0
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://fixture.test')
@@ -24,7 +24,11 @@ async function fixture(t: TestContext) {
       const { ids } = JSON.parse(String(init.body))
       writes++
       if (ids.some((id: string) => !rows.some((row) => row.id === id))) return Response.json({ detail: 'Notification not found' }, { status: 404 })
-      rows = rows.map((row) => ids.includes(row.id) ? { ...row, archived_at: url.pathname.endsWith('/archive') ? row.archived_at ?? '2030-01-02T00:00:00Z' : null } : row)
+      rows = rows.map((row) => {
+        if (!ids.includes(row.id)) return row
+        if (url.pathname.endsWith('/unread-selected')) return { ...row, is_read: false }
+        return { ...row, archived_at: url.pathname.endsWith('/archive') ? row.archived_at ?? '2030-01-02T00:00:00Z' : null }
+      })
       return Response.json({ ok: true })
     }
     if (url.pathname.endsWith('/unread-count')) return Response.json({ unread_count: rows.filter((row) => row.archived_at === null && !row.is_read).length })
@@ -44,6 +48,7 @@ async function fixture(t: TestContext) {
 for (const [options, selected, activeIds, count] of [
   [notificationsArchiveSelectedOptions, first.id, [], 0],
   [notificationsRestoreSelectedOptions, second.id, [first.id, second.id], 2],
+  [notificationsUnreadSelectedOptions, first.id, [first.id], 1],
 ] as const) {
   test(`${options.name} refreshes both observed views and the authoritative unread count without reading rows`, async (t) => {
     // Given
@@ -72,7 +77,17 @@ for (const [options, selected, activeIds, count] of [
   })
 }
 
-test('selected archive and restore share the owner-fenced queue before any second transport', async (t) => {
+test('selected unread refreshes both observed views while counting only active rows', async (t) => {
+  const { client, policy, writes } = await fixture(t, true)
+  const mutation = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), notificationsUnreadSelectedOptions(client)))
+  await mutation.mutate([first.id, second.id, first.id])
+  assert.equal(writes(), 1)
+  assert.deepEqual(client.getQueryData<NotificationPage>(notificationKeys.list(null))?.items, [first])
+  assert.deepEqual(client.getQueryData<NotificationPage>(notificationKeys.list(null, 'archived'))?.items, [second])
+  assert.deepEqual(client.getQueryData(notificationKeys.unread), { unread_count: 1 })
+})
+
+test('selected archive, unread and restore share the owner-fenced queue before any second transport', async (t) => {
   // Given
   const { client, policy } = await fixture(t)
   const response = Promise.withResolvers<Response>()
@@ -81,13 +96,15 @@ test('selected archive and restore share the owner-fenced queue before any secon
   const owner = policy.capture()
   const archive = new MutationObserver(client, ownMutationOptions(policy, owner, notificationsArchiveSelectedOptions(client)))
   const restore = new MutationObserver(client, ownMutationOptions(policy, owner, notificationsRestoreSelectedOptions(client)))
+  const unread = new MutationObserver(client, ownMutationOptions(policy, owner, notificationsUnreadSelectedOptions(client)))
   const archived = assert.rejects(archive.mutate([first.id]), StaleSessionError)
   await started.promise
   const restored = assert.rejects(restore.mutate([first.id]), StaleSessionError)
+  const unreadResult = assert.rejects(unread.mutate([first.id]), StaleSessionError)
   // When
   policy.replace('replacement-token')
   response.resolve(Response.json({ ok: true }))
-  await Promise.all([archived, restored])
+  await Promise.all([archived, restored, unreadResult])
   // Then
   assert.equal(fetch.mock.callCount(), 1)
 })

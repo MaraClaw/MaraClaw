@@ -43,7 +43,11 @@ interval is `provider_timestamp <= now < provider_timestamp + 24 hours`, not 24 
 from engine receipt. Missing evidence and expiry persist respectively as
 `whatsapp_window_unavailable` and `whatsapp_window_expired`; these terminal intents
 are not retried or revived by subsequent inbound activity. New inbound activity can
-only authorize a new reply turn. No template or proactive sender is added.
+only authorize a new reply turn. The `send_channel_message` tool supports text-only
+WhatsApp follow-ups to an already bound, authorized contact in their exact existing
+non-group reply session. The same receipt window applies, with a 4096-character
+limit and no template sends. Provider acknowledgement means acceptance, not delivery;
+timeouts and accepted-but-unrecorded history failures must not be automatically retried.
 The receipt columns and terminal reasons require a fresh schema baseline; no
 existing-database upgrade is supplied.
 
@@ -57,6 +61,58 @@ do not promise exactly-once external delivery.
 Replies are produced by OpenClaw and returned through `/gateway/report`, not by a
 second synchronous engine LLM turn. See [gateway report delivery](gateway-report-delivery.md)
 for durable chunk checkpoints, provider backoff, and delivery ambiguity limits.
+
+## Personal QR WhatsApp bursts
+
+Personal QR self-chat text uses durable burst collection. Cloud API WhatsApp and
+other channels retain their existing per-message admission behavior.
+
+Each accepted original commits its own native receipt, transcript entry, and quota
+charge. Replays do not extend collection, charge quota again, or add another member.
+The engine reserves one pending gateway turn for a contiguous, same-scope burst and
+joins its original texts with two newlines. It becomes ready after two seconds of
+quiet, with a maximum collection window of five seconds from the first member.
+Five seconds is not an execution deadline: an earlier active or uncertain shared
+turn, unavailable model, or guest update gate can still delay execution.
+
+There is one active shared human turn per agent. Both immediate wakes and guest
+polling check the actual FIFO head through `openclaw_shared_dispatch`; they cannot
+skip an unready head. A claimed turn's body and model selection are frozen. New
+arrivals form a later turn, and an intervening web entry or different sender/route
+prevents appending to an earlier burst. Admission does not rewrite guest model
+configuration; dispatch applies the selected model under guest-write exclusion
+before committing the claim. Shared uncertain deliveries are not timeout-requeued.
+
+The worker/all role owns the required `personal_burst_reconciler` loop. It scans
+durable due heads at most one second apart and uses the normal owned wake admission.
+Missed in-process wakes and process restarts therefore do not erase pending bursts.
+Disconnect, ownership changes, or stale route fences cancel unclaimed bursts while
+retaining accepted transcript entries and their quota charges; they do not redirect
+old work to a newly linked account.
+
+| Environment variable | Default | Meaning |
+|---|---:|---|
+| `WHATSAPP_PERSONAL_BURST_QUIET_SECONDS` | 2 | Quiet interval before a burst is ready |
+| `WHATSAPP_PERSONAL_BURST_MAX_SECONDS` | 5 | Maximum collection window |
+| `WHATSAPP_PERSONAL_BURST_PENDING_COUNT` | 50 | Pending accepted Personal originals per shared lane |
+| `WHATSAPP_PERSONAL_BURST_PENDING_BYTES` | 65536 | Pending original UTF-8 bytes, excluding separators |
+| `WHATSAPP_PERSONAL_BURST_BODY_BYTES` | 16384 | One joined turn's UTF-8 bytes, including separators |
+| `WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS` | 30 | Minimum interval between notices for the same frozen scope |
+
+The pending caps exclude the one in-flight turn, which is separately bounded by
+the body limit. Capacity is checked before quota. Capacity, body-size, and quota
+rejections are durable native-event outcomes: they retain no rejected body and
+create no user transcript, guest work, or quota charge. A replay remains rejected;
+the user must send a new message after the condition clears. A cooldown-controlled
+notice explicitly says the message was not queued and asks the user to resend.
+Notices use the existing durable reply journal without a model invocation or chat
+history entry. They can appear in the access-checked gateway operational listing.
+Pending limits and notice cooldown are not global storage or ingress-rate limits.
+
+Persistence requires `personal_burst_batches`, `personal_burst_inputs`, and
+`personal_busy_notices` from `scripts/schema_baseline.sql`. These definitions are
+fresh-schema initialization, not an automatic existing-database upgrade. No live
+migration is supplied or performed by this feature.
 
 ## Canonical types
 
@@ -72,7 +128,7 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 | `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (inbound via `channels.inbound`) |
 | `google_chat` | Google Chat | Chat app HTTP endpoint | `api/google_chat.py` (full shared package) |
 | `wechat` | WeChat | poll / ilink | `api/wechat.py`, `services/wechat_channel.py` |
-| `whatsapp` | WhatsApp | webhook | `api/whatsapp.py` (proactive not registered yet) |
+| `whatsapp` | WhatsApp | Cloud webhook / Personal QR connector | `api/whatsapp.py`, `channels/whatsapp_personal_supervisor.py` (proactive not registered) |
 | `atlassian` | Atlassian tools | not chat inbound | `api/atlassian.py` |
 | `agentbay` | AgentBay | not chat inbound | AgentBay APIs |
 

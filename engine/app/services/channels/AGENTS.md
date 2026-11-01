@@ -15,7 +15,7 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 | Discord | `api/discord_bot.py`, `discord_gateway.py` | limited | types only |
 | MS Teams | `api/teams.py` | yes | types + full inbound pipeline + dedup |
 | WeChat | `api/wechat.py`, `wechat_channel.py` | yes | types only |
-| WhatsApp | `api/whatsapp.py` (mounted) | no | types only |
+| WhatsApp | `api/whatsapp.py` (mounted) | existing authorized reply session, within receipt window | types + outbound plan/transport + reply-window policy |
 | **Google Chat** | **`api/google_chat.py`** | **yes** | **full helper** |
 
 ## Layout

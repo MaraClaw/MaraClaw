@@ -7,7 +7,6 @@ import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,6 +15,7 @@ from pywhales.exceptions import DockerException
 
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_inbox, openclaw_routing, openclaw_turns
 from app.services.shared_chat import shared_session_id
 from guest_bootstrap_fakes import BOOTSTRAP_PENDING_EXIT, PENDING_STDERR, guard_refusal
@@ -26,7 +26,7 @@ ACTION_75 = DockerException(["docker", "exec"], BOOTSTRAP_PENDING_EXIT, stderr=b
 
 
 class SharedQueue:
-    """One pending shared turn behind the SQL guards of ``claim_shared`` and ``release_delivery``."""
+    """One pending shared turn behind the SQL guards of the central ``claim_ready_shared`` and ``release_delivery``."""
 
     def __init__(self, agent: AgentRecord) -> None:
         conversation = str(shared_session_id(agent.id))
@@ -36,10 +36,10 @@ class SharedQueue:
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         return self.row if (self.row.id, self.row.agent_id) == (message_id, agent_id) else None
 
-    async def claim_shared(self, _agent_id: UUID, _session_id: UUID, *, now: datetime) -> GatewayMessageRecord | None:
+    async def claim_ready_shared(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
         if self.row.status != "pending":
             return None
-        self.row = replace(self.row, status="delivered", delivered_at=now)
+        self.row = replace(self.row, status="delivered", delivered_at=request.now)
         return self.row
 
     async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
@@ -90,8 +90,9 @@ def guest_with(
     monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
     monkeypatch.setattr(openclaw_routing, "assert_work_allowed", open_gate)
     monkeypatch.setattr(openclaw_routing, "load_agent_for_new_work", eligible)
-    for name in ("get_for_agent", "claim_shared", "release_delivery"):
+    for name in ("get_for_agent", "release_delivery"):
         monkeypatch.setattr(openclaw_routing.gateway_message_dao, name, getattr(queue, name))
+    monkeypatch.setattr(openclaw_routing, "claim_ready_shared", queue.claim_ready_shared)
     monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: directory)
     monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
     monkeypatch.setattr(openclaw_inbox, "_container_ref", lambda _agent: "guest")
