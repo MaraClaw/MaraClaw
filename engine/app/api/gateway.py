@@ -63,8 +63,8 @@ async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> Gate
 
     Also updates openclaw_last_seen for online status tracking.
     """
-    logger.debug("[Gateway] poll called, key_prefix={}...", x_api_key[:8])
     agent = await _get_agent_by_key(x_api_key)
+    logger.debug("[Gateway] poll called agent={}", agent.id)
 
     from app.services.openclaw_hot_cache import should_touch_last_seen
 
@@ -182,8 +182,8 @@ async def report_result(
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
-    logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
     agent = await _get_agent_by_key(x_api_key)
+    logger.info("[Gateway] report called agent={} msg_id={}", agent.id, body.message_id)
 
     async with connection_ctx():
         active = await agent_dao.lock_openclaw(agent)

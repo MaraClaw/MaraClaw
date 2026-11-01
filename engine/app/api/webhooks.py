@@ -81,7 +81,7 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     # We'll check per-agent rate limit after finding the trigger below.
     # For now, apply a generous global ceiling to prevent memory abuse.
     if hit_count >= 60:  # hard ceiling: 60/min regardless of config
-        logger.warning(f"Webhook hard rate limit exceeded for token {token[:8]}...")
+        logger.warning("Webhook hard rate limit exceeded: hits={}", hit_count)
         return JSONResponse({"ok": True}, status_code=429)
 
     # Look up trigger by token (enabled webhooks only)
@@ -100,14 +100,20 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
 
     # Re-check hits against agent-specific limit (hits already collected above)
     if hit_count > agent_rate_limit:  # > because current hit is already counted
-        logger.warning(f"Webhook per-agent rate limit ({agent_rate_limit}/min) for token {token[:8]}...")
+        logger.warning(
+            "Webhook per-agent rate limit exceeded: trigger={} agent={} limit={}/min hits={}",
+            target.id,
+            target_agent_id,
+            agent_rate_limit,
+            hit_count,
+        )
         try:
             await write_audit_log(
                 "webhook_rate_limited",
                 {
                     "trigger_name": target_name,
                     "limit": agent_rate_limit,
-                    "token_prefix": token[:8],
+                    "trigger_id": str(target.id),
                 },
                 agent_id=target_agent_id,
             )

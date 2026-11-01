@@ -68,17 +68,43 @@ def _json_mapping(value: object) -> JsonObject:
     return json_object_from(value)
 
 
-def _oauth_error_fields(payload: object) -> tuple[str, str]:
-    data = json_object_from(payload)
-    nested = data.get("error")
-    if is_json_object(nested):
-        code = json_as_str_or(nested.get("code"), "unknown")
-        description = json_as_str_or(nested.get("message"), json_as_str_or(data.get("message"), "No description"))
-        return code, description
-    error_code = json_as_str_or(data.get("error"), "unknown")
-    fallback_message = json_as_str_or(data.get("message"), "No description")
-    error_description = json_as_str_or(data.get("error_description"), fallback_message)
-    return error_code, error_description
+_KNOWN_ERROR_CODES = frozenset(
+    {
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "invalid_scope",
+        "access_denied",
+        "interaction_required",
+        "temporarily_unavailable",
+        "server_error",
+        "BadArgument",
+        "MissingProperty",
+        "MessageSizeTooBig",
+        "ServiceError",
+        "BotNotInConversationRoster",
+        "ConversationBlockedByUser",
+        "ConversationNotFound",
+    }
+)
+
+
+def _provider_error_code(response: httpx.Response) -> str:
+    """Classify a failed provider reply for logs: an allowlisted code, ``other``, ``none`` or ``unparsed``.
+
+    Descriptions, messages and bodies are remote free text and can echo credentials, so they are never read.
+    """
+    try:
+        data = json_object_from_response(response)
+    except ValueError:
+        return "unparsed"
+    error = data.get("error")
+    code = json_as_str(error.get("code") if is_json_object(error) else error)
+    if code is None:
+        return "none"
+    return code if code in _KNOWN_ERROR_CODES else "other"
 
 
 async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
@@ -122,6 +148,7 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
             access_token_raw: object = token.token
             expires_on_raw: object = token.expires_on
             if not isinstance(access_token_raw, str) or not isinstance(expires_on_raw, (int, float)):
+                logger.error("Teams: managed identity token request failed agent={} kind=malformed_response", agent_id)
                 return None
 
             _teams_tokens[agent_id] = {
@@ -137,7 +164,11 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
             logger.error("Teams: azure-identity package not installed. Install it with: pip install azure-identity")
             return None
         except Exception as e:
-            logger.exception(f"Teams: Failed to get access token via managed identity for agent {agent_id}: {e}")
+            logger.error(
+                "Teams: managed identity token request failed agent={} kind=identity error_type={}",
+                agent_id,
+                type(e).__name__,
+            )
             return None
 
     app_id = config.app_id
@@ -161,48 +192,36 @@ async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(token_url, data=data)
-            if resp.status_code != 200:
-                error_body = resp.text
-                try:
-                    error_code, error_description = _oauth_error_fields(json_object_from_response(resp))
-                    logger.error(
-                        f"Teams: OAuth token request failed for agent {agent_id}: status={resp.status_code}, error={error_code}, description={error_description}"
-                    )
-                except ValueError:
-                    logger.error(
-                        f"Teams: OAuth token request failed for agent {agent_id}: status={resp.status_code}, response={error_body[:500]}"
-                    )
-                logger.error(f"Teams: Token URL={token_url}, tenant_id={tenant_id}, client_id={app_id[:20]}...")
-                return None
-            token_data = json_object_from_response(resp)
-            access_token = token_data.get("access_token")
-            expires_in = token_data.get("expires_in")
-            if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
-                return None
-
-            _teams_tokens[agent_id] = {
-                "access_token": access_token,
-                "expires_at": time.time() + float(expires_in),
-            }
-            logger.info(f"Teams: Successfully obtained access token for agent {agent_id}, expires in {expires_in}s")
-            return access_token
-    except httpx.HTTPStatusError as e:
-        error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
-        try:
-            if hasattr(e, "response") and e.response:
-                error_code, error_description = _oauth_error_fields(json_object_from_response(e.response))
-                logger.error(
-                    f"Teams: OAuth token HTTP error for agent {agent_id}: status={e.response.status_code}, error={error_code}, description={error_description}"
-                )
-        except ValueError:
-            logger.error(
-                f"Teams: OAuth token HTTP error for agent {agent_id}: status={e.response.status_code if hasattr(e, 'response') and e.response else 'unknown'}, response={error_body[:500]}"
-            )
-        logger.error(f"Teams: Token URL={token_url}, tenant_id={tenant_id}, client_id={app_id[:20]}...")
-        return None
     except Exception as e:
-        logger.exception(f"Teams: Failed to get access token for agent {agent_id}: {e}")
+        kind = "transport" if isinstance(e, httpx.HTTPError) else "unexpected"
+        logger.error(
+            "Teams: OAuth token request failed agent={} kind={} error_type={}", agent_id, kind, type(e).__name__
+        )
         return None
+    if resp.status_code != 200:
+        logger.error(
+            "Teams: OAuth token request failed agent={} kind=http_status status={} error_code={}",
+            agent_id,
+            resp.status_code,
+            _provider_error_code(resp),
+        )
+        return None
+    try:
+        token_data = json_object_from_response(resp)
+    except ValueError:
+        token_data = {}
+    access_token = token_data.get("access_token")
+    expires_in = token_data.get("expires_in")
+    if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
+        logger.error("Teams: OAuth token request failed agent={} kind=malformed_response", agent_id)
+        return None
+
+    _teams_tokens[agent_id] = {
+        "access_token": access_token,
+        "expires_at": time.time() + float(expires_in),
+    }
+    logger.info(f"Teams: Successfully obtained access token for agent {agent_id}, expires in {expires_in}s")
+    return access_token
 
 
 async def _send_teams_message(
@@ -254,38 +273,34 @@ async def _send_teams_message_single_chunk(
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(post_url, headers=headers, json=activity)
-            if resp.status_code != 200:
-                error_body = resp.text
-                try:
-                    error_code, error_description = _oauth_error_fields(json_object_from_response(resp))
-                    logger.error(
-                        f"Teams: Failed to send message: status={resp.status_code}, error={error_code}, description={error_description}"
-                    )
-                except ValueError:
-                    logger.error(
-                        f"Teams: Failed to send message: status={resp.status_code}, response={error_body[:500]}"
-                    )
-                logger.error(
-                    f"Teams: POST URL={post_url}, conversation_id={conversation_id}, service_url={service_url}"
-                )
-            _ = resp.raise_for_status()
-            if strict and not bool(json_as_str(json_object_from_response(resp).get("id"))):
-                raise RuntimeError("Teams did not acknowledge the message")
-            logger.info(f"Teams: Sent message to conversation {conversation_id}")
-    except httpx.HTTPStatusError as e:
-        error_body = e.response.text if hasattr(e, "response") and e.response else "No response body"
-        try:
-            if hasattr(e, "response") and e.response:
-                error_code, error_description = _oauth_error_fields(json_object_from_response(e.response))
-                logger.error(
-                    f"Teams: HTTP error sending message: status={e.response.status_code}, error={error_code}, description={error_description}"
-                )
-        except ValueError:
-            logger.error(
-                f"Teams: HTTP error sending message: status={e.response.status_code if hasattr(e, 'response') and e.response else 'unknown'}, response={error_body[:500]}"
-            )
-        logger.error(f"Teams: POST URL={post_url}, conversation_id={conversation_id}, service_url={service_url}")
+    except httpx.TransportError as e:
+        logger.error(
+            "Teams: send failed kind=transport error_type={} conversation={}", type(e).__name__, conversation_id
+        )
         raise
+    if resp.status_code != 200:
+        logger.error(
+            "Teams: send failed kind=http_status status={} error_code={} conversation={}",
+            resp.status_code,
+            _provider_error_code(resp),
+            conversation_id,
+        )
+    _ = resp.raise_for_status()
+    if strict and not _send_acknowledged(resp, conversation_id):
+        raise RuntimeError("Teams did not acknowledge the message")
+    logger.info(f"Teams: Sent message to conversation {conversation_id}")
+
+
+def _send_acknowledged(resp: httpx.Response, conversation_id: str) -> bool:
+    """Whether the provider returned an activity id; an unreadable reply logs a bounded event and re-raises."""
+    try:
+        acknowledged = bool(json_as_str(json_object_from_response(resp).get("id")))
+    except ValueError:
+        logger.error("Teams: send failed kind=malformed_response conversation={}", conversation_id)
+        raise
+    if not acknowledged:
+        logger.error("Teams: send failed kind=malformed_response conversation={}", conversation_id)
+    return acknowledged
 
 
 # ─── Config CRUD ────────────────────────────────────────
@@ -439,7 +454,7 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response
             logger.warning(f"[Teams] Missing conversation_id or sender_id in activity for agent {agent_id}")
             return {"ok": True}
 
-        logger.info(f"[Teams] Message from={sender_id}, conversation={conversation_id}: {user_text[:80]}")
+        logger.info("[Teams] Message from={}, conversation={}, chars={}", sender_id, conversation_id, len(user_text))
 
         if not bool(activity_id):
             return Response(status_code=400, content="Teams activity ID is required")
@@ -459,5 +474,5 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response
         )
         return {"ok": True}
     except Exception as e:
-        logger.exception(f"Teams: Unhandled exception in webhook handler for agent {agent_id}: {e}")
+        logger.error("Teams: webhook handler failed agent={} error_type={}", agent_id, type(e).__name__)
         return Response(status_code=500, content="Internal server error")
