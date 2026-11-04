@@ -4,9 +4,20 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from tests.test_linkup_proxy_client import (
+    FakeClock,
+    FakeResponse,
+    MemoryJobDao,
+    MemoryKeyDao,
+    proxy_settings,
+    use_upstream,
+)
 
 from app.records.web_search_event import WebSearchEventRecord
 from app.services.linkup.analytics import (
@@ -299,7 +310,7 @@ def test_float_from_row_accepts_decimal() -> None:
 
 @pytest.mark.asyncio
 async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.test_linkup_proxy_client import FakeClient, FakeResponse, MemoryJobDao, MemoryKeyDao
+    from tests.test_linkup_proxy_client import FakeClient, FakeResponse, MemoryJobDao, MemoryKeyDao, proxy_settings
 
     from app.services.linkup import analytics as analytics_mod, client as client_mod, jobs as jobs_mod, keys as keys_mod
     from app.services.linkup.client import proxy_linkup
@@ -309,7 +320,7 @@ async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.M
     jobs = MemoryJobDao()
     events = MemoryEventDao()
     agent = uuid4()
-    settings = SimpleNamespace(SECRET_KEY="test-secret", LINKUP_API_KEY="")
+    settings = proxy_settings()
     monkeypatch.setattr(keys_mod, "linkup_api_key_dao", keys)
     monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", keys)
@@ -397,3 +408,185 @@ async def test_proxy_v1_rejects_bad_token() -> None:
     with pytest.raises(HTTPException) as exc:
         await proxy_v1("search", request, authorization="Bearer not-a-token")
     assert exc.value.status_code == 401
+
+
+@pytest.fixture
+def bounded_proxy(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    from app.api import linkup_proxy
+    from app.services.linkup import analytics as analytics_mod, client as client_mod, jobs as jobs_mod, keys as keys_mod
+
+    keys = MemoryKeyDao()
+    events = MemoryEventDao()
+    clock = FakeClock()
+    settings = proxy_settings(LINKUP_PROXY_MAX_RESPONSE_BYTES=10)
+    agent = uuid4()
+    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", keys)
+    monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", keys)
+    monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", MemoryJobDao())
+    monkeypatch.setattr(client_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(client_mod, "_monotonic", clock)
+    monkeypatch.setattr(analytics_mod, "web_search_event_dao", events)
+    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(uuid4()))
+    monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
+    monkeypatch.setattr(linkup_proxy, "get_settings", lambda: settings)
+    monkeypatch.setattr(linkup_proxy, "parse_proxy_token", lambda _token: agent)
+    monkeypatch.setattr(linkup_proxy, "agent_available", AsyncMock(return_value=True))
+    app = FastAPI()
+    app.include_router(linkup_proxy.router)
+    return SimpleNamespace(keys=keys, events=events, clock=clock, settings=settings, app=app, agent=agent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status", "error_class", "response_bytes", "attempts"),
+    [
+        ("ceiling", 502, "response_ceiling", 12, 1),
+        ("deadline", 504, "deadline_exceeded", 4, 1),
+        ("rotation", 504, "deadline_exceeded", 0, 1),
+        ("upstream", 500, "upstream_error", 4, 2),
+    ],
+)
+async def test_bounded_post_records_one_event_at_http_boundary(
+    bounded_proxy: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    status: int,
+    error_class: str,
+    response_bytes: int,
+    attempts: int,
+) -> None:
+    from app.services.linkup import client as client_mod
+    from app.services.linkup.keys import add_key
+
+    first = await add_key(label="a", api_key="key-a")
+    _ = await add_key(label="b", api_key="key-b")
+    responses = [FakeResponse(500, "boom"), FakeResponse(500, "boom")]
+    if failure == "ceiling":
+        responses = [FakeResponse(200, chunks=[b"123456", b"789012", b"not read"])]
+    if failure == "deadline":
+        responses = [FakeResponse(500, "boom", on_send=lambda: bounded_proxy.clock.advance(31))]
+    if failure == "rotation":
+        responses = [FakeResponse(402, "quota")]
+        advance = client_mod.advance_cursor
+
+        async def expire_during_rotation(key_id: UUID):
+            result = await advance(key_id)
+            bounded_proxy.clock.advance(31)
+            return result
+
+        monkeypatch.setattr(client_mod, "advance_cursor", expire_during_rotation)
+    calls = use_upstream(monkeypatch, responses)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/linkup/v1/search", content=b'{"q":"x"}', headers={"Authorization": "Bearer agent.digest"}
+        )
+
+    assert response.status_code == status
+    assert len(calls) == attempts
+    assert len(bounded_proxy.events.rows) == 1
+    row = bounded_proxy.events.rows[0]
+    assert (row.http_status, row.error_class, row.response_bytes) == (status, error_class, response_bytes)
+    assert row.key_id == first.id
+    assert row.agent_id == bounded_proxy.agent
+    assert len(row.error_class) <= 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared_length", [False, True])
+async def test_oversize_request_has_no_key_lookup_upstream_or_event(
+    bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, declared_length: bool
+) -> None:
+    from tests.test_linkup_proxy_client import _chunked
+
+    from app.services.linkup import client as client_mod
+
+    lookup = AsyncMock()
+    monkeypatch.setattr(client_mod, "ensure_env_key_seeded", lookup)
+    calls = use_upstream(monkeypatch, [])
+    consumed: list[int] = []
+    headers = {"Authorization": "Bearer agent.digest"}
+    if declared_length:
+        headers["Content-Length"] = "1025"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/linkup/v1/search", content=_chunked([512, 513, 1024], consumed), headers=headers
+        )
+
+    assert response.status_code == 413
+    assert consumed == ([] if declared_length else [512, 513])
+    lookup.assert_not_awaited()
+    assert calls == []
+    assert bounded_proxy.events.rows == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["ceiling", "deadline"])
+async def test_failed_bound_poll_has_no_event(
+    bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from app.services.linkup.jobs import bind_job
+    from app.services.linkup.keys import add_key
+
+    key = await add_key(label="a", api_key="key-a")
+    await bind_job(upstream_job_id="job-1", key_id=key.id, kind="research")
+    upstream = FakeResponse(200, "x" * 11)
+    status = 502
+    if failure == "deadline":
+        upstream = FakeResponse(200, "ok", on_send=lambda: bounded_proxy.clock.advance(31))
+        status = 504
+    calls = use_upstream(monkeypatch, [upstream])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/linkup/v1/research/job-1", headers={"Authorization": "Bearer agent.digest"})
+
+    assert response.status_code == status
+    assert len(calls) == 1
+    assert upstream.stream.closed
+    assert bounded_proxy.events.rows == []
+
+
+@pytest.mark.asyncio
+async def test_analytics_write_is_outside_deadline(
+    bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from app.services.linkup import client as client_mod
+    from app.services.linkup.keys import add_key
+
+    _ = await add_key(label="a", api_key="key-a")
+    _ = use_upstream(monkeypatch, [FakeResponse(200, "{}")])
+    real_timeout = asyncio.timeout
+    scopes: list[asyncio.Timeout] = []
+
+    def capture_timeout(delay: float | None) -> asyncio.Timeout:
+        scope = real_timeout(delay)
+        scopes.append(scope)
+        return scope
+
+    create = bounded_proxy.events.create
+
+    async def create_after_budget(*, obj_in: dict[str, Any]):
+        bounded_proxy.clock.advance(31)
+        with pytest.raises(RuntimeError, match="finished Timeout"):
+            scopes[0].reschedule(asyncio.get_running_loop().time())
+        return await create(obj_in=obj_in)
+
+    monkeypatch.setattr(client_mod.asyncio, "timeout", capture_timeout)
+    monkeypatch.setattr(bounded_proxy.events, "create", create_after_budget)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/linkup/v1/search", content=b'{"q":"x"}', headers={"Authorization": "Bearer agent.digest"}
+        )
+
+    assert response.status_code == 200
+    assert len(bounded_proxy.events.rows) == 1
+    assert bounded_proxy.events.rows[0].error_class is None

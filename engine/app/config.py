@@ -230,6 +230,10 @@ class Settings(BaseSettings):
     # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
     LINKUP_PROXY_ENABLED: bool = True
     LINKUP_PROXY_BASE_URL: str = ""
+    # Proxy bounds: request body ceiling, decoded upstream response ceiling, and one total deadline per call.
+    LINKUP_PROXY_MAX_REQUEST_BYTES: int = Field(default=1048576, gt=0, le=268435456)
+    LINKUP_PROXY_MAX_RESPONSE_BYTES: int = Field(default=10485760, gt=0, le=1073741824)
+    LINKUP_PROXY_DEADLINE_SECONDS: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
     # Search analytics: capture billed Linkup POSTs; export is off until a bucket is set.
     WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED: bool = True
     WEB_SEARCH_ANALYTICS_EXPORT_ENABLED: bool = False
