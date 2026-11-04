@@ -1,3 +1,4 @@
+import asyncio
 import http
 import json
 import socket
@@ -22,15 +23,27 @@ PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_prox
 KEY = "sk-adapter-secret"
 
 
+class StalledReply:
+    def __init__(self) -> None:
+        self.started: asyncio.Event = asyncio.Event()
+        self.closed: asyncio.Event = asyncio.Event()
+
+
 class Stream(httpcore.AsyncNetworkStream):
-    def __init__(self, response: bytes) -> None:
-        self.response: bytes = response
+    def __init__(self, response: bytes | StalledReply | httpcore.NetworkError | httpcore.TimeoutException) -> None:
+        self.response: bytes | StalledReply | httpcore.NetworkError | httpcore.TimeoutException = response
         self.written: bytes = b""
         self.tls: tuple[str | None, ssl.VerifyMode, bool] | None = None
         self.closed: bool = False
 
     @override
     async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        if isinstance(self.response, StalledReply):
+            self.response.started.set()
+            await asyncio.Event().wait()
+        if isinstance(self.response, httpcore.NetworkError | httpcore.TimeoutException):
+            raise self.response
+        assert isinstance(self.response, bytes)
         data, self.response = self.response[:max_bytes], self.response[max_bytes:]
         return data
 
@@ -41,6 +54,8 @@ class Stream(httpcore.AsyncNetworkStream):
     @override
     async def aclose(self) -> None:
         self.closed = True
+        if isinstance(self.response, StalledReply):
+            self.response.closed.set()
 
     @override
     async def start_tls(
@@ -62,7 +77,7 @@ class Wire(httpcore.AsyncNetworkBackend):
     def __init__(self) -> None:
         self.connections: list[str] = []
         self.streams: list[Stream] = []
-        self.responses: list[bytes] = []
+        self.responses: list[bytes | StalledReply | httpcore.NetworkError | httpcore.TimeoutException] = []
         self.answers: list[str] = ["8.8.8.8"]
         self.lookups: int = 0
 
@@ -116,7 +131,6 @@ KINDS: dict[str, tuple[SandboxType, Factory, str]] = {
 EXECUTE_REPLIES: dict[str, list[bytes]] = {
     "judge0": [
         reply(201, {"token": "tok"}),
-        reply(200, {}),
         reply(200, {"status": {"id": 3}, "stdout": "out", "stderr": "", "exit_code": 0}),
     ],
     "self_hosted": [reply(200, {"success": True, "stdout": "out"})],

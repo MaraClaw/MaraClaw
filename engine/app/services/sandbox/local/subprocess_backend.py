@@ -2,17 +2,24 @@
 
 import asyncio
 import contextlib
+import inspect
 import os
 import shutil
 import signal
 import sys
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import ClassVar, NotRequired, TypedDict, override
+from typing import ClassVar, NotRequired, Protocol, TypedDict, override, runtime_checkable
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import (
+    BaseSandboxBackend,
+    ExecutionDeadline,
+    ExecutionResult,
+    SandboxCapabilities,
+    TerminationReason,
+    active_execution_deadline,
+)
 from app.services.sandbox.config import SandboxConfig
 from app.services.workspace_paths import WorkspacePathError, resolve_path_within_root
 
@@ -25,21 +32,40 @@ class SubprocessExecKwargs(TypedDict):
     preexec_fn: NotRequired[Callable[[], None]]
 
 
-async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
-    """Stop a sandbox child and wait for all of its captured streams to close."""
-    if process.returncode is not None:
-        return
+@runtime_checkable
+class _TransportProcess(Protocol):
+    _transport: asyncio.SubprocessTransport
+
+
+def _close_pipes(process: asyncio.subprocess.Process) -> None:
+    # Process.wait() can wait for pipe EOF even after the child was reaped. A setsid descendant may hold those FDs;
+    # bubblewrap's PID namespace owns its lifetime, while these local transports must still be closed explicitly.
+    if isinstance(process, _TransportProcess):
+        for fd in (1, 2):
+            pipe = process._transport.get_pipe_transport(fd)
+            if pipe is not None:
+                pipe.close()
+
+
+async def _terminate_process_group(
+    process: asyncio.subprocess.Process, deadline: ExecutionDeadline | None = None
+) -> None:
+    """Kill the original session group even when its leader was already reaped; never wait for EOF indefinitely."""
+    budget = deadline.step_budget(0.25) if deadline is not None else 0.25
+    # start_new_session=True makes PID the original PGID. getpgid(pid) fails after leader exit, losing descendants.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    waiter = asyncio.create_task(process.wait())
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-    except ProcessLookupError:
-        process.kill()
-    except OSError:
-        process.kill()
-    try:
-        _ = await asyncio.wait_for(process.wait(), timeout=2)
-    except TimeoutError:
-        process.kill()
-        _ = await process.wait()
+        done, _ = await asyncio.wait((waiter,), timeout=budget)
+        if not done:
+            _close_pipes(process)
+    finally:
+        _ = waiter.cancel()
+        _ = await asyncio.gather(waiter, return_exceptions=True)
 
 
 # Security patterns - reused from agent_tools.py
@@ -100,9 +126,18 @@ def _execute_kwarg(kwargs: Mapping[str, object], name: str) -> object:
 async def _emit_output(on_output: object, text: str, label: str) -> None:
     if not callable(on_output):
         return
-    maybe = on_output(text, label)
+    maybe = (
+        on_output(text, label)
+        if inspect.iscoroutinefunction(on_output)
+        else await asyncio.to_thread(on_output, text, label)
+    )
     if isinstance(maybe, Awaitable):
         await maybe
+
+
+def _observe_delivery(task: asyncio.Task[None]) -> None:
+    if not task.cancelled():
+        _ = task.exception()
 
 
 def _check_code_safety(language: str, code: str, allow_network: bool = False) -> str | None:
@@ -444,13 +479,50 @@ class SubprocessBackend(BaseSandboxBackend):
         work_dir: str | None = None,
         **kwargs: object,
     ) -> ExecutionResult:
+        """Bound setup, execution and pipe draining with the same monotonic deadline used by the tool guard."""
+        supplied = kwargs.get("deadline")
+        deadline = (
+            supplied
+            if isinstance(supplied, ExecutionDeadline)
+            else active_execution_deadline.get() or ExecutionDeadline(exec_timeout)
+        )
+        try:
+            async with asyncio.timeout(deadline.remaining()):
+                return await self._execute(
+                    code,
+                    language,
+                    exec_timeout,
+                    work_dir,
+                    deadline=deadline,
+                    **{key: value for key, value in kwargs.items() if key != "deadline"},
+                )
+        except TimeoutError:
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=124,
+                duration_ms=deadline.elapsed_ms(),
+                error=f"Code execution timed out after {exec_timeout}s",
+                termination=TerminationReason.SANDBOX_TIMEOUT,
+            )
+
+    async def _execute(
+        self,
+        code: str,
+        language: str,
+        exec_timeout: int = 30,
+        work_dir: str | None = None,
+        *,
+        deadline: ExecutionDeadline,
+        **kwargs: object,
+    ) -> ExecutionResult:
         """Execute code in a subprocess."""
         if "timeout" in kwargs:
             raise TypeError("execute() no longer accepts 'timeout'; use 'exec_timeout'")
         timeout = exec_timeout
         on_output = _execute_kwarg(kwargs, "on_output")
         agent_id = _execute_kwarg(kwargs, "agent_id")
-        start_time = time.time()
 
         # Validate language
         if language not in ("python", "bash", "node"):
@@ -459,7 +531,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=f"Unsupported language: {language}. Use: python, bash, or node",
             )
 
@@ -471,7 +543,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=f"❌ {safety_error}",
             )
 
@@ -487,7 +559,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=str(exc),
             )
         await asyncio.to_thread(work_path.mkdir, parents=True, exist_ok=True)
@@ -520,6 +592,11 @@ class SubprocessBackend(BaseSandboxBackend):
 
         proc: asyncio.subprocess.Process | None = None
         readers: list[asyncio.Task[None]] = []
+        deliveries: list[asyncio.Task[None]] = []
+        stdout_data = bytearray()
+        stderr_data = bytearray()
+        output_dropped = False
+        result: ExecutionResult | None = None
         try:
             await self._ensure_workspace_venv(venv_path)
             _ = await asyncio.to_thread(script_path.write_text, code, encoding="utf-8")
@@ -528,7 +605,7 @@ class SubprocessBackend(BaseSandboxBackend):
             bwrap_command = self._build_bwrap_command(sandbox_command, work_path, venv_path)
             if bwrap_command is None or not bwrap_command:
                 if not self.config.allow_unsafe_fallback_when_bwrap_missing:
-                    duration_ms = int((time.time() - start_time) * 1000)
+                    duration_ms = deadline.elapsed_ms()
                     return ExecutionResult(
                         success=False,
                         stdout="",
@@ -556,13 +633,40 @@ class SubprocessBackend(BaseSandboxBackend):
                     **self._build_exec_kwargs(work_path, timeout),
                 )
 
-            stdout_data = bytearray()
-            stderr_data = bytearray()
+            async def deliver(queue: asyncio.Queue[bytes | None], label: str) -> None:
+                nonlocal output_dropped
+                while (chunk := await queue.get()) is not None:
+                    delivery = asyncio.create_task(
+                        _emit_output(on_output, chunk.decode("utf-8", errors="replace"), label)
+                    )
+                    try:
+                        done, _ = await asyncio.wait((delivery,), timeout=min(0.1, deadline.remaining()))
+                        if not done:
+                            output_dropped = True
+                            return
+                        delivery.result()
+                    except Exception:
+                        output_dropped = True
+                        return
+                    finally:
+                        if not delivery.done():
+                            output_dropped = True
+                            _ = delivery.cancel()
+                            done, _ = await asyncio.wait((delivery,), timeout=deadline.step_budget(0.05))
+                            if not done:
+                                delivery.add_done_callback(_observe_delivery)
+                        if delivery.done():
+                            _observe_delivery(delivery)
 
             async def read_stream(stream: asyncio.StreamReader | None, out: bytearray, label: str = "stdout") -> None:
+                nonlocal output_dropped
                 if stream is None:
                     return
                 capture_limit = self.config.max_stderr_bytes if label == "stderr" else self.config.max_stdout_bytes
+                queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=8)
+                delivery = asyncio.create_task(deliver(queue, label)) if on_output else None
+                if delivery is not None:
+                    deliveries.append(delivery)
                 while True:
                     chunk = await stream.read(4096)
                     if not chunk:
@@ -570,74 +674,99 @@ class SubprocessBackend(BaseSandboxBackend):
                     remaining = capture_limit - len(out)
                     if remaining > 0:
                         out.extend(chunk[:remaining])
-                    # Real-time streaming: push each chunk to the WebSocket
-                    if on_output:
+                    if delivery is not None:
                         try:
-                            text = chunk.decode("utf-8", errors="replace")
-                            await _emit_output(on_output, text, label)
-                        except Exception as exc:
-                            logger.debug(f"[Subprocess] Output callback failed: {exc}")
+                            if delivery.done():
+                                output_dropped = True
+                            else:
+                                queue.put_nowait(chunk)
+                        except asyncio.QueueFull:
+                            output_dropped = True
+                if delivery is not None and not delivery.done():
+                    if queue.full():
+                        _ = queue.get_nowait()
+                        output_dropped = True
+                    queue.put_nowait(None)
 
             readers = [
                 asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout")),
                 asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr")),
             ]
 
-            is_timeout = False
-            try:
-                _ = await asyncio.wait_for(proc.wait(), timeout=timeout)
-            except TimeoutError:
-                await _terminate_process_group(proc)
-                is_timeout = True
-
-            _ = await asyncio.gather(*readers)
+            _ = await proc.wait()
+            _ = await asyncio.wait(readers)
+            for reader in readers:
+                reader.result()
+            if deliveries:
+                _ = await asyncio.wait(deliveries)
             stdout = bytes(stdout_data)
             stderr = bytes(stderr_data)
 
             stdout_str = stdout.decode("utf-8", errors="replace")[:10000] if stdout else ""
             stderr_str = stderr.decode("utf-8", errors="replace")[:5000] if stderr else ""
 
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            if is_timeout:
-                return ExecutionResult(
-                    success=False,
-                    stdout=stdout_str,
-                    stderr=stderr_str,
-                    exit_code=124,
-                    duration_ms=duration_ms,
-                    error=f"Code execution timed out after {timeout}s. If you expect this code to take longer, try calling the tool again with a higher 'timeout' parameter (up to 3600s).",
-                )
+            duration_ms = deadline.elapsed_ms()
 
             exit_code = proc.returncode if proc.returncode is not None else 1
-            return ExecutionResult(
+            result = ExecutionResult(
                 success=proc.returncode == 0,
                 stdout=stdout_str,
                 stderr=stderr_str,
                 exit_code=exit_code,
                 duration_ms=duration_ms,
                 error=None if proc.returncode == 0 else f"Exit code: {proc.returncode}",
+                output_dropped=output_dropped,
             )
+            return result
 
         except asyncio.CancelledError:
-            if proc is not None:
-                await _terminate_process_group(proc)
+            if deadline.expired:
+                result = ExecutionResult(
+                    success=False,
+                    stdout=stdout_data.decode("utf-8", errors="replace")[:10000],
+                    stderr=stderr_data.decode("utf-8", errors="replace")[:5000],
+                    exit_code=124,
+                    duration_ms=deadline.elapsed_ms(),
+                    error=f"Code execution timed out after {timeout}s",
+                    termination=TerminationReason.SANDBOX_TIMEOUT,
+                    output_dropped=output_dropped or any(not task.done() for task in deliveries),
+                )
+                return result
             raise
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
+            duration_ms = deadline.elapsed_ms()
             logger.exception("[Subprocess] Execution error")
-            return ExecutionResult(
+            result = ExecutionResult(
                 success=False,
                 stdout="",
                 stderr="",
                 exit_code=1,
                 duration_ms=duration_ms,
                 error=f"Execution error: {str(e)[:200]}",
+                termination=TerminationReason.BACKEND_ABORT,
             )
+            return result
 
         finally:
-            for reader in readers:
-                _ = reader.cancel()
+            if proc is not None:
+                await _terminate_process_group(proc, deadline)
+                if readers:
+                    _ = await asyncio.wait(readers, timeout=deadline.step_budget(0.1))
+                _close_pipes(proc)
+            for task in readers:
+                _ = task.cancel()
             _ = await asyncio.gather(*readers, return_exceptions=True)
+            for task in deliveries:
+                _ = task.cancel()
+            if deliveries:
+                _, pending = await asyncio.wait(deliveries, timeout=deadline.step_budget(0.1))
+                for task in pending:
+                    output_dropped = True
+                    task.add_done_callback(_observe_delivery)
+            if result is not None:
+                result.stdout = stdout_data.decode("utf-8", errors="replace")[:10000]
+                result.stderr = stderr_data.decode("utf-8", errors="replace")[:5000]
+                result.output_dropped |= output_dropped
+                result.duration_ms = deadline.elapsed_ms()
             # Clean up temp script
             await asyncio.to_thread(script_path.unlink, missing_ok=True)

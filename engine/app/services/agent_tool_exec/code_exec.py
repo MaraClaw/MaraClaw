@@ -1,11 +1,13 @@
 """Code execution through the configured sandbox backend."""
 
+import asyncio
 import uuid
 from pathlib import Path
 
 from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
 from app.services import agent_tools
+from app.services.sandbox.base import ExecutionDeadline, ExecutionResult, TerminationReason, active_execution_deadline
 from app.services.sandbox.config import SandboxConfigOverrides
 from app.services.tool_runtime.provenance import config_provenance
 
@@ -122,14 +124,52 @@ async def _execute_code(
         logger.info(
             f"[Sandbox] Executing code with backend: {backend.__class__.__name__} (tool={tool_name}, timeout={timeout}s)"
         )
-        result = await backend.execute(
-            code=code,
-            language=language,
-            exec_timeout=timeout,
-            work_dir=str(work_dir),
-            on_output=on_output,
-            agent_id=agent_id,
-        )
+        deadline = ExecutionDeadline(timeout)
+        token = active_execution_deadline.set(deadline)
+        try:
+            execution = asyncio.create_task(
+                backend.execute(
+                    code=code,
+                    language=language,
+                    exec_timeout=timeout,
+                    work_dir=str(work_dir),
+                    on_output=on_output,
+                    agent_id=agent_id,
+                )
+            )
+        finally:
+            active_execution_deadline.reset(token)
+        try:
+            done, _ = await asyncio.wait((execution,), timeout=deadline.settle_remaining())
+            if done:
+                result = execution.result()
+            else:
+                _ = execution.cancel()
+                done, _ = await asyncio.wait((execution,), timeout=deadline.hard_remaining())
+                if done:
+                    _ = await asyncio.gather(execution, return_exceptions=True)
+                else:
+                    # A backend that suppresses cancellation cannot be forcibly stopped by asyncio. Observe its eventual
+                    # result without letting its teardown extend the tool deadline.
+                    execution.add_done_callback(_observe_execution)
+                result = ExecutionResult(
+                    success=False,
+                    stdout="",
+                    stderr="",
+                    exit_code=1,
+                    duration_ms=deadline.elapsed_ms(),
+                    error="Sandbox backend exceeded its deadline" + ("; cleanup incomplete" if not done else ""),
+                    termination=TerminationReason.BACKEND_ABORT,
+                    output_dropped=on_output is not None,
+                )
+        except asyncio.CancelledError:
+            _ = execution.cancel()
+            done, _ = await asyncio.wait((execution,), timeout=deadline.hard_remaining())
+            if done:
+                _ = await asyncio.gather(execution, return_exceptions=True)
+            else:
+                execution.add_done_callback(_observe_execution)
+            raise
         return backend._format_result(result)
 
     except ValueError as e:
@@ -142,3 +182,8 @@ async def _execute_code(
         if is_e2b_tool:
             return f"❌ E2B execution error: {str(e)[:200]}"
         return f"❌ Execution error: {str(e)[:200]}"
+
+
+def _observe_execution(execution: asyncio.Task[ExecutionResult]) -> None:
+    if not execution.cancelled():
+        _ = execution.exception()

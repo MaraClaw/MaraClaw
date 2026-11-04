@@ -1,5 +1,8 @@
 import asyncio
 import itertools
+import os
+import signal
+import sys
 import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
@@ -8,8 +11,9 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from app.services.sandbox.base import ExecutionDeadline, TerminationReason
 from app.services.sandbox.config import SandboxConfig, SandboxConfigOverrides, SandboxType
-from app.services.sandbox.local.subprocess_backend import SubprocessBackend
+from app.services.sandbox.local.subprocess_backend import SubprocessBackend, _terminate_process_group, _TransportProcess
 from app.services.sandbox.registry import get_sandbox_backend
 
 
@@ -269,11 +273,11 @@ async def test_execute_enforces_canonical_timeout(tmp_path: Path, monkeypatch: p
     # When: the canonical execution timeout is passed with supported output context
     result = await backend.execute("print(1)", "python", exec_timeout=0, work_dir=str(tmp_path), on_output=None)
 
-    # Then: the timeout is enforced and cleanup preserves the execution contract
+    # Then: setup is part of the deadline, so an already-expired call never launches a child.
     assert not result.success
     assert result.exit_code == 124
-    assert process.killed
-    assert process.reaped
+    assert not process.started.is_set()
+    assert not process.killed
     assert not (tmp_path / "_exec_tmp.py").exists()
 
 
@@ -515,7 +519,9 @@ async def test_execute_over_budget_preserves_timeout_and_cancellation_cleanup(
         with pytest.raises(asyncio.CancelledError):
             await execution
     else:
-        result = await backend.execute("pass", "python", exec_timeout=0, work_dir=str(tmp_path))
+        result = await backend.execute(
+            "pass", "python", exec_timeout=0, work_dir=str(tmp_path), deadline=ExecutionDeadline(0.1, grace=0.2)
+        )
         assert result.exit_code == 124
         assert (result.stdout, result.stderr) == ("sss", "ee")
     # Then: the process is reaped and its temporary script is removed even after overflow.
@@ -561,3 +567,132 @@ async def test_execute_cancellation_joins_output_readers_after_overflow(
         release_callbacks.set()
         execution.cancel()
         await asyncio.gather(execution, return_exceptions=True)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_stalled_or_failing_output_delivery_does_not_block_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    process = OutputProcess(iter((b"first", b"second")), iter((b"warning",)))
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=9, max_stderr_bytes=3), process)
+    active: set[asyncio.Task[object]] = set()
+    entered = asyncio.Event()
+
+    async def callback(_: str, __: str) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        active.add(task)
+        entered.set()
+        try:
+            if fails:
+                raise RuntimeError("stream disconnected")
+            await asyncio.Event().wait()
+        finally:
+            active.remove(task)
+
+    async with asyncio.timeout(1):
+        result = await backend.execute(
+            "pass", "python", work_dir=str(tmp_path), on_output=callback, deadline=ExecutionDeadline(0.5, grace=0.2)
+        )
+    assert entered.is_set()
+    assert result.success
+    assert (result.stdout, result.stderr) == ("firstseco", "war")
+    assert result.output_dropped
+    assert active == set()
+    assert process.reaped
+
+
+async def test_terminate_group_kills_survivor_after_leader_exited() -> None:
+    leader = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import os; os.read(0, 1)", stdin=asyncio.subprocess.PIPE, process_group=0
+    )
+    member: asyncio.subprocess.Process | None = None
+    try:
+        member = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import signal; print('ready', flush=True); signal.pause()",
+            stdout=asyncio.subprocess.PIPE,
+            process_group=leader.pid,
+        )
+        assert member.stdout is not None
+        async with asyncio.timeout(2):
+            assert await member.stdout.readline() == b"ready\n"
+            assert leader.stdin is not None
+            leader.stdin.close()
+            assert await leader.wait() == 0
+            await _terminate_process_group(leader, ExecutionDeadline(0, grace=0.2))
+            assert await member.wait() == -signal.SIGKILL
+    finally:
+        for process in (leader, member):
+            if process is not None:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+
+
+async def test_timeout_result_includes_output_drained_after_kill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = OutputProcess(iter(()), iter(()), running=True)
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=9), process)
+
+    class AfterKillStream:
+        emitted = False
+
+        async def read(self, _: int) -> bytes:
+            await process.finished.wait()
+            if self.emitted:
+                return b""
+            self.emitted = True
+            return b"late output"
+
+    monkeypatch.setattr(process, "stdout", AfterKillStream())
+    async with asyncio.timeout(1):
+        result = await backend.execute(
+            "pass", "python", work_dir=str(tmp_path), deadline=ExecutionDeadline(0.1, grace=0.2)
+        )
+    assert result.stdout == "late outp"
+    assert result.termination == TerminationReason.SANDBOX_TIMEOUT
+    assert process.killed
+    assert process.reaped
+
+
+async def test_execute_closes_pipe_held_by_escaped_setsid_process_after_leader_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    escaped = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import os\ntry:\n while True: os.write(1, b'x' * 4096)\nexcept BrokenPipeError: pass",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert escaped.stdout is not None
+    assert os.getsid(escaped.pid) == escaped.pid
+    process = OutputProcess(iter(()), iter(()))
+    backend = streaming_backend(monkeypatch, SandboxConfig(max_stdout_bytes=17, max_stderr_bytes=3), process)
+    monkeypatch.setattr(process, "stdout", escaped.stdout)
+    assert isinstance(escaped, _TransportProcess)
+    monkeypatch.setattr(process, "_transport", escaped._transport, raising=False)
+    process.returncode = 0
+
+    async def exited() -> int:
+        return 0
+
+    monkeypatch.setattr(process, "wait", exited)
+    before = asyncio.all_tasks()
+    try:
+        async with asyncio.timeout(2):
+            result = await backend.execute(
+                "pass", "python", work_dir=str(tmp_path), deadline=ExecutionDeadline(0.1, grace=0.4)
+            )
+            assert await escaped.wait() == 0
+        assert result.termination == TerminationReason.SANDBOX_TIMEOUT
+        assert result.stdout == "x" * 17
+        assert asyncio.all_tasks() == before
+    finally:
+        if escaped.returncode is None:
+            escaped.kill()
+        await escaped.wait()
