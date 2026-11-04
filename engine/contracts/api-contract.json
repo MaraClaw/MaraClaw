@@ -15003,6 +15003,42 @@
         "title": "TransferRequest",
         "type": "object"
       },
+      "TransferReviewPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TransferSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TransferReviewPage",
+        "type": "object"
+      },
+      "TransferReviewView": {
+        "enum": [
+          "pending",
+          "recent"
+        ],
+        "title": "TransferReviewView",
+        "type": "string"
+      },
       "TransferStatus": {
         "enum": [
           "payment_review",
@@ -28416,6 +28452,82 @@
           }
         ],
         "summary": "Review",
+        "tags": [
+          "company-admissions"
+        ]
+      }
+    },
+    "/api/company-admissions/transfers/review/page": {
+      "get": {
+        "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f7265766965772f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransferReviewView",
+              "default": "pending"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferReviewPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Page",
         "tags": [
           "company-admissions"
         ]

@@ -37,7 +37,7 @@ test('destination admission links require own-target genesis rights and always e
   }
 })
 
-test('payment queue selects only paid pending records from a mixed recent response', () => {
+test('pending predicate selects only paid payment_review records', () => {
   // Given
   const free = transferSummarySchema.parse({ ...pendingTransfer, choice: 'free' })
   // When
@@ -46,18 +46,37 @@ test('payment queue selects only paid pending records from a mixed recent respon
   assert.deepEqual(result, [pendingTransfer])
 })
 
-test('review list uses the bounded contract and propagates cancellation', async (t) => {
+test('review page requests the selected view and parses items with a cursor', async (t) => {
   // Given
   const signal = new AbortController().signal
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([pendingTransfer, admittedTransfer]))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [pendingTransfer, admittedTransfer], next_cursor: 'abc_-' }))
   // When
-  const result = await fetchTransferReviews(signal)
+  const result = await fetchTransferReviews('recent', null, signal)
   // Then
-  assert.deepEqual(result, [pendingTransfer, admittedTransfer])
-  assert.equal(Object.isFrozen(result), true)
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/transfers/review?limit=50')
+  assert.deepEqual(result, { items: [pendingTransfer, admittedTransfer], next_cursor: 'abc_-' })
+  assert.equal(Object.isFrozen(result.items), true)
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/transfers/review/page?view=recent&limit=50')
   assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
 })
+
+test('review page forwards the opaque cursor URL-encoded and accepts a final page', async (t) => {
+  // Given
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+  // When
+  const result = await fetchTransferReviews('pending', 'a+b/c=&d')
+  // Then
+  assert.deepEqual(result, { items: [], next_cursor: null })
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/transfers/review/page?view=pending&limit=50&cursor=a%2Bb%2Fc%3D%26d')
+})
+
+for (const invalid of [[], { items: [pendingTransfer] }, { items: [], next_cursor: '' }, { items: [{ ...pendingTransfer, status: 'approved' }], next_cursor: null }]) {
+  test('malformed review pages fail at the response boundary', async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json(invalid))
+    // When / Then
+    await assert.rejects(fetchTransferReviews('pending'), z.ZodError)
+  })
+}
 
 test('detail and own tenant read use only the authorized transfer and tenant endpoints', async (t) => {
   // Given

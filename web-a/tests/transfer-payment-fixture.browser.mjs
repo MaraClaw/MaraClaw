@@ -4,7 +4,7 @@ import { bounded, responseBarrier, uuid } from './admission-fixture.browser.mjs'
 import { pendingTransfer } from './transfer-review-fixtures.ts'
 
 export { bounded, responseBarrier }
-export const listPath = '/api/company-admissions/transfers/review'
+export const listPath = '/api/company-admissions/transfers/review/page'
 export const detailPath = `/api/company-admissions/transfers/${pendingTransfer.id}`
 
 export function paymentFixture(receipt, options) {
@@ -33,8 +33,8 @@ function reply(state, call) {
     ? { body: { id: state.user.tenant_id, is_active: true, is_default_end_user_org: state.defaultOrg ?? true } }
     : { status: state.tenantStatus, body: { detail: 'Synthetic tenant access unavailable' } }
   if (path === listPath) {
-    assert.equal(method, 'GET'); assert.deepEqual(params, { limit: '50' })
-    return state.listStatus === 200 ? { body: state.empty ? [] : [state.row, { ...state.row, id: uuid(9899), choice: 'free' }] }
+    assert.equal(method, 'GET'); assert.deepEqual(params, { view: 'pending', limit: '50' })
+    return state.listStatus === 200 ? { body: { items: state.empty ? [] : [state.row], next_cursor: null } }
       : { status: state.listStatus, body: { detail: 'Synthetic payment list unavailable' } }
   }
   if (path === detailPath) return state.detailStatus === 200 ? { body: state.row } : { status: state.detailStatus, body: { detail: 'Synthetic payment detail unavailable' } }

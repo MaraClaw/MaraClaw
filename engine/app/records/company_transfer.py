@@ -20,6 +20,11 @@ class TransferStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+class TransferReviewView(StrEnum):
+    PENDING = "pending"
+    RECENT = "recent"
+
+
 @dataclass(frozen=True, slots=True)
 class CompanyTransferRecord:
     id: UUID

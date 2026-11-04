@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.security import get_current_user
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
+from app.records.company_transfer import TransferReviewView
 from app.records.user import UserRecord
-from app.schemas.company_transfer import PaymentDecision, TransferQuote, TransferSummary
+from app.schemas.company_transfer import PaymentDecision, TransferQuote, TransferReviewPage, TransferSummary
+from app.services.company_transfer_cursor import TransferReviewCursor
 from app.services.company_transfer_guards import quote as transfer_quote
 from app.services.company_transfer_review import decide_payment, require_payment_reviewer, withdraw_transfer
 
@@ -30,6 +32,26 @@ async def review(
 ) -> list[TransferSummary]:
     await require_payment_reviewer(user.id)
     return [TransferSummary.model_validate(row) for row in await transfers.list_requests(None, limit)]
+
+
+@router.get("/transfers/review/page", response_model=TransferReviewPage)
+async def review_page(
+    view: TransferReviewView = TransferReviewView.PENDING,
+    limit: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    user: UserRecord = Depends(get_current_user),
+) -> TransferReviewPage:
+    await require_payment_reviewer(user.id)
+    position = TransferReviewCursor.decode(cursor, view) if cursor is not None else None
+    rows = await transfers.list_review_page(
+        view, limit=limit, before=(position.created_at, position.id) if position is not None else None
+    )
+    items = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        next_cursor = TransferReviewCursor(version=1, view=view, created_at=last.created_at, id=last.id).encode()
+    return TransferReviewPage(items=[TransferSummary.model_validate(row) for row in items], next_cursor=next_cursor)
 
 
 @router.get("/transfers/{request_id}", response_model=TransferSummary)

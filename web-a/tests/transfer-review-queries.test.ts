@@ -9,14 +9,26 @@ import { reviewTenantOptions, transferDecisionOptions, transferDetailOptions, tr
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { createFixture } from './helpers.ts'
+import type { TransferReviewPage } from '../src/lib/transfer-reviews-api.ts'
 import { admittedTransfer, pendingTransfer } from './transfer-review-fixtures.ts'
+
+function page(...items: TransferReviewPage['items']): TransferReviewPage {
+  return { items, next_cursor: 'next' }
+}
+
+test('review pages are keyed by view and cursor', () => {
+  // Given / When / Then
+  assert.notDeepEqual(transferReviewKeys.list('pending', null), transferReviewKeys.list('recent', null))
+  assert.notDeepEqual(transferReviewKeys.list('pending', null), transferReviewKeys.list('pending', 'next'))
+  assert.deepEqual(transferReviewKeys.list('pending', 'next').slice(0, 2), transferReviewKeys.lists)
+})
 
 test('disabled access, queue and invalid detail observers make no requests', (t) => {
   // Given
   const client = new QueryClient()
   t.after(() => client.clear())
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([]))
-  const observers = [new QueryObserver(client, reviewTenantOptions(null, false)), new QueryObserver(client, transferReviewsOptions(false)), new QueryObserver(client, transferDetailOptions(null, true))]
+  const observers = [new QueryObserver(client, reviewTenantOptions(null, false)), new QueryObserver(client, transferReviewsOptions('pending', null, false)), new QueryObserver(client, transferDetailOptions(null, true))]
   // When
   for (const observer of observers) t.after(observer.subscribe(() => undefined))
   // Then
@@ -34,12 +46,14 @@ test('a denied decision never sends a request even when called directly', async 
   assert.equal(fetch.mock.callCount(), 0)
 })
 
-test('a successful payment review cancels old polls and replaces detail and recent-list state', async (t) => {
+test('a successful payment review cancels old polls, leaves the pending pages and replaces the recent row', async (t) => {
   // Given
   const { policy } = createFixture()
   const client = new QueryClient()
   t.after(() => client.clear())
-  client.setQueryData(transferReviewKeys.list, [pendingTransfer])
+  client.setQueryData(transferReviewKeys.list('pending', null), page(pendingTransfer))
+  client.setQueryData(transferReviewKeys.list('recent', null), page(pendingTransfer))
+  client.setQueryData(transferReviewKeys.list('pending', 'older'), page(pendingTransfer))
   client.setQueryData(notificationKeys.unread, { unread_count: 1 })
   const response = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<AbortSignal | null | undefined>()
@@ -48,17 +62,19 @@ test('a successful payment review cancels old polls and replaces detail and rece
     started.resolve(options?.signal)
     return response.promise
   })
-  const poll = client.fetchQuery(transferReviewsOptions(true))
+  const poll = client.fetchQuery(transferReviewsOptions('pending', null, true))
   const signal = await started.promise
   const mutation = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), transferDecisionOptions(client, pendingTransfer.id, true)))
   // When
   await mutation.mutate({ decision: 'approved', reason: null })
-  response.resolve(Response.json([pendingTransfer]))
+  response.resolve(Response.json(page(pendingTransfer)))
   await poll
   // Then
   assert.equal(signal?.aborted, true)
   assert.deepEqual(client.getQueryData(transferReviewKeys.detail(pendingTransfer.id)), admittedTransfer)
-  assert.deepEqual(client.getQueryData(transferReviewKeys.list), [admittedTransfer])
+  assert.deepEqual(client.getQueryData(transferReviewKeys.list('pending', null)), page())
+  assert.deepEqual(client.getQueryData(transferReviewKeys.list('pending', 'older')), page(), 'every cached pending page drops the decided request')
+  assert.deepEqual(client.getQueryData(transferReviewKeys.list('recent', null)), page(admittedTransfer))
   assert.equal(client.getQueryState(notificationKeys.unread)?.isInvalidated, true)
 })
 
@@ -69,7 +85,7 @@ for (const status of [403, 409, 503]) {
     const client = new QueryClient()
     t.after(() => client.clear())
     client.setQueryData(transferReviewKeys.detail(pendingTransfer.id), pendingTransfer)
-    client.setQueryData(transferReviewKeys.list, [pendingTransfer])
+    client.setQueryData(transferReviewKeys.list('pending', null), page(pendingTransfer))
     const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Decision unavailable' }, { status }))
     const mutation = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), transferDecisionOptions(client, pendingTransfer.id, true)))
     // When
@@ -77,7 +93,7 @@ for (const status of [403, 409, 503]) {
     // Then
     assert.equal(fetch.mock.callCount(), 1)
     assert.deepEqual(client.getQueryData(transferReviewKeys.detail(pendingTransfer.id)), pendingTransfer)
-    assert.equal(client.getQueryState(transferReviewKeys.list)?.isInvalidated, status === 409)
+    assert.equal(client.getQueryState(transferReviewKeys.list('pending', null))?.isInvalidated, status === 409)
   })
 }
 
@@ -86,7 +102,7 @@ test('a retired-session payment decision cannot update or invalidate caches', as
   const { policy } = createFixture()
   const client = new QueryClient()
   t.after(() => client.clear())
-  client.setQueryData(transferReviewKeys.list, [pendingTransfer])
+  client.setQueryData(transferReviewKeys.list('pending', null), page(pendingTransfer))
   client.setQueryData(notificationKeys.unread, { unread_count: 2 })
   const response = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<void>()
@@ -99,7 +115,7 @@ test('a retired-session payment decision cannot update or invalidate caches', as
   response.resolve(Response.json(admittedTransfer))
   await rejected
   // Then
-  assert.deepEqual(client.getQueryData(transferReviewKeys.list), [pendingTransfer])
+  assert.deepEqual(client.getQueryData(transferReviewKeys.list('pending', null)), page(pendingTransfer))
   assert.equal(client.getQueryData(transferReviewKeys.detail(pendingTransfer.id)), undefined)
   assert.equal(client.getQueryState(notificationKeys.unread)?.isInvalidated, false)
 })

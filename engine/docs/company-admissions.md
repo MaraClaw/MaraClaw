@@ -134,7 +134,8 @@ status is read from the ordinary admission APIs, not from payment status.
 | Route | Response / authorization |
 |---|---|
 | `GET /api/company-admissions/transfers/mine?limit=50` | `TransferSummary[]`, applicant-owned; limit 1–100. |
-| `GET /api/company-admissions/transfers/review?limit=50` | `TransferSummary[]`; payment reviewers only; limit 1–100. |
+| `GET /api/company-admissions/transfers/review?limit=50` | `TransferSummary[]`; payment reviewers only; limit 1–100; newest rows across every choice and status. Retained for compatibility; web-a pages with `/review/page`. |
+| `GET /api/company-admissions/transfers/review/page?view=pending\|recent&limit=50&cursor=` | `{items: TransferSummary[], next_cursor}`; payment reviewers only (checked before the cursor is decoded). `pending` = paid choice in `payment_review`; `recent` = every paid-choice request. The view filter runs in SQL before `LIMIT`; keyset on `(created_at DESC, id DESC)` with `limit + 1` lookahead. The cursor is versioned, `extra=forbid` and bound to its view; malformed, tampered or cross-view cursors return 400. |
 | `GET /api/company-admissions/transfers/{id}` | `TransferSummary`; owner or payment reviewer. |
 | `POST /api/company-admissions/transfers/{id}/decision` | `{decision:"approved"\|"rejected",reason?:string\|null}` (max 2000 characters); returns `TransferSummary`. |
 | `POST /api/company-admissions/transfers/{id}/withdraw` | Owner only; returns `TransferSummary`. Once an admission exists, withdraw that admission instead. |
