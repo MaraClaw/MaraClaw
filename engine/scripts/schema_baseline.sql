@@ -1705,11 +1705,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	completed_at TIMESTAMP WITH TIME ZONE, 
+	claim_token UUID, 
+	lease_expires_at TIMESTAMP WITH TIME ZONE, 
 	PRIMARY KEY (id), 
+	CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL)), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(created_by) REFERENCES users (id), 
 	FOREIGN KEY(supervision_target_user_id) REFERENCES users (id)
 );
+
+CREATE INDEX IF NOT EXISTS ix_tasks_lease_expires_at ON tasks (lease_expires_at) WHERE claim_token IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_tenant_onboardings (
 	id UUID NOT NULL, 

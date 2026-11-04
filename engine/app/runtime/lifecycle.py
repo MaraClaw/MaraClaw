@@ -114,6 +114,7 @@ class Runtime:
             from app.services.openclaw_dispatch_reconciler import openclaw_dispatch_reconciler_loop
             from app.services.openclaw_update_worker import start_openclaw_update_worker
             from app.services.scheduler import start_scheduler
+            from app.services.task_lease import task_lease_recovery_loop
             from app.services.trigger_daemon import start_trigger_daemon
 
             self.tasks.start("trigger_daemon", start_trigger_daemon(), requirement="loop")
@@ -125,6 +126,7 @@ class Runtime:
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
             self.tasks.start("openclaw_dispatch", openclaw_dispatch_reconciler_loop(), requirement="loop")
+            self.tasks.start("task_lease_recovery", task_lease_recovery_loop(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
             from app.services.channels.whatsapp_personal_supervisor import personal_supervisor

@@ -32,6 +32,8 @@ class TaskRecord:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     completed_at: datetime | None = None
+    claim_token: UUID | None = None
+    lease_expires_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> TaskRecord:
@@ -53,7 +55,17 @@ class TaskRecord:
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
             completed_at=datetime_from_row(row.get("completed_at")),
+            claim_token=uuid_from_row_opt(row.get("claim_token")),
+            lease_expires_at=datetime_from_row(row.get("lease_expires_at")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskClaim:
+    """Proof of ownership of one task run; every later write is fenced on ``token``."""
+
+    task_id: UUID
+    token: UUID
 
 
 @dataclass(slots=True)

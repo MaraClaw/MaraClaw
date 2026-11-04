@@ -135,7 +135,13 @@ async def trigger_task(
 
     from app.api.background_tasks import schedule_background_task
     from app.services.task_executor import execute_task
+    from app.services.task_lease import claim_task
 
-    schedule_background_task(execute_task(task.id, agent_id), "execute task")
+    claim = await claim_task(task.id, agent_id)
+    if claim is None:
+        raise HTTPException(
+            status_code=409, detail="This task is already running. Wait for it to finish before retrying."
+        )
+    schedule_background_task(execute_task(task.id, agent_id, claim), "execute task")
 
     return {"status": "triggered", "task_id": str(task_id)}

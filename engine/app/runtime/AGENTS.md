@@ -25,6 +25,8 @@ Owns per-lifespan process resources, background work and readiness. `app/main.py
 
 ## Owned Tasks And Readiness
 
+- Worker also owns `task_lease_recovery`: every 30 seconds it returns expired task claims to pending with a log, without rerunning them. Task runs renew their 120-second leases every 30 seconds from whichever process scheduled them; API and connector roles never scan or reset task claims at startup.
+
 - Track only owned tasks; never cancel a global `asyncio.all_tasks()` set. Cancel unfinished tasks and await them with `gather(return_exceptions=True)`; log non-cancellation failures.
 - `OwnedTasks.start` distinguishes optional, finite `setup`, and ongoing `loop`. Required setup is ready only after successful completion; a required loop is ready only while running. Normal loop return, failure or cancellation invalidates readiness. Retain required evidence after done-task removal.
 - `EventTasks` tracks admitted SDK callbacks; closing rejects new callbacks with `CancelledError`, then cancels/awaits existing callbacks. Do not let callbacks outlive their manager's ownership.

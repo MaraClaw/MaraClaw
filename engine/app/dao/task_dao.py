@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, ClassVar, final
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.core.domain.tasks import TaskStatus, TaskType
-from app.core.json_types import int_from_row, str_from_row
+from app.core.json_types import int_from_row, str_from_row, uuid_from_row
 from app.dao.base import BaseDAO
-from app.records.task import TaskLogRecord, TaskRecord
+from app.db.connection import DbConnection
+from app.db.pool import get_pool
+from app.db.session import transaction
+from app.records.task import TaskClaim, TaskLogRecord, TaskRecord
 
 _TASK_COLUMNS = (
     "id",
@@ -29,9 +33,39 @@ _TASK_COLUMNS = (
     "created_at",
     "updated_at",
     "completed_at",
+    "claim_token",
+    "lease_expires_at",
 )
 
 _LOG_COLUMNS = ("id", "task_id", "content", "created_at")
+
+# The lease clock is the database's, so engine processes with skewed clocks agree on expiry.
+_LEASE_UNTIL = "clock_timestamp() + make_interval(secs => %(lease_seconds)s::float8)"
+
+# Settling is fenced on the claim token and writes its log entry in the same statement.
+_SETTLE_DONE = """
+    WITH settled AS (
+        UPDATE tasks SET status = 'done', completed_at = clock_timestamp(),
+               claim_token = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE id = %(id)s AND claim_token = %(token)s
+          AND lease_expires_at > clock_timestamp() RETURNING id
+    ) INSERT INTO task_logs (id, task_id, content)
+      SELECT gen_random_uuid(), id, %(content)s FROM settled RETURNING task_id"""
+_SETTLE_PENDING = """
+    WITH settled AS (
+        UPDATE tasks SET status = 'pending', completed_at = NULL,
+               claim_token = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE id = %(id)s AND claim_token = %(token)s
+          AND lease_expires_at > clock_timestamp() RETURNING id
+    ) INSERT INTO task_logs (id, task_id, content)
+      SELECT gen_random_uuid(), id, %(content)s FROM settled RETURNING task_id"""
+
+
+@asynccontextmanager
+async def _committed() -> AsyncGenerator[DbConnection]:
+    """Own a checkout and commit even inside a request or a sibling task that holds a connection."""
+    async with get_pool().connection() as raw, transaction(DbConnection(raw)) as db:
+        yield db
 
 
 @final
@@ -114,6 +148,84 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 {"agent_id": agent_id, "pattern": f"%{title}%"},
             )
             return TaskRecord.from_row(row) if row is not None else None
+
+    async def claim(self, task_id: UUID, agent_id: UUID, *, lease_seconds: float) -> TaskClaim | None:
+        """Atomically start a run: ``doing`` plus a fresh owner token, unless an unexpired lease exists.
+
+        One statement, so concurrent claims serialize on the row and exactly one wins. Joins an ambient
+        transaction when there is one (the trigger route), so a rolled-back request leaves no claim.
+        """
+        token = uuid4()
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""UPDATE tasks SET status = 'doing', completed_at = NULL,
+                           claim_token = %(token)s, lease_expires_at = {_LEASE_UNTIL},
+                           updated_at = now()
+                    WHERE id = %(id)s AND agent_id = %(agent_id)s
+                      AND (claim_token IS NULL OR lease_expires_at <= clock_timestamp())
+                    RETURNING id""",
+                {"id": task_id, "agent_id": agent_id, "token": token, "lease_seconds": lease_seconds},
+            )
+        return TaskClaim(task_id=task_id, token=token) if row is not None else None
+
+    async def renew(self, claim: TaskClaim, *, lease_seconds: float) -> bool:
+        """Extend the lease in its own committed transaction; False once the token no longer owns the row."""
+        async with _committed() as db:
+            row = await db.fetchone(
+                f"UPDATE tasks SET lease_expires_at = {_LEASE_UNTIL} "
+                "WHERE id = %(id)s AND claim_token = %(token)s "
+                "AND lease_expires_at > clock_timestamp() RETURNING id",
+                {"id": claim.task_id, "token": claim.token, "lease_seconds": lease_seconds},
+            )
+        return row is not None
+
+    async def complete(self, claim: TaskClaim, *, status: TaskStatus, log: str) -> bool:
+        """Finish a run as ``done`` (stamping ``completed_at``) or back to ``pending``, and log it.
+
+        A stale token changes nothing, not even the log.
+        """
+        match status:
+            case TaskStatus.DONE:
+                sql = _SETTLE_DONE
+            case TaskStatus.PENDING:
+                sql = _SETTLE_PENDING
+            case _:
+                raise ValueError(f"A run cannot be completed as {status.value}")
+        return await self._settle(claim, sql, log)
+
+    async def release(self, claim: TaskClaim, *, log: str) -> bool:
+        """Give the task back as ``pending`` with the reason logged; a stale token changes nothing."""
+        return await self._settle(claim, _SETTLE_PENDING, log)
+
+    async def _settle(self, claim: TaskClaim, sql: str, log: str) -> bool:
+        async with _committed() as db:
+            row = await db.fetchone(sql, {"id": claim.task_id, "token": claim.token, "content": log})
+        return row is not None
+
+    async def recover_expired(self, *, limit: int, log: str) -> list[UUID]:
+        """Return runs whose lease expired to ``pending`` with a log entry; never reruns them.
+
+        Rows another worker is settling right now are skipped rather than waited on.
+        """
+        async with _committed() as db:
+            rows = await db.fetchall(
+                """WITH expired AS (
+                       SELECT id FROM tasks
+                       WHERE claim_token IS NOT NULL AND lease_expires_at <= clock_timestamp()
+                       ORDER BY lease_expires_at, id LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                   ), recovered AS (
+                        UPDATE tasks AS t SET status = 'pending', completed_at = NULL,
+                               claim_token = NULL, lease_expires_at = NULL,
+                              updated_at = now()
+                       FROM expired
+                       WHERE t.id = expired.id AND t.claim_token IS NOT NULL
+                         AND t.lease_expires_at <= clock_timestamp()
+                       RETURNING t.id
+                   ) INSERT INTO task_logs (id, task_id, content)
+                     SELECT gen_random_uuid(), id, %(content)s FROM recovered RETURNING task_id""",
+                {"limit": limit, "content": log},
+            )
+        return [uuid_from_row(row["task_id"]) for row in rows]
 
     async def delete_with_logs(self, task_id: UUID) -> TaskRecord | None:
         """Delete task logs then the task row; return the deleted task when present."""
