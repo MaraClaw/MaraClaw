@@ -71,7 +71,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-    chromium && \
+        chromium=156.0.8078.79-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 
