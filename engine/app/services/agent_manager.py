@@ -447,7 +447,7 @@ class AgentManager:
         )
         path = agent_dir / "openclaw.json"
         if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
-            logger.info("[OpenClaw] skip guest config write; unchanged for {}", agent.id)
+            logger.info("[OpenClaw] keeping existing guest config for {}; tracked config inputs unchanged", agent.id)
             return path
         config = self._generate_openclaw_config(
             agent,
