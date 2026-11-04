@@ -383,7 +383,10 @@ async def test_publication_repoints_the_agent_and_marks_success_atomically(db: D
         "SELECT container_id, container_port, openclaw_image_id, status FROM agents WHERE id = %(id)s", {"id": agent_id}
     )
     assert row == {
-        "container_id": "new", "container_port": 18999, "openclaw_image_id": "sha256:t", "status": desired_status
+        "container_id": "new",
+        "container_port": 18999,
+        "openclaw_image_id": "sha256:t",
+        "status": desired_status,
     }
     assert await one(db, "SELECT state FROM openclaw_update_runs WHERE id = %(id)s", id=run.id) == "succeeded"
     assert (await runs.succeeded_for(agent_id, notice.id)) is not None

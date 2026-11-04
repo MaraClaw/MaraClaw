@@ -33,7 +33,9 @@ class _Docker:
         self.images: list[str] = []
         self.mounts: list[tuple[str, str, str]] = []
 
-    def run(self, image: str, *_args: object, volumes: list[tuple[str, str, str]], **_kwargs: object) -> SimpleNamespace:
+    def run(
+        self, image: str, *_args: object, volumes: list[tuple[str, str, str]], **_kwargs: object
+    ) -> SimpleNamespace:
         self.images.append(image)
         self.mounts = volumes
         return SimpleNamespace(id="new-container-id")
