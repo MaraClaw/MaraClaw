@@ -28,7 +28,8 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
         await start_store.fail(operation, code)
         raise
     except GuestStartPreflightError as exc:
-        await start_store.fail(operation, exc.code)
+        code = "configuration_failed" if exc.code == "guest_recreation_required" else exc.code
+        await start_store.fail(operation, code)
         raise
     except GuestOwnershipError:
         await start_store.fail(operation, "ownership_conflict")

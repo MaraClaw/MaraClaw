@@ -480,10 +480,13 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert docker_client.container.remove_calls
     assert run_kwargs["detach"] is True
     assert run_kwargs["name"] == f"maraclaw-agent-{agent.id}"
-    assert run_kwargs["volumes"] == [(str(agent_dir), "/home/node/.openclaw", "rw")]
+    assert run_kwargs["volumes"] == [(str(agent_dir), "/home/node/custom-state", "rw")]
+    assert run_kwargs["envs"]["HOME"] == "/home/node"
     assert run_kwargs["envs"]["OPENCLAW_HOME"] == "/home/node"
-    assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/.openclaw"
-    assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/.openclaw/openclaw.json"
+    assert run_kwargs["envs"]["OPENCLAW_STATE_DIR"] == "/home/node/custom-state"
+    assert run_kwargs["envs"]["OPENCLAW_CONFIG_PATH"] == "/home/node/custom-state/openclaw.json"
+    assert config["agents"]["defaults"]["workspace"] == "${OPENCLAW_STATE_DIR}/workspace"
+    assert config["skills"]["load"]["extraDirs"] == ["/home/node/.openclaw/skills"]
     assert run_kwargs["envs"]["OPENCLAW_GATEWAY_TOKEN"] == config["gateway"]["auth"]["token"]
     assert config["gateway"]["controlUi"] == {"allowedOrigins": CONTROL_UI_ORIGINS}
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"

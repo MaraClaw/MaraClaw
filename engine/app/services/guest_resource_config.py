@@ -3,7 +3,7 @@ from typing import NotRequired, TypedDict
 
 from pydantic import TypeAdapter
 
-from app.core.json_types import JsonObject, json_object_from
+from app.core.json_types import JsonObject, json_object_from, str_list_from_row
 
 
 class _Entries(TypedDict):
@@ -48,7 +48,21 @@ def preserve_guest_resources(path: Path, generated: JsonObject) -> JsonObject:
     skill_load = previous.get("skills", {}).get("load", {})
     if "extraDirs" in skill_load:
         skills = json_object_from(result.get("skills"))
-        load: JsonObject = {"extraDirs": [*skill_load["extraDirs"]], **json_object_from(skills.get("load"))}
+        managed_load = json_object_from(skills.get("load"))
+        managed_dirs = str_list_from_row(managed_load.get("extraDirs"))
+        custom_dirs: list[str] = []
+        for directory in skill_load["extraDirs"]:
+            for state_root in ("/home/node/.openclaw", "/home/node/custom-state"):
+                if directory != "/home/node/.openclaw/skills" and (
+                    directory == state_root or directory.startswith(f"{state_root}/")
+                ):
+                    directory = "${OPENCLAW_STATE_DIR}" + directory[len(state_root) :]
+                    break
+            custom_dirs.append(directory)
+        load: JsonObject = {
+            **managed_load,
+            "extraDirs": list(dict.fromkeys([*custom_dirs, *managed_dirs])),
+        }
         result["skills"] = {**skills, "load": load}
 
     return result

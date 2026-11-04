@@ -53,6 +53,7 @@ async def resume_operation(
         state=ContainerState(status="exited"),
         config=ContainerConfig(labels={AGENT_LABEL: str(identifier)}),
         host_config=ContainerHostConfig(memory=20, port_bindings={}),
+        mounts=[SimpleNamespace(destination="/home/node/custom-state")],
     )
     docker.guests["same-owned-id"] = guest
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)

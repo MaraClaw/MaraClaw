@@ -60,7 +60,7 @@ Before the Docker env and mount list are computed, the backend restores any encr
 If global `GOGCLI_ENABLED` is true and the specific agent has `gogcli_enabled=true`, the container receives:
 
 ```text
-GOG_HOME=/home/node/.openclaw/gogcli
+GOG_HOME=/home/node/custom-state/gogcli
 GOG_KEYRING_BACKEND=file
 ```
 
@@ -178,11 +178,11 @@ The human authenticates directly with Google and grants consent there. The websi
 When gogcli completes authentication successfully, gogcli stores the resulting Google credential material under its configured home/keyring inside the container:
 
 ```text
-GOG_HOME=/home/node/.openclaw/gogcli
+GOG_HOME=/home/node/custom-state/gogcli
 GOG_KEYRING_BACKEND=file
 ```
 
-The container path `/home/node/.openclaw` is backed by the agent's mounted workspace data. That means the credentials belong to the agent's local OpenClaw runtime state, not to the website and not to an API response.
+The container path `/home/node/custom-state` is backed by the same host agent directory used before the mount change; host-side `agent_dir/gogcli/data` is unchanged. That means the credentials belong to the agent's local OpenClaw runtime state, not to the website and not to an API response. Legacy containers retain their original `GOG_HOME` until explicit replacement.
 
 On the next successful authenticated status poll, the backend archives only the host-side `agent_dir/gogcli/data` directory, base64-encodes it, encrypts it with the backend secret key, and stores it in `gogcli_credential_states.encrypted_gog_data_archive`. The archive is treated as opaque gogcli state. Cache, workspace files, and backend-local `_gogcli_secrets` files are not included.
 

@@ -70,7 +70,7 @@ def test_docker_extras_use_file_keyring_without_secret(monkeypatch, tmp_path: Pa
     env, volumes = gogcli_docker_extras(agent, agent_dir)
 
     # Then
-    assert GOG_HOME == "/home/node/.openclaw/gogcli"
+    assert GOG_HOME == "/home/node/custom-state/gogcli"
     assert GOG_KEYRING_BACKEND == "file"
     assert env == {
         "GOG_HOME": GOG_HOME,

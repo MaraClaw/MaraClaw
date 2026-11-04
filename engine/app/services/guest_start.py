@@ -41,6 +41,11 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
         if guests:
             guest = guests[0]
             inspected = await to_thread.run_sync(inspect_guest_container, client, guest.id)
+            if any(mount.destination == "/home/node/.openclaw" for mount in inspected.mounts or []):
+                raise GuestStartPreflightError(
+                    "Guest state mount masks image skills; recreate the guest through the OpenClaw update workflow",
+                    code="guest_recreation_required",
+                )
             state = inspected.state
             host_config = inspected.host_config
             if state is None or state.status not in ("running", "exited", "created"):

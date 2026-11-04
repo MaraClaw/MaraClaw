@@ -63,6 +63,25 @@ async def test_stopped_guest_resumes_same_id(env):
 
 
 @pytest.mark.parametrize("status", ["running", "exited"])
+async def test_legacy_state_mount_requires_explicit_replacement_without_mutation(env, monkeypatch, status):
+    manager, docker, agent = env
+    docker.guests["old"].state.status = status
+    docker.guests["old"].mounts[0].destination = "/home/node/.openclaw"
+
+    async def forbidden(_id):
+        pytest.fail("legacy mount refusal rewrote the workspace")
+
+    monkeypatch.setattr(manager, "_materialize_agent_dir", forbidden)
+    with pytest.raises(GuestStartPreflightError, match=r"recreate.*OpenClaw update"):
+        await manager.start_container(agent)
+
+    assert (agent.container_id, agent.container_port) == ("old", 18888)
+    assert docker.guests["old"].state.status == status
+    assert docker.runs == docker.removed == docker.starts == docker.probes == []
+    manager._prepare_linkup_proxy_token.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", ["running", "exited"])
 async def test_existing_guest_registers_before_reuse(env, status):
     manager, docker, agent = env
     docker.guests["old"].state.status = status

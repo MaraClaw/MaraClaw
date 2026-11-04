@@ -479,7 +479,7 @@ class AgentManager:
         """Generate openclaw.json config for the agent container."""
         chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
         defaults: JsonObject = {
-            "workspace": "/home/node/.openclaw/workspace",
+            "workspace": "${OPENCLAW_STATE_DIR}/workspace",
             "model": self._defaults_model_block(chosen_ref, fallback),
         }
         aliases = self._model_aliases(model, secondary, fallback)
@@ -521,6 +521,7 @@ class AgentManager:
             )
             linkup_skill_env["LINKUP_PROXY_TOKEN"] = _proxy_token(agent.id)
         config["skills"] = {
+            "load": {"extraDirs": ["/home/node/.openclaw/skills"]},
             "entries": {
                 folder_name: {
                     "enabled": settings.LINKUP_PROXY_ENABLED,
@@ -641,9 +642,10 @@ class AgentManager:
             write_maraclaw_sync_skill(agent_dir)
             container_envs: dict[str, str] = {
                 "OPENCLAW_GATEWAY_TOKEN": gateway_token,
+                "HOME": "/home/node",
                 "OPENCLAW_HOME": "/home/node",
-                "OPENCLAW_STATE_DIR": "/home/node/.openclaw",
-                "OPENCLAW_CONFIG_PATH": "/home/node/.openclaw/openclaw.json",
+                "OPENCLAW_STATE_DIR": "/home/node/custom-state",
+                "OPENCLAW_CONFIG_PATH": "/home/node/custom-state/openclaw.json",
                 "MARACLAW_API_BASE": guest_engine_base_url(),
                 **gogcli_envs,
             }
@@ -676,7 +678,7 @@ class AgentManager:
                     name=guest_container_name(agent.id),
                     networks=[settings.DOCKER_NETWORK],
                     publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
-                    volumes=[(str(agent_dir), "/home/node/.openclaw", "rw"), *gogcli_volumes],
+                    volumes=[(str(agent_dir), "/home/node/custom-state", "rw"), *gogcli_volumes],
                     envs=container_envs,
                     restart="unless-stopped",
                     memory=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,

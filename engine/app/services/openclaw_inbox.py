@@ -40,7 +40,7 @@ BOOTSTRAP_PENDING = "guest bootstrap pending"
 
 _WAKE_SCRIPT = """\
 import { readFileSync } from "node:fs";
-const token = readFileSync("/home/node/.openclaw/.openclaw-hooks-token", "utf8").trim();
+const token = readFileSync(new URL(".openclaw-hooks-token", import.meta.url), "utf8").trim();
 const body = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const response = await fetch("http://127.0.0.1:18789/hooks/agent", {
   method: "POST",
@@ -71,7 +71,7 @@ API key: environment `MARACLAW_GATEWAY_API_KEY`
 `GET {base_url}/api/gateway/poll`
 Header: `X-Api-Key: $MARACLAW_GATEWAY_API_KEY`
 
-Run `node /home/node/.openclaw/.maraclaw-poll.mjs` to poll and dispatch each
+Run `node "$OPENCLAW_STATE_DIR/.maraclaw-poll.mjs"` to poll and dispatch each
 item into its explicit runtime session. Never answer inbox items in the heartbeat
 session. The child session reports its own result; do not report on its behalf.
 
@@ -338,7 +338,14 @@ def _exec_in_guest_hooks(agent: AgentRecord, agent_dir: Path, body: WakeBody) ->
         error = _docker_execute(
             agent,
             guarded_argv(
-                ["node", f"/home/node/.openclaw/{WAKE_SCRIPT_FILENAME}", f"/home/node/.openclaw/{payload.name}"]
+                [
+                    "sh",
+                    "-c",
+                    'exec node "$OPENCLAW_STATE_DIR/$1" "$OPENCLAW_STATE_DIR/$2"',
+                    "maraclaw-wake",
+                    WAKE_SCRIPT_FILENAME,
+                    payload.name,
+                ]
             ),
         )
     finally:
