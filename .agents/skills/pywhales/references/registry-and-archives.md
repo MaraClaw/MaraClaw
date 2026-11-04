@@ -184,6 +184,23 @@ pull/push progress streams report under the regular `captured`/`stream`
 families instead. See
 [Telemetry and admission](telemetry-and-admission.md) for the full schema.
 
+Schema-8 observation preflight refusals use those same families, emit no
+launch/completion pair, and preserve the original exception without starting a
+child or reading upload input. A lazy save checks and can emit its refusal at
+first iteration, not construction; eager inspection is a separate captured
+operation. Earlier argument validation is not a refusal event.
+`InspectionPolicy.max_total_launch_attempts` also bounds archive launch
+reservations across enclosing shared observation accounts. A lazy save reserves
+at first iteration, separately from its eager inspect preflight. Exhaustion
+raises `ObservationLimitError` with reason `total_launch_attempts` before child
+creation or upload input reads; accepted reservations are not refunded after
+later failure. See [Observation budgets](observation-and-convergence.md#bounding-batch-inspection).
+`max_concurrent_children` separately limits owned local children until reap.
+Saturation consumes no launch attempt; failed spawn returns its child slot but
+not its accepted attempt. Lazy save charges its eager inspection separately and
+reserves the save slot only on first iteration. Reaped output may remain buffered
+after that slot is released; exhaust or close the generator to finish cleanup.
+
 ## Other Operations
 
 `docker.tag(...)` and `docker.images()` (`image.list()`) cover local tagging
@@ -196,6 +213,12 @@ filesystem and an image; both forward `pull`, defaulting to `"missing"`, to
 container creation. `docker.import_(source, tag=...)` imports a tarball's
 contents as a new filesystem image; it is unrelated to `load`, which restores
 images previously produced by `save`/`docker save`.
+
+`image.prune(..., timeout=10)` returns CLI text and accepts a keyword-only local
+deadline, validated before filters or lookup. `None` inherits the client default;
+expiry doesn't undo daemon-side deletion and must not trigger an automatic retry.
+For all five prune result/filter contracts, see
+[Bound prune CLI launches](containers-and-output.md#bound-prune-cli-launches).
 
 Image `copy_from` and `copy_to` also accept keyword-only `timeout=None`: an
 explicit value gives each helper launch its own deadline, including inspection,

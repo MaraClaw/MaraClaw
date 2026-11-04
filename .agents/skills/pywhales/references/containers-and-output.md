@@ -32,6 +32,75 @@ example, with `source = Path.cwd().resolve()`, mount that directory read-only
 and run `["ls", "/work"]`. Import `Path` from `pathlib`. A remote engine must
 have the source path on its own host.
 
+## Startup Health Interval And Approved Profiles
+
+Container `create` and every `run` mode, including `docker.create`/`docker.run`
+aliases, accept `health_start_interval=None`. A supplied value must be positive
+whole seconds: an exact `int` (not a bool or float), or an integral-second
+`datetime.timedelta`. Invalid values raise `ValueError` before image preflight
+or CLI lookup. It forwards `--health-start-interval <seconds>s`; omission leaves
+the image setting unchanged. This is the check interval during the startup
+period, not `health_start_period`, `health_interval`, or a convergence timeout.
+The operator must qualify the selected CLI and engine for Docker API 1.44+.
+PyWhales doesn't probe versions, retry without the flag, or silently downgrade.
+
+```python
+from pywhales import docker
+
+# Run only on an authorized, operator-qualified API 1.44+ target.
+with docker.run(
+    "alpine:3.22",
+    ["sleep", "30"],
+    detach=True,
+    health_cmd="true",
+    health_start_period=20,
+    health_start_interval=2,
+    stop_timeout=1,
+) as container:
+    print(container.id)
+```
+
+For application-approved creation, import `CreateRequest`, `SecurityProfile`,
+`RuntimePolicy`, `plan_create`, and `create_from_plan` from `pywhales.profiles`,
+not the package root. Direct calls don't apply profiles automatically.
+`CreateRequest.health_start_interval` accepts only `None` or a positive exact
+integer in seconds, not a timedelta. The profile's
+`max_health_start_interval=None` means no approval, not an unlimited interval;
+an explicit positive exact integer ceiling is required for a supplied request.
+Above-ceiling requests fail with `PolicyReason.LIMIT`; missing approval uses
+`NOT_APPROVED`. Invalid request or ceiling types use `INVALID`.
+
+The selected `RuntimePolicy.supported_controls` must include the baseline
+`CONTROLS` and, only when an interval is requested, `"health_start_interval"`.
+Declare that extra control only after qualifying this runtime; don't mutate
+`CONTROLS` or add it to every runtime by assumption. Missing runtime support is
+`UNSUPPORTED`. Omitted intervals need no new runtime control or profile ceiling.
+
+Given the application's existing `client`, `profile`, and `request`, and explicit
+operator approval of the selected runtime and a 5-second ceiling:
+
+```python
+from dataclasses import replace
+
+from pywhales.profiles import CONTROLS, RuntimePolicy, plan_create
+
+qualified_runtime = RuntimePolicy(
+    name=request.runtime,
+    rootless=request.rootless,
+    supported_controls=CONTROLS | {"health_start_interval"},
+)
+approved_profile = replace(
+    profile, max_health_start_interval=5, runtimes=(qualified_runtime,)
+)
+requested = replace(request, health_start_interval=2)
+plan = plan_create(approved_profile, requested, client)  # no Docker I/O
+```
+
+`plan_create` performs pure validation. `create_from_plan(client, plan)` rechecks
+the plan and endpoint binding before preparation, pull, inspect, or creation,
+then forwards the approved interval to `client.container.create`. It creates
+but doesn't start the container; the application owns its later lifecycle.
+
 ## Container Environment Values
 
 `envs={...}` sets values inside the container. In container `create`, `run`, and
@@ -51,8 +120,12 @@ order, instead of being rejected:
   containing NUL, or a non-string key.
 - Duplicate names after stringification, including names that differ only by
   case on Windows.
-- Names colliding with the effective inherited/client environment or an active
+- Names colliding with the effective child environment or an active
   frozen environment snapshot, compared case-insensitively on Windows.
+
+With `inherit_environment=False`, ordinary names present only in excluded
+ambient state don't collide; explicit client-overlay entries still do. Reserved
+names remain reserved. See [CLI environment isolation](client-and-errors.md#isolate-the-cli-environment).
 
 `DockerClient(strict_env_transport=True)` turns every entry above into a
 `ValueError` with a fixed message that discloses no name or value; one ineligible
@@ -103,6 +176,14 @@ and attaching more than one container raises `ValueError`; an empty iterable
 returns `None` without a launch. `docker.start`, `docker.container.start`, and
 `Container.start()` share these rules and their return shapes.
 
+For workloads whose stderr may resemble Docker errors, configure
+`DockerClient(strict_workload_errors=True)`. Attached `run`, non-detached
+`execute`, and `start(attach=True)` then raise exact `DockerException` on nonzero
+exits, in captured/TTY and supported streamed modes, including handle and root
+aliases. Detached/unattached calls and image/inspect preflights keep specialized
+errors. See [Workload failures](client-and-errors.md#separate-workload-failures-from-docker-errors)
+for defaults, preserved error attributes, and timeout/cancellation behavior.
+
 `run`, `execute`, `logs`, `start`, and `wait` each accept a keyword-only `timeout` in
 positive finite seconds, replacing the client's `default_timeout` for that one
 launch; omitting it (`None`) inherits the client default, which is itself
@@ -126,12 +207,54 @@ raises `ValueError` even for `[]`, while a valid one with `[]` returns `[]`
 without a launch. A single reference returns an `int`, an iterable of references
 a `list[int]`. Expiry raises `DockerTimeout` without stopping the containers.
 
+For running/healthy readiness plus designated successful one-shot completion,
+use `capture_containers()` and `wait()` from `pywhales.convergence`, not
+`docker.wait()`. They return typed observation outcomes instead of exit codes;
+set `fail_on_exit=True` at capture to fail when a long-running member exits
+without restarting, even with exit code 0, or `fail_on_unhealthy=True` to fail on
+an eligible running member reporting `unhealthy`. Both default to `False`. See
+[Standalone containers](observation-and-convergence.md#standalone-containers)
+for restart-budget precedence and designated completion rules.
+
 `start` takes `timeout` in every mode (unattached, attached and captured, or
 streamed) and through all three entry points, validated before the container
 iterable is consumed. An invalid value raises `ValueError` even for `[]`, while
 a valid one with `[]` returns `None` without a launch. A streamed `start`,
 `run`, `execute`, or `logs` deadline keeps advancing while nobody iterates, so
 exhaust the stream or close it on early exit; closing reaps only the local CLI.
+
+## Bound Prune CLI Launches
+
+Container, image, network, volume, and system `prune()` accept keyword-only
+`timeout=None`. Give each cleanup call its own positive finite seconds;
+`None` inherits the client's launch-snapshotted default, and an explicit value
+replaces it without changing shared configuration. Validation rejects booleans,
+zero, negative and nonfinite values before filters are consumed or the executable
+is resolved. This is a local CLI deadline, not an object-age `until` filter or a
+Docker timeout flag.
+
+| Call | Result |
+| --- | --- |
+| `client.container.prune(..., timeout=10)` | `None` |
+| `client.container.prune(..., stream_logs=True, timeout=10)` | Owned `ProcessStream` of `(source, bytes)` |
+| `client.image.prune(..., timeout=10)` | `str` CLI output |
+| `client.network.prune(..., timeout=10)` | `None` |
+| `client.volume.prune(..., timeout=10)` | `None` |
+| `client.system.prune(..., timeout=10)` | `None` |
+
+Use the explicit command-group methods, not an assumed root `prune` alias.
+Keep each method's flags and filter grammar: system accepts a mapping or pairs,
+while the other four require iterable pairs and reject mappings. Repeated pairs
+retain order. Check installed signatures before selecting filters or options.
+
+Container streaming starts eagerly and its deadline advances even before the
+first iteration. Exhaust it or use a context manager; early close is idempotent,
+and a recorded timeout is delivered once after local child/pipe/thread cleanup.
+Retained partial output does not replay streamed stdout already delivered.
+Every prune suppresses confirmation and deletes resources: run only the cleanup
+the user authorized. A timeout kills and reaps the local CLI, but doesn't prove
+daemon-side removal stopped or rolled back. Do not automatically retry a prune
+after an ambiguous timeout.
 
 ## Bound Stream Buffering
 
@@ -181,6 +304,8 @@ cancellation boundary and keep the stream in a context manager.
 Container properties such as `name` and `state` can issue inspect calls and use
 a short-lived cache. Read a property once into a local variable for a coherent
 decision; use `container.reload()` when an explicit refresh is required.
+A reload must still describe the handle's immutable ID; a mismatched snapshot
+raises `ParsingError` and leaves the cached data and refresh time untouched.
 
 ## Copy Files or Export a Filesystem
 

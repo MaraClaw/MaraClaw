@@ -40,9 +40,9 @@ Keep Compose globals on its client: `compose_files`, `compose_profiles`,
 `compose_project_name`, `compose_project_directory`, and `compose_env_files`.
 Environment files are applied in order, with later files overriding earlier ones.
 
-`environment={"KEY": "value"}` overlays entries on top of the inherited process
-environment for every launch from that client; omitting it (`None`) inherits
-the process environment rather than replacing it. This does not affect
+`environment={"KEY": "value"}` overlays the child's base environment for every
+launch from that client. By default, `inherit_environment=True` copies the
+process environment; `environment=None` adds no overlay. This does not affect
 executable lookup or the parent Python process's own environment.
 
 Keep this CLI configuration distinct from container `envs={...}`. Eligible
@@ -53,8 +53,37 @@ Neither path is a secret vault. See
 including the Compose interpolation caveat.
 
 If passing an existing `client_config=...`, configure that object directly,
-`strict_env_transport` included: the constructor retains it unchanged and
+`inherit_environment`, `strict_env_transport`, and `strict_workload_errors` included: the constructor retains it unchanged and
 ignores the other constructor options.
+
+## Isolate The CLI Environment
+
+```python
+from pywhales import DockerClient
+
+client = DockerClient(
+    inherit_environment=False,
+    environment={"DOCKER_CONTEXT": "ci"},
+)
+```
+
+Select an existing authorized context in place of `ci`. With inheritance off,
+the child retains only the available `PATH` and `HOME` entries from the parent,
+plus `USERPROFILE` and `SYSTEMROOT` on Windows; Windows names match
+case-insensitively. The explicit client overlay and per-launch overrides are
+applied on top. Ambient `DOCKER_*`, `SSH_AUTH_SOCK`, tokens, and proxy variables
+aren't inherited: pass any needed entries explicitly through `environment=`.
+Executable lookup still uses the Python process's `PATH`, not the overlay.
+Retained home paths can still select Docker configuration and credential helpers;
+this flag controls environment inheritance, not all credential or filesystem access.
+
+The setting covers captured calls, streams, image load/save, and inventory
+capture. Each launch keeps its selected environment; staged inventory reuses its
+frozen group snapshot. Environment-only container/build forwarding checks that
+same effective environment: an ordinary name found only in excluded ambient
+state no longer collides. Reserved CLI names still require literal fallback or
+fail in strict mode. Keep the config stable when using endpoint-bound policy
+objects; changing this compared setting invalidates an existing endpoint binding.
 
 ## Strict Environment Transport
 
@@ -111,7 +140,9 @@ consumer isn't reconstructed there. Expiry does not guarantee
 daemon-side cancellation or rollback. See
 [Containers, output, and lifecycle](containers-and-output.md) and
 [Registry transfers and archives](registry-and-archives.md) for which methods
-accept a per-call `timeout`.
+accept a per-call `timeout`. Container, image, network, volume and system prune
+also accept it; see [Bound prune CLI launches](containers-and-output.md#bound-prune-cli-launches)
+for result shapes, filters and destructive-timeout handling.
 
 ## Handle the Right Failure
 
@@ -150,6 +181,38 @@ the caller's own stdin instead of writing a value; pass an explicit password
 when running non-interactively. Obtain credentials from the application's
 existing secret mechanism; don't embed them in generated examples or reports.
 
+### Separate Workload Failures From Docker Errors
+
+By default, forwarded workload stderr can select a specialized exception: a job
+that prints `Error: No such container: db` can look like `NoSuchContainer`.
+For user-submitted jobs or cleanup logic that relies on those types, opt in on
+the client rather than trying to recognize workload stderr yourself:
+
+```python
+from pywhales import DockerClient
+
+jobs = DockerClient(strict_workload_errors=True)
+```
+
+The default is `False` on both `DockerClient` and `ClientConfig`. With it enabled,
+nonzero exits from attached container `run`, non-detached `execute`, attached
+`start`, and non-detached Compose `run`/`execute` raise exactly `DockerException`,
+not a stderr-selected subclass. This covers captured/TTY execution and supported
+streams, including a failure observed before iteration or at exhaustion. Compose
+`execute` still has no stream mode. The exception retains its `docker_command`,
+`return_code`, `stdout`, and `stderr` attributes (output may be `None` when
+uncaptured), with the same safe/raw rendering policy.
+
+Detached/unattached launches, implicit image pulls, inspection preflights, and
+other commands retain their existing specialization. A specialized preflight
+error can therefore still come from an attached call. The setting does not
+distinguish actual Docker errors within a marked launch: all its nonzero exits,
+including code 125, stay generic. Don't infer resource absence from workload
+stderr. `DockerTimeout`, observation cancellation/limit errors, and telemetry
+outcomes are unchanged. The originating config is snapshotted per launch, so
+later mutations don't change a stream already running. Check installed support
+as described in [Usage validation](validation.md).
+
 ## Troubleshooting Without Credential Leaks
 
 `PYWHALES_DEBUG=1` enables execution diagnostics, with command and environment
@@ -168,6 +231,20 @@ Safe mode suppresses the payload-bearing parsing chain; raw diagnostics chains
 the original error. Event parsing keeps the launch-time diagnostics setting.
 `version()` and container stats keep their existing exception behavior.
 
+Scalar inspection of container, image, network, volume, config, secret, node,
+service, task, plugin, and context handles requires exactly one JSON object in
+the CLI's response array. Empty/multiple results, non-object/non-array shapes,
+or invalid JSON raise `ParsingError`. A reload that returns a different stored
+ID or name also raises `ParsingError` without replacing the cached snapshot or
+its refresh timestamp. A current-context handle tracking `None` may follow a
+changed current context. Initial name/prefix resolution is still allowed;
+reloads use the resolved identity. Safe diagnostics dump no response and suppress
+payload-bearing causes; raw diagnostics can expose original errors and dumps.
+These checks don't replace command failures with parsing failures: classified
+`DockerException` subclasses retain their raw command, status, and output fields.
+Builder listings, manifest object responses, and batch inspection retain their
+separate contracts; don't assume the scalar array rule for them.
+
 If an argument is rejected, inspect that method in the installed package before
 changing versions or guessing SDK-style names. New Compose flags are forwarded
 to the plugin without a compatibility probe or automatic fallback.
@@ -175,7 +252,7 @@ to the plugin without a compatibility probe or automatic fallback.
 For opt-in sanitized execution telemetry or application-owned concurrency
 limits around specific calls, see
 [Telemetry and admission](telemetry-and-admission.md). For bounding batch
-inspection or waiting for Swarm service/stack or Compose project convergence,
+inspection or waiting for Swarm node readiness, service/job/stack, Compose project, or standalone container convergence,
 see [Observation budgets and convergence](observation-and-convergence.md).
 
 Application policy APIs also require explicit imports from `pywhales.profiles`,
