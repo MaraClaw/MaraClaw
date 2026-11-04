@@ -180,13 +180,16 @@ async def test_explicit_outcome_is_committed_before_unlock(surface, monkeypatch,
         assert runtime.events[-1] == "rollback"
 
 
-@pytest.mark.parametrize("failure", ["admission", "preflight", "ownership", "unexpected"])
+@pytest.mark.parametrize("failure", ["admission", "preflight", "layout", "ownership", "unexpected"])
 async def test_preflight_outcomes_do_not_persist_runtime(surface, monkeypatch, failure):
     # Given a failure before destructive replacement.
     app, runtime, agent = surface
     errors = {
         "admission": GuestAdmissionError("guest_memory_capacity_exceeded", "capacity exhausted"),
         "preflight": GuestStartPreflightError("preparation failed"),
+        "layout": GuestStartPreflightError(
+            "Recreate through the OpenClaw update workflow", code="guest_recreation_required"
+        ),
         "ownership": GuestOwnershipError(agent.id, "old", str(uuid4())),
         "unexpected": RuntimeError("programming failure"),
     }
@@ -202,7 +205,9 @@ async def test_preflight_outcomes_do_not_persist_runtime(surface, monkeypatch, f
                 await client.post(f"/api/agents/{agent.id}/start")
         else:
             response = await client.post(f"/api/agents/{agent.id}/start")
-            assert response.status_code == (409 if failure == "admission" else 502)
+            assert response.status_code == (409 if failure in ("admission", "layout") else 502)
+            if failure == "layout":
+                assert response.json()["detail"]["code"] == "guest_recreation_required"
     # Then expected refusals leave references intact; unexpected errors propagate.
     assert runtime.committed == agent
     assert "persist" not in runtime.events

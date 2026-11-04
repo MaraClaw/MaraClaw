@@ -88,7 +88,7 @@ async def request_upgrade(
     ):
         if existing is not None:
             return existing, False
-    if agent.status not in ("running", "idle") or agent.container_id in (None, "") or agent.setup_pending:
+    if agent.status not in ("running", "idle", "stopped") or agent.container_id in (None, "") or agent.setup_pending:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": NOT_RUNNING_CODE})
     created = await openclaw_update_run_dao.create_pending(
         notice_id=notice_id, agent_id=agent.id, requested_by=actor.id

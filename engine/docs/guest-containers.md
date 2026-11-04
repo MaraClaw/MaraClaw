@@ -31,11 +31,35 @@ a 120-second bound. Conflicting ownership, multiple owned guests or an
 unresumable state fail rather than replacing a guest.
 If none exists, the engine prepares and creates one, then checks readiness.
 
+New and replacement guests bind the existing host agent directory at
+`/home/node/custom-state`, with `OPENCLAW_STATE_DIR` pointing there and
+`OPENCLAW_CONFIG_PATH=/home/node/custom-state/openclaw.json`. `HOME` and
+`OPENCLAW_HOME` remain `/home/node`. This leaves image-installed
+`/home/node/.openclaw/skills` visible; generated `skills.load.extraDirs` includes
+that directory and retains custom roots. Roots beneath either guest state path
+use `${OPENCLAW_STATE_DIR}` so existing custom skills remain reachable after
+replacement or rollback. Host state paths and data do not move.
+The workspace uses `${OPENCLAW_STATE_DIR}/workspace`, and inbox scripts resolve
+the guest's state directory so a restored legacy container can still use its
+original state mount after upgrade rollback.
+
+Ordinary starts refuse a guest mounted at `/home/node/.openclaw` with
+HTTP 409 `guest_recreation_required` requesting explicit recreation through the
+[OpenClaw update workflow](openclaw-updates.md#http-contract). That workflow needs a
+notice without a successful run for the agent; a platform admin must publish a new
+notice if none is usable. Ordinary starts neither reuse the skill-masking layout
+nor delete or recreate it.
+The update workflow snapshots the same host directory and retains its existing
+rollback behavior; merely restarting the old container cannot change its mounts.
+Explicit updates also accept stopped agents with an existing container: the new
+guest is checked for readiness, then stopped before publication. The agent stays
+stopped on success, and rollback restores the original without starting it.
+
 Explicit [replacement](../app/services/agent_manager.py) remains a separate path;
 OpenClaw upgrades call `start_container(..., rehydrate=False)`. Replacement
 prepares workspace/model/auth/config inputs, the image reference and port candidates
 before destroying an owned guest. The new guest is recorded `creating`; its
-readiness owner (ordinary start or upgrade) publishes `running`. Preparation or
+readiness owner (ordinary start or upgrade) publishes the final runtime state. Preparation or
 admission refusal does not first destroy that guest. Workspace/config/auth writes
 are **not transactional or rolled back** and may already affect the old guest;
 upgrades skip workspace rehydration.

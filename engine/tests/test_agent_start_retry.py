@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Literal
 
 import anyio
 import pytest
@@ -131,12 +132,15 @@ async def test_backoff_caps_at_three_hundred_seconds(start_db):
     assert delays == [10, 20, 40, 80, 160, 300, 300]
 
 
-async def test_configuration_failure_requires_intervention_without_tight_retry(start_db, executor, monkeypatch):
+@pytest.mark.parametrize("code", ["configuration_failed", "guest_recreation_required"])
+async def test_configuration_failure_requires_intervention_without_tight_retry(
+    start_db, executor, monkeypatch, code: Literal["configuration_failed", "guest_recreation_required"]
+):
     # Given typed configuration failure contains private runtime context.
     operation, _original = await make_pending(start_db)
 
     async def refuse(_record):
-        raise GuestStartPreflightError("secret configuration context")
+        raise GuestStartPreflightError("secret configuration context", code=code)
 
     monkeypatch.setattr(reconciler.agent_manager, "start_container", refuse)
     # When the scan fails and is immediately repeated.

@@ -66,7 +66,7 @@ async def rewrite(guest: Guest, writer: Writer) -> None:
         (
             "skills",
             {
-                "load": {"extraDirs": ["/home/node/.openclaw/custom-skills"]},
+                "load": {"extraDirs": ["/home/node/.openclaw/custom-skills", "/home/node/.openclaw/skills"]},
                 "entries": {"custom": {"enabled": False, "env": {"RESOURCE_KEY": "retained"}}},
             },
         ),
@@ -87,8 +87,33 @@ async def test_guest_resource_settings_survive_config_rewrite(
     for key, value in resource.items():
         if key == "entries":
             assert json_object_from(stored[key]).get("custom") == json_object_from(value)["custom"]
+        elif section == "skills" and key == "load":
+            assert stored[key] == {"extraDirs": ["${OPENCLAW_STATE_DIR}/custom-skills", "/home/node/.openclaw/skills"]}
         else:
             assert stored[key] == value
+
+
+@pytest.mark.parametrize("writer", ["refresh", "recreate"])
+@pytest.mark.parametrize(
+    ("root", "resolved"),
+    [
+        ("/custom/skills", "/custom/skills"),
+        ("/home/node/.openclaw/custom-skills", "${OPENCLAW_STATE_DIR}/custom-skills"),
+        ("/home/node/custom-state/custom-skills", "${OPENCLAW_STATE_DIR}/custom-skills"),
+    ],
+)
+async def test_image_skill_discovery_is_added_without_dropping_custom_roots(
+    guest: Guest, writer: Writer, root: str, resolved: str
+) -> None:
+    guest.path.write_text(json.dumps({"skills": {"load": {"extraDirs": [root, root]}}}), encoding="utf-8")
+
+    await rewrite(guest, writer)
+
+    stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    assert json_object_from(json_object_from(stored["skills"])["load"])["extraDirs"] == [
+        resolved,
+        "/home/node/.openclaw/skills",
+    ]
 
 
 @pytest.mark.parametrize(("section", "key"), [("mcp", "servers"), ("skills", "entries"), ("plugins", "entries")])

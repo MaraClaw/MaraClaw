@@ -119,7 +119,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
     # Then
     assert docker_client.run_kwargs is not None
     envs = docker_client.run_kwargs["envs"]
-    assert envs["GOG_HOME"] == "/home/node/.openclaw/gogcli"
+    assert envs["GOG_HOME"] == "/home/node/custom-state/gogcli"
     assert envs["GOG_KEYRING_BACKEND"] == "file"
     assert envs["GOG_KEYRING_PASSWORD_FILE"] == "/run/secrets/gogcli_keyring_password"
     assert "GOG_KEYRING_PASSWORD" not in envs
@@ -128,7 +128,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
         "/run/secrets/gogcli_keyring_password",
         "ro",
     ) in docker_client.run_kwargs["volumes"]
-    assert (str(agent_dir), "/home/node/.openclaw", "rw") in docker_client.run_kwargs["volumes"]
+    assert (str(agent_dir), "/home/node/custom-state", "rw") in docker_client.run_kwargs["volumes"]
     assert restore_calls == [(agent_id, agent_dir, True)]
 
 

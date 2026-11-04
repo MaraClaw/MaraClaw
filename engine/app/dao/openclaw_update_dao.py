@@ -37,12 +37,12 @@ _FANOUT = (
     "AND i.is_active IS TRUE AND i.is_platform_admin IS FALSE AND t.is_active IS TRUE "
     "RETURNING 1) SELECT count(*) AS recipients FROM inserted"
 )
-# Publication keeps its own agent-visible CAS: the agent must still be desired-running.
+# Publication keeps its own desired-state CAS, including explicit stopped replacements.
 _PUBLISH_AGENT = (
     "UPDATE agents SET container_id = %(new)s, container_port = %(port)s, openclaw_image_id = %(image)s, "
-    "status = 'running', last_active_at = clock_timestamp(), updated_at = clock_timestamp() "
+    "status = %(status)s, last_active_at = clock_timestamp(), updated_at = clock_timestamp() "
     "WHERE id = %(agent_id)s AND container_id IS NOT DISTINCT FROM %(old)s "
-    "AND status IN ('running', 'idle') AND is_expired IS FALSE AND setup_pending IS FALSE "
+    "AND status::text = ANY(%(expected_statuses)s) AND is_expired IS FALSE AND setup_pending IS FALSE "
     "AND (expires_at IS NULL OR expires_at > clock_timestamp()) "
     "AND (tenant_id IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = agents.tenant_id AND t.is_active IS TRUE)) "
     "AND EXISTS (SELECT 1 FROM users u WHERE u.id = agents.creator_id AND u.is_active IS TRUE) "
@@ -244,6 +244,7 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
         new_container_id: str,
         port: int | None,
         image_id: str,
+        keep_stopped: bool = False,
     ) -> bool:
         """Atomically repoint the agent and mark the run succeeded, or change nothing."""
         try:
@@ -256,6 +257,8 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
                         "new": new_container_id,
                         "port": port,
                         "image": image_id,
+                        "status": "stopped" if keep_stopped else "running",
+                        "expected_statuses": ["stopped"] if keep_stopped else ["running", "idle"],
                     },
                 )
                 if agent_row is None:

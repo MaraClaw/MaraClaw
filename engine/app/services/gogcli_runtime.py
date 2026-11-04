@@ -12,7 +12,7 @@ from app.config import get_settings
 settings = get_settings()
 
 GOGCLI_ENABLED = settings.GOGCLI_ENABLED
-GOG_HOME = "/home/node/.openclaw/gogcli"
+GOG_HOME = "/home/node/custom-state/gogcli"
 GOG_KEYRING_BACKEND = "file"
 GOGCLI_SECRET_MOUNT_PATH = "/run/secrets/gogcli_keyring_password"  # noqa: S105 - path, not a password
 _SECRET_ROOT_NAME = "_gogcli_secrets"  # noqa: S105 - directory name, not a secret value

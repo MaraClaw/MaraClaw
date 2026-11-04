@@ -19,7 +19,9 @@ settings = get_settings()
 @dataclass(eq=False, slots=True)
 class GuestStartPreflightError(RuntimeError):
     reason: str
-    code: Literal["configuration_failed", "readiness_failed", "runtime_failed"] = "configuration_failed"
+    code: Literal["configuration_failed", "readiness_failed", "runtime_failed", "guest_recreation_required"] = (
+        "configuration_failed"
+    )
 
     @override
     def __str__(self) -> str:

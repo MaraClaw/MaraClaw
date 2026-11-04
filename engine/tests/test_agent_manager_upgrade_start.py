@@ -31,9 +31,13 @@ class _Docker:
     def __init__(self) -> None:
         self.container = _Containers()
         self.images: list[str] = []
+        self.mounts: list[tuple[str, str, str]] = []
 
-    def run(self, image: str, *_args: object, **_kwargs: object) -> SimpleNamespace:
+    def run(
+        self, image: str, *_args: object, volumes: list[tuple[str, str, str]], **_kwargs: object
+    ) -> SimpleNamespace:
         self.images.append(image)
+        self.mounts = volumes
         return SimpleNamespace(id="new-container-id")
 
 
@@ -116,8 +120,9 @@ async def test_rehydrate_false_skips_storage_and_gogcli_and_keeps_guest_resource
     config = json.loads((env.agent_dir / "openclaw.json").read_text(encoding="utf-8"))
     assert config["mcp"]["servers"]["docs"] == {"url": "https://mcp.invalid"}
     assert config["skills"]["entries"]["mine"] == {"enabled": True}
-    assert config["skills"]["load"]["extraDirs"] == ["/skills"]
+    assert config["skills"]["load"]["extraDirs"] == ["/skills", "/home/node/.openclaw/skills"]
     assert config["plugins"]["entries"]["custom"] == {"enabled": True}
+    assert env.docker.mounts[0] == (str(env.agent_dir), "/home/node/custom-state", "rw")
 
 
 async def test_default_start_still_rehydrates(tmp_path, monkeypatch):

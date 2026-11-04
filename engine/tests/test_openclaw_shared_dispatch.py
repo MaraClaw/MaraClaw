@@ -56,7 +56,7 @@ async def test_shared_wake_falls_back_only_before_possible_admission(
     admitted = await openclaw_inbox.wake_openclaw_inbox(agent, content="human", message_id=uuid4(), session_key=key)
     assert admitted is fallback
     assert all(argv[: len(GUARD)] == GUARD for argv in executed)
-    assert executed[0][len(GUARD)] == "node"
+    assert executed[0][len(GUARD)] == "sh"
     assert len(executed) == (2 if fallback else 1)
     if fallback:
         assert executed[1][executed[1].index("--session-key") + 1] == key

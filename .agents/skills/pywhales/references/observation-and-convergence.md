@@ -10,7 +10,7 @@ calls automatically.
 - [Bounding batch inspection](#bounding-batch-inspection)
 - [Manifest lists](#manifest-lists)
 - [Bounding streams and uploads](#bounding-streams-and-uploads)
-- [Waiting for convergence](#waiting-for-convergence): [Swarm](#swarm-service-or-stack), [Swarm jobs](#swarm-jobs), [Compose](#compose-project), [outcomes](#outcomes-and-budgets)
+- [Waiting for convergence](#waiting-for-convergence): [Swarm](#swarm-service-or-stack), [Swarm nodes](#swarm-node-readiness), [Swarm jobs](#swarm-jobs), [Compose](#compose-project), [standalone containers](#standalone-containers), [outcomes](#outcomes-and-budgets)
 - [Optional application reconciliation](#optional-application-reconciliation)
 
 ## Bounding Batch Inspection
@@ -34,6 +34,8 @@ policy = InspectionPolicy(
     max_response_bytes=1_048_576,
     max_total_references=200,
     max_total_response_bytes=4_194_304,
+    max_total_launch_attempts=8,
+    max_concurrent_children=2,
 )
 cancel = Event()
 request = InventoryRequest(
@@ -48,17 +50,45 @@ with observation(policy, deadline=monotonic() + 30.0, cancel=cancel):
 
 `InspectionPolicy(max_references=..., max_argv_bytes=..., max_response_bytes=...)`
 requires three positive integers; there's no default policy. Optional
-`max_total_references`, `max_total_response_bytes`, `max_total_stream_bytes`, and
-`max_total_stdin_bytes` default to `None`. An unset output total leaves that
+`max_total_references`, `max_total_response_bytes`, `max_total_stream_bytes`,
+`max_total_stdin_bytes`, `max_total_launch_attempts`, and `max_concurrent_children`
+default to `None`. An unset output total leaves that
 aggregate unbounded; unset stdin still refuses captured input inside an
 observation unless an enclosing scope supplies a stdin budget. Booleans, zero,
-and negative values are invalid for every policy limit. The illustrative limits
-above aren't a universal sizing recommendation. `observation()`
+negative values, and non-exact integers are invalid for every policy limit.
+The illustrative limits above aren't a universal sizing recommendation. `observation()`
 is a context manager applying those limits, plus an optional absolute
 monotonic `deadline` and a `cancel` `Event`, to synchronous list/inspect
 calls executed through it. Nested scopes can only tighten the active limits,
 never loosen them, and the scope applies to the current context only; it
 doesn't automatically propagate to worker threads you spawn inside it.
+
+`max_total_launch_attempts` bounds accepted local CLI launch reservations, not
+successful children. One reservation follows cancellation, deadline and argument
+preflight for captured calls, streams and both archive directions. Each enclosing
+account is checked and debited atomically; exhaustion raises
+`ObservationLimitError` with reason `total_launch_attempts` without charging any
+account, spawning a child or reading upload input. Accepted reservations are never
+refunded after interruption, spawn failure or CLI failure. Nested scopes cannot
+reset an outer allowance; explicitly copied contexts share its consumption.
+A separate scope created independently in each thread does not share a budget.
+Lazy saves reserve at first iteration, and their separate eager inspection costs
+its own captured reservation.
+
+`max_concurrent_children` separately caps owned local CLI children until reap,
+not daemon workloads, output buffers, or open stream/admission handles. It is
+`None` (unbounded) or a positive exact integer. Nested scopes enforce every
+enclosing synchronized account; explicitly copied contexts share those accounts.
+Saturation raises `ObservationLimitError(reason="concurrent_children")` without
+waiting, spawning, reading upload input, or consuming any attempt or slot.
+Accepted launches debit attempt and child accounts atomically. A failed spawn
+consumes its accepted attempt but returns its slot. A successful spawn keeps the
+slot until the local child is reaped, not merely until pipe EOF or scope exit.
+After reap, output may still be buffered and the stream or admission permit may
+remain open; close or exhaust owned streams anyway. Lazy `save` reserves under
+the scope active at first iteration, while eager inspect is charged separately
+under its own launch scope. Inventory's sequential chunk plan doesn't reserve
+child slots for the whole plan; each launch must fit at its actual preflight.
 
 The scope's restrictions belong to the shared synchronous captured path (the
 path list/inspect-style calls use). Inside a scope, that path rejects `tty`,
@@ -79,6 +109,12 @@ own cache. Supported kinds are thirteen: `container`, `image`, `network`,
 nonempty strings, else `ValueError`. Empty input launches no CLI. Request
 shape, total reference count, and each reference's argv and environment limits
 are checked for every group before the first inspect launch.
+The complete chunk plan must also fit every enclosing launch account's remaining
+allowance: one launch per ordinary chunk, one builder listing per group and one
+per singleton manifest inspect. This preliminary check consumes no reservations.
+Another worker can consume capacity afterward, so the authoritative per-launch
+check can still stop a later inspection. Detached capture and staged bulk-cache
+publication retain their failure behavior; there is no whole-inventory reservation.
 
 Builders have no batch inspect command, so they work differently. All builder
 requests sharing the same `ClientConfig` object use one strict
@@ -191,12 +227,15 @@ inventory call. Snapshots aren't daemon transactions or total memory caps.
 `pywhales.convergence` is an opt-in, read-only observer of one fixed target:
 a captured Swarm service generation, including replicated and global jobs
 (`capture_service` returns a `ServiceTarget`), an explicit Swarm stack
-(`StackTarget`), or selected Compose
-services (`capture_compose` returns a `ComposeTarget`). `wait()` takes any of
-the three. Existing mutating calls never invoke it automatically; capture and
-wait yourself after submitting the change you want to confirm. Choose the
+(`StackTarget`), selected Swarm nodes (`capture_nodes` returns a `NodeTarget`),
+selected Compose services (`capture_compose` returns a
+`ComposeTarget`), or standalone containers (`capture_containers` returns a
+`ContainerTarget`). `wait()` takes any of these five target types. Existing mutating calls
+never invoke it automatically; capture and wait yourself after submitting the
+change you want to confirm. Choose the
 Swarm path for `docker service`/`docker stack` deployments and the Compose path
-for a `docker compose` project.
+for a `docker compose` project; use standalone capture for explicit container
+names or IDs.
 
 ### Swarm Service Or Stack
 
@@ -241,8 +280,8 @@ non-container runtime is `Failure(reason="unsupported")`, and malformed
 service/task data fails closed.
 
 `wait(target, *, policy, timeout, poll_interval, cancel=None)` accepts a
-`ServiceTarget`, a `StackTarget(services=(...))`, or a `ComposeTarget` and
-returns `Success`, `Failure`, `Deadline`, or `Cancelled`. For ordinary
+`ServiceTarget`, a `StackTarget(services=(...))`, a `NodeTarget`, a `ComposeTarget`, or a
+`ContainerTarget` and returns `Success`, `Failure`, `Deadline`, or `Cancelled`. For ordinary
 (Replicated and Global) Swarm targets, only current desired-running tasks count;
 a changed service `Version` or template fingerprint returns `superseded`;
 `paused`/`failed`/rollback `UpdateStatus` states are terminal `update_failed`
@@ -250,6 +289,64 @@ failures. Jobs follow their own rules, described next. Snapshot collection isn't
 an atomic Swarm transaction, so a final generation recheck reduces, but can't
 remove, races from concurrent changes. A successful result proves the captured
 task-generation conditions, not application health or readiness.
+
+### Swarm Node Readiness
+
+Use `capture_nodes()` before resuming deployment after node maintenance; it
+observes existing nodes without changing availability, roles, or cluster state.
+Check that the installed `pywhales.convergence` exports both `capture_nodes`
+and `NodeTarget`, and that `wait` accepts that target.
+
+```python
+from pywhales.convergence import NodeTarget, capture_nodes, wait
+
+# Reuse client, policy and cancel from the service example. Supply actual exact
+# node IDs from the application's selected membership, never names or prefixes.
+target = capture_nodes(
+    client,
+    ("exact-manager-node-id", "exact-worker-node-id"),
+    manager_ids=("exact-manager-node-id",),
+    require_leader=True,
+    policy=policy,
+    timeout=10,
+    cancel=cancel,
+)
+if isinstance(target, NodeTarget):
+    outcome = wait(target, policy=policy, timeout=120, poll_interval=1, cancel=cancel)
+```
+
+`capture_nodes(client, node_ids, *, manager_ids=(), require_leader=False, policy, timeout, cancel=None)`
+returns `NodeTarget` or a typed `Failure`/`Deadline`/`Cancelled`. `node_ids` must
+be a nonempty tuple of distinct nonempty exact IDs. `manager_ids` must be a tuple
+of distinct selected IDs; its default `()` requests no manager-specific checks,
+not automatic discovery. Invalid selections, timeouts, or dry-run clients raise
+`ValueError` before lookup. Keep the originating config stable and target IDs
+out of untrusted output. `require_leader` must be exactly a bool; enabling it
+requires a nonempty `manager_ids` subset, validated before Docker lookup. The
+frozen target retains that option.
+
+Each selected node must have state `ready` and availability `active`. Designated
+managers must also remain managers and report reachability `reachable`;
+leadership is ignored by default. Demotion or missing manager status blocks success,
+while workers need no manager status. Node version-index changes during recovery
+are allowed. `wait` inspects the fixed IDs and requires a second complete
+all-clear pass; it never re-lists or replaces membership.
+
+With `require_leader=True`, each complete clear pass must observe exactly one
+leader among the designated managers. The leader identity may change between
+passes. Within a present manager status, omitted `Leader` means false; explicit
+nonboolean values (including null) produce cause-free `Failure(reason="malformed")`
+only for designated nodes reporting manager role and status, at capture and wait.
+Other nodes cannot satisfy or invalidate the selected leader count. These are
+sequential selected observations, not proof of global or continuous leadership.
+
+An exact missing-node response during capture is `Failure(reason="observation")`
+with its cause; disappearance during wait is cause-free `superseded`. Unrelated
+CLI errors remain observation failures, not disappearance. Malformed projections,
+unknown readiness values, or a returned identity mismatch fail closed. Capture
+checks identity and wire shape, not readiness, so a recovering node can still be
+captured. `Success` proves the selected node conditions at observation time, not
+application health or permission to deploy.
 
 ### Swarm Jobs
 
@@ -319,7 +416,8 @@ match capture_compose(
     compose_client,
     services,
     completion_services=("migrate",),
-    max_restarts=0,  # optional: no observed restarts for long-running members
+    fail_on_exit=True,  # opt in to failing when a long-running member exits
+    fail_on_unhealthy=True,  # opt in to eligible running unhealthy failures
     policy=policy,
     timeout=10,
     cancel=cancel,
@@ -336,7 +434,7 @@ match capture_compose(
 ```
 
 `capture_compose(client, services, *, completion_services=(), max_restarts=None,
-policy, timeout, cancel=None)` returns a
+fail_on_exit=False, fail_on_unhealthy=False, policy, timeout, cancel=None)` returns a
 `ComposeTarget` or a typed `Failure`/`Deadline`/`Cancelled`, so check for the
 target before waiting. Capture after `compose up` has returned, so the target
 fixes the containers you mean to wait for, and keep the client's Compose
@@ -356,6 +454,12 @@ waiting.
   member above budget keeps its service unsettled even while healthy. This is a
   live blocker, not a permanent failure or a monotonic-counter assumption;
   completion services ignore the restart budget.
+- `fail_on_exit` must be a bool; other values raise `ValueError` before launch.
+  The target freezes this choice, which defaults to `False` for compatibility.
+  Capture does not itself treat an exit as a failure; `wait()` evaluates it.
+- `fail_on_unhealthy` likewise requires an exact bool, defaults to `False`, and
+  is frozen on the target before launch. Capture records the policy; only
+  `wait()` evaluates terminal unhealthy failures.
 - Capture lists the selected services' containers with stopped ones included,
   inspects each, and skips one-off `compose run` containers. For every selected
   service the target records the full container IDs and the single
@@ -372,10 +476,10 @@ waiting.
   service label or config hash is `superseded`, so a scale-up or recreate after
   capture ends the wait instead of moving the target.
 - An unmarked service's container counts as ready only when it is `running`, not restarting, not
-  paused, and `healthy` whenever a healthcheck is configured; a configured
-  healthcheck with no health status yet blocks, and a `NONE` healthcheck test
-  counts as none. A container that exited 0, such as a one-shot job, isn't
-  running and stays a blocker unless its service was marked for completion.
+  paused, and any reported health status is `healthy`, even without a configured
+  healthcheck. Missing `Health` blocks only when a healthcheck is configured;
+  a `NONE` healthcheck test counts as none. By default, an exited container isn't
+  running and remains a blocker; mark one-shot services for completion instead.
 - A marked service completes only when every captured container is `exited`
   with `ExitCode` 0 and not restarting. Created, running, or restarting
   containers remain unfinished. A non-restarting container exited nonzero ends
@@ -383,11 +487,126 @@ waiting.
   exit code, or container ID is included. An exited completion container with a
   missing or malformed `ExitCode` yields `Failure(reason="malformed")` with no
   cause. A service with no containers is still `unsupported`, not complete.
+- With `fail_on_exit=True`, a non-restarting long-running member that has exited
+  with code 0 or nonzero produces cause-free `Failure(reason="exited")` on the
+  first complete evaluation that sees it, including the confirming pass. A
+  failed completion member takes precedence as `completion_failed`; an enabled
+  restart budget validates all long-running restart counts before checking for
+  exits, so a malformed count yields `malformed`. Restarting members and exited
+  members over budget remain blockers rather than producing `exited`. Completion
+  rules and Swarm service or stack targets are unchanged.
+- With `fail_on_unhealthy=True`, a long-running member reporting exactly
+  `unhealthy` produces cause-free `Failure(reason="unhealthy")` only when running,
+  unpaused, not restarting, and within any enabled restart budget. A reported
+  status counts even without a configured healthcheck. `starting`, missing
+  `Health`, and other non-healthy statuses stay blockers under the readiness rules
+  above, not terminal unhealthy failures. Completion members ignore health.
+  Wire validation comes first, then failed completion, enabled restart-count
+  validation, eligible `exited`, and eligible `unhealthy`, across the complete
+  selection. The policy applies on first and confirming evaluations; paused,
+  restarting, or over-budget members remain blockers. Default-off leaves
+  unhealthy members pending and doesn't change Swarm targets.
 - When a cycle finds all long-running services ready and completion services
   finished, `wait()` lists and checks the project again. `Success` requires
   that mandatory second pass to satisfy the same conditions and be unchanged.
-  It proves the captured conditions at that moment, not application readiness
-  beyond the configured healthchecks.
+   It proves the captured conditions at that moment, not application readiness
+   beyond the configured healthchecks.
+
+### Standalone Containers
+
+Use this path to observe existing containers without Compose project discovery.
+`docker.container.wait()` (also `docker.wait()`) waits for containers to stop
+and returns exit codes; convergence `wait()` observes running/healthy state and
+designated successful completion, returning typed outcomes. See
+[Containers, output, and lifecycle](containers-and-output.md#choose-the-result-type)
+for the exit-code API.
+
+Check that the installed package exports `ContainerTarget` and
+`capture_containers`, that capture accepts `completion`, `max_restarts`, and
+both `fail_on_exit` and `fail_on_unhealthy`, and
+that convergence `wait` accepts `ContainerTarget`; see
+[Usage validation](validation.md). A version string alone doesn't establish
+these capabilities.
+
+```python
+from threading import Event
+
+from pywhales import DockerClient, InspectionPolicy
+from pywhales.convergence import (
+    Cancelled,
+    ContainerTarget,
+    Deadline,
+    Failure,
+    Success,
+    capture_containers,
+    wait,
+)
+
+client = DockerClient()
+policy = InspectionPolicy(
+    max_references=32, max_argv_bytes=65536, max_response_bytes=1_048_576
+)
+cancel = Event()
+
+# These names identify already-existing containers you're authorized to observe.
+target = capture_containers(
+    client,
+    ("database", "migration"),
+    completion=("migration",),
+    fail_on_exit=True,  # opt in to failing when a long-running member exits
+    fail_on_unhealthy=True,  # opt in to eligible running unhealthy failures
+    policy=policy,
+    timeout=10,
+    cancel=cancel,
+)
+if isinstance(target, ContainerTarget):
+    outcome = wait(target, policy=policy, timeout=120, poll_interval=1, cancel=cancel)
+    converged = isinstance(outcome, Success)
+elif isinstance(target, Failure):
+    print(f"Container capture failed: {target.reason}")
+elif isinstance(target, (Deadline, Cancelled)):
+    print(f"Container capture stopped: {type(target).__name__}")
+```
+
+`capture_containers(client, references, *, completion=(), max_restarts=None,
+fail_on_exit=False, fail_on_unhealthy=False, policy, timeout, cancel=None)` returns a `ContainerTarget` or typed
+`Failure`/`Deadline`/`Cancelled`. Capture and wait never launch, restart, stop,
+or remove containers.
+
+`references` must be a nonempty tuple of distinct, nonempty names or ID prefixes.
+`completion` must be a tuple of distinct references drawn from that selection;
+its default `()` leaves all members long-running. `max_restarts` is `None`
+(disabled) or a nonnegative integer, never a boolean. `fail_on_exit` and
+`fail_on_unhealthy` must each be an exact bool and default to `False`. Invalid
+selections, completion tuples, restart budgets, failure flags, or timeouts, and
+clients configured with `compose_dry_run=True`, raise `ValueError` before any CLI launch.
+
+Capture resolves each reference once to a full lowercase 64-hex container ID.
+The target freezes those IDs, completion IDs, restart budget, and failure flags; keep its
+originating client configuration stable and its IDs out of untrusted output.
+Different references resolving to the same ID produce cause-free
+`Failure(reason="malformed")`, as does unusable inspect output. A missing
+container during capture is `Failure(reason="observation")` with its cause.
+Each wait cycle inspects only the captured IDs, never resolving names again;
+a later disappearance or recreate is `Failure(reason="superseded")`, not a
+replacement to follow. Compose labels aren't required here; Compose capture
+still enforces its service labels, config hashes, and fixed project membership.
+
+The [Compose readiness and completion rules](#compose-project) apply per
+standalone container: unmarked members must be running, not restarting or
+paused, and any reported health must be healthy; missing `Health` blocks only a
+configured healthcheck. Marked members must exit
+0 without restarting; a nonzero exit without restarting is cause-free
+`completion_failed`, and a missing or malformed exit code is cause-free
+`malformed`. Both Compose failure-policy rules and their precedence above apply:
+capture does not evaluate exits or unhealthy state as terminal failures, and by
+default an exited or unhealthy long-running member remains
+a blocker. An enabled restart budget checks each long-running member's current
+`RestartCount`, not restarts since capture. Missing, negative, or non-integer
+counts are cause-free `malformed`; over-budget readings block success but a
+later within-budget reading clears the blocker. Completion members ignore the
+budget. After an all-clear, `Success` requires a second complete all-clear pass
+over the same IDs. It proves only the captured conditions at that moment.
 
 ### Outcomes And Budgets
 
@@ -395,30 +614,49 @@ These rules apply to every target. `timeout` on capture and wait is a positive
 finite total budget for that call, unlike a per-launch CLI timeout; cleanup
 can outlast it. `poll_interval` is also positive finite seconds.
 `Deadline.detail`, when present, is a payload-free aggregate from the last
-complete polling cycle, not live state at expiry; it's absent when capture
-expired or no cycle finished. It holds `captured_services` plus counts of
-affected services per reason, each service counted at most once per reason and
+complete polling cycle, never a partial cycle or live state at expiry; it's
+absent when capture expired or no cycle finished. It holds `captured_services`
+plus counts of affected services per reason, each service counted at most once per reason and
 reasons allowed to overlap. Swarm counters are `missing_ready_slots`,
 `duplicate_slots`, `stale_templates`, `non_running_tasks`, `invalid_task_shape`,
 `ongoing_updates`, `missing_ready_nodes`, `duplicate_node_assignments`,
 `missing_node_assignments`, and `outside_approved_nodes`. A job wait fills only
 `missing_ready_slots` (a ReplicatedJob short of `TotalCompletions`) and
 `missing_ready_nodes` (a GlobalJob with an approved node not yet complete), each
-counting affected services rather than tasks or nodes. For Compose the
-long-running readiness counters are `non_running_containers`,
-`restarting_containers`, `paused_containers`, and `unhealthy_containers` (a
-configured healthcheck that isn't `healthy`, including still `starting` or not
-yet reported). A restarting or paused container also counts as non-running.
+counting affected services rather than tasks or nodes. For Compose and standalone
+targets the long-running readiness counters are `non_running_containers`,
+`restarting_containers`, `paused_containers`, and `unhealthy_containers` (any
+reported health that isn't `healthy`, or missing health with a configured
+healthcheck). These are pending blockers, including `starting`; the opt-in
+terminal `unhealthy` reason follows the eligibility rules above. Restarting and
+paused containers have their own counters; `non_running_containers` tests status
+alone.
 `unfinished_completion_containers` counts affected completion services, not
 individual containers or replicas; the other readiness counters exclude
 completion services.
 `restart_budget_exceeded_containers` counts affected long-running services once
-each, bounded by `captured_services`, from the latest complete cycle.
+each, bounded by `captured_services`, from the latest complete cycle. For a
+standalone target, each captured container is one `captured_services` unit and
+each applicable container counter counts those units; all Swarm-only counters
+stay zero.
+
+For a `NodeTarget`, each selected node is one `captured_services` unit.
+`non_ready_nodes`, `unavailable_nodes`, `non_manager_nodes`, and
+`unreachable_managers` count affected nodes once per reason, with overlapping
+reasons allowed and each count bounded by that total. Other target counters stay
+zero, except `leader_mismatch_managers`: with leadership enabled it is zero for
+exactly one observed designated leader, otherwise the number of designated
+managers (not the number of leaders). It is zero when disabled and carries no
+identities. Interrupted node cycles, including confirming passes, retain only the last
+published complete cycle. Node failures have `service_id=None`; deadline detail
+contains only integer counts, never node IDs.
 
 A `Failure.cause` or a target's `template` may hold confidential wire data; they
 stay out of `repr()`, but don't log them without a confidentiality policy.
+Standalone failures have `service_id=None`.
 Cancellation or deadline expiry reaps only the local CLI child; it never cancels
-or rolls back daemon-side Swarm or Compose work.
+or rolls back daemon-side work, including Swarm, Compose, or standalone
+containers.
 
 ## Optional Application Reconciliation
 
@@ -433,4 +671,9 @@ Leases don't fence Docker itself; there is no exactly-once guarantee or built-in
 reset/retry/delete workflow. Check installed signatures and the application's
 ownership/recovery design before opting in; don't replace failed mutating calls
 with blind retries.
-The journal's convergence failure vocabulary also accepts `completion_failed`.
+The journal's convergence failure vocabulary also accepts `completion_failed`,
+`exited`, and `unhealthy`. An adapter observing a target captured with
+`fail_on_unhealthy=True` can return that failure; reconciliation projects it to
+`FAILED` with convergence `"unhealthy"`, clears any prior deadline detail, and
+doesn't replay the mutation. As with `exited`, it retains no container state,
+exit code, output, or failure cause.

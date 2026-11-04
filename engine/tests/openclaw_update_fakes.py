@@ -202,6 +202,7 @@ class FakeStore:
         new_container_id: str,
         port: int | None,
         image_id: str,
+        keep_stopped: bool = False,
     ) -> bool:
         agent, run = self.agents.get(agent_id), self.runs.get(run_id)
         if (
@@ -209,12 +210,16 @@ class FakeStore:
             or run is None
             or run.state != "cutover"
             or agent.container_id != old_container_id
-            or agent.status not in ("running", "idle")
+            or agent.status not in (("stopped",) if keep_stopped else ("running", "idle"))
             or agent.is_expired
         ):
             return False
         self.agents[agent_id] = replace(
-            agent, container_id=new_container_id, container_port=port, openclaw_image_id=image_id, status="running"
+            agent,
+            container_id=new_container_id,
+            container_port=port,
+            openclaw_image_id=image_id,
+            status="stopped" if keep_stopped else "running",
         )
         self.runs[run_id] = replace(run, state="succeeded")
         self.updated_at[run_id] = datetime.now(UTC)

@@ -37,6 +37,7 @@ class Docker:
             config=SimpleNamespace(labels={AGENT_LABEL: str(agent.id)}),
             host_config=SimpleNamespace(memory=memory, port_bindings={}),
             state=SimpleNamespace(status=status),
+            mounts=[SimpleNamespace(destination="/home/node/custom-state")],
         )
         self.guests[guest.id] = guest
         return guest

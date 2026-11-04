@@ -96,7 +96,7 @@ async def test_wake_delivers_through_the_guarded_in_guest_hooks(tmp_path, monkey
     assert woke is True
     assert len(docker.calls) == 1
     assert docker.calls[0][: len(GUARD)] == GUARD
-    assert docker.calls[0][len(GUARD)] == "node"
+    assert docker.calls[0][len(GUARD)] == "sh"
     assert "Good morning!" in docker.payloads[0]
     assert not list(agent_dir.glob(".maraclaw-wake-*.json"))
 
@@ -139,7 +139,7 @@ async def test_wake_leaves_pending_when_hooks_refuse(tmp_path, monkeypatch) -> N
 
     assert woke is False
     assert docker.calls[0][: len(GUARD)] == GUARD
-    assert docker.calls[0][len(GUARD)] == "node"
+    assert docker.calls[0][len(GUARD)] == "sh"
 
 
 async def test_wake_never_starts_the_guest_gateway(tmp_path, monkeypatch) -> None:
@@ -159,7 +159,7 @@ async def test_wake_never_starts_the_guest_gateway(tmp_path, monkeypatch) -> Non
 
     assert woke is False
     assert len(docker.calls) == 2
-    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "node" for call in docker.calls)
+    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "sh" for call in docker.calls)
 
 
 @pytest.mark.parametrize("attempts", [1, 2])
@@ -220,7 +220,7 @@ async def test_refused_hooks_are_retried_through_the_guard(tmp_path, monkeypatch
 
     assert woke is True
     assert len(docker.calls) == 2
-    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "node" for call in docker.calls)
+    assert all(call[: len(GUARD)] == GUARD and call[len(GUARD)] == "sh" for call in docker.calls)
 
 
 async def test_skips_redelivery_when_inbox_already_reported(tmp_path, monkeypatch) -> None:
