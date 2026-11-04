@@ -1,15 +1,15 @@
 {
   "name": "openclaw-dispatcher",
   "version": "1.0.0",
-  "description": "OpenClaw message poller",
+  "description": "OpenClaw native Gateway WebSocket RPC",
   "keywords": [
     "openclaw"
   ],
   "license": "MIT",
   "author": "KennyDizi <chitrung09t2@gmail.com>",
-  "type": "commonjs",
-  "main": "index.js",
+  "type": "module",
+  "main": "gateway-rpc.mjs",
   "scripts": {
-    "test": "test"
+    "test": "node --test ../../tests/openclaw_gateway_rpc.test.mjs"
   }
 }
