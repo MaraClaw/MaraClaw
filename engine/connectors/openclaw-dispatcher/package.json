@@ -1,0 +1,15 @@
+{
+  "name": "openclaw-dispatcher",
+  "version": "1.0.0",
+  "description": "OpenClaw message poller",
+  "keywords": [
+    "openclaw"
+  ],
+  "license": "MIT",
+  "author": "KennyDizi <chitrung09t2@gmail.com>",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  }
+}
