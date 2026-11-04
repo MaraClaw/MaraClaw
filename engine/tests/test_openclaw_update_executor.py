@@ -75,14 +75,21 @@ def h(tmp_path: Path) -> Harness:
     return Harness(tmp_path)
 
 
-async def test_success_publishes_new_container_pins_target_and_cleans_old_artifacts(h: Harness):
+@pytest.mark.parametrize("initial_status", ["running", "stopped"])
+async def test_success_publishes_new_container_pins_target_and_cleans_old_artifacts(h: Harness, initial_status: str):
+    h.store.agents[h.agent.id] = replace(h.agent, status=initial_status)
+    h.docker.containers["old-id"].running = initial_status == "running"
     # When the run executes against a healthy agent.
     await h.executor.process(h.run.id)
     # Then the DB points at the new writer, pinned to the immutable pulled image id, in one atomic publication.
     assert h.stored_run.state == "succeeded"
-    assert h.stored_agent.container_id != "old-id"
+    new_id = h.stored_agent.container_id
+    assert new_id is not None
+    assert new_id != "old-id"
     assert h.stored_agent.openclaw_image_id == NEW_IMAGE
     assert h.stored_agent.container_port == 18900
+    assert h.stored_agent.status == initial_status
+    assert h.docker.containers[new_id].running == (initial_status == "running")
     # And the replacement ran the immutable id without rehydrating; the old parked container and snapshot are gone.
     assert h.manager.starts == [(NEW_IMAGE, False)]
     assert "old-id" not in h.docker.containers
@@ -148,15 +155,18 @@ async def test_pull_failure_fails_the_run_and_leaves_the_old_guest_untouched(h: 
     assert h.manager.starts == []
 
 
-@pytest.mark.parametrize("status", ["stopped", "error"])
-async def test_stopped_agent_fails_not_running_without_mutation(h: Harness, status: str):
+@pytest.mark.parametrize("status", ["error", "creating"])
+async def test_ineligible_agent_fails_not_running_without_mutation(h: Harness, status: str):
     h.store.agents[h.agent.id] = replace(h.agent, status=status)
     await h.executor.process(h.run.id)
     assert (h.stored_run.state, h.stored_run.failure_code) == ("failed", "not_running")
     assert h.docker.calls == []
 
 
-async def test_new_container_start_failure_rolls_back_state_and_restarts_the_original(h: Harness):
+@pytest.mark.parametrize("initial_status", ["running", "stopped"])
+async def test_new_container_start_failure_rolls_back_state_and_restarts_the_original(h: Harness, initial_status: str):
+    h.store.agents[h.agent.id] = replace(h.agent, status=initial_status)
+    h.docker.containers["old-id"].running = initial_status == "running"
     # Given the new writer dirties the shared state before it fails.
     h.manager.fail_start = True
     await h.executor.process(h.run.id)
@@ -166,7 +176,8 @@ async def test_new_container_start_failure_rolls_back_state_and_restarts_the_ori
     assert (h.agent_dir / "workspace" / "memory.md").read_text(encoding="utf-8") == "before"
     original = h.docker.containers["old-id"]
     assert original.name == guest_container_name(h.agent.id)
-    assert original.running
+    assert original.running == (initial_status == "running")
+    assert h.stored_agent.status == initial_status
     assert original.restart == "unless-stopped"
     assert h.stored_agent.openclaw_image_id == OLD_IMAGE
     assert h.stored_agent.container_id == "old-id"

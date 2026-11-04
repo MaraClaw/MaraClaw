@@ -206,8 +206,9 @@ class UpgradeFixture:
         )
 
 
-async def test_manager_starts_an_upgrade_and_gets_202(client, monkeypatch):
-    fx = UpgradeFixture(monkeypatch)
+@pytest.mark.parametrize("initial_status", ["running", "stopped"])
+async def test_manager_starts_an_upgrade_and_gets_202(client, monkeypatch, initial_status):
+    fx = UpgradeFixture(monkeypatch, status=initial_status)
     created = run("pending", notice_id=fx.notice.id, agent_id=fx.agent.id)
     fx.create.return_value = created
     response = await fx.post(client)
@@ -236,8 +237,8 @@ async def test_existing_active_or_succeeded_run_replays_with_200(client, monkeyp
     fx.create.assert_not_awaited()
 
 
-@pytest.mark.parametrize("fields", [{"status": "stopped"}, {"container_id": None}, {"setup_pending": True}])
-async def test_stopped_agents_get_409_not_running(client, monkeypatch, fields):
+@pytest.mark.parametrize("fields", [{"status": "error"}, {"container_id": None}, {"setup_pending": True}])
+async def test_ineligible_agents_get_409_not_running(client, monkeypatch, fields):
     fx = UpgradeFixture(monkeypatch, **fields)
     response = await fx.post(client)
     assert response.status_code == 409

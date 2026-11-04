@@ -33,6 +33,7 @@ class UpgradeStore(Protocol):
         new_container_id: str,
         port: int | None,
         image_id: str,
+        keep_stopped: bool = False,
     ) -> bool: ...
     async def pin_image(self, agent_id: UUID, image_id: str) -> None: ...
     async def mark_rollback_failed(self, agent_id: UUID, image_id: str | None) -> None: ...
@@ -77,6 +78,7 @@ class PostgresUpgradeStore:
         new_container_id: str,
         port: int | None,
         image_id: str,
+        keep_stopped: bool = False,
     ) -> bool:
         return await openclaw_update_run_dao.publish_success(
             run_id,
@@ -85,6 +87,7 @@ class PostgresUpgradeStore:
             new_container_id=new_container_id,
             port=port,
             image_id=image_id,
+            keep_stopped=keep_stopped,
         )
 
     async def pin_image(self, agent_id: UUID, image_id: str) -> None:

@@ -160,7 +160,12 @@ class UpgradeExecutor:
         if agent is None:
             return
         old = None
-        if _desired_running(agent) and agent.container_id not in (None, ""):
+        if (
+            agent.status in ("running", "idle", "stopped")
+            and not agent.is_expired
+            and not agent.setup_pending
+            and agent.container_id not in (None, "")
+        ):
             old = await to_thread.run_sync(self.docker.inspect, agent.container_id)
         if old is None:
             await self.store.finish_failed(run.id, NOT_RUNNING)
@@ -205,6 +210,9 @@ class UpgradeExecutor:
         await self.store.set_journal(run.id, plan.journal(new_id))
         if not await self._ready(new_id):
             raise _CutoverError(NOT_READY)
+        keep_stopped = agent.status == "stopped"
+        if keep_stopped:
+            await to_thread.run_sync(self.docker.stop, new_id)
         published = await self.store.publish_success(
             run.id,
             agent.id,
@@ -212,6 +220,7 @@ class UpgradeExecutor:
             new_container_id=new_id,
             port=replacement.container_port,
             image_id=plan.target,
+            keep_stopped=keep_stopped,
         )
         if not published:
             raise _CutoverError(PUBLISH_CONFLICT)

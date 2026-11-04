@@ -361,20 +361,30 @@ async def test_one_active_run_per_agent_and_one_success_per_notice(db: DbConnect
     assert latest.id == retry.id
 
 
-async def test_publication_repoints_the_agent_and_marks_success_atomically(db: DbConnection):
+@pytest.mark.parametrize("keep_stopped", [False, True])
+async def test_publication_repoints_the_agent_and_marks_success_atomically(db: DbConnection, keep_stopped: bool):
     t = await tenant(db)
-    agent_id = await agent(db, t, await member(db, t))
+    desired_status = "stopped" if keep_stopped else "running"
+    agent_id = await agent(db, t, await member(db, t), status=desired_status)
     notice, _ = await publish(True)
     run = await runs.create_pending(notice_id=notice.id, agent_id=agent_id, requested_by=None)
     assert run is not None
     assert await runs.begin_cutover(run.id, RunJournal(old_container_id="old"))
     assert await runs.publish_success(
-        run.id, agent_id, old_container_id="old", new_container_id="new", port=18999, image_id="sha256:t"
+        run.id,
+        agent_id,
+        old_container_id="old",
+        new_container_id="new",
+        port=18999,
+        image_id="sha256:t",
+        keep_stopped=keep_stopped,
     )
     row = await db.fetchone(
         "SELECT container_id, container_port, openclaw_image_id, status FROM agents WHERE id = %(id)s", {"id": agent_id}
     )
-    assert row == {"container_id": "new", "container_port": 18999, "openclaw_image_id": "sha256:t", "status": "running"}
+    assert row == {
+        "container_id": "new", "container_port": 18999, "openclaw_image_id": "sha256:t", "status": desired_status
+    }
     assert await one(db, "SELECT state FROM openclaw_update_runs WHERE id = %(id)s", id=run.id) == "succeeded"
     assert (await runs.succeeded_for(agent_id, notice.id)) is not None
 
