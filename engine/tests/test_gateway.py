@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
@@ -18,7 +17,6 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
 from app.api import gateway
-from app.config import Settings
 from app.core.logging import configure_logging
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db import session as session_module
@@ -119,20 +117,13 @@ def _row(**overrides: object) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_claim_pending_moves_only_pending_rows_in_one_statement(raw: _FakeRawConnection) -> None:
-    agent_id = uuid.uuid4()
-    now = datetime(2026, 10, 14, 10, 0, tzinfo=UTC)
-    raw.rows = [_row(agent_id=agent_id, delivered_at=now)]
-
-    claimed = await gateway_message_dao.claim_pending(agent_id, now=now)
-
-    assert [row.status for row in claimed] == ["delivered"]
-    assert len(raw.executed) == 1
-    query, params = raw.executed[0]
-    assert query.startswith("WITH claimed AS (UPDATE gateway_messages SET status = 'delivered'")
-    assert "WHERE agent_id = %(agent_id)s AND status = 'pending' RETURNING" in query
-    assert query.endswith("FROM claimed ORDER BY created_at ASC")
-    assert params == {"agent_id": agent_id, "now": now}
+async def test_claim_ordinary_head_is_scoped_to_message_and_agent(raw: _FakeRawConnection) -> None:
+    agent_id, message_id = uuid.uuid4(), uuid.uuid4()
+    raw.rows = [_row(id=message_id, agent_id=agent_id)]
+    claimed = await gateway_message_dao.claim_ordinary_head(message_id, agent_id)
+    assert claimed is not None
+    assert (claimed.id, claimed.agent_id, claimed.status) == (message_id, agent_id, "delivered")
+    assert raw.executed[0][1] == {"id": message_id, "agent": agent_id}
 
 
 @pytest.mark.asyncio
@@ -146,21 +137,6 @@ async def test_complete_is_guarded_by_open_status(raw: _FakeRawConnection) -> No
     assert query.startswith("UPDATE gateway_messages SET status = 'completed', result = %(result)s")
     assert "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered')" in query
     assert params == {"id": message_id, "agent_id": agent_id, "result": "done", "now": now}
-
-
-@pytest.mark.asyncio
-async def test_requeue_stale_deliveries_never_touches_completed_rows(raw: _FakeRawConnection) -> None:
-    agent_id = uuid.uuid4()
-    stale_before = datetime(2026, 10, 14, 9, 45, tzinfo=UTC)
-    requeued_id = uuid.uuid4()
-    raw.rows = [{"id": requeued_id}]
-
-    assert await gateway_message_dao.requeue_stale_deliveries(agent_id, stale_before=stale_before) == [requeued_id]
-
-    query, params = raw.executed[0]
-    assert query.startswith("UPDATE gateway_messages SET status = 'pending', delivered_at = NULL")
-    assert "AND status = 'delivered' AND (delivered_at IS NULL OR delivered_at < %(stale_before)s)" in query
-    assert params == {"agent_id": agent_id, "stale_before": stale_before}
 
 
 @pytest.mark.asyncio
@@ -178,25 +154,6 @@ async def test_release_delivery_requires_the_same_claim(raw: _FakeRawConnection)
     query, params = raw.executed[0]
     assert "AND status = 'delivered' AND delivered_at = %(delivered_at)s" in query
     assert params == {"id": claimed.id, "agent_id": claimed.agent_id, "delivered_at": claimed.delivered_at}
-
-
-@pytest.mark.asyncio
-async def test_mark_delivered_claims_only_a_pending_row(raw: _FakeRawConnection) -> None:
-    message_id, agent_id = uuid.uuid4(), uuid.uuid4()
-
-    assert await gateway_message_dao.mark_delivered(message_id, agent_id) is None
-
-    query, params = raw.executed[0]
-    assert query.startswith("UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s")
-    assert "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' RETURNING" in query
-    assert (params["id"], params["agent_id"]) == (message_id, agent_id)
-
-
-def test_delivery_timeout_setting_must_be_positive() -> None:
-    assert Settings(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=1).OPENCLAW_DELIVERY_TIMEOUT_SECONDS == 1
-    for value in (0, -5):
-        with pytest.raises(ValidationError):
-            _ = Settings(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=value)
 
 
 @pytest.mark.asyncio
@@ -330,37 +287,6 @@ class _DeliveryStore:
     async def claim_ready_shared(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
         return None
 
-    async def requeue_stale_deliveries(
-        self, agent_id: uuid.UUID, *, stale_before: datetime, exclude_conversation: str | None = None
-    ) -> list[uuid.UUID]:
-        requeued = []
-        for row in self.rows.values():
-            if (
-                row.agent_id == agent_id
-                and (exclude_conversation is None or row.conversation_id != exclude_conversation)
-                and row.status == "delivered"
-                and (row.delivered_at is None or row.delivered_at < stale_before)
-            ):
-                row.status, row.delivered_at = "pending", None
-                requeued.append(row.id)
-        await asyncio.sleep(0)
-        return requeued
-
-    async def claim_pending(
-        self, agent_id: uuid.UUID, *, now: datetime, exclude_conversation: str | None = None
-    ) -> list[GatewayMessageRecord]:
-        claimed = []
-        for row in self.rows.values():
-            if (
-                row.agent_id == agent_id
-                and row.status == "pending"
-                and (exclude_conversation is None or row.conversation_id != exclude_conversation)
-            ):
-                row.status, row.delivered_at = "delivered", now
-                claimed.append(replace(row))
-        await asyncio.sleep(0)
-        return sorted(claimed, key=lambda row: row.created_at or now)
-
     async def complete(
         self, message_id: uuid.UUID, agent_id: uuid.UUID, *, result: str, now: datetime
     ) -> GatewayMessageRecord | None:
@@ -378,13 +304,9 @@ class _DeliveryStore:
 @pytest.fixture
 def delivery_store(monkeypatch: pytest.MonkeyPatch) -> _DeliveryStore:
     store = _DeliveryStore()
-    for name in ("claim_pending", "requeue_stale_deliveries", "complete", "get_for_agent"):
+    for name in ("complete", "get_for_agent"):
         monkeypatch.setattr(gateway_message_dao, name, getattr(store, name))
-    monkeypatch.setattr(delivery, "claim_ready_shared", store.claim_ready_shared)
     monkeypatch.setattr(delivery, "connection_ctx", store.connection_ctx)
-    monkeypatch.setattr(delivery, "assert_work_allowed", AsyncMock())
-    monkeypatch.setattr(delivery, "load_agent_for_new_work", AsyncMock())
-    monkeypatch.setattr(delivery, "get_settings", lambda: SimpleNamespace(OPENCLAW_DELIVERY_TIMEOUT_SECONDS=60))
     return store
 
 
@@ -427,6 +349,9 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
 
     monkeypatch.setattr(gateway.agent_dao, "touch_openclaw", promote)
     monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", admit)
+    monkeypatch.setattr(gateway, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_user", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_agent", AsyncMock())
     monkeypatch.setattr(gateway, "connection_ctx", poll_context)
 
     async def insert(**kwargs):
@@ -464,6 +389,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     monkeypatch.setattr("app.api.websocket.manager", SimpleNamespace(send_to_session=ws))
     monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", direct_delivery)
     monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", direct_delivery)
+    monkeypatch.setattr("app.services.openclaw_routing.wake_shared_lane", lambda *_args: None)
     return SimpleNamespace(
         agent=agent,
         sender=sender,
@@ -511,90 +437,6 @@ async def test_delivery_store_enforces_per_message_destination_uniqueness(delive
     }
 
 
-async def test_overlapping_polls_claim_disjoint_batches_and_keep_response_fields(
-    monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore, report_env: SimpleNamespace
-) -> None:
-    env = report_env
-    env.row.selected_slot, env.row.guest_model_ref = "secondary", "provider/model"
-    second = replace(env.row, id=uuid.uuid4(), content="second")
-    completed = replace(env.row, id=uuid.uuid4(), status="completed", result="already done")
-    delivery_store.rows.update({second.id: second, completed.id: completed})
-    history = [SimpleNamespace(role="user", content="prior", user_id=env.session.user_id, created_at=env.at)]
-    history_calls = []
-    relationship_calls = []
-
-    async def list_history(**kwargs):
-        history_calls.append(kwargs)
-        return history
-
-    async def display_name(_id):
-        return "User"
-
-    async def relationships(agent):
-        relationship_calls.append(agent.id)
-        return []
-
-    monkeypatch.setattr("app.services.openclaw_hot_cache.should_touch_last_seen", lambda _id: False)
-    monkeypatch.setattr(gateway.chat_message_dao, "list_for_session", list_history)
-    monkeypatch.setattr(gateway.user_dao, "display_name_for_id", display_name)
-    monkeypatch.setattr(gateway, "_poll_relationships", relationships)
-
-    left, right = await asyncio.gather(gateway.poll_messages("key"), gateway.poll_messages("key"))
-
-    left_ids, right_ids = {m.id for m in left.messages}, {m.id for m in right.messages}
-    assert not left_ids & right_ids
-    assert left_ids | right_ids == {env.row.id, second.id}
-    assert completed.status == "completed"
-    assert relationship_calls == [env.agent.id]
-    assert history_calls == [{"conversation_id": str(env.session.id), "limit": 10}] * 2
-    for message in left.messages + right.messages:
-        assert message.conversation_id == str(env.session.id)
-        assert message.sender_agent_name == "Sender"
-        assert message.sender_user_name == "User"
-        assert message.content in ("question", "second")
-        assert message.model == "provider/model"
-        assert message.model_slot == "secondary"
-        assert [item.model_dump() for item in message.history] == [
-            {"role": "user", "content": "prior", "sender_name": "User", "created_at": env.at}
-        ]
-    assert delivery_store.events.count("commit") == 2
-
-
-async def test_claim_poll_batch_uses_configured_timeout_and_strict_cutoff(delivery_store: _DeliveryStore) -> None:
-    agent_id = uuid.uuid4()
-    at = datetime(2026, 10, 14, 10, tzinfo=UTC)
-    cutoff = at - timedelta(seconds=60)
-    rows = [
-        GatewayMessageRecord(
-            id=uuid.uuid4(), agent_id=agent_id, content="boundary", status="delivered", delivered_at=cutoff
-        ),
-        GatewayMessageRecord(
-            id=uuid.uuid4(),
-            agent_id=agent_id,
-            content="expired",
-            status="delivered",
-            delivered_at=cutoff - timedelta(microseconds=1),
-        ),
-        GatewayMessageRecord(id=uuid.uuid4(), agent_id=agent_id, content="legacy", status="delivered"),
-        GatewayMessageRecord(
-            id=uuid.uuid4(),
-            agent_id=agent_id,
-            content="done",
-            status="completed",
-            delivered_at=cutoff - timedelta(days=1),
-        ),
-    ]
-    delivery_store.rows.update({row.id: row for row in rows})
-
-    claimed = await delivery.claim_poll_batch(agent_id, now=at)
-
-    assert {row.id for row in claimed} == {rows[1].id, rows[2].id}
-    assert rows[0].delivered_at == cutoff
-    assert rows[3].status == "completed"
-    assert all(row.delivered_at == at for row in claimed)
-    assert delivery_store.events == ["enter", "commit"]
-
-
 async def test_report_first_result_wins_and_all_side_effects_run_once(
     monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore, report_env: SimpleNamespace
 ) -> None:
@@ -634,16 +476,15 @@ async def test_report_first_result_wins_and_all_side_effects_run_once(
     ]
 
 
-async def test_late_report_after_reclaim_wins_over_new_delivery(
+async def test_late_report_for_uncertain_delivery_wins_over_duplicate(
     delivery_store: _DeliveryStore, report_env: SimpleNamespace
 ) -> None:
     env = report_env
-    run_a = await delivery.claim_poll_batch(env.agent.id, now=env.at)
-    run_b = await delivery.claim_poll_batch(env.agent.id, now=env.at + timedelta(seconds=61))
-    assert [row.id for row in run_a] == [row.id for row in run_b] == [env.row.id]
+    env.row.status = "delivered"
+    env.row.delivered_at = env.at - timedelta(days=1)
 
-    await gateway.report_result(GatewayReportRequest(message_id=run_a[0].id, result="A"), "key")
-    response = await gateway.report_result(GatewayReportRequest(message_id=run_b[0].id, result="B"), "key")
+    await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="A"), "key")
+    response = await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="B"), "key")
 
     assert response == {"status": "ok"}
     assert delivery_store.rows[env.row.id].result == "A"
@@ -658,8 +499,6 @@ async def test_report_wins_while_requeued_row_is_still_pending(
     delivery_store: _DeliveryStore, report_env: SimpleNamespace
 ) -> None:
     env = report_env
-    await delivery.claim_poll_batch(env.agent.id, now=env.at)
-    await delivery_store.requeue_stale_deliveries(env.agent.id, stale_before=env.at + timedelta(seconds=1))
     assert delivery_store.rows[env.row.id].status == "pending"
 
     await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="late"), "key")
@@ -960,21 +799,16 @@ def _app_output(chunks: list[str]) -> str:
     return "\n".join(line for line in "".join(chunks).splitlines() if " | app." in line)
 
 
-async def test_poll_and_report_diagnostics_identify_the_agent_never_the_api_key(
-    monkeypatch: pytest.MonkeyPatch, report_env: SimpleNamespace, app_log: list[str]
+async def test_report_diagnostics_identify_the_agent_never_the_api_key(
+    report_env: SimpleNamespace, app_log: list[str]
 ) -> None:
     env = report_env
-    monkeypatch.setattr("app.services.openclaw_hot_cache.should_touch_last_seen", lambda _id: False)
-    monkeypatch.setattr(gateway, "_poll_relationships", AsyncMock(return_value=[]))
 
     reported = await gateway.report_result(GatewayReportRequest(message_id=env.row.id, result="answer"), API_KEY_CANARY)
-    polled = await gateway.poll_messages(API_KEY_CANARY)
 
     output = _app_output(app_log)
     assert reported == {"status": "ok"}
-    assert polled.messages == []
     assert f"[Gateway] report called agent={env.agent.id} msg_id={env.row.id}" in output
-    assert f"[Gateway] poll called agent={env.agent.id}" in output
     assert API_KEY_CANARY[:8] not in output
 
 
@@ -985,10 +819,14 @@ async def test_rejected_api_key_is_unauthorized_and_absent_from_logs(
 
     monkeypatch.setattr(gateway.agent_dao, "get_openclaw_by_api_key", AsyncMock(return_value=None))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/gateway/poll", headers={"X-Api-Key": API_KEY_CANARY})
+        response = await client.post(
+            "/api/gateway/report",
+            headers={"X-Api-Key": API_KEY_CANARY},
+            json={"message_id": str(uuid.uuid4()), "result": "answer"},
+        )
 
     output = _app_output(app_log)
     assert response.status_code == 401
     assert response.json() == {"detail": "Invalid API key"}
-    assert "<-- GET /api/gateway/poll 401" in output
+    assert "<-- POST /api/gateway/report 401" in output
     assert API_KEY_CANARY[:8] not in output

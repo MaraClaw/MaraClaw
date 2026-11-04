@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.openclaw_dispatch import BURST_ROUTING_REASON, SharedClaim
+from app.records.openclaw_dispatch import SharedClaim
 from app.records.personal_burst import BURST_CANCELLED_RESULT
 
 _COLUMNS = (
@@ -45,7 +44,7 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM gateway_messages "
                 "WHERE agent_id = %(agent_id)s AND status = 'pending' "
-                "ORDER BY created_at ASC",
+                "ORDER BY created_at ASC, id ASC",
                 {"agent_id": agent_id},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
@@ -59,29 +58,6 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 {"session": session_id, "agent": agent_id},
             )
             return parent is not None
-
-    async def claim_shared(self, agent_id: UUID, session_id: UUID, *, now: datetime) -> GatewayMessageRecord | None:
-        """Claim the actual oldest pending shared row, but only when it is a legacy/other-entry row.
-
-        A Personal burst anchor (marker or batch header) is never claimable here: its readiness, fresh scope and
-        routing live in ``openclaw_shared_dispatch``. The readiness gate applies to the head AFTER ``LIMIT 1``, so an
-        unready head blocks every younger row instead of being skipped.
-        """
-        if not await self.lock_shared_lane(agent_id, session_id):
-            return None
-        async with self.session() as db:
-            row = await db.fetchone(
-                "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s WHERE id = ("
-                "SELECT id FROM gateway_messages WHERE agent_id = %(agent)s AND conversation_id = %(conversation)s "
-                "AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM gateway_messages "
-                "WHERE agent_id = %(agent)s AND conversation_id = %(conversation)s AND status = 'delivered') "
-                "ORDER BY created_at, id LIMIT 1) "
-                "AND routing_reason IS DISTINCT FROM %(burst)s "
-                "AND NOT EXISTS (SELECT 1 FROM personal_burst_batches b WHERE b.gateway_id = gateway_messages.id) "
-                f"RETURNING {self._select_list()}",
-                {"agent": agent_id, "conversation": str(session_id), "now": now, "burst": BURST_ROUTING_REASON},
-            )
-            return self.record_factory(row) if row is not None else None
 
     async def claim_head(self, claim: SharedClaim) -> GatewayMessageRecord | None:
         """Write the final body/routing and deliver ``claim.message_id`` iff it is still the actual lane head.
@@ -137,36 +113,51 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
             )
             return True
 
-    async def claim_pending(
-        self, agent_id: UUID, *, now: datetime, exclude_conversation: str | None = None
-    ) -> list[GatewayMessageRecord]:
-        """Move every pending row to delivered and return only the rows this call moved."""
-        exclusion = "AND conversation_id IS DISTINCT FROM %(exclude)s " if exclude_conversation is not None else ""
-        params = {"agent_id": agent_id, "now": now}
-        if exclude_conversation is not None:
-            params["exclude"] = exclude_conversation
-        async with self.session() as db:
-            rows = await db.fetchall(
-                "WITH claimed AS ("
-                "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
-                "WHERE agent_id = %(agent_id)s AND status = 'pending' "
-                + exclusion
-                + f"RETURNING {self._select_list()}"
-                + f") SELECT {self._select_list()} FROM claimed ORDER BY created_at ASC",
-                params,
-            )
-            return [GatewayMessageRecord.from_row(row) for row in rows]
-
-    async def mark_delivered(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
-        """Claim one pending row for a wake; ``None`` when a poll or another wake already took it."""
+    async def claim_ordinary_head(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
+        """Claim an ordinary lane head after the caller has locked its agent row."""
         async with self.session() as db:
             row = await db.fetchone(
-                "UPDATE gateway_messages SET status = 'delivered', delivered_at = %(now)s "
-                "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status = 'pending' "
+                "UPDATE gateway_messages g SET status = 'delivered', delivered_at = clock_timestamp() "
+                "WHERE g.id = %(id)s AND g.agent_id = %(agent)s AND g.status = 'pending' "
+                "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR ("
+                "NOT EXISTS (SELECT 1 FROM gateway_messages d WHERE d.agent_id = g.agent_id "
+                "AND d.conversation_id = g.conversation_id AND d.status = 'delivered') "
+                "AND NOT EXISTS (SELECT 1 FROM gateway_messages p WHERE p.agent_id = g.agent_id "
+                "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
+                "AND (p.created_at, p.id) < (g.created_at, g.id)))) "
                 f"RETURNING {self._select_list()}",
-                {"id": message_id, "agent_id": agent_id, "now": datetime.now(UTC)},
+                {"id": message_id, "agent": agent_id},
             )
-            return GatewayMessageRecord.from_row(row) if row is not None else None
+            return self.record_factory(row) if row is not None else None
+
+    async def pending_dispatch_page(
+        self, limit: int, *, after: tuple[datetime, UUID] | None = None
+    ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
+        """Page pending lane heads without replaying any delivered work."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('g')} FROM gateway_messages g "
+                "LEFT JOIN personal_burst_batches b ON b.gateway_id = g.id "
+                "WHERE g.status = 'pending' AND (%(after_time)s::timestamptz IS NULL "
+                "OR (g.created_at, g.id) > (%(after_time)s, %(after_id)s)) "
+                "AND (b.gateway_id IS NULL OR b.state != 'pending' OR b.ready_at <= clock_timestamp()) "
+                "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR ("
+                "NOT EXISTS (SELECT 1 FROM gateway_messages d WHERE d.agent_id = g.agent_id "
+                "AND d.conversation_id = g.conversation_id AND d.status = 'delivered') "
+                "AND NOT EXISTS (SELECT 1 FROM gateway_messages p WHERE p.agent_id = g.agent_id "
+                "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
+                "AND (p.created_at, p.id) < (g.created_at, g.id)))) "
+                "ORDER BY g.created_at, g.id LIMIT %(limit)s",
+                {
+                    "after_time": after[0] if after else None,
+                    "after_id": after[1] if after else None,
+                    "limit": limit + 1,
+                },
+            )
+        messages = [self.record_factory(row) for row in rows[:limit]]
+        last = messages[-1] if len(rows) > limit else None
+        cursor = (last.created_at, last.id) if last is not None and last.created_at is not None else None
+        return messages, cursor
 
     async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
         """Return a claimed row to pending, unless a newer claim or a report has moved it since."""
@@ -179,23 +170,6 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 {"id": claimed.id, "agent_id": claimed.agent_id, "delivered_at": claimed.delivered_at},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
-
-    async def requeue_stale_deliveries(
-        self, agent_id: UUID, *, stale_before: datetime, exclude_conversation: str | None = None
-    ) -> list[UUID]:
-        """Return delivered rows with no report since ``stale_before`` (or no ``delivered_at``) to pending."""
-        exclusion = "AND conversation_id IS DISTINCT FROM %(exclude)s " if exclude_conversation is not None else ""
-        params = {"agent_id": agent_id, "stale_before": stale_before}
-        if exclude_conversation is not None:
-            params["exclude"] = exclude_conversation
-        async with self.session() as db:
-            rows = await db.fetchall(
-                "UPDATE gateway_messages SET status = 'pending', delivered_at = NULL "
-                "WHERE agent_id = %(agent_id)s AND status = 'delivered' "
-                "AND (delivered_at IS NULL OR delivered_at < %(stale_before)s) " + exclusion + "RETURNING id",
-                params,
-            )
-            return [uuid_from_row(row["id"]) for row in rows]
 
     async def complete(
         self, message_id: UUID, agent_id: UUID, *, result: str, now: datetime
@@ -228,21 +202,6 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
                 {"agent_id": agent_id, "limit": limit},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
-
-    async def completed_before(self, message: GatewayMessageRecord) -> list[GatewayMessageRecord]:
-        async with self.session() as db:
-            rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM gateway_messages WHERE agent_id = %(agent)s "
-                "AND conversation_id = %(conversation)s AND status = 'completed' "
-                "AND (created_at, id) < (%(created)s, %(id)s) ORDER BY created_at DESC, id DESC LIMIT 5",
-                {
-                    "agent": message.agent_id,
-                    "conversation": message.conversation_id,
-                    "created": message.created_at,
-                    "id": message.id,
-                },
-            )
-        return [self.record_factory(row) for row in reversed(rows)]
 
 
 gateway_message_dao = GatewayMessageDAO()

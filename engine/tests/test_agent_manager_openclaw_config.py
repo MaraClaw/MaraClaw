@@ -173,6 +173,32 @@ def test_write_guest_config_adds_control_ui_origins_to_legacy_config_without_rot
     assert (gateway["bind"], gateway["port"]) == ("lan", 18789)
 
 
+def test_write_guest_config_stages_native_adapter_before_fingerprint_fast_return(monkeypatch, tmp_path):
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
+    manager = AgentManager.__new__(AgentManager)
+    agent = AgentRecord(id=uuid.uuid4(), name="Cached Agent", creator_id=uuid.uuid4())
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    config_path = manager.write_guest_config(agent, primary=None)
+    assert config_path is not None
+    adapter = agent_dir / ".maraclaw-rpc.mjs"
+    adapter.unlink()
+    legacy = agent_dir / ".maraclaw-poll.mjs"
+    legacy.write_text("modified legacy script", encoding="utf-8")
+    before = config_path.read_bytes()
+
+    result = manager.write_guest_config(agent, primary=None)
+
+    assert result == config_path
+    assert config_path.read_bytes() == before
+    assert adapter.is_file()
+    assert not legacy.exists()
+    (retired,) = agent_dir.glob(".maraclaw-retired-*-maraclaw-poll.mjs")
+    assert retired.read_text(encoding="utf-8") == "modified legacy script"
+
+
 def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
     settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
@@ -218,10 +244,10 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert "GROK_API_KEY" not in config["env"]["vars"]
     assert config["auth"]["profiles"][XAI_OAUTH_PROFILE_ID] == {"provider": "xai", "mode": "oauth"}
     assert config["auth"]["order"]["xai"] == [XAI_OAUTH_PROFILE_ID]
-    assert config["hooks"]["enabled"] is True
+    assert "hooks" not in config
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
-    assert config["agents"]["defaults"]["heartbeat"]["every"] == "30s"
+    assert "heartbeat" not in config["agents"]["defaults"]
     assert config["memory"]["search"] == {"enabled": True}
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
@@ -467,7 +493,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert not (agent_dir / ".openclaw" / "openclaw.json").exists()
     config = json.loads(host_config_path.read_text(encoding="utf-8"))
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
-    assert (agent_dir / "workspace" / "skills" / "maraclaw-sync" / "SKILL.md").is_file()
+    assert (agent_dir / ".maraclaw-rpc.mjs").is_file()
 
     run_kwargs = docker_client.run_kwargs
     assert run_kwargs is not None

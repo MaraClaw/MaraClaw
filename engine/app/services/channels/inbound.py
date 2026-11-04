@@ -30,9 +30,7 @@ CHANNEL_REPLY_QUEUED = "Message forwarded to the agent. Waiting for response..."
 def routing_history_limit(context_window_size: int | None = None) -> int:
     """How many prior turns to load for OpenClaw slot routing.
 
-    Guests receive conversation history from ``/api/gateway/poll``. Engine-side
-    history is only for the heuristic preflight, so a long window just delays
-    the wake.
+    Runtime sessions retain their own history; this window is for routing preflight.
     """
     if isinstance(context_window_size, int) and context_window_size > 0:
         wanted = context_window_size
@@ -201,7 +199,6 @@ async def generate_channel_reply(
             conversation_id=session_id,
             reply_session_id=reply_session_id,
             history=prior,
-            await_wake=False,
         )
     return CHANNEL_REPLY_QUEUED
 

@@ -14,11 +14,11 @@ from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.openclaw_dispatch import SharedDispatchRequest
+from app.records.openclaw_dispatch import SharedClaim, SharedDispatchRequest
 from app.services import openclaw_routing, openclaw_update_exclusion
-from app.services.openclaw_gateway_delivery import claim_poll_batch, record_report
+from app.services.openclaw_gateway_delivery import record_report
 from app.services.openclaw_shared_dispatch import claim_ready_shared
-from app.services.openclaw_turns import completed_history
+from app.services.openclaw_turns import runtime_session_key
 from app.services.shared_chat import shared_session_id
 from test_chat_submission_postgres import ReceiptDatabase
 
@@ -68,28 +68,25 @@ async def seed_shared(db: ReceiptDatabase) -> list[GatewayMessageRecord]:
         ]
 
 
-async def test_shared_poll_and_wake_claim_only_fifo_head(pooled_database: ReceiptDatabase) -> None:
+async def test_competing_shared_wakes_claim_only_fifo_head(pooled_database: ReceiptDatabase) -> None:
     # Given two workers competing for three shared turns.
     db = pooled_database
     messages = await seed_shared(db)
     claimed: list[GatewayMessageRecord] = []
-
-    async def poll() -> None:
-        claimed.extend(await claim_poll_batch(db.agent.id))
 
     async def wake() -> None:
         row = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
         if row:
             claimed.append(row)
 
-    # When wake and poll run concurrently using independent real connections.
+    # When wakes run concurrently using independent real connections.
     async with anyio.create_task_group() as tasks:
-        tasks.start_soon(poll)
+        tasks.start_soon(wake)
         tasks.start_soon(wake)
 
     # Then only the earliest turn is executable, even after the normal timeout.
     assert [row.id for row in claimed] == [messages[0].id]
-    assert await claim_poll_batch(db.agent.id, now=datetime.now(UTC) + timedelta(days=1)) == []
+    assert await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC) + timedelta(days=1))) is None
 
 
 async def test_low_level_shared_claim_takes_the_lane_lock_and_only_the_fifo_head(
@@ -102,8 +99,20 @@ async def test_low_level_shared_claim_takes_the_lane_lock_and_only_the_fifo_head
 
     async def claim(connection: DbConnection) -> None:
         async with transaction(connection):
-            row = await gateway_message_dao.claim_shared(
-                db.agent.id, shared_session_id(db.agent.id), now=datetime.now(UTC)
+            lane = shared_session_id(db.agent.id)
+            assert await gateway_message_dao.lock_shared_lane(db.agent.id, lane)
+            row = await gateway_message_dao.claim_head(
+                SharedClaim(
+                    messages[0].id,
+                    db.agent.id,
+                    str(lane),
+                    messages[0].content,
+                    None,
+                    None,
+                    None,
+                    None,
+                    datetime.now(UTC),
+                )
             )
             if row:
                 claimed.append(row)
@@ -154,23 +163,23 @@ async def test_reply_intent_waits_for_completion_and_equal_human_inputs_remain_d
     assert intent == {"destination_id": provider.id}
 
 
-async def test_completion_advances_fifo_without_later_queued_history(pooled_database: ReceiptDatabase) -> None:
+async def test_completion_advances_fifo_with_stable_runtime_session(pooled_database: ReceiptDatabase) -> None:
     # Given a claimed first turn and later human inputs already durably queued.
     db = pooled_database
     messages = await seed_shared(db)
-    assert [row.id for row in await claim_poll_batch(db.agent.id)] == [messages[0].id]
+    first = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    assert first is not None
+    assert first.id == messages[0].id
 
     # When the first result completes and the next worker claims the queue.
     async with transaction(db.first):
         report = await record_report(db.agent, messages[0].id, "first answer")
-    following = await claim_poll_batch(db.agent.id)
-    async with transaction(db.second):
-        history = await completed_history(following[0])
-
-    # Then only the next input runs with completed prior context, never future inputs.
+    following = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    assert following is not None
+    # Then only the next input runs, in the same native gateway session.
     assert report is not None
-    assert [row.id for row in following] == [messages[1].id]
-    assert [(entry.role, entry.content) for entry in history] == [("user", "0"), ("assistant", "first answer")]
+    assert following.id == messages[1].id
+    assert runtime_session_key(first) == runtime_session_key(following)
 
 
 async def test_shared_report_cannot_complete_unclaimed_later_turn(pooled_database: ReceiptDatabase) -> None:
@@ -182,7 +191,9 @@ async def test_shared_report_cannot_complete_unclaimed_later_turn(pooled_databas
         report = await record_report(db.agent, messages[1].id, "out of order")
     # Then no later input can bypass the shared claim gate.
     assert report is None
-    assert [row.id for row in await claim_poll_batch(db.agent.id)] == [messages[0].id]
+    first = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    assert first is not None
+    assert first.id == messages[0].id
 
 
 async def test_reply_intent_is_not_rederived_and_rejects_forged_destination(pooled_database: ReceiptDatabase) -> None:
@@ -210,7 +221,9 @@ async def test_reply_intent_is_not_rederived_and_rejects_forged_destination(pool
             reply_session_id=provider.id,
         )
         assert await gateway_report_delivery_dao.has_outstanding_session(provider.id)
-    _ = await claim_poll_batch(db.agent.id)
+    claimed = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    assert claimed is not None
+    assert claimed.id == message.id
     # When the turn completes and a relay claims its persisted intent.
     async with transaction(db.first):
         await record_report(db.agent, message.id, "provider answer")

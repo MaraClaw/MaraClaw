@@ -26,7 +26,7 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
 | `inbound.py` | Shared session / history / persist / enqueue helpers; accepts through `submissions` |
 | `submissions.py` | Durable native-event acceptance. One transaction: fresh authorization, receipt reserve/replay, sender quota, transcript, gateway row and reply intent |
-| `outbound.py`, `outbound_*.py` | Deliver a guest `/gateway/report` to the originating IM thread; `outbound_plan` (configured outbound, chunking, `build_plan`), `outbound_identity` (preflight), `outbound_transport` / `outbound_enterprise` (chunk send, ack) and `outbound_errors` (delivery errors, retry times) |
+| `outbound.py`, `outbound_*.py` | Deliver a completed gateway result to the originating IM thread after native engine settlement or the independent `/gateway/report` API; `outbound_plan` (configured outbound, chunking, `build_plan`), `outbound_identity` (preflight), `outbound_transport` / `outbound_enterprise` (chunk send, ack) and `outbound_errors` (delivery errors, retry times) |
 | `llm_bridge.py` | `_load_agent_and_model` plus engine LLM helpers for trigger/heartbeat only |
 | `dedup.py` | Process-local plus fail-open Redis hints (`*_shared` adds SET NX). **Not authoritative**: never decides acceptance, replay or conflict |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
@@ -46,7 +46,7 @@ Fenced by `config_id`, `auth_epoch`, `generation`, lease `claim_token` and `acco
 - `whatsapp_personal_events.py` handles bridge frames, binds the account identity (ambiguous identity fails) and `revoke_current_claim`; diagnostics log typed summaries (`error_summary`, stages, drop reasons), not message text or auth values.
 - `whatsapp_personal_intake.py` re-validates the live connection and unexpired lease, rejects assistant echoes by looking up the `whatsapp_personal_sends` message id, and accepts only the owner's self-chat messages (`from_me`, no participant, `remote_jid` is the linked account) stamped after activation. Its event key is `personal:{auth_epoch}:{message_id}`.
 - `whatsapp_personal_journal.py` is the durable send journal (`pending`, `dispatch_started`, `accepted`, `rejected`, `uncertain`, `cancelled`). `enqueue` is idempotent on `command_id`, and surfaces `rejected`, `uncertain` or `cancelled` as `PersonalSendTerminalError` and `pending` or `dispatch_started` as `PersonalSendPendingError`; `authorize_dispatch` claims the oldest pending row under the lease with no provider I/O in the transaction.
-- `personal_burst_*` batch fresh originals: `admission` runs capacity, then quota, then durable acceptance; `gateway` writes the pending burst anchor and the static "not queued" source, `notice` records terminal rejections with at most one notice per scope cooldown, `outcome` holds the typed accepted/replayed/rejected result and `limits` projects settings. The worker loop `services/personal_burst_reconciler.py` recovers missed wakes; PostgreSQL is the readiness authority.
+- `personal_burst_*` batch fresh originals: `admission` runs capacity, then quota, then durable acceptance; `gateway` writes the pending burst anchor and the static "not queued" source, `notice` records terminal rejections with at most one notice per scope cooldown, `outcome` holds the typed accepted/replayed/rejected result and `limits` projects settings. The worker loop `services/openclaw_dispatch_reconciler.py` recovers pending ready heads through the same native drain and `claim_ready_shared` authority; PostgreSQL is the readiness authority. Unready heads and delivered turns block younger Shared work; uncertain execution is never timeout-requeued.
 
 ## Adding a channel
 
@@ -62,4 +62,4 @@ Fenced by `config_id`, `auth_epoch`, `generation`, lease `claim_token` and `acco
 - Treat Redis dedup or a process-local hit as proof of acceptance or replay.
 - Put SSO/login OAuth in channel adapters. Provider directory admin sync is retired; Google Chat authentication and user gogcli OAuth remain separate live contracts.
 - Grow `agent_tools.py` with channel branches; use `agent_tool_exec` + this package.
-- Move LLM orchestration back into `api/feishu.py`. New IM callers should enqueue via `inbound.generate_channel_reply` / `run_text_turn`; replies arrive on `/gateway/report`.
+- Move LLM orchestration back into `api/feishu.py`. New IM callers should enqueue via `inbound.generate_channel_reply` / `run_text_turn`; native terminal settlement persists replies and the durable report relay sends the accepted IM intent. The independent `/gateway/report` API remains available.

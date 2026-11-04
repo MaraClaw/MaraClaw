@@ -46,12 +46,11 @@ from app.services.guest_ports import guest_port_candidates, is_port_bind_conflic
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.linkup_runtime import LINKUP_SEARCH_SKILL_FOLDER, linkup_default_skill_folder_names
 from app.services.llm import get_model_api_key
-from app.services.openclaw_inbox import (
-    ensure_openclaw_tokens,
+from app.services.openclaw_gateway_config import (
+    ensure_gateway_token,
+    gateway_config_block,
     guest_engine_base_url,
-    heartbeat_block,
-    inbox_config_block,
-    write_maraclaw_sync_skill,
+    prepare_native_gateway_files,
 )
 from app.services.openclaw_memory_embeddings import (
     memory_embedding_config,
@@ -412,7 +411,7 @@ class AgentManager:
         fallback: LLMModelRecord | None,
         selected: LLMModelRecord | None,
     ) -> str:
-        parts: list[str] = []
+        parts: list[str] = ["native-gateway-rpc-v1"]
         for row in (selected, primary, secondary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
@@ -439,6 +438,7 @@ class AgentManager:
         if not agent_dir.exists():
             logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
             return None
+        prepare_native_gateway_files(agent_dir)
         fingerprint = self._guest_config_fingerprint(
             primary=primary,
             secondary=secondary,
@@ -463,7 +463,6 @@ class AgentManager:
             logger.info("[OpenClaw] skip guest config write; file already current for {}", agent.id)
             return path
         self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
-        write_maraclaw_sync_skill(agent_dir)
         _guest_config_fingerprints[str(agent.id)] = fingerprint
         return path
 
@@ -485,18 +484,14 @@ class AgentManager:
         aliases = self._model_aliases(model, secondary, fallback)
         if aliases:
             defaults["models"] = aliases
-        defaults["heartbeat"] = heartbeat_block()
         config: JsonObject = {
             "agents": {"defaults": defaults},
             "memory": {"search": memory_search_block(memory_embedding_config(settings))},
             "plugins": {"slots": {"memory": "memory-core"}},
         }
         agent_dir = self._agent_dir(agent.id)
-        if agent_dir.exists():
-            gateway_token, hooks_token = ensure_openclaw_tokens(agent_dir)
-        else:
-            gateway_token, hooks_token = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
-        config.update(inbox_config_block(hooks_token, gateway_token))
+        gateway_token = ensure_gateway_token(agent_dir) if agent_dir.exists() else secrets.token_urlsafe(24)
+        config.update(gateway_config_block(gateway_token))
 
         env = self._collect_provider_env(model, secondary, fallback)
         env["MARACLAW_API_BASE"] = guest_engine_base_url()
@@ -638,8 +633,8 @@ class AgentManager:
                 selected=primary,
             )
             self._ensure_openclaw_workspace_layout(agent_dir)
-            gateway_token, _hooks_token = ensure_openclaw_tokens(agent_dir)
-            write_maraclaw_sync_skill(agent_dir)
+            gateway_token = ensure_gateway_token(agent_dir)
+            prepare_native_gateway_files(agent_dir)
             container_envs: dict[str, str] = {
                 "OPENCLAW_GATEWAY_TOKEN": gateway_token,
                 "HOME": "/home/node",

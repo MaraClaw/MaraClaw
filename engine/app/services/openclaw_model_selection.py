@@ -7,11 +7,9 @@ configuration or touching Docker/queues. The guest configuration is applied only
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.records.agent import AgentRecord
-from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
 from app.records.openclaw_dispatch import PreparedOpenClawMessage
 from app.services.agent_manager import guest_model_ref
@@ -100,20 +98,3 @@ async def resolve_stored_model(agent: AgentRecord, ref: str) -> ResolvedModel | 
     bundle = await load_agent_model_bundle(agent)
     model = find_stored_model(bundle, ref)
     return ResolvedModel(bundle, model) if model is not None else None
-
-
-def requires_primary(messages: Sequence[GatewayMessageRecord]) -> bool:
-    """True when any queued row is missing a slot or is classified primary."""
-    return any((message.selected_slot or "primary") == "primary" for message in messages)
-
-
-def applied_guest_model(
-    choice_slot: ModelSlot,
-    choice_model: LLMModelRecord | None,
-    bundle: ModelBundle,
-    pending: Sequence[GatewayMessageRecord],
-) -> LLMModelRecord | None:
-    """Model to write into ``openclaw.json`` for this enqueue."""
-    if choice_slot == "secondary" and requires_primary(pending):
-        return bundle.primary or choice_model
-    return choice_model

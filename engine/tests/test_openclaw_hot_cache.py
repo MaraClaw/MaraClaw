@@ -29,12 +29,6 @@ def test_ensure_flag_is_slot_specific() -> None:
     assert openclaw_hot_cache.recently_ensured(agent) is False
 
 
-def test_last_seen_touch_throttles() -> None:
-    agent_id = uuid4()
-    assert openclaw_hot_cache.should_touch_last_seen(agent_id) is True
-    assert openclaw_hot_cache.should_touch_last_seen(agent_id) is False
-
-
 def test_api_key_lookup_does_not_store_plaintext() -> None:
     agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="N")
     openclaw_hot_cache.set_cached_agent_by_key("oc-secret", agent)

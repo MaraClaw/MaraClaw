@@ -14,6 +14,7 @@ from tests.test_whatsapp_personal_burst_store_fixtures import (
     receive,
 )
 
+from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.personal_burst_dao import personal_burst_dao
 from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao as dispatch
 from app.db.errors import CheckViolationError
@@ -179,28 +180,6 @@ async def test_seal_cancels_batch_when_members_were_lost(burst_db):
     assert (resolved.state, resolved.cancel_reason) == ("cancelled", "members_lost")
 
 
-async def test_due_heads_are_durable_actual_heads_in_ready_order(burst_db):
-    f = burst_db
-    early = await admit(f, "n1", "a")
-    await age(f, early.gateway_id, 10)
-    async with transaction(f.db.first):
-        behind = await anchor(f, content="legacy behind")
-    late = await admit(f, "n2", "b")  # tail is the legacy row, so this is a new unready batch
-    await age(f, late.gateway_id, 10)
-    async with transaction(f.db.first):
-        heads = await dispatch.due_heads(10)
-        none = await dispatch.due_heads(0)
-    # Then only the actual oldest pending row is a head; the later due batch is not eligible while another row precedes it.
-    assert [h.gateway_id for h in heads] == [early.gateway_id]
-    assert none == []
-    async with transaction(f.db.first):
-        await dispatch.cancel_batch(early.gateway_id, "operator")
-        await f.db.first.execute("DELETE FROM gateway_messages WHERE id = %(id)s", {"id": behind})
-        assert [h.gateway_id for h in await dispatch.due_heads(10)] == [late.gateway_id]
-        await dispatch.seal(late.gateway_id)
-        assert [h.gateway_id for h in await dispatch.due_heads(10)] == [late.gateway_id]
-
-
 async def test_sealed_batch_resumes_after_restart_from_durable_state(burst_db):
     # Given a sealed batch read by a different connection (a restarted worker).
     f = burst_db
@@ -209,9 +188,10 @@ async def test_sealed_batch_resumes_after_restart_from_durable_state(burst_db):
     async with transaction(f.db.first):
         await dispatch.seal(batch.gateway_id)
     async with transaction(f.db.second):
-        [head] = await dispatch.due_heads(5)
-    sealed = present(head.batch)
-    assert (head.gateway_id, sealed.state, sealed.frozen_body) == (batch.gateway_id, "sealed", "a")
+        heads, _ = await gateway_message_dao.pending_dispatch_page(5)
+        sealed = present(await dispatch.get(batch.gateway_id))
+    assert [head.id for head in heads] == [batch.gateway_id]
+    assert (sealed.state, sealed.frozen_body) == ("sealed", "a")
 
 
 async def test_equal_timestamps_keep_gateway_fifo_by_created_at_then_id(burst_db):

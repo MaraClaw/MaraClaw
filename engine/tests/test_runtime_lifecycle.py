@@ -160,8 +160,8 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         audit_logger,
         broadcast_email_worker,
         gateway_report_relay,
+        openclaw_dispatch_reconciler,
         openclaw_update_worker,
-        personal_burst_reconciler,
         scheduler,
         scheduler_tasks,
         trigger_daemon,
@@ -255,7 +255,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
-    monkeypatch.setattr(personal_burst_reconciler, "personal_burst_reconciler_loop", reconcile_bursts)
+    monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", broadcast)
     monkeypatch.setattr(readiness, "ping_pool", probe)
@@ -327,7 +327,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
     assert ("gateway_report_relay" in names) == role_enabled(roles, "worker")
-    assert ("personal_burst" in names) == role_enabled(roles, "worker")
+    assert ("openclaw_dispatch" in names) == role_enabled(roles, "worker")
     assert burst_stopped.is_set() == role_enabled(roles, "worker")
     assert ("openclaw_update" in names) == role_enabled(roles, "worker")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")

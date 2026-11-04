@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
-import anyio
 import pytest
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
@@ -22,7 +21,6 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.openclaw_update_dao import openclaw_update_notice_dao as notices, openclaw_update_run_dao as runs
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
-from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_update import RunJournal
 from app.scripts import bootstrap_db
 from app.services.agent_manager import guest_container_name
@@ -148,46 +146,28 @@ async def shared_queue(db: DbConnection) -> tuple[UUID, UUID]:
     return agent_id, session_id
 
 
-async def test_upgrade_requeues_delivered_shared_chat_for_reclaim(db: DbConnection) -> None:
-    # Given a fresh shared-chat delivery owned by the guest that has just stopped.
-    agent_id, session_id = await shared_queue(db)
-    claimed_at = datetime.now(UTC)
-    claimed = await gateway_message_dao.claim_shared(agent_id, session_id, now=claimed_at)
-    assert claimed is not None
-    assert (claimed.content, claimed.status, claimed.delivered_at) == ("first", "delivered", claimed_at)
-    # When cutover releases that guest's in-flight claims.
-    await PostgresUpgradeStore().requeue_inflight(agent_id)
-    # Then the shared delivery loses its old claim and can be claimed again, without skipping ahead.
-    released = await gateway_message_dao.get_for_agent(claimed.id, agent_id)
-    assert released is not None
-    assert (released.status, released.delivered_at) == ("pending", None)
-    reclaimed_at = claimed_at + timedelta(seconds=1)
-    reclaimed = await gateway_message_dao.claim_shared(agent_id, session_id, now=reclaimed_at)
-    assert reclaimed is not None
-    assert (reclaimed.id, reclaimed.status, reclaimed.delivered_at) == (claimed.id, "delivered", reclaimed_at)
-    assert await gateway_message_dao.claim_shared(agent_id, session_id, now=reclaimed_at) is None
-    assert [message.content for message in await gateway_message_dao.list_pending(agent_id)] == ["second"]
-
-
-async def test_normal_shared_claims_serialize_concurrent_consumers(db: DbConnection) -> None:
-    # Given two queued turns in the same canonical shared lane and no upgrade requeue.
-    agent_id, session_id = await shared_queue(db)
-    claimed_at = datetime.now(UTC)
-    claims: list[GatewayMessageRecord | None] = []
-
-    async def claim() -> None:
-        claims.append(await gateway_message_dao.claim_shared(agent_id, session_id, now=claimed_at))
-
-    # When two consumers compete for the lane.
-    async with anyio.create_task_group() as group:
-        group.start_soon(claim)
-        group.start_soon(claim)
-    # Then exactly the first turn is delivered; another claim cannot bypass it.
-    assert len(claims) == 2
-    assert claims.count(None) == 1
-    assert [(message.content, message.status) for message in claims if message is not None] == [("first", "delivered")]
-    assert await gateway_message_dao.claim_shared(agent_id, session_id, now=claimed_at) is None
-    assert [message.content for message in await gateway_message_dao.list_pending(agent_id)] == ["second"]
+async def test_upgrade_preserves_uncertain_delivery_without_replay(db: DbConnection, tmp_path) -> None:
+    agent_id, _notice, run, _docker, _manager, executor = await _executor_env(db, tmp_path)
+    delivered = await gateway_message_dao.create(
+        obj_in={
+            "agent_id": agent_id,
+            "conversation_id": "ordinary",
+            "content": "first",
+            "status": "delivered",
+            "delivered_at": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+    pending = await gateway_message_dao.create(
+        obj_in={"agent_id": agent_id, "conversation_id": "ordinary", "content": "second", "status": "pending"}
+    )
+    await executor.process(run.id)
+    first = await gateway_message_dao.get_for_agent(delivered.id, agent_id)
+    second = await gateway_message_dao.get_for_agent(pending.id, agent_id)
+    assert first is not None
+    assert (first.status, first.delivered_at) == ("delivered", delivered.delivered_at)
+    assert second is not None
+    assert second.status == "pending"
+    assert await gateway_message_dao.claim_ordinary_head(pending.id, agent_id) is None
 
 
 async def test_fanout_reaches_every_active_non_platform_membership_across_tenants(db: DbConnection):

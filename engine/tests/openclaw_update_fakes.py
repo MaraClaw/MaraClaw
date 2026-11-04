@@ -143,7 +143,6 @@ class FakeManager:
 class FakeStore:
     agents: dict[uuid.UUID, AgentRecord]
     runs: dict[uuid.UUID, OpenClawUpdateRunRecord]
-    requeued: list[uuid.UUID] = field(default_factory=list[uuid.UUID])
     updated_at: dict[uuid.UUID, datetime] = field(default_factory=dict[uuid.UUID, datetime])
 
     async def list_active(self) -> list[OpenClawUpdateRunRecord]:
@@ -232,6 +231,3 @@ class FakeStore:
     async def mark_rollback_failed(self, agent_id: uuid.UUID, image_id: str | None) -> None:
         if agent_id in self.agents:
             self.agents[agent_id] = replace(self.agents[agent_id], openclaw_image_id=image_id, status="error")
-
-    async def requeue_inflight(self, agent_id: uuid.UUID) -> None:
-        self.requeued.append(agent_id)

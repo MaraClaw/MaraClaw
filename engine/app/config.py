@@ -181,8 +181,6 @@ class Settings(BaseSettings):
 
     # How OpenClaw guests reach this engine on the Docker network.
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
-    # Requeue a gateway message the guest took but has not reported after this many seconds.
-    OPENCLAW_DELIVERY_TIMEOUT_SECONDS: int = Field(default=900, gt=0)
     # Personal WhatsApp burst batching: originals join one turn after a quiet window, bounded by the max window.
     # Pending limits exclude the one in-flight batch; the body limit is the joined UTF-8 size of one batch.
     WHATSAPP_PERSONAL_BURST_QUIET_SECONDS: float = Field(default=2.0, gt=0, le=3600, allow_inf_nan=False)

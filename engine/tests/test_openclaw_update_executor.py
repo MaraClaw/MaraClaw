@@ -95,7 +95,6 @@ async def test_success_publishes_new_container_pins_target_and_cleans_old_artifa
     assert "old-id" not in h.docker.containers
     assert not snapshot_path(h.agent_dir, h.run.id).exists()
     assert (h.agent_dir / "workspace" / "written-by-new-writer.txt").is_file()
-    assert h.store.requeued == [h.agent.id]
 
 
 async def test_cleanup_ownership_refusal_preserves_published_success_and_continues_cleanup(
@@ -181,7 +180,6 @@ async def test_new_container_start_failure_rolls_back_state_and_restarts_the_ori
     assert original.restart == "unless-stopped"
     assert h.stored_agent.openclaw_image_id == OLD_IMAGE
     assert h.stored_agent.container_id == "old-id"
-    assert h.store.requeued == [h.agent.id, h.agent.id]
 
 
 async def test_readiness_failure_removes_new_writer_before_restoring_state(h: Harness):
@@ -243,12 +241,9 @@ async def test_run_in_cutover_rolls_back_instead_of_rolling_forward(h: Harness):
     assert (h.agent_dir / "workspace" / "memory.md").read_text(encoding="utf-8") == "before"
     assert h.manager.starts == []
     assert h.stored_agent.openclaw_image_id == OLD_IMAGE
-    assert h.store.requeued == [h.agent.id]
 
 
-async def test_interrupted_cutover_stops_original_before_restore_and_requeue(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_interrupted_cutover_stops_original_before_restore(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a worker died just after journaling cutover, before stopping the original or taking a snapshot.
     canonical = guest_container_name(h.agent.id)
     journal = RunJournal(
@@ -260,23 +255,16 @@ async def test_interrupted_cutover_stops_original_before_restore_and_requeue(
     )
     h.store.runs[h.run.id] = replace(h.run, state="cutover", journal=journal)
     observed: list[tuple[str, bool]] = []
-    requeue = FakeStore.requeue_inflight
 
     def observe_restore(agent_dir: Path, run_id: uuid.UUID) -> bool:
         observed.append(("restore", h.docker.containers["old-id"].running))
         return restore_snapshot(agent_dir, run_id)
 
-    async def observe_requeue(store: FakeStore, agent_id: uuid.UUID) -> None:
-        observed.append(("requeue", h.docker.containers["old-id"].running))
-        await requeue(store, agent_id)
-
     monkeypatch.setattr(executor_module, "restore_snapshot", observe_restore)
-    monkeypatch.setattr(FakeStore, "requeue_inflight", observe_requeue)
     # When another worker recovers the interrupted run.
     await h.executor.process(h.run.id)
-    # Then restore and requeue run in order with the original stopped, before it resumes service.
-    assert observed == [("restore", False), ("requeue", False)]
-    assert h.store.requeued == [h.agent.id]
+    # Then restore runs with the original stopped, before it resumes service.
+    assert observed == [("restore", False)]
     assert h.docker.containers["old-id"].running
     assert (h.stored_run.state, h.stored_run.failure_code) == ("failed", "interrupted")
 

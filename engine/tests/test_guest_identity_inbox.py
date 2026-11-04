@@ -1,9 +1,11 @@
+from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
 import pytest
 
 from app.records.agent import AgentRecord
-from app.services import openclaw_inbox
+from app.records.gateway_message import GatewayMessageRecord
+from app.services import openclaw_gateway_config, openclaw_gateway_rpc
 from app.services.agent_manager import agent_manager
 from app.services.guest_identity import guest_container_name
 from guest_identity_fakes import Docker, Guest
@@ -13,28 +15,56 @@ SECOND = UUID("deadbeef-0000-4000-8000-000000000002")
 
 
 @pytest.mark.parametrize("recorded", [None, "legacy-id", "stale-id"])
-def test_exec_routes_to_label_proven_legacy_id(monkeypatch: pytest.MonkeyPatch, recorded: str | None) -> None:
+async def test_exec_routes_to_label_proven_legacy_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, recorded: str | None
+) -> None:
     # Given a deployed short-name guest with a complete matching label.
     docker = Docker(Guest("legacy-id", "maraclaw-agent-deadbeef", str(FIRST)))
     monkeypatch.setattr(agent_manager, "docker_client", docker)
     agent = AgentRecord(id=FIRST, name="Guest", creator_id=uuid4(), container_id=recorded)
-    # When delivering an inbox command.
-    result = openclaw_inbox._docker_execute(agent, ["node", "wake.js"])
-    # Then execution uses its inspected immutable ID, not the colliding name or stale persisted ID.
-    assert result is None
-    assert docker.container.calls == [("execute", "legacy-id")]
+    message = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
+    targets: list[str] = []
+    _prepare_execution(monkeypatch, tmp_path, agent, targets)
+    result = await openclaw_gateway_rpc.execute_gateway_turn(agent, message)
+    assert targets == ["legacy-id"]
+    assert result == openclaw_gateway_rpc.UncertainOutcome(str(message.id), "unknown", None, "invalid_output")
 
 
-def test_exec_never_routes_through_foreign_legacy_name(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_exec_never_routes_through_foreign_legacy_name(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # Given the short-name collision belongs to another complete UUID.
     docker = Docker(Guest("foreign-id", "maraclaw-agent-deadbeef", str(SECOND)))
     monkeypatch.setattr(agent_manager, "docker_client", docker)
     agent = AgentRecord(id=FIRST, name="Guest", creator_id=uuid4())
-    # When delivering an inbox command without a recorded container.
-    result = openclaw_inbox._docker_execute(agent, ["node", "wake.js"])
+    message = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
+    targets: list[str] = []
+    _prepare_execution(monkeypatch, tmp_path, agent, targets)
+    result = await openclaw_gateway_rpc.execute_gateway_turn(agent, message)
     # Then no command is delivered to the foreign guest.
-    assert result is not None
-    assert docker.container.calls == []
+    assert result == openclaw_gateway_rpc.NotAdmittedOutcome(str(message.id), "not_submitted", "guest_unavailable")
+    assert targets == []
+
+
+def _prepare_execution(monkeypatch, tmp_path, agent: AgentRecord, targets: list[str]) -> None:
+    @asynccontextmanager
+    async def exclusion(_agent_id):
+        yield
+
+    async def allowed(_agent_id):
+        return None
+
+    async def fresh(_agent_id):
+        return agent
+
+    def execute(container_id, _payload_name, _cancel):
+        targets.append(container_id)
+        return "{}"
+
+    monkeypatch.setattr(openclaw_gateway_rpc, "guest_write_section", exclusion)
+    monkeypatch.setattr(openclaw_gateway_rpc, "assert_work_allowed", allowed)
+    monkeypatch.setattr(openclaw_gateway_rpc.agent_dao, "get", fresh)
+    monkeypatch.setattr(openclaw_gateway_rpc, "_execute", execute)
+    monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
+    monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
 
 
 def test_inbox_and_manager_share_full_uuid_naming() -> None:

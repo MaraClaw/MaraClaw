@@ -38,10 +38,6 @@ FIXED_CASES = [
         {"status": "sent", "target": "Member", "type": "human", "channel": "feishu"},
     ),
     (
-        contracts.GatewaySetupGuideResponse,
-        {"skill_filename": "sync.md", "skill_content": "", "heartbeat_addition": ""},
-    ),
-    (
         contracts.MessageInboxItem,
         {
             "id": "message",

@@ -1,6 +1,3 @@
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -14,7 +11,6 @@ from tests.test_chat_submission_postgres import (
 )
 
 from app.db.session import transaction
-from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services import (
     chat_submissions,
@@ -22,63 +18,37 @@ from app.services import (
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
 )
-from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.channels import submissions
 from app.services.chat_submissions import ChatSubmission
 from app.services.llm.turn import ModelBundle
-from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 
 __all__ = ["channel_db", "receipt_db", "writable_receipt_db"]
 
 
-@pytest.fixture
-async def config_failure(
-    receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
-) -> AsyncIterator[type[Exception]]:
-    model = LLMModelRecord(uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
-
-    async def ensure(agent: AgentRecord) -> AgentRecord:
-        return agent
-
-    monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
-    monkeypatch.setattr(routing, "ensure_agent_company_models", ensure)
-    monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
-    gate = AsyncMock(side_effect=[None, OpenClawUpdateInProgressError()]) if failure == "upgrade" else AsyncMock()
-    monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
-    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
-    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
-    monkeypatch.setattr(routing.agent_manager, "write_guest_config", Mock(side_effect=OSError("private config path")))
-    async with AsyncExitStack() as stack:
-        if failure == "timeout":
-            await stack.enter_async_context(setup_workspace_lock(tmp_path / str(receipt_db.agent.id)))
-        yield OpenClawUpdateInProgressError if failure == "upgrade" else routing.GuestConfigWriteError
-
-
-@pytest.mark.parametrize("failure", ["write", "timeout", "upgrade"])
-async def test_config_failure_rolls_back_session_acceptance(
-    writable_receipt_db: ReceiptDatabase, config_failure: type[Exception], monkeypatch: pytest.MonkeyPatch
+async def test_session_acceptance_commits_without_writing_guest_configuration(
+    writable_receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given a real session transaction using the failing fenced preparation.
     db = writable_receipt_db
+    model = LLMModelRecord(uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
+    writer = Mock(side_effect=OSError("private config path"))
+    monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
+    monkeypatch.setattr(routing, "ensure_agent_company_models", AsyncMock(side_effect=lambda agent: agent))
+    monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
+    monkeypatch.setattr(exclusion.agent_manager, "write_guest_config", writer)
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", routing.prepare_openclaw_message)
     submission = ChatSubmission(client_submission_id=uuid4(), content="hello")
-    # When preparation fails inside the caller-owned PostgreSQL transaction.
-    with pytest.raises(config_failure):
-        async with transaction(db.first):
-            await chat_submissions.accept_submission(
-                submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
-            )
-    # Then no turn, charge, gateway item, or session metadata change persists.
     async with transaction(db.first):
-        assert await db.first.fetchval("SELECT count(*) FROM chat_messages") == 0
-        assert await db.first.fetchval("SELECT count(*) FROM gateway_messages") == 0
-        assert (
-            await db.first.fetchval("SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id}) == 0
+        accepted = await chat_submissions.accept_submission(
+            submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
         )
-        assert await db.first.fetchone("SELECT title, last_message_at FROM chat_sessions") == {
-            "title": "Session QA",
-            "last_message_at": None,
-        }
+    assert not accepted.replayed
+    writer.assert_not_called()
+    async with transaction(db.first):
+        assert await db.first.fetchval("SELECT count(*) FROM chat_messages") == 1
+        assert await db.first.fetchval("SELECT count(*) FROM gateway_messages") == 1
+        assert (
+            await db.first.fetchval("SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id}) == 1
+        )
 
 
 async def test_channel_acceptance_commits_without_touching_the_guest_configuration(
@@ -90,7 +60,7 @@ async def test_channel_acceptance_commits_without_touching_the_guest_configurati
     write = Mock(side_effect=OSError("private config path"))
     monkeypatch.setattr(selection, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(selection, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
-    monkeypatch.setattr(routing.agent_manager, "write_guest_config", write)
+    monkeypatch.setattr(exclusion.agent_manager, "write_guest_config", write)
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", selection.prepare_shared_openclaw_message)
     # When the native event is accepted.
     async with transaction(fixture.db.first):

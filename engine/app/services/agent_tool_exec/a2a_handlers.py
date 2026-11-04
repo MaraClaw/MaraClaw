@@ -19,7 +19,6 @@ async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
             sender_user_id=ctx.owner_id,
             conversation_id=ctx.chat_session_id,
             history=ctx.conversation_history,
-            await_wake=False,
         )
 
         await log_activity(
@@ -31,10 +30,10 @@ async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
 
         last_seen = ctx.target_agent.openclaw_last_seen
         online = last_seen is not None and (datetime.now(UTC) - last_seen).total_seconds() < 300
-        status_hint = "online" if online else "offline (message will be delivered on next heartbeat)"
+        status_hint = "online" if online else "offline"
         return (
             f"✅ Message sent to {ctx.target_agent.name} (OpenClaw agent, currently {status_hint}). "
-            "The message has been queued and will be delivered when the agent polls for updates."
+            "The message has been queued for delivery."
         )
     except Exception as error:
         logger.exception(f"[A2A] _a2a_handle_openclaw failed: from={ctx.source_agent.id}, to={ctx.target_agent.id}")

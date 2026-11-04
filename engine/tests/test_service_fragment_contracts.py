@@ -17,11 +17,10 @@ from app.core.json_types import JsonObject
 from app.records.channel_config import ChannelConfigRecord
 from app.services import template_seeder, tool_config
 from app.services.channels import google_chat
-from app.services.openclaw_inbox import heartbeat_block, inbox_config_block
+from app.services.openclaw_gateway_config import gateway_config_block
 from app.services.service_contracts import (
     GoogleChatMessage,
-    OpenClawHeartbeat,
-    OpenClawInboxConfig,
+    OpenClawGateway,
     TeamsMessageActivity,
     TemplateMetadata,
     TemplateSeed,
@@ -32,38 +31,27 @@ from app.services.wechat_channel import get_wechat_context_entry, update_wechat_
 
 
 def test_guest_fragments_validate_when_generated() -> None:
-    config = inbox_config_block(hooks_token="hooks-secret", gateway_token="gateway-secret")
+    config = gateway_config_block("gateway-secret")
 
-    parsed = TypeAdapter(OpenClawInboxConfig).validate_python(config, strict=True)
+    parsed = TypeAdapter(OpenClawGateway).validate_python(config["gateway"], strict=True)
 
-    assert parsed["gateway"]["auth"]["token"] == "gateway-secret"
-    assert parsed["gateway"]["controlUi"]["allowedOrigins"] == ["http://localhost:18789", "http://127.0.0.1:18789"]
-    assert parsed["hooks"]["token"] == "hooks-secret"
-    assert parsed["hooks"]["allowedSessionKeyPrefixes"] == ["hook:", "agent:main:hook:maraclaw:"]
+    assert parsed["auth"]["token"] == "gateway-secret"
+    assert parsed["controlUi"]["allowedOrigins"] == ["http://localhost:18789", "http://127.0.0.1:18789"]
 
 
 def test_guest_gateway_contract_rejects_wildcard_control_ui_origin() -> None:
-    config = inbox_config_block(hooks_token="hooks-secret", gateway_token="gateway-secret")
+    config = gateway_config_block("gateway-secret")
     gateway = config["gateway"]
     assert isinstance(gateway, dict)
     gateway["controlUi"] = {"allowedOrigins": ["*"]}
 
     with pytest.raises(ValidationError):
-        TypeAdapter(OpenClawInboxConfig).validate_python(config, strict=True)
-
-
-def test_heartbeat_fragment_validates_when_generated() -> None:
-    fragment = heartbeat_block()
-
-    parsed = TypeAdapter(OpenClawHeartbeat).validate_python(fragment, strict=True)
-
-    assert parsed["every"] == "30s"
+        TypeAdapter(OpenClawGateway).validate_python(gateway, strict=True)
 
 
 @pytest.mark.parametrize(
     ("contract", "payload"),
     [
-        (OpenClawHeartbeat, {"every": "1h", "prompt": ""}),
         (WeChatContextEntry, {"context_token": "token", "conv_id": "conversation"}),
         (TenantToolSettings, {"config": []}),
         (GoogleChatMessage, {"text": "hello", "thread": {"id": "thread"}}),

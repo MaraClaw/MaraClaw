@@ -201,7 +201,6 @@ class UpgradeExecutor:
         await to_thread.run_sync(self.docker.set_restart, plan.old_id, "no")
         await to_thread.run_sync(self.docker.stop, plan.old_id)
         await to_thread.run_sync(self.docker.rename, plan.old_id, plan.parked)
-        await self.store.requeue_inflight(agent.id)
         _ = await to_thread.run_sync(commit_snapshot, plan.agent_dir, run.id)
         replacement = replace(agent, container_id=None)
         new_id = await self.manager.start_container(replacement, image=plan.target, rehydrate=False)
@@ -306,7 +305,6 @@ class UpgradeExecutor:
             return
         if original is None:
             raise _CutoverError(ROLLBACK_FAILED)
-        await self.store.requeue_inflight(agent.id)
         if original.name != canonical:
             await run_in(self.docker.rename, old_id, canonical)
         await run_in(self.docker.set_restart, old_id, "unless-stopped")

@@ -30,12 +30,6 @@ class GatewayHumanMessageResponse(TypedDict):
 type GatewaySendMessageResponse = GatewayAgentMessageResponse | GatewayHumanMessageResponse
 
 
-class GatewaySetupGuideResponse(TypedDict):
-    skill_filename: str
-    skill_content: str
-    heartbeat_addition: str
-
-
 class MessageInboxItem(TypedDict):
     id: str
     sender_type: Literal["agent"]
