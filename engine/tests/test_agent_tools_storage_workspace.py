@@ -1041,3 +1041,160 @@ async def test_delete_workspace_directory_uses_prefix_existence(monkeypatch, tmp
     assert result.ok is True
     assert f"{agent_id}/workspace/dir/a.txt" not in storage.files
     assert f"{agent_id}/workspace/dir/nested/b.txt" not in storage.files
+
+
+def _build_symlink_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Agent workspace with inside/outside symlinks; the outside target is a prefix sibling of the workspace."""
+    workspace = tmp_path / "agent"
+    sibling = tmp_path / "agent-other"
+    docs = workspace / "workspace"
+    docs.mkdir(parents=True)
+    sibling.mkdir()
+    (sibling / "secret.md").write_text("needle outside\n", encoding="utf-8")
+    (sibling / "nested.md").write_text("needle nested outside\n", encoding="utf-8")
+    (docs / "notes.md").write_text("needle inside\n", encoding="utf-8")
+    (docs / "inside-file.md").symlink_to(docs / "notes.md")
+    (docs / "real-dir").mkdir()
+    (docs / "real-dir" / "child.md").write_text("needle child\n", encoding="utf-8")
+    (docs / "inside-dir").symlink_to(docs / "real-dir", target_is_directory=True)
+    (docs / "outside-file.md").symlink_to(sibling / "secret.md")
+    (docs / "outside-dir").symlink_to(sibling, target_is_directory=True)
+    return workspace, sibling
+
+
+def _forbid_outside_access(monkeypatch: pytest.MonkeyPatch, outside: Path) -> None:
+    """Fail the test when content, size or children of anything under ``outside`` are read."""
+    read_text, iterdir, stat = Path.read_text, Path.iterdir, Path.stat
+
+    def is_outside(path: Path) -> bool:
+        return path.resolve().is_relative_to(outside.resolve())
+
+    def guarded_read_text(self: Path, *args, **kwargs):
+        assert not is_outside(self), f"read content of {self}"
+        return read_text(self, *args, **kwargs)
+
+    def guarded_iterdir(self: Path):
+        assert not is_outside(self), f"listed children of {self}"
+        return iterdir(self)
+
+    def guarded_stat(self: Path, *args, **kwargs):
+        assert not is_outside(self), f"stat of {self}"
+        return stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
+    monkeypatch.setattr(Path, "stat", guarded_stat)
+
+
+def test_source_path_fallback_rejects_symlink_sibling_resolving_outside_root(monkeypatch, tmp_path):
+    # Given: "secretnote.md" does not exist, so the normalized-name fallback matches "secret note.md" -> outside file
+    workspace, sibling = _build_symlink_fixture(tmp_path)
+    docs = workspace / "workspace"
+    (docs / "secret note.md").symlink_to(sibling / "secret.md")
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+
+    # When / Then
+    with pytest.raises(ValueError, match="Access denied for this path"):
+        agent_tools._resolve_tool_source_path(workspace, "workspace/secretnote.md")
+    assert agent_tools._read_file(workspace, "workspace/secretnote.md") == "Access denied for this path"
+
+
+def test_source_path_fallback_keeps_symlink_sibling_resolving_inside_root(monkeypatch, tmp_path):
+    workspace, _sibling = _build_symlink_fixture(tmp_path)
+    docs = workspace / "workspace"
+    (docs / "my notes.md").symlink_to(docs / "notes.md")
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+
+    source = agent_tools._resolve_tool_source_path(workspace, "workspace/mynotes.md")
+    read = agent_tools._read_file(workspace, "workspace/mynotes.md")
+
+    assert source == (docs / "notes.md").resolve()
+    assert "needle inside" in read
+
+
+def test_source_path_fallback_prefers_inside_match_over_escaping_match(monkeypatch, tmp_path):
+    workspace, sibling = _build_symlink_fixture(tmp_path)
+    docs = workspace / "workspace"
+    (docs / "a b.md").symlink_to(sibling / "secret.md")
+    (docs / "ab.MD").write_text("inside", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+
+    assert agent_tools._resolve_tool_source_path(workspace, "workspace/a  b.md") == (docs / "ab.MD").resolve()
+
+
+def test_local_search_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
+    workspace, sibling = _build_symlink_fixture(tmp_path)
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    _forbid_outside_access(monkeypatch, sibling)
+
+    through_directory_link = agent_tools._search_files(workspace, "needle", path="workspace", file_pattern="*/*.md")
+    everything = agent_tools._search_files(workspace, "needle", path="workspace")
+
+    assert "outside" not in through_directory_link
+    assert "outside" not in everything
+    assert "workspace/notes.md:1: needle inside" in everything
+    assert "workspace/inside-file.md:1: needle inside" in everything
+    assert "workspace/real-dir/child.md:1: needle child" in everything
+    assert "workspace/inside-dir/child.md:1: needle child" in through_directory_link
+    # notes.md, inside-file.md, real-dir/child.md; the two outside links are not even counted as searched
+    assert everything.startswith("🔍 Found 3+ match(es) in 3 file(s)")
+
+
+def test_local_find_skips_entries_resolving_outside_root_without_statting_them(monkeypatch, tmp_path):
+    workspace, sibling = _build_symlink_fixture(tmp_path)
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    _forbid_outside_access(monkeypatch, sibling)
+
+    everything = agent_tools._find_files(workspace, "*", path="workspace")
+    through_directory_link = agent_tools._find_files(workspace, "outside-dir/*", path="workspace")
+    only_outside = agent_tools._find_files(workspace, "outside-*", path="workspace")
+
+    assert "outside" not in everything
+    assert "📄 workspace/inside-file.md (14B)" in everything
+    assert "📁 workspace/inside-dir/" in everything
+    assert everything.startswith("📂 Found 4 item(s) (2 dirs, 2 files) matching '*':")
+    assert through_directory_link == "No files matching pattern: outside-dir/*"
+    assert only_outside == "No files matching pattern: outside-*"
+
+
+def test_local_listing_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
+    workspace, sibling = _build_symlink_fixture(tmp_path)
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    _forbid_outside_access(monkeypatch, sibling)
+
+    listing = agent_tools._list_files(workspace, "workspace")
+
+    assert "outside" not in listing
+    assert listing == (
+        "📂 workspace: 2 folder(s), 2 file(s)\n"
+        "  📁 inside-dir/ (1 items)\n"
+        "  📄 inside-file.md (14B)\n"
+        "  📄 notes.md (14B)\n"
+        "  📁 real-dir/ (1 items)"
+    )
+
+
+def test_enterprise_root_search_find_and_listing_skip_symlinks_to_other_tenant(monkeypatch, tmp_path):
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    enterprise = tmp_path / "enterprise_info_tenant-a"
+    other_tenant = tmp_path / "enterprise_info_tenant-a-other"
+    enterprise.mkdir()
+    other_tenant.mkdir()
+    (other_tenant / "payroll.md").write_text("needle payroll\n", encoding="utf-8")
+    (enterprise / "handbook.md").write_text("needle handbook\n", encoding="utf-8")
+    (enterprise / "handbook-link.md").symlink_to(enterprise / "handbook.md")
+    (enterprise / "payroll-link.md").symlink_to(other_tenant / "payroll.md")
+    (enterprise / "other-tenant").symlink_to(other_tenant, target_is_directory=True)
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    _forbid_outside_access(monkeypatch, other_tenant)
+
+    listing = agent_tools._list_files(workspace, "enterprise_info", tenant_id="tenant-a")
+    search = agent_tools._search_files(workspace, "needle", path="enterprise_info", tenant_id="tenant-a")
+    found = agent_tools._find_files(workspace, "*", path="enterprise_info", tenant_id="tenant-a")
+
+    assert "payroll" not in listing + search + found
+    assert "other-tenant" not in listing + search + found
+    assert listing == "📂 enterprise_info: 0 folder(s), 2 file(s)\n  📄 handbook-link.md (16B)\n  📄 handbook.md (16B)"
+    assert search.startswith("🔍 Found 2+ match(es) in 2 file(s)")
+    assert found.startswith("📂 Found 2 item(s) (0 dirs, 2 files) matching '*':")

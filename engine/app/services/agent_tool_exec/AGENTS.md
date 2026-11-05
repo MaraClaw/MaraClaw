@@ -30,6 +30,14 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - Keep tool catalog metadata in `app/services/tool_definitions/` (seed) and `app/services/agent_tools_definitions/` (OpenAI shapes).
 - Avoid importing route modules or FastAPI dependencies here; handlers should stay service-layer code.
 
+## Workspace Containment
+
+- Authorized root: the agent workspace, or `enterprise_info_{tenant_id}` for `enterprise_info/` paths (`_allowed_root_for_tool_path`). Resolve every target and check `Path.is_relative_to(root.resolve())`; never `str.startswith` (a `<agent_id>-other` sibling passes it).
+- Explicit escaping paths return the existing access-denied string. Entries discovered by `rglob` / `glob` / `iterdir` (`_search_files`, `_find_files`, `_list_files`) are skipped via `workspace_paths._resolves_within_root` before any read, stat or child count.
+- The normalized-filename fallback in `_resolve_tool_source_path` returns `sibling.resolve()` only when inside the root; a match that escapes raises access denied.
+- `_send_channel_file` and AgentBay `resolve_workspace` check once with no fallback path. Inside-root symlinks keep working; check-to-use symlink swaps are out of scope.
+- Regression tests build real dirs/symlinks under `tmp_path`: `test_agent_tools_storage_workspace.py`, `test_agentbay_file_transfer.py`, `test_channel_file_send_containment.py`.
+
 ## Page read and X search (no web search-engine tools)
 
 - `web_read.py` - `read_webpage` only.

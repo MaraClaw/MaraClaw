@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from .workspace_paths import _resolves_within_root
+
 type ResolveToolSourcePath = Callable[..., Path]
 
 
@@ -17,10 +19,12 @@ def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, worksp
         target = (enterprise_root / sub).resolve() if sub else enterprise_root
         if not target.is_relative_to(enterprise_root):
             return "Access denied for this path"
+        root = enterprise_root
     else:
         target = (ws / rel_path) if rel_path else ws
         target = target.resolve()
-        if not target.is_relative_to(ws.resolve()):
+        root = ws.resolve()
+        if not target.is_relative_to(root):
             return "Access denied for this path"
 
     if not target.exists():
@@ -40,6 +44,8 @@ def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, worksp
     file_count = 0
     for item_path in sorted(target.iterdir()):
         if item_path.name.startswith("."):
+            continue
+        if not _resolves_within_root(item_path, root):
             continue
         if item_path.is_dir():
             dir_count += 1

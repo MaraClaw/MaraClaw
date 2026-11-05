@@ -60,10 +60,8 @@ async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArgum
 
     file_path = await _resolve_path(ws / rel_path)
     ws_resolved = await _resolve_path(ws)
-    if not str(file_path).startswith(str(ws_resolved)):
-        file_path = await _resolve_path(agent_tools.WORKSPACE_ROOT / str(agent_id) / rel_path)
-        if not await _run_path_call(file_path.exists):
-            return f"Error: File not found: {rel_path}"
+    if not file_path.is_relative_to(ws_resolved):
+        return "Access denied for this path"
     if not await _run_path_call(file_path.exists):
         return f"Error: File not found: {rel_path}"
 

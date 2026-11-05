@@ -9,6 +9,7 @@ from threading import Event
 
 import anyio
 import pytest
+from fastapi import HTTPException
 
 from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
@@ -304,3 +305,36 @@ async def test_local_atomic_create_metadata_never_rereads_content(tmp_path, monk
         assert result.current_version is not None
         assert result.current_version.size == 3
         assert target.read_bytes() == b"new"
+
+
+@pytest.mark.parametrize("key", ["link/secret.txt", "link"])
+async def test_local_storage_rejects_symlink_to_prefix_sibling_of_root(tmp_path: Path, key: str):
+    root = tmp_path / "storage"
+    sibling = tmp_path / "storage-other"
+    root.mkdir()
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("secret")
+    (root / "link").symlink_to(sibling, target_is_directory=True)
+    backend = LocalStorageBackend(str(root))
+
+    with pytest.raises(HTTPException) as raised:
+        backend._full_path(key)
+    with pytest.raises(HTTPException):
+        await backend.read_bytes(key)
+    with pytest.raises(HTTPException):
+        await backend.write_bytes("link/written.txt", b"escaped")
+
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "Path traversal not allowed"
+    assert sorted(path.name for path in sibling.iterdir()) == ["secret.txt"]
+
+
+async def test_local_storage_keeps_symlinks_that_stay_inside_root(tmp_path: Path):
+    root = tmp_path / "storage"
+    (root / "real").mkdir(parents=True)
+    (root / "real" / "a.txt").write_text("inside")
+    (root / "alias").symlink_to(root / "real", target_is_directory=True)
+    backend = LocalStorageBackend(str(root))
+
+    assert backend._full_path("alias/a.txt") == (root / "real" / "a.txt").resolve()
+    assert await backend.read_bytes("alias/a.txt") == b"inside"

@@ -27,7 +27,7 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 
 - Pass logical storage keys, not raw filesystem paths.
 - Normalize keys with `normalize_storage_key` or prefix helpers.
-- Local backend still performs resolved-path prefix checks after normalization.
+- `LocalStorageBackend._full_path` resolves after normalization and requires `is_relative_to(root)` (403 otherwise). This guards the global storage root only; agent/tenant isolation is enforced by the tool-level checks in `agent_tool_exec/`.
 - Use `WriteCondition(version_token=...)` for user-visible or concurrent edits.
 - Upload callers must attempt `create_bytes_if_absent` directly, not check `exists` then write. Advance to a new filename only on `conflict`; bound filename attempts. Set response filename/key only after `ok`; never delete a conflict winner or hide provider failures. Use the accepted candidate for content type, extraction, materialization, and response fields.
 - Do not assume local files are authoritative when S3/fallback is enabled.
