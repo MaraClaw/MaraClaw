@@ -39,9 +39,9 @@ New and replacement guests bind the existing host agent directory at
 that directory and retains custom roots. Roots beneath either guest state path
 use `${OPENCLAW_STATE_DIR}` so existing custom skills remain reachable after
 replacement or rollback. Host state paths and data do not move.
-The workspace uses `${OPENCLAW_STATE_DIR}/workspace`, and inbox scripts resolve
-the guest's state directory so a restored legacy container can still use its
-original state mount after upgrade rollback.
+The workspace uses `${OPENCLAW_STATE_DIR}/workspace`. Native turns run the engine's
+staged `.maraclaw-rpc.mjs` inside the owned guest at `/home/node/custom-state`,
+using its adjacent Gateway token and a unique mode-0600 per-turn payload.
 
 Ordinary starts refuse a guest mounted at `/home/node/.openclaw` with
 HTTP 409 `guest_recreation_required` requesting explicit recreation through the
@@ -101,17 +101,32 @@ A missing, stale or malformed event makes the helper exit 75 and print
 `exec --` keeps the action's own exit status, exit 75 alone proves nothing; the
 engine treats only exit 75 together with that stderr line as a refusal. The
 engine's [argv shapes](../app/services/guest_bootstrap.py) are its only readiness
-and gateway contact: probes use `check-ready`; inbox hook wakes, the
-shared-session CLI fallback and the generated `.maraclaw-poll.mjs` (which re-runs
-itself under `exec --` before it claims the inbox or calls the localhost hook)
-use `exec --`. A refusal leaves the work pending, with no retry over host HTTP or
-another transport, and the engine never starts the gateway: the image helper
-owns it. An image without the helper never becomes ready.
+and gateway contact: probes use `check-ready`; native turns use
+`exec -- node /home/node/custom-state/.maraclaw-rpc.mjs <payload-path>`. The adapter
+then uses token-authenticated protocol 4 WebSocket RPC on guest loopback. There is
+no retry over host HTTP or another transport, and the engine never starts the
+gateway: the image helper owns it. An image without the helper never becomes ready.
 
-A shared turn's claim is released back to pending only for such a positively
-identified refusal, because the action never ran. Every other failed or
-ambiguous wake, and any admitted action (including one that itself exits 75),
-keeps the claim.
+A positively identified bootstrap refusal, other proven pre-submission refusal
+or explicit request rejection releases only the exact claim back to pending using
+its `delivered_at` compare-and-set. Accepted or uncertain execution retains
+`delivered` in every lane, including when the action itself exits 75. The pending
+dispatch reconciler never requeues delivered work by age or after an upgrade.
+Cancellation drains and reaps the local Docker CLI before removing the payload
+or releasing workspace exclusion, even under repeated cancellation. This does
+not prove cancellation of a detached Gateway run or exactly-once execution.
+
+Native file preparation runs under the existing workspace exclusion before the
+guest-config fingerprint fast return. It stages the adapter, quarantines reserved
+`.maraclaw-poll.mjs`, `.maraclaw-wake.mjs`, wake payloads and the old hooks token,
+and moves `workspace/skills/maraclaw-sync` outside loaded skills into
+`.maraclaw-retired-sync-*`, preserving modified skill contents. Only the exact
+former generated `BOOTSTRAP.md` is replaced with neutral SOUL/IDENTITY guidance;
+user, template and empty variants remain unchanged. Directory and artifact opens
+refuse symlinks. Regenerated config omits the old hooks and model-poll heartbeat;
+the Gateway token/API key, OAuth profiles, Linkup configuration and guest-owned
+MCP/skill/plugin resources keep their independent lifecycle. No sibling guest
+image change is required for this transport retirement.
 
 ## Limits On New Or Replacement Guests
 
@@ -175,7 +190,7 @@ reserves and unlimited-external-allocation refusal remain unchanged.
 
 New and replacement guests publish their gateway port on host `127.0.0.1`
 only. Inside the Docker network, the gateway retains `bind: lan` and token
-authentication so the engine can reach it by container name. The generated
+authentication; native turns connect to loopback from inside the owned guest. The generated
 `openclaw.json` declares `gateway.controlUi.allowedOrigins` as exactly
 `http://localhost:18789` and `http://127.0.0.1:18789` (no wildcard), so OpenClaw
 no longer seeds them at startup for the non-loopback bind. The engine rewrites
@@ -368,7 +383,7 @@ expiry is `is_expired` or `expires_at <= now`, including timestamp equality.
 Fresh owner, identity and tenant activity, owner/agent tenant consistency and
 pending transfer cleanup are checked independently of the runtime status.
 Channel acceptance checks before new quota/transcript/enqueue work; routing,
-guest poll/wake and trigger invocation/delivery recheck before their next work
+native claim/execution and trigger invocation/delivery recheck before their next work
 boundary. These checks do not force interruption of side effects already running.
 
 Manual Stop retains its existing queue semantics. An otherwise eligible stopped

@@ -43,7 +43,7 @@ class TempWorkspace:
 def _safe_local_target(local_root: Path, rel_path: str) -> Path | None:
     root_resolved = local_root.resolve()
     target = (local_root / rel_path).resolve()
-    if not str(target).startswith(str(root_resolved)):
+    if not target.is_relative_to(root_resolved):
         return None
     return target
 
@@ -136,7 +136,10 @@ async def _materialize_storage_path_with_budget(
         budget["total"] += version.size
         return
     if await storage.is_dir(storage_key):
-        (local_root / rel_path).mkdir(parents=True, exist_ok=True)
+        target = _safe_local_target(local_root, rel_path)
+        if target is None:
+            return
+        target.mkdir(parents=True, exist_ok=True)
         for entry in await storage.list_dir(storage_key):
             child_rel = f"{rel_path.rstrip('/')}/{entry.name}" if rel_path else entry.name
             await _materialize_storage_path_with_budget(storage, entry.key, child_rel, local_root, budget, manifest)
@@ -192,6 +195,9 @@ async def flush_temp_workspace(
             for rel_path, entry in manifest.items():
                 if rel_path in local_files:
                     continue
+                if _safe_local_target(temp_workspace.root, rel_path) is None:
+                    skipped.append(rel_path)
+                    continue
                 result = await storage.delete_if_match(
                     entry.storage_key,
                     condition=WriteCondition(version_token=entry.base_version_token),
@@ -219,7 +225,7 @@ def _collect_temp_workspace_files(root: Path, selected_paths: list[str]) -> dict
         if not selected:
             continue
         target = (root_resolved / selected).resolve()
-        if not str(target).startswith(str(root_resolved)):
+        if not target.is_relative_to(root_resolved):
             continue
         if target.is_file():
             files[normalize_workspace_path(selected)] = target
@@ -229,7 +235,10 @@ def _collect_temp_workspace_files(root: Path, selected_paths: list[str]) -> dict
         for path in target.rglob("*"):
             if not path.is_file():
                 continue
-            rel = path.resolve().relative_to(root_resolved).as_posix()
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root_resolved):
+                continue
+            rel = resolved.relative_to(root_resolved).as_posix()
             files[normalize_workspace_path(rel)] = path
     return files
 

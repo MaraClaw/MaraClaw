@@ -10,6 +10,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.okr_dao import okr_key_result_dao, okr_objective_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
+from app.services.okr_owners import resolve_owner
 
 from ._agent_tool_exec_okr_access import _OKRRequestContext
 from .registry import ToolArguments
@@ -68,43 +69,32 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
         period_end = _string_argument(arguments, "period_end")
         if title in (None, "") or owner_type in (None, "") or period_start in (None, "") or period_end in (None, ""):
             return "Missing required fields: title, owner_type, period_start, period_end"
-        p_start = date.fromisoformat(period_start)
-        p_end = date.fromisoformat(period_end)
+        if owner_type not in ("company", "user", "agent"):
+            return "Invalid owner_type."
+        if ag.tenant_id is None:
+            return "Agent has no tenant."
+        try:
+            p_start = date.fromisoformat(period_start)
+        except ValueError:
+            return "Invalid period_start."
+        try:
+            p_end = date.fromisoformat(period_end)
+        except ValueError:
+            return "Invalid period_end."
+        if p_end < p_start:
+            return "Invalid period_end: before period_start."
 
         owner_id_str = _string_argument(arguments, "owner_id")
+        if owner_type != "company" and arguments.get("owner_id") is not None and owner_id_str is None:
+            return "Invalid owner_id: must be a UUID."
         owner_name_hint = _string_argument(arguments, "owner_name")
         owner_id: uuid.UUID | None = None
 
-        if owner_id_str not in (None, ""):
+        if owner_type != "company" and owner_id_str not in (None, ""):
             try:
                 owner_id = uuid.UUID(owner_id_str)
             except ValueError:
-                owner_id = None
-
-            if owner_id:
-                owner_exists = False
-                if owner_type == "agent":
-                    owner_exists = await agent_dao.get(owner_id) is not None
-                elif owner_type == "user":
-                    owner_exists = await user_dao.get(owner_id) is not None
-                    if not owner_exists:
-                        member = await org_member_dao.get(owner_id)
-                        if member:
-                            owner_exists = True
-                            if member.user_id:
-                                owner_id = member.user_id
-                                logger.info(
-                                    f"[OKR] _create_objective: resolved OrgMember.id {owner_id_str} "
-                                    f"→ user_id {owner_id}"
-                                )
-
-                if not owner_exists:
-                    owner_id = None
-                    if owner_name_hint in (None, ""):
-                        return (
-                            f"owner_id '{owner_id_str}' was not found. Provide a valid UUID, "
-                            "or pass owner_name instead."
-                        )
+                return "Invalid owner_id: must be a UUID."
 
         if owner_type != "company" and not owner_id and owner_name_hint not in (None, ""):
             if owner_type == "agent":
@@ -113,7 +103,7 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                         ag.tenant_id, [owner_name_hint], exclude_stopped=False
                     )
                     owner_id = matches[0].id if matches else None
-            elif owner_type == "user" and ag.tenant_id:
+            else:
                 user = await user_dao.find_by_email_or_display_name(owner_name_hint, tenant_id=ag.tenant_id)
                 owner_id = user.id if user else None
                 if not owner_id:
@@ -132,8 +122,10 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
         if owner_type != "company" and not owner_id:
             return f"Failed: owner_id or owner_name is required for {owner_type} OKRs."
 
-        if not ctx["agent_is_system"] and owner_type == "agent" and owner_id is None:
-            owner_id = agent_id
+        if owner_id is not None:
+            owner_id = await resolve_owner(ag.tenant_id, owner_type, owner_id)
+            if owner_id is None:
+                return "Invalid owner_id: owner does not belong to this tenant."
 
         permission_error = _okr_access_module()._can_create_okr_target(ctx, owner_type, owner_id)
         if permission_error not in (None, ""):

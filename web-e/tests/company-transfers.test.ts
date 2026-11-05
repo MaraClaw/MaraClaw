@@ -4,7 +4,7 @@ import { ZodError } from 'zod'
 
 import { transferOrg } from '../src/lib/auth-api.ts'
 import { authSession } from '../src/lib/auth-session.ts'
-import { getMyTransfer, getTransferQuote, listMyTransfers, withdrawMyTransfer } from '../src/lib/company-transfers-api.ts'
+import { getMyTransfer, getTransferQuote, listMyTransfers, listMyTransfersPage, withdrawMyTransfer } from '../src/lib/company-transfers-api.ts'
 import { formatMoney } from '../src/lib/format-money.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { admissionSummarySchema } from '../src/lib/types/company-admissions.ts'
@@ -76,6 +76,7 @@ test('free submission forwards explicit destructive consent and parses admission
 for (const operation of [
   { name: 'quote', path: '/api/company-admissions/transfer-quote', value: quote, run: getTransferQuote },
   { name: 'mine', path: '/api/company-admissions/transfers/mine?limit=100', value: [summary], run: listMyTransfers },
+  { name: 'mine page', path: '/api/company-admissions/transfers/mine/page?limit=50', value: { items: [summary], next_cursor: null }, run: (options: Parameters<typeof getTransferQuote>[0]) => listMyTransfersPage({ limit: 50 }, options) },
   { name: 'detail', path: '/api/company-admissions/transfers/id%2Fwith%3Fchars', value: summary, run: (options: Parameters<typeof getTransferQuote>[0]) => getMyTransfer('id/with?chars', options) },
   { name: 'withdraw', path: '/api/company-admissions/transfers/id%2Fwith%3Fchars/withdraw', value: { ...summary, status: 'withdrawn' }, run: (options: Parameters<typeof getTransferQuote>[0]) => withdrawMyTransfer('id/with?chars', options) },
 ]) {
@@ -149,4 +150,73 @@ test('legacy nullable transfer metadata remains valid', () => {
   const result = admissionSummarySchema.parse(admission)
   // Then
   assert.equal(result.transfer, null)
+})
+
+for (const limit of [1, 100]) {
+  test(`member transfer pages encode opaque cursors with limit ${limit} and include free requests`, async (context) => {
+    // Given
+    const cursor = 'opaque/+?=&cursor'
+    const free = { ...summary, choice: 'free', status: 'admission_created', fee_amount_minor: 0, free_consent_at: summary.created_at }
+    context.mock.method(globalThis, 'fetch', async (path: string) => {
+      const url = new URL(path, 'https://fixture.test')
+      assert.equal(url.pathname, '/api/company-admissions/transfers/mine/page')
+      assert.deepEqual([...url.searchParams], [['limit', String(limit)], ['cursor', cursor]])
+      return Response.json({ items: [free], next_cursor: cursor })
+    })
+    // When
+    const page = await listMyTransfersPage({ limit, cursor }, { owner: authSession.capture() })
+    // Then
+    assert.deepEqual(page, { items: [free], next_cursor: cursor })
+  })
+}
+
+for (const [name, response] of [
+  ['legacy array', [summary]],
+  ['missing cursor', { items: [summary] }],
+  ['invalid item', { items: [{ ...summary, status: 'joined' }], next_cursor: null }],
+  ['numeric cursor', { items: [], next_cursor: 1 }],
+  ['empty cursor', { items: [], next_cursor: '' }],
+  ['oversized cursor', { items: [], next_cursor: 'x'.repeat(2049) }],
+] as const) {
+  test(`member transfer pages reject ${name} responses at the boundary`, async (context) => {
+    // Given
+    context.mock.method(globalThis, 'fetch', async () => Response.json(response))
+    // When / Then
+    await assert.rejects(listMyTransfersPage({ limit: 50 }, { owner: authSession.capture() }), ZodError)
+  })
+}
+
+for (const [name, page] of [
+  ['zero limit', { limit: 0 }], ['oversized limit', { limit: 101 }], ['fractional limit', { limit: 1.5 }],
+  ['empty cursor', { limit: 50, cursor: '' }], ['oversized cursor', { limit: 50, cursor: 'x'.repeat(2049) }],
+] as const) {
+  test(`member transfer pages reject ${name} before sending a request`, async (context) => {
+    // Given
+    const request = context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+    // When / Then
+    await assert.rejects(listMyTransfersPage(page, { owner: authSession.capture() }), ZodError)
+    assert.equal(request.mock.callCount(), 0)
+  })
+}
+
+test('member transfer pages discard an aborted response', async (context) => {
+  // Given
+  const controller = new AbortController()
+  context.mock.method(globalThis, 'fetch', async () => {
+    controller.abort()
+    return Response.json({ items: [summary], next_cursor: null })
+  })
+  // When / Then
+  await assert.rejects(listMyTransfersPage({ limit: 50 }, {
+    owner: authSession.capture(), signal: controller.signal,
+  }), { name: 'AbortError' })
+})
+
+test('member transfer pages accept an empty terminal page', async (context) => {
+  // Given
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+  // When
+  const page = await listMyTransfersPage({ limit: 50 }, { owner: authSession.capture() })
+  // Then
+  assert.deepEqual(page, { items: [], next_cursor: null })
 })

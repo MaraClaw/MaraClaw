@@ -58,7 +58,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 9. `useTransferReviewAccess` looks up `/api/tenants/me` (`['admin-transfer-review-tenant', tenantId]`) only for
    `canInspectReviewTenant` and no lock. `canReview` requires no lock, no tenant-lookup error and `canReviewTransferPayments`.
    Queue and detail are enabled only by `canReview` and poll every 30 seconds. `transferDecisionOptions` throws a local 403
-   when not allowed. Success cancels polls, sets detail, patches the queue and invalidates transfers plus notifications;
+   when not allowed. Queue pages key on `['admin-transfer-payments','list',view,cursor]`. Success cancels polls, sets detail, removes the decided request from every cached `pending` page, replaces it in `recent` pages and invalidates transfers plus notifications;
    only a 409 invalidates on error.
 10. Agent transfer reads (`gcTime: 0`, `staleTime: 0`, no retry) fetch the source detail and every recipient page.
     Success cancels and invalidates transfers, users, user, companies, deletion queries and notifications;

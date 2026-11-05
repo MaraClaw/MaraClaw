@@ -1,3 +1,4 @@
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -5,35 +6,30 @@ import pytest
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.records.okr import OKRSettingsRecord
-from app.services import okr_reporting, openclaw_inbox
+from app.services import okr_reporting, openclaw_gateway_rpc
 from app.services.agent_manager import agent_manager
-from app.services.guest_identity import GuestIdentity
+from guest_bootstrap_fakes import GUARD
 
 
-@pytest.mark.parametrize("nested", [False, True])
-def test_docker_execute_accepts_direct_and_nested_clients(monkeypatch: pytest.MonkeyPatch, nested: bool) -> None:
-    # Given: both supported SDK/fake shapes expose the same execute contract.
-    calls: list[tuple[str, list[str], bool]] = []
+def test_native_docker_execute_uses_guarded_owned_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
 
     class Executor:
-        def execute(self, container: str, command: list[str], *, stream: bool = False) -> str:
-            calls.append((container, command, stream))
+        def execute(self, container: str, command: list[str], *, stream: bool, timeout: int) -> str:
+            calls.append((container, command, stream, timeout))
             return "done"
 
     class Client:
         container: Executor = Executor()
 
-    monkeypatch.setattr(agent_manager, "docker_client", Client() if nested else Executor())
-    agent = AgentRecord(id=uuid4(), name="Inbox", creator_id=uuid4(), container_id="container-abc")
-    owned_guest = GuestIdentity("container-abc", f"maraclaw-agent-{agent.id}", str(agent.id), ())
-    monkeypatch.setattr(openclaw_inbox, "resolve_guest", lambda _client, _agent: owned_guest)
-
-    # When: the adapter invokes a guest command.
-    error = openclaw_inbox._docker_execute(agent, ["node", "wake.mjs"])
-
-    # Then: neither SDK shape changes command delivery or the success result.
-    assert error is None
-    assert calls == [("container-abc", ["node", "wake.mjs"], False)]
+    monkeypatch.setattr(agent_manager, "docker_client", Client())
+    assert openclaw_gateway_rpc._execute("container-abc", "payload.json", Event()) == "done"
+    container, command, stream, timeout = calls[0]
+    assert container == "container-abc"
+    assert command[: len(GUARD)] == GUARD
+    assert command[-1] == "/home/node/custom-state/payload.json"
+    assert stream is False
+    assert timeout == 940
 
 
 @pytest.mark.parametrize("primary_owner", ["same", "other", "global", "disabled"])

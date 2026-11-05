@@ -24,24 +24,6 @@ class OpenClawGateway(TypedDict, closed=True):
     controlUi: OpenClawControlUi
 
 
-class OpenClawHooks(TypedDict, closed=True):
-    enabled: Literal[True]
-    path: Literal["/hooks"]
-    token: str
-    allowRequestSessionKey: Literal[True]
-    allowedSessionKeyPrefixes: list[str]
-
-
-class OpenClawInboxConfig(TypedDict, closed=True):
-    gateway: OpenClawGateway
-    hooks: OpenClawHooks
-
-
-class OpenClawHeartbeat(TypedDict, closed=True):
-    every: Literal["30s"]
-    prompt: str
-
-
 class WeChatContextEntry(TypedDict, closed=True):
     context_token: str
     conv_id: str

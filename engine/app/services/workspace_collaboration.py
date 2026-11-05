@@ -97,7 +97,7 @@ def safe_agent_path(base: Path, path: str) -> Path:
     """Resolve a path under an agent directory and reject traversal."""
     rel = normalize_workspace_path(path)
     target = (base / rel).resolve()
-    if not str(target).startswith(str(base.resolve())):
+    if not target.is_relative_to(base.resolve()):
         raise ValueError("Path traversal not allowed")
     return target
 

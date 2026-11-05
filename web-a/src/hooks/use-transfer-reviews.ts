@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { canInspectReviewTenant, canReviewTransferPayments } from '@/lib/transfer-review-access'
-import type { TransferId } from '@/lib/transfer-reviews-api'
+import type { TransferId, TransferReviewView } from '@/lib/transfer-reviews-api'
 import { reviewTenantOptions, transferDecisionOptions, transferDetailOptions, transferReviewsOptions } from './transfer-review-options'
 import { useAuth } from './use-auth'
 import { useSessionMutation } from './use-session-mutation'
@@ -19,8 +19,8 @@ export function useTransferReviewAccess() {
   }
 }
 
-export function useTransferReviews() {
-  return useQuery(transferReviewsOptions(useTransferReviewAccess().canReview))
+export function useTransferReviews(view: TransferReviewView, cursor: string | null) {
+  return useQuery(transferReviewsOptions(view, cursor, useTransferReviewAccess().canReview))
 }
 
 export function useTransferDetail(id: TransferId | null) {

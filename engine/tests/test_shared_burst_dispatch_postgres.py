@@ -19,10 +19,10 @@ from tests.burst_dispatch_fixtures import (
 )
 from tests.personal_burst_fixtures import age_batch, only_batch, scalar, submit
 
+from app.dao.agent_dao import agent_dao
 from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_routing
 from app.services.agent_manager import guest_model_ref
-from app.services.openclaw_gateway_delivery import claim_poll_batch
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 
 __all__ = ["channel_db", "lane", "linked", "receipt_db"]
@@ -57,25 +57,30 @@ async def test_an_unready_head_blocks_every_younger_row_and_changes_nothing(lane
     _ = await submit(lane.linked, "n0", "still typing")
     gateway_id = await only_batch(lane.linked)
     web = await legacy_row(lane, "web")
-    # When both the central claim and the guest poll try before the quiet period ends.
+    # When competing native claims try before the quiet period ends.
     blocked = await claim(lane)
-    polled = await claim_poll_batch(lane.agent_id)
+    competing = await claim(lane)
     # Then nothing is delivered, the web row is not skipped ahead, and no guest config was written.
-    assert (blocked.message, blocked.blocked, polled) == (None, "not_due", [])
+    assert (blocked.message, blocked.blocked, competing.message, competing.blocked) == (
+        None,
+        "not_due",
+        None,
+        "not_due",
+    )
     assert [(await gateway(lane, i)).status for i in (gateway_id, web)] == ["pending", "pending"]
     assert lane.guest.written == []
 
 
-async def test_wake_and_poll_use_the_same_gate_and_race_to_one_winner(lane: Lane) -> None:
-    # Given one due batch and independent callers: two polls, two wakes, two direct claims.
+async def test_wakes_and_claims_use_the_same_gate_and_race_to_one_winner(lane: Lane) -> None:
+    # Given one due batch and independent callers: two wakes and two direct claims.
     gateway_id = await due_batch(lane, "a", "b")
     now = datetime.now(UTC)
+    agent = await agent_dao.get(lane.agent_id)
+    assert agent is not None
     # When they all race.
     outcomes = await asyncio.gather(
-        claim_poll_batch(lane.agent_id),
-        claim_poll_batch(lane.agent_id),
-        openclaw_routing._claim_wake(lane.agent_id, gateway_id),
-        openclaw_routing._claim_wake(lane.agent_id, gateway_id),
+        openclaw_routing._claim_wake(agent, gateway_id),
+        openclaw_routing._claim_wake(agent, gateway_id),
         claim_ready_shared(SharedDispatchRequest(lane.agent_id, now)),
         claim_ready_shared(SharedDispatchRequest(lane.agent_id, now)),
     )
@@ -92,11 +97,11 @@ async def test_an_active_uncertain_turn_blocks_the_lane_and_is_never_requeued(la
     await backdate_delivery(lane, 3)
     _ = await submit(lane.linked, "n9", "next")
     await age_pending(lane, 10)
-    # When the guest polls and a wake arrives.
-    polled = await claim_poll_batch(lane.agent_id)
+    # When competing native claims arrive.
+    competing = await claim(lane)
     blocked = await claim(lane)
     # Then the old turn stays delivered, the new batch waits, and no model is applied twice.
-    assert polled == []
+    assert competing.blocked == "active"
     assert blocked.blocked == "active"
     assert (await gateway(lane, gateway_id)).status == "delivered"
     assert len(lane.guest.written) == 1

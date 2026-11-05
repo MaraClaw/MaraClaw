@@ -1,9 +1,11 @@
 import asyncio
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import override
 
 import pytest
 
+from app.api import background_tasks
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime import lifecycle, readiness
 from app.runtime.connectors import WeChatRuntime
@@ -14,12 +16,22 @@ from producer_admission_fixtures import producer_admission
 __all__ = ["producer_admission"]
 
 
+@pytest.fixture(autouse=True)
+async def _background_admission() -> AsyncGenerator[None]:
+    background_tasks.start_background_tasks()
+    try:
+        yield
+    finally:
+        await background_tasks.drain_background_tasks(grace_seconds=0)
+        background_tasks.start_background_tasks()
+
+
 @pytest.mark.parametrize(
     "role", ["api", "worker", "connector", "api,connector", "worker,connector", "all", "bootstrap"]
 )
 @pytest.mark.parametrize(
     "failed_worker",
-    ["trigger_daemon", "agent_setup", "agent_start_reconciler", "personal_burst", "whatsapp_personal"],
+    ["trigger_daemon", "agent_setup", "agent_start_reconciler", "openclaw_dispatch", "whatsapp_personal"],
 )
 async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
@@ -31,8 +43,8 @@ async def test_actual_start_registers_required_role_evidence(
         broadcast_email_worker,
         company_transfer_cleanup,
         gateway_report_relay,
+        openclaw_dispatch_reconciler,
         openclaw_update_worker,
-        personal_burst_reconciler,
         scheduler,
         trigger_daemon,
     )
@@ -84,7 +96,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
-    monkeypatch.setattr(personal_burst_reconciler, "personal_burst_reconciler_loop", loop)
+    monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
@@ -105,9 +117,9 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "worker"):
             assert required["agent_start_reconciler"][1] is False
         assert ("gateway_report_relay" in required) == role_enabled(roles, "worker")
-        assert ("personal_burst" in required) == role_enabled(roles, "worker")
+        assert ("openclaw_dispatch" in required) == role_enabled(roles, "worker")
         if role_enabled(roles, "worker"):
-            assert required["personal_burst"][1] is False
+            assert required["openclaw_dispatch"][1] is False
         assert ("Connector" in required) == role_enabled(roles, "connector")
         assert ("whatsapp_personal" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])

@@ -51,6 +51,13 @@ class TransferSummary(BaseModel):
 
 
 @final
+class TransferReviewPage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    items: list[TransferSummary]
+    next_cursor: str | None
+
+
+@final
 class PaymentReviewResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     status: Literal["payment_review"] = "payment_review"

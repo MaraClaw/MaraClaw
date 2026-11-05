@@ -63,7 +63,7 @@ Operator policy and limitations: [guest containers](../../docs/guest-containers.
 - Connector managers start only under the `connector` role, from lifespan `start_all` **after** `init_pool`. Do not start process-wide loops from ordinary request handlers (one `start_client` after config save is the existing exception).
 - Preserve provider-specific identity semantics such as Feishu `user_id` vs `open_id`, WeCom `external_id` vs `unionid`, and SSO secret differences.
 - Slack and Teams are webhook/API integrations, not lifespan daemon managers.
-- Personal WhatsApp (QR) is not a manager singleton: the `connector` role runs `channels/whatsapp_personal_supervisor.py` (Node bridge in `connectors/whatsapp`) and the `worker` role runs `personal_burst_reconciler.py`. Contract: `channels/AGENTS.md`.
+- Personal WhatsApp (QR) is not a manager singleton: the `connector` role runs `channels/whatsapp_personal_supervisor.py` (Node bridge in `connectors/whatsapp`). The required worker loop `openclaw_dispatch_reconciler.py` recovers pending native lane heads, including due Personal bursts, in keyset pages of 50 with a one-second scan interval; it never replays delivered work. Contract: `channels/AGENTS.md` and `../../docs/shared-openclaw-runtime.md`.
 - Auth providers, SSO, Google OAuth and IM channels remain supported independently of retired provider directory sync. Do not remove login, identity binding or channel behavior when changing shared organization members.
 
 ## Bundled Skill Files

@@ -4,7 +4,6 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import override
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -28,7 +27,6 @@ from app.services import (
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
 )
-from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired
@@ -86,6 +84,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
     state = TurnState()
     state.session_id = str(shared_session_id(state.agent.id))
     raw = TurnConnection(state)
+    queued: list[GatewayMessageRecord] = []
     token = session._conn_ctx.set(None)
     monkeypatch.setattr(session, "get_pool", lambda: _FakePool(raw))
     background_tasks.start_background_tasks()
@@ -131,6 +130,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
             agent = AgentRecord(id=message.agent_id, name="Agent", creator_id=uuid4())
             routing._schedule_inbox_wake(agent, message.content, message.id)
             raise RuntimeError("private database failure")
+        queued.append(message)
         return message
 
     async def wake(_agent, _content, _message_id):
@@ -196,7 +196,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
     monkeypatch.setattr(ws_api, "persist_chat_message", persist)
     monkeypatch.setattr(ws_api, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(ws_api, "check_agent_expired", AsyncMock())
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[]))
+    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(side_effect=lambda _id: list(queued)))
     monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent))
     monkeypatch.setattr(
         openclaw_enqueue, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent)
@@ -343,11 +343,9 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
 
 
 @pytest.mark.parametrize("onboarding", [False, True])
-@pytest.mark.parametrize("failure", ["write", "timeout", "upgrade"])
-async def test_real_config_preparation_rejects_without_accepting_a_turn(
-    monkeypatch: pytest.MonkeyPatch, turn, tmp_path: Path, onboarding: bool, failure: str
+async def test_real_model_preparation_accepts_without_writing_guest_config(
+    monkeypatch: pytest.MonkeyPatch, turn, onboarding: bool
 ):
-    # Given real preparation with a broken writer, contended fence, or locked gate recheck.
     state, raw = turn
     model = LLMModelRecord(uuid4(), "anthropic", "opus", "encrypted-key", "Primary")
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", routing.prepare_openclaw_message)
@@ -355,34 +353,15 @@ async def test_real_config_preparation_rejects_without_accepting_a_turn(
     monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(routing, "ensure_agent_company_models", AsyncMock(return_value=state.agent))
     monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
-    gate = AsyncMock(side_effect=[None, OpenClawUpdateInProgressError()]) if failure == "upgrade" else AsyncMock()
-    monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
-    monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())
-    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
-    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
     writer = Mock(side_effect=OSError("private config path"))
-    monkeypatch.setattr(routing.agent_manager, "write_guest_config", writer)
-    # When driving the actual WebSocket turn through preparation.
-    if failure == "timeout":
-        async with setup_workspace_lock(tmp_path / str(state.agent.id)):
-            handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
-    else:
-        handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
-    # Then neither success frames nor durable or in-memory acceptance survive.
-    reason = "openclaw_update_in_progress" if failure == "upgrade" else "guest_config_failed"
-    assert len(state.frames) == 1
-    assert state.frames[0]["type"] == "turn_rejected"
-    assert state.frames[0]["reason"] == reason
-    assert "private" not in str(state.frames[0]["content"])
-    assert not state.pending
-    assert not state.committed
-    assert not state.messages
-    assert not state.wake.is_set()
-    assert raw.commits == 0
-    assert raw.rollbacks == int(not onboarding)
-    assert len(handler.conversation) == 1
-    if failure != "write":
-        writer.assert_not_called()
+    monkeypatch.setattr(exclusion.agent_manager, "write_guest_config", writer)
+    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await asyncio.wait_for(state.wake.wait(), timeout=1)
+    assert raw.commits == 1
+    assert raw.rollbacks == 0
+    assert "gateway" in state.committed
+    assert len(handler.conversation) == 2
+    writer.assert_not_called()
 
 
 @pytest.mark.parametrize("onboarding", [False, True])

@@ -1,206 +1,193 @@
-"""A shared turn's delivery claim follows what the bootstrap guard proved about admission, through the real wake path."""
-
-from __future__ import annotations
-
 import asyncio
-import json
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from dataclasses import replace
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from pywhales.exceptions import DockerException
 
+from app.db.session import get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedDispatchRequest
-from app.services import openclaw_inbox, openclaw_routing, openclaw_turns
+from app.services import openclaw_gateway_delivery as delivery, openclaw_gateway_rpc as rpc, openclaw_routing as routing
 from app.services.shared_chat import shared_session_id
-from guest_bootstrap_fakes import BOOTSTRAP_PENDING_EXIT, PENDING_STDERR, guard_refusal
-
-DENIED = guard_refusal()
-REFUSED = DockerException(["docker", "exec"], 1, stderr=b"ECONNREFUSED 18789")
-ACTION_75 = DockerException(["docker", "exec"], BOOTSTRAP_PENDING_EXIT, stderr=b"openclaw: temporary failure")
 
 
-class SharedQueue:
-    """One pending shared turn behind the SQL guards of the central ``claim_ready_shared`` and ``release_delivery``."""
-
-    def __init__(self, agent: AgentRecord) -> None:
-        conversation = str(shared_session_id(agent.id))
-        self.row = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, conversation_id=conversation, content="human")
+class NativeQueue:
+    def __init__(self, shared: bool) -> None:
+        self.agent = AgentRecord(id=uuid4(), name="QA", creator_id=uuid4())
+        self.row = GatewayMessageRecord(
+            id=uuid4(),
+            agent_id=self.agent.id,
+            content="human",
+            conversation_id=str(shared_session_id(self.agent.id)) if shared else "ordinary-thread",
+        )
+        self.claims: list[GatewayMessageRecord] = []
         self.releases: list[GatewayMessageRecord] = []
 
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         return self.row if (self.row.id, self.row.agent_id) == (message_id, agent_id) else None
 
-    async def claim_ready_shared(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
+    async def ordinary_claim(self, agent: AgentRecord, message_id: UUID) -> GatewayMessageRecord | None:
+        assert (agent.id, message_id) == (self.row.agent_id, self.row.id)
         if self.row.status != "pending":
             return None
-        self.row = replace(self.row, status="delivered", delivered_at=request.now)
+        self.row = replace(self.row, status="delivered", delivered_at=datetime.now(UTC))
+        self.claims.append(self.row)
         return self.row
 
-    async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+    async def shared_claim(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
+        assert request.agent_id == self.agent.id
+        return await self.ordinary_claim(self.agent, self.row.id)
+
+    async def release(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
         self.releases.append(claimed)
         if self.row.status != "delivered" or self.row.delivered_at != claimed.delivered_at:
             return None
         self.row = replace(self.row, status="pending", delivered_at=None)
         return self.row
 
-
-class ScriptedGuestDocker:
-    """Guest exec API: each call consumes the next outcome (the last repeats); ``None`` is an accepted action."""
-
-    def __init__(self, directory: Path, *outcomes: Exception | None) -> None:
-        self.container = self
-        self.directory = directory
-        self.outcomes = list(outcomes)
-        self.calls: list[list[str]] = []
-        self.admitted_keys: list[str] = []
-
-    def execute(self, _container: str, argv: list[str], *, stream: bool = False) -> str:
-        self.calls.append(argv)
-        outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
-        if outcome is not None:
-            raise outcome
-        payload = json.loads((self.directory / Path(argv[-1]).name).read_text(encoding="utf-8"))
-        self.admitted_keys.append(payload["idempotencyKey"])
-        return ""
+    async def run(self) -> None:
+        await routing._run_inbox_wake(self.agent, self.row.content, self.row.id)
 
 
-def guest_with(
-    monkeypatch: pytest.MonkeyPatch, directory: Path, *outcomes: Exception | None
-) -> tuple[AgentRecord, SharedQueue, ScriptedGuestDocker]:
-    agent = AgentRecord(id=uuid4(), name="QA", creator_id=uuid4())
-    queue = SharedQueue(agent)
-    docker = ScriptedGuestDocker(directory, *outcomes)
-
-    @asynccontextmanager
-    async def connection() -> AsyncGenerator[None]:
-        yield None
-
-    async def open_gate(_agent_id: UUID) -> None:
-        return None
-
-    async def eligible(_agent_id: UUID) -> AgentRecord:
-        return agent
-
-    monkeypatch.setattr(openclaw_routing, "connection_ctx", connection)
-    monkeypatch.setattr(openclaw_routing, "assert_work_allowed", open_gate)
-    monkeypatch.setattr(openclaw_routing, "load_agent_for_new_work", eligible)
-    for name in ("get_for_agent", "release_delivery"):
-        monkeypatch.setattr(openclaw_routing.gateway_message_dao, name, getattr(queue, name))
-    monkeypatch.setattr(openclaw_routing, "claim_ready_shared", queue.claim_ready_shared)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager._agent_dir", lambda _id: directory)
-    monkeypatch.setattr("app.services.agent_manager.agent_manager.docker_client", docker)
-    monkeypatch.setattr(openclaw_inbox, "_container_ref", lambda _agent: "guest")
-    return agent, queue, docker
+@pytest.fixture(params=[False, True], ids=["ordinary", "shared"])
+def queue(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> NativeQueue:
+    value = NativeQueue(request.param is True)
+    monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
+    monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(return_value=value.agent))
+    monkeypatch.setattr(routing.gateway_message_dao, "get_for_agent", value.get_for_agent)
+    monkeypatch.setattr(routing.gateway_message_dao, "release_delivery", value.release)
+    monkeypatch.setattr(routing, "claim_ordinary_turn", value.ordinary_claim)
+    monkeypatch.setattr(routing, "claim_ready_shared", value.shared_claim)
+    monkeypatch.setattr(delivery, "settle_native_report", AsyncMock(return_value=None))
+    return value
 
 
-@pytest.mark.parametrize("denial", [[DENIED], [REFUSED, DENIED]], ids=["hook-denied", "cli-fallback-denied"])
-async def test_denied_shared_turn_is_released_then_dispatched_once_bootstrap_completes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denial: list[Exception]
+@pytest.mark.parametrize("admission", ["not_submitted", "rejected"])
+async def test_proven_refusal_releases_exact_claim(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, admission: Literal["not_submitted", "rejected"]
 ) -> None:
-    # Given a shared turn whose first dispatch the guard refuses, and a guest that finishes bootstrapping afterwards.
-    agent, queue, docker = guest_with(monkeypatch, tmp_path, *denial, None)
-    message = queue.row
-    # When the wake claims the turn and the guard denies it.
-    await openclaw_routing._run_inbox_wake(agent, message.content, message.id)
-    # Then nothing was admitted and the exact claim is back in the queue instead of stranding it as delivered.
-    assert docker.admitted_keys == []
+    execute = AsyncMock(return_value=rpc.NotAdmittedOutcome(str(queue.row.id), admission, "bootstrap_pending"))
+    monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
+    await queue.run()
     assert queue.row.status == "pending"
     assert queue.row.delivered_at is None
-    assert len(queue.releases) == 1
-    # When a later wake runs after the current boot has finished bootstrapping.
-    await openclaw_routing._run_inbox_wake(agent, message.content, message.id)
-    # Then the same turn is admitted exactly once and stays claimed.
-    assert docker.admitted_keys == [str(message.id)]
+    assert queue.releases == queue.claims
+    execute.assert_awaited_once_with(queue.agent, queue.claims[0])
+
+
+@pytest.mark.parametrize("admission", ["unknown", "accepted"])
+async def test_uncertain_admission_is_never_replayed(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, admission: Literal["unknown", "accepted"]
+) -> None:
+    execute = AsyncMock(
+        return_value=rpc.UncertainOutcome(str(queue.row.id), admission, str(queue.row.id), "disconnect")
+    )
+    monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
+    await queue.run()
+    await queue.run()
     assert queue.row.status == "delivered"
-    assert len(queue.releases) == 1
+    assert queue.releases == []
+    assert execute.await_count == 1
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("private transport failure"), asyncio.CancelledError()])
+async def test_interruption_retains_delivery(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    monkeypatch.setattr(rpc, "execute_gateway_turn", AsyncMock(side_effect=failure))
+    if isinstance(failure, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await queue.run()
+    else:
+        await queue.run()
+    assert queue.row.status == "delivered"
+    assert queue.releases == []
+
+
+@pytest.mark.parametrize("newer", ["completed", "new-claim"])
+async def test_refusal_release_cannot_overwrite_newer_state(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, newer: str
+) -> None:
+    async def execute(_agent: AgentRecord, claimed: GatewayMessageRecord) -> rpc.NativeTurnOutcome:
+        assert claimed.delivered_at is not None
+        queue.row = (
+            replace(queue.row, status="completed")
+            if newer == "completed"
+            else replace(queue.row, delivered_at=claimed.delivered_at + timedelta(seconds=1))
+        )
+        return rpc.NotAdmittedOutcome(str(claimed.id), "rejected", "rejected")
+
+    monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
+    await queue.run()
+    assert queue.releases == queue.claims
+    assert queue.row.status == ("completed" if newer == "completed" else "delivered")
+    if newer != "completed":
+        assert queue.row.delivered_at != queue.releases[0].delivered_at
 
 
 @pytest.mark.parametrize(
-    "outcomes",
+    ("status", "text", "expected"),
     [
-        [DockerException(["docker", "exec"], 1, stderr=b"ReadTimeout")],
-        [DockerException(["docker", "exec"], 1, stderr=b"HTTP 503")],
-        [REFUSED, DockerException(["docker", "exec"], 1, stderr=b"cli crashed")],
-        [RuntimeError("docker socket closed")],
-        [DockerException(["docker", "exec"], BOOTSTRAP_PENDING_EXIT)],
-        [ACTION_75],
-        [DockerException(["docker", "exec"], BOOTSTRAP_PENDING_EXIT, stderr=b"warning\n" + PENDING_STDERR.encode())],
-        [REFUSED, ACTION_75],
-    ],
-    ids=[
-        "hook-timeout",
-        "hook-5xx",
-        "cli-fallback-failed",
-        "transport-error",
-        "hook-exit-75-silent",
-        "hook-exit-75-other-stderr",
-        "hook-exit-75-marker-not-first",
-        "cli-fallback-exit-75",
+        ("ok", "answer", "answer"),
+        ("ok", "", "The agent completed the request without a text response."),
+        ("error", "SECRET token", "The agent could not complete this request."),
+        ("timeout", "SECRET path", "The agent timed out before completing this request."),
     ],
 )
-async def test_ambiguous_shared_dispatch_failure_keeps_the_claim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcomes: list[Exception]
+async def test_terminal_outcomes_settle_truthful_safe_result(
+    queue: NativeQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    status: Literal["ok", "error", "timeout"],
+    text: str,
+    expected: str,
 ) -> None:
-    # Given a dispatch that fails without proof that the guest never admitted the turn.
-    agent, queue, docker = guest_with(monkeypatch, tmp_path, *outcomes)
-    # When the wake runs.
-    await openclaw_routing._run_inbox_wake(agent, queue.row.content, queue.row.id)
-    # Then the claim is retained, so a possibly running turn is never requeued.
-    assert docker.admitted_keys == []
-    assert queue.row.status == "delivered"
+    async def execute(_agent: AgentRecord, claimed: GatewayMessageRecord) -> rpc.NativeTurnOutcome:
+        assert get_connection() is None
+        return rpc.TerminalOutcome(str(claimed.id), str(claimed.id), status, text, "private-code")
+
+    settle = AsyncMock(return_value=delivery.RecordedReport(queue.row, None))
+    publish = AsyncMock()
+    monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
+    monkeypatch.setattr(delivery, "settle_native_report", settle)
+    monkeypatch.setattr(delivery, "publish_report", publish)
+    await queue.run()
+    settle.assert_awaited_once_with(queue.agent, queue.row.id, expected)
+    publish.assert_awaited_once_with(queue.agent, settle.return_value)
     assert queue.releases == []
 
 
-async def test_admitted_shared_turn_keeps_its_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    agent, queue, docker = guest_with(monkeypatch, tmp_path, None)
-    await openclaw_routing._run_inbox_wake(agent, queue.row.content, queue.row.id)
-    assert docker.admitted_keys == [str(queue.row.id)]
-    assert queue.row.status == "delivered"
-    assert queue.releases == []
-
-
-@pytest.mark.parametrize("failure", [RuntimeError("dispatch bug"), asyncio.CancelledError()], ids=["error", "cancel"])
-async def test_interrupted_shared_dispatch_keeps_the_claim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+async def test_repeated_cancellation_joins_exact_refusal_release(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given a dispatch that is interrupted after the claim, so admission is unknown.
-    agent, queue, _docker = guest_with(monkeypatch, tmp_path, None)
+    started, finish = asyncio.Event(), asyncio.Event()
+    release = queue.release
 
-    async def interrupted(_agent: AgentRecord, _message: GatewayMessageRecord) -> bool:
-        raise failure
+    async def delayed(claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        started.set()
+        await finish.wait()
+        return await release(claimed)
 
-    monkeypatch.setattr(openclaw_turns, "dispatch_shared_turn", interrupted)
-    # When the wake runs.
-    if isinstance(failure, asyncio.CancelledError):
+    monkeypatch.setattr(routing.gateway_message_dao, "release_delivery", delayed)
+    monkeypatch.setattr(
+        rpc,
+        "execute_gateway_turn",
+        AsyncMock(return_value=rpc.NotAdmittedOutcome(str(queue.row.id), "rejected", "rejected")),
+    )
+    task = asyncio.create_task(queue.run())
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        finish.set()
         with pytest.raises(asyncio.CancelledError):
-            await openclaw_routing._run_inbox_wake(agent, queue.row.content, queue.row.id)
-    else:
-        await openclaw_routing._run_inbox_wake(agent, queue.row.content, queue.row.id)
-    # Then the claim is retained.
-    assert queue.row.status == "delivered"
-    assert queue.releases == []
-
-
-async def test_denial_release_cannot_overwrite_a_completed_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Given a turn that a report completes while the guard denial is still being handled.
-    agent, queue, docker = guest_with(monkeypatch, tmp_path, DENIED)
-    execute = docker.execute
-
-    def complete_then_deny(container: str, argv: list[str], *, stream: bool = False) -> str:
-        queue.row = replace(queue.row, status="completed")
-        return execute(container, argv, stream=stream)
-
-    monkeypatch.setattr(docker, "execute", complete_then_deny)
-    # When the wake releases its claim.
-    await openclaw_routing._run_inbox_wake(agent, queue.row.content, queue.row.id)
-    # Then the compare-and-set refuses to rewrite the newer state.
-    assert len(queue.releases) == 1
-    assert queue.row.status == "completed"
+            await task
+    assert queue.row.status == "pending"
+    assert queue.releases == queue.claims

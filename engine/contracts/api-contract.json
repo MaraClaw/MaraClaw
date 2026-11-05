@@ -6806,233 +6806,6 @@
         "title": "ForgotPasswordResponse",
         "type": "object"
       },
-      "GatewayHistoryItem": {
-        "properties": {
-          "content": {
-            "title": "Content",
-            "type": "string"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "role": {
-            "title": "Role",
-            "type": "string"
-          },
-          "sender_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender Name"
-          }
-        },
-        "required": [
-          "role",
-          "content"
-        ],
-        "title": "GatewayHistoryItem",
-        "type": "object"
-      },
-      "GatewayMessageOut": {
-        "properties": {
-          "content": {
-            "title": "Content",
-            "type": "string"
-          },
-          "conversation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Conversation Id"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "history": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/GatewayHistoryItem"
-            },
-            "title": "History",
-            "type": "array"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "model_slot": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Slot"
-          },
-          "runtime_session_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runtime Session Key"
-          },
-          "sender_agent_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender Agent Name"
-          },
-          "sender_user_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender User Id"
-          },
-          "sender_user_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender User Name"
-          }
-        },
-        "required": [
-          "id",
-          "content"
-        ],
-        "title": "GatewayMessageOut",
-        "type": "object"
-      },
-      "GatewayPollResponse": {
-        "properties": {
-          "messages": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/GatewayMessageOut"
-            },
-            "title": "Messages",
-            "type": "array"
-          },
-          "relationships": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/GatewayRelationshipItem"
-            },
-            "title": "Relationships",
-            "type": "array"
-          }
-        },
-        "title": "GatewayPollResponse",
-        "type": "object"
-      },
-      "GatewayRelationshipItem": {
-        "properties": {
-          "channels": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Channels",
-            "type": "array"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "role": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Role"
-          },
-          "type": {
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type"
-        ],
-        "title": "GatewayRelationshipItem",
-        "type": "object"
-      },
       "GatewayReportRequest": {
         "properties": {
           "message_id": {
@@ -10239,6 +10012,11 @@
           },
           "owner_type": {
             "default": "company",
+            "enum": [
+              "company",
+              "user",
+              "agent"
+            ],
             "title": "Owner Type",
             "type": "string"
           },
@@ -15229,6 +15007,42 @@
         ],
         "title": "TransferRequest",
         "type": "object"
+      },
+      "TransferReviewPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TransferSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TransferReviewPage",
+        "type": "object"
+      },
+      "TransferReviewView": {
+        "enum": [
+          "pending",
+          "recent"
+        ],
+        "title": "TransferReviewView",
+        "type": "string"
       },
       "TransferStatus": {
         "enum": [
@@ -28594,6 +28408,73 @@
         ]
       }
     },
+    "/api/company-admissions/transfers/mine/page": {
+      "get": {
+        "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f6d696e652f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferReviewPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mine Page",
+        "tags": [
+          "company-admissions"
+        ]
+      }
+    },
     "/api/company-admissions/transfers/review": {
       "get": {
         "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f726576696577",
@@ -28643,6 +28524,82 @@
           }
         ],
         "summary": "Review",
+        "tags": [
+          "company-admissions"
+        ]
+      }
+    },
+    "/api/company-admissions/transfers/review/page": {
+      "get": {
+        "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f7265766965772f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransferReviewView",
+              "default": "pending"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferReviewPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Page",
         "tags": [
           "company-admissions"
         ]
@@ -31924,49 +31881,6 @@
         ]
       }
     },
-    "/api/gateway/poll": {
-      "get": {
-        "description": "Claims pending messages and returns only the rows this call moved.\n\nAlso updates openclaw_last_seen for online status tracking.",
-        "operationId": "get_2f6170692f676174657761792f706f6c6c",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Api-Key",
-            "required": true,
-            "schema": {
-              "title": "X-Api-Key",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GatewayPollResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Poll Messages",
-        "tags": [
-          "gateway"
-        ]
-      }
-    },
     "/api/gateway/report": {
       "post": {
         "description": "OpenClaw agent reports the result of a processed message.",
@@ -32020,7 +31934,7 @@
     },
     "/api/gateway/send-message": {
       "post": {
-        "description": "OpenClaw agent sends a message to a person or another agent.\n\nRoutes automatically based on target type:\n- Agent target: enqueue for the peer guest; reply arrives on the next poll\n- Human target: send via available channel (feishu, etc.)",
+        "description": "OpenClaw agent sends a message to a person or another agent.\n\nRoutes automatically based on target type:\n- Agent target: enqueue for the peer guest; native execution settles its reply\n- Human target: send via available channel (feishu, etc.)",
         "operationId": "post_2f6170692f676174657761792f73656e642d6d657373616765",
         "parameters": [
           {
@@ -32064,57 +31978,6 @@
           }
         },
         "summary": "Send Message",
-        "tags": [
-          "gateway"
-        ]
-      }
-    },
-    "/api/gateway/setup-guide/{agent_id}": {
-      "get": {
-        "description": "Return the pre-filled Skill file and Heartbeat instruction for this agent.",
-        "operationId": "get_2f6170692f676174657761792f73657475702d67756964652f7b6167656e745f69647d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "agent_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Agent Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Api-Key",
-            "required": true,
-            "schema": {
-              "title": "X-Api-Key",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Setup Guide",
         "tags": [
           "gateway"
         ]

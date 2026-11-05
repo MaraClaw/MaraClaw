@@ -1,12 +1,15 @@
+import asyncio
 import ssl
 import sys
 from types import SimpleNamespace
 
+import httpcore
 import pytest
 from tests.sandbox_wire_fakes import (
     EXECUTE_REPLIES,
     KEY,
     KINDS,
+    StalledReply,
     Wire,
     build,
     install_wire,
@@ -17,7 +20,7 @@ from tests.sandbox_wire_fakes import (
 )
 
 from app.services.sandbox.api.judge0_backend import Judge0Backend
-from app.services.sandbox.base import ExecutionResult
+from app.services.sandbox.base import ExecutionDeadline, ExecutionResult, TerminationReason
 from app.services.sandbox.config import ENDPOINT_BLOCKED_MESSAGE, SandboxConfig, SandboxType
 
 
@@ -108,12 +111,11 @@ async def test_judge0_flow_keeps_payload_polling_and_output_budget(wire: Wire) -
     # Given: a finished submission with oversized output.
     wire.responses = [
         reply(201, {"token": "tok"}),
-        reply(200, {}),
         reply(200, {"status": {"id": 3}, "stdout": "x" * 20000, "stderr": "e" * 9000, "exit_code": 0}),
     ]
     # When
     result = await build("judge0").execute("print(1)", "python", exec_timeout=5)
-    # Then: the submit body, duplicate GET, field-filtered poll and truncation are unchanged.
+    # Then: one field-filtered GET completes the round and terminal status stops polling.
     assert wire.streams[0].body == {
         "source_code": "print(1)",
         "language_id": 71,
@@ -121,7 +123,6 @@ async def test_judge0_flow_keeps_payload_polling_and_output_budget(wire: Wire) -
         "memory_limit": "256m",
     }
     assert [stream.request_line for stream in wire.streams[1:]] == [
-        "GET /submissions/tok HTTP/1.1",
         "GET /submissions/tok?fields=stdout%2Cstderr%2Cstatus%2Ctime%2Cmemory%2Cexit_code HTTP/1.1",
     ]
     assert (result.success, len(result.stdout), len(result.stderr)) == (True, 10000, 5000)
@@ -136,3 +137,40 @@ async def test_judge0_default_endpoint_uses_the_public_client(wire: Wire) -> Non
     # Then: the hosted default is reached through the public transport.
     assert healthy is True
     assert wire.streams[0].tls == ("api.judge0.com", ssl.CERT_REQUIRED, True)
+
+
+@pytest.mark.parametrize("stage", ["submit", "poll"])
+async def test_judge0_shared_deadline_stops_a_stalled_wire(wire: Wire, stage: str) -> None:
+    stalled = StalledReply()
+    wire.responses = [stalled] if stage == "submit" else [reply(201, {"token": "tok"}), stalled]
+    deadline = ExecutionDeadline(0.1, grace=0.2)
+    async with asyncio.timeout(1):
+        result = await build("judge0").execute("pass", "python", deadline=deadline)
+    assert stalled.started.is_set()
+    assert stalled.closed.is_set()
+    assert result.termination == TerminationReason.SANDBOX_TIMEOUT
+    assert result.exit_code == 124
+    assert deadline.hard_remaining() > 0
+    assert all(stream.closed for stream in wire.streams)
+
+
+@pytest.mark.parametrize(
+    ("response", "reason"),
+    [
+        (
+            reply(200, {"status": {"id": 5, "description": "Time Limit Exceeded"}}),
+            TerminationReason.PROVIDER_TIME_LIMIT,
+        ),
+        (httpcore.ReadError("broken wire"), TerminationReason.BACKEND_ABORT),
+        (httpcore.ReadTimeout("read deadline"), TerminationReason.BACKEND_ABORT),
+    ],
+)
+async def test_judge0_distinguishes_provider_time_limit_from_transport_failure(
+    wire: Wire, response: bytes | httpcore.NetworkError | httpcore.TimeoutException, reason: TerminationReason
+) -> None:
+    wire.responses = [reply(201, {"token": "tok"}), response]
+    result = await build("judge0").execute("pass", "python")
+    assert not result.success
+    assert result.termination == reason
+    assert len(wire.streams) == 2
+    assert all(stream.closed for stream in wire.streams)

@@ -1,7 +1,7 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
-FROM docker:29.9.2-cli AS dockercli
+FROM docker:29.9.3-cli AS dockercli
 
 FROM node:26.13.0-trixie-slim AS whatsapp
 WORKDIR /bridge
@@ -71,7 +71,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-        chromium=156.0.8078.73-1~deb13u1 && \
+        chromium=156.0.8078.79-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 

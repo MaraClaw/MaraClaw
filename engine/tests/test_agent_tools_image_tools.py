@@ -122,6 +122,40 @@ async def test_upload_image_returns_http_failure_without_retrying(monkeypatch, t
     assert len(fake_httpx.calls) == 1
 
 
+async def test_upload_image_rejects_rollback_sibling_symlink(monkeypatch, tmp_path):
+    workspace = tmp_path / "agent"
+    sibling = tmp_path / "agent.rollback-1"
+    workspace.mkdir()
+    sibling.mkdir()
+    (sibling / "secret.png").write_bytes(b"secret")
+    (workspace / "link.png").symlink_to(sibling / "secret.png")
+    monkeypatch.setattr(agent_tools, "_get_tool_config", AsyncMock(return_value={"private_key": "key"}))
+    fake_httpx = install_fake_httpx(monkeypatch, [])
+
+    result = await images._upload_image(uuid.uuid4(), workspace, {"file_path": "link.png"})
+
+    assert "Access denied" in result
+    assert fake_httpx.calls == []
+
+
+@pytest.mark.parametrize("kind", ["sibling", "symlink"])
+async def test_upload_image_rejects_escape(monkeypatch, tmp_path, kind):
+    root = tmp_path / "agent"
+    root.mkdir()
+    sibling = tmp_path / "agent.rollback-run"
+    sibling.mkdir()
+    (sibling / "secret.png").write_bytes(b"secret")
+    (root / "link.png").symlink_to(sibling / "secret.png")
+    fake = install_fake_httpx(monkeypatch, [])
+    monkeypatch.setattr(agent_tools, "_get_tool_config", AsyncMock(return_value={"private_key": "key"}))
+    path = "../agent.rollback-run/secret.png" if kind == "sibling" else "link.png"
+
+    result = await images._upload_image(uuid.uuid4(), root, {"file_path": path})
+
+    assert "Access denied" in result
+    assert fake.calls == []
+
+
 @pytest.mark.asyncio
 async def test_siliconflow_generates_then_downloads_url_with_expected_timeouts(monkeypatch):
     fake_httpx = install_fake_httpx(

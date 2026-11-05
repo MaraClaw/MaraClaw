@@ -9,7 +9,7 @@ import pytest
 from app.core.json_types import JsonObject
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolOutputCallback
-from app.services.sandbox.base import ExecutionResult
+from app.services.sandbox.base import ExecutionResult, TerminationReason
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local.subprocess_backend import SubprocessBackend
 
@@ -98,7 +98,7 @@ async def test_executes_configured_backend_with_agent_overrides(
         agent_id, tmp_path, {"code": "print('ok')", "timeout": 8}, tool_name=tool_name, on_output=on_output
     )
     # Then: the override wins and execution/streaming happens once in the backend.
-    assert result == "📤 Output:\nbackend output"
+    assert result == "📤 Output:\nbackend output\n\nTermination: completed\n\nStreamed output dropped: no"
     assert lookups == [(agent_id, tool_name)]
     assert len(configs) == 1
     assert configs[0].allow_network is True
@@ -205,7 +205,10 @@ async def test_backend_timeout_result_preserves_partial_output(tmp_path: Path, b
     # When
     result = await agent_tools._execute_code(None, tmp_path, {"code": "pass"})
     # Then
-    assert result == "📤 Output:\npartial\n\n⚠️ Stderr:\nwarning\n\n❌ Error: timed out"
+    assert result == (
+        "📤 Output:\npartial\n\n⚠️ Stderr:\nwarning\n\n❌ Error: timed out"
+        "\n\nTermination: completed\n\nStreamed output dropped: no"
+    )
     assert len(backend.calls) == 1
 
 
@@ -269,3 +272,52 @@ async def test_negative_output_budget_prevents_backend_execution(
     assert "sandbox configuration error" in result.lower()
     assert backend.calls == []
     assert host_launches == []
+
+
+@pytest.mark.parametrize("stalled_cleanup", [False, True])
+async def test_outer_guard_bounds_execution_and_cancellation_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: RecordingBackend, stalled_cleanup: bool
+) -> None:
+    from app.services.sandbox import base
+
+    monkeypatch.setattr(base, "CLEANUP_GRACE_SECONDS", 0.1)
+    started, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    tasks: list[asyncio.Task[ExecutionResult]] = []
+
+    async def stalled(*args: object, **kwargs: object) -> ExecutionResult:
+        task = asyncio.current_task()
+        assert task is not None
+        tasks.append(task)
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+            if stalled_cleanup:
+                await release.wait()
+        return backend.result
+
+    monkeypatch.setattr(backend, "execute", stalled)
+    try:
+        async with asyncio.timeout(1):
+            result = await agent_tools._execute_code(None, tmp_path, {"code": "pass", "timeout": 0})
+        assert started.is_set()
+        assert cancelled.is_set()
+        assert "Termination: backend abort" in result
+        assert ("cleanup incomplete" in result) == stalled_cleanup
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("reason", list(TerminationReason))
+@pytest.mark.parametrize("dropped", [False, True])
+def test_formatter_reports_termination_and_dropped_streamed_output(reason: TerminationReason, dropped: bool) -> None:
+    backend = SubprocessBackend(SandboxConfig())
+    result = backend._format_result(
+        ExecutionResult(False, "captured", "", 1, 0, termination=reason, output_dropped=dropped)
+    )
+    assert reason.value.replace("_", " ") in result.lower()
+    assert "captured" in result
+    assert ("Streamed output was dropped" in result) == dropped
+    assert ("Streamed output dropped: no" in result) != dropped

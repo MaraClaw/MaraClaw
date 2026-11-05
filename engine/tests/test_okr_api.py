@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, ValidationError
 
 from app.api import okr as okr_api
@@ -150,7 +151,7 @@ async def test_sync_relationships_wipes_and_rebuilds(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_create_objective_maps_org_member_to_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    member = SimpleNamespace(id=MEMBER_ID, user_id=USER_ID)
+    member = SimpleNamespace(id=MEMBER_ID, user_id=USER_ID, tenant_id=TENANT_ID)
     created = OKRObjectiveRecord(
         id=OBJECTIVE_ID,
         tenant_id=TENANT_ID,
@@ -161,7 +162,7 @@ async def test_create_objective_maps_org_member_to_user_id(monkeypatch: pytest.M
         period_end=datetime(2026, 3, 31, tzinfo=UTC).date(),
         created_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
-    monkeypatch.setattr(okr_api.user_dao, "exists", AsyncMock(return_value=False))
+    monkeypatch.setattr(okr_api.user_dao, "get", AsyncMock(side_effect=[None, _admin()]))
     monkeypatch.setattr(okr_api.org_member_dao, "get", AsyncMock(return_value=member))
     create = AsyncMock(return_value=created)
     monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
@@ -179,6 +180,93 @@ async def test_create_objective_maps_org_member_to_user_id(monkeypatch: pytest.M
 
     assert result.owner_id == str(USER_ID)
     assert create.call_args.kwargs["obj_in"]["owner_id"] == USER_ID
+
+
+@pytest.mark.asyncio
+async def test_create_objective_rejects_foreign_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(okr_api.agent_dao, "get", AsyncMock(return_value=SimpleNamespace(tenant_id=uuid.uuid4())))
+    create = AsyncMock()
+    monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
+
+    with pytest.raises(HTTPException) as exc:
+        await okr_api.create_objective(
+            okr_api.ObjectiveCreate(
+                title="Ship",
+                owner_type="agent",
+                owner_id=str(AGENT_ID),
+                period_start="2026-01-01",
+                period_end="2026-03-31",
+            ),
+            user=_admin(),
+        )
+
+    assert exc.value.status_code == 422
+    assert "owner_id" in str(exc.value.detail)
+    create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_lookups", "member_tenant"),
+    [
+        pytest.param([UserRecord(id=MEMBER_ID, tenant_id=uuid.UUID(int=9))], None, id="direct-foreign-user"),
+        pytest.param([None], uuid.UUID(int=9), id="foreign-member"),
+        pytest.param(
+            [None, UserRecord(id=USER_ID, tenant_id=uuid.UUID(int=9))], TENANT_ID, id="member-linked-user-moved"
+        ),
+    ],
+)
+async def test_create_objective_rejects_foreign_owner_without_writing(
+    monkeypatch: pytest.MonkeyPatch, user_lookups: list[UserRecord | None], member_tenant: uuid.UUID | None
+) -> None:
+    user_get = AsyncMock(side_effect=user_lookups)
+    monkeypatch.setattr(okr_api.user_dao, "get", user_get)
+    member = None if member_tenant is None else SimpleNamespace(id=MEMBER_ID, tenant_id=member_tenant, user_id=USER_ID)
+    monkeypatch.setattr(okr_api.org_member_dao, "get", AsyncMock(return_value=member))
+    create = AsyncMock()
+    monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
+    with pytest.raises(HTTPException) as exc:
+        await okr_api.create_objective(
+            okr_api.ObjectiveCreate(
+                title="Ship",
+                owner_type="user",
+                owner_id=str(MEMBER_ID),
+                period_start="2026-01-01",
+                period_end="2026-03-31",
+            ),
+            user=_admin(),
+        )
+    assert exc.value.status_code == 422
+    assert "owner_id" in str(exc.value.detail)
+    assert user_get.await_count == len(user_lookups)
+    create.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [
+        ({"owner_type": "unknown"}, "owner_type"),
+        ({"owner_type": "user", "owner_id": "bad"}, "owner_id"),
+        ({"owner_type": "agent"}, "owner_id"),
+        ({"period_start": "bad"}, "period_start"),
+        ({"period_end": "bad"}, "period_end"),
+        ({"period_end": "2025-12-31"}, "period_end"),
+    ],
+)
+async def test_create_objective_invalid_fields_return_422_without_writes(monkeypatch, changes, field) -> None:
+    app = FastAPI()
+    app.include_router(okr_api.router)
+    app.dependency_overrides[okr_api.get_current_user] = _admin
+    create = AsyncMock()
+    monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
+    payload = {"title": "Ship", "period_start": "2026-01-01", "period_end": "2026-03-31", **changes}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/okr/objectives", json=payload)
+
+    assert response.status_code == 422
+    assert field in str(response.json())
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
-"""Process-local TTLs for the OpenClaw send/poll hot path.
+"""Process-local TTLs for OpenClaw model, API-key and display-name lookups.
 
 Redis is unused here on purpose: these values are cheap to rebuild, and a
-miss must never block enqueue or poll.
+miss must not block the underlying lookup.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from app.records.agent import AgentRecord
 from app.services.llm.turn import ModelBundle
 
 _DEFAULT_TTL_SECONDS = 45.0
-_LAST_SEEN_TTL_SECONDS = 20.0
 type CacheValue = AgentRecord | ModelBundle | str | bool
 
 _store: dict[str, tuple[float, CacheValue]] = {}
@@ -118,11 +117,3 @@ def get_cached_display_name(user_id: UUID) -> str | None:
 
 def set_cached_display_name(user_id: UUID, name: str) -> None:
     cache_set(display_name_key(user_id), name, ttl=60.0)
-
-
-def should_touch_last_seen(agent_id: UUID) -> bool:
-    key = f"seen:{agent_id}"
-    if cache_get(key) is True:
-        return False
-    cache_set(key, True, ttl=_LAST_SEEN_TTL_SECONDS)
-    return True

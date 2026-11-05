@@ -24,13 +24,13 @@ def is_quiet_access_log(method: str, path: str) -> bool:
         return True
     if verb == "GET" and "/sessions/" in path and path.endswith("/messages"):
         return True
-    if path.endswith(("/gateway/poll", "/gateway/heartbeat")):
+    if path.endswith("/gateway/heartbeat"):
         return verb in {"GET", "POST"}
     return False
 
 
 def route_label(request: Request) -> str:
-    """Matched route template such as ``/api/gateway/poll/{id}``; never the concrete path or query.
+    """Matched route template such as ``/api/agents/{id}``; never the concrete path or query.
 
     Read after routing has run: the router stores the matched route in the shared ASGI scope.
     """

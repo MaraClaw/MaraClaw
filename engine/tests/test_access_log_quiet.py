@@ -7,10 +7,9 @@ def test_session_message_polls_are_quiet() -> None:
     assert is_quiet_access_log("POST", path) is False
 
 
-def test_health_and_unread_and_guest_poll_are_quiet() -> None:
+def test_health_unread_and_guest_heartbeat_are_quiet() -> None:
     assert is_quiet_access_log("GET", "/api/health") is True
     assert is_quiet_access_log("GET", "/api/notifications/unread-count") is True
-    assert is_quiet_access_log("GET", "/api/gateway/poll") is True
     assert is_quiet_access_log("POST", "/api/gateway/heartbeat") is True
 
 

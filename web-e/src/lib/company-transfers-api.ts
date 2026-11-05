@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import type { SessionOwner } from './auth-session.ts'
 import { apiRequest } from './http.ts'
-import { transferQuoteSchema, transferSummarySchema } from './types/company-transfers.ts'
+import { transferPageRequestSchema, transferQuoteSchema, transferSummaryPageSchema, transferSummarySchema, type TransferPageRequest, type TransferSummaryPage } from './types/company-transfers.ts'
 
 type RequestContext = { readonly owner: SessionOwner; readonly signal?: AbortSignal }
 
@@ -21,6 +21,16 @@ export async function listMyTransfers(context: RequestContext) {
   const { owner, signal } = context
   return apiRequest('/api/company-admissions/transfers/mine?limit=100', {
     schema: z.array(transferSummarySchema).readonly(), owner, ...requestSignal(signal),
+  })
+}
+
+export async function listMyTransfersPage(page: TransferPageRequest, context: RequestContext): Promise<TransferSummaryPage> {
+  const { owner, signal } = context
+  const { limit, cursor } = transferPageRequestSchema.parse(page)
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (cursor !== undefined) query.set('cursor', cursor)
+  return apiRequest(`/api/company-admissions/transfers/mine/page?${query}`, {
+    schema: transferSummaryPageSchema, owner, ...requestSignal(signal),
   })
 }
 

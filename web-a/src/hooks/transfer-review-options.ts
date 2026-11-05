@@ -3,13 +3,14 @@ import { queryOptions, skipToken, type QueryClient } from '@tanstack/react-query
 import { ApiError } from '../lib/http.ts'
 import {
   decideTransferPayment, fetchReviewTenant, fetchTransferDetail, fetchTransferReviews,
-  type TransferDecision, type TransferId, type TransferSummary,
+  type TransferDecision, type TransferId, type TransferReviewPage, type TransferReviewView, type TransferSummary,
 } from '../lib/transfer-reviews-api.ts'
 import { notificationKeys } from './notification-options.ts'
 
 export const transferReviewKeys = {
   all: ['admin-transfer-payments'] as const,
-  list: ['admin-transfer-payments', 'list'] as const,
+  lists: ['admin-transfer-payments', 'list'] as const,
+  list: (view: TransferReviewView, cursor: string | null) => ['admin-transfer-payments', 'list', view, cursor] as const,
   detail: (id: TransferId | null) => ['admin-transfer-payments', 'detail', id] as const,
   tenant: (tenantId: string | null) => ['admin-transfer-review-tenant', tenantId] as const,
 }
@@ -23,10 +24,10 @@ export function reviewTenantOptions(tenantId: string | null, enabled: boolean) {
   })
 }
 
-export function transferReviewsOptions(enabled: boolean) {
+export function transferReviewsOptions(view: TransferReviewView, cursor: string | null, enabled: boolean) {
   return queryOptions({
-    queryKey: transferReviewKeys.list,
-    queryFn: ({ signal }) => fetchTransferReviews(signal),
+    queryKey: transferReviewKeys.list(view, cursor),
+    queryFn: ({ signal }) => fetchTransferReviews(view, cursor, signal),
     enabled, refetchInterval: 30_000, retry: false,
   })
 }
@@ -50,7 +51,10 @@ export function transferDecisionOptions(client: QueryClient, id: TransferId, all
     onSuccess: (detail: TransferSummary) => {
       void client.cancelQueries({ queryKey: transferReviewKeys.all })
       client.setQueryData(transferReviewKeys.detail(id), detail)
-      client.setQueryData<readonly TransferSummary[]>(transferReviewKeys.list, (items) => items?.map((item) => item.id === id ? detail : item))
+      client.setQueriesData<TransferReviewPage>({ queryKey: [...transferReviewKeys.lists, 'pending'] }, (page) =>
+        page ? { ...page, items: page.items.filter((item) => item.id !== id) } : page)
+      client.setQueriesData<TransferReviewPage>({ queryKey: [...transferReviewKeys.lists, 'recent'] }, (page) =>
+        page ? { ...page, items: page.items.map((item) => item.id === id ? detail : item) } : page)
       void client.invalidateQueries({ queryKey: transferReviewKeys.all })
       void client.invalidateQueries({ queryKey: notificationKeys.all })
     },

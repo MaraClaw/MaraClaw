@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -117,12 +118,16 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(delivery.gateway_message_dao, "get_for_agent", get_for_agent)
     monkeypatch.setattr(gateway.gateway_message_dao, "complete", complete)
     monkeypatch.setattr(gateway.agent_dao, "update", update)
-    monkeypatch.setattr(gateway.chat_message_dao, "insert_message", insert_message)
+    monkeypatch.setattr(delivery.chat_message_dao, "insert_message", insert_message)
+    monkeypatch.setattr(gateway, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_user", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_agent", AsyncMock())
     monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
     monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", get_participant)
     monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", create_intent)
     monkeypatch.setattr("app.api.websocket.manager", _Manager())
     monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", deliver_session_reply)
+    monkeypatch.setattr("app.services.openclaw_routing.wake_shared_lane", lambda *_args: None)
 
     result = await gateway.report_result(
         GatewayReportRequest(message_id=msg.id, result="Guest answer"),
@@ -195,6 +200,6 @@ async def test_generate_channel_reply_wakes_in_background(monkeypatch: pytest.Mo
     )
 
     assert reply == CHANNEL_REPLY_QUEUED
-    assert captured["await_wake"] is False
+    assert "await_wake" not in captured
     assert captured["content"] == "hello from whatsapp"
     assert captured["history"] == history[-ROUTING_HISTORY_LIMIT:]

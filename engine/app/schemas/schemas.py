@@ -605,40 +605,6 @@ class HealthResponse(BaseModel):
 # ─── Gateway (OpenClaw) ─────────────────────────────────
 
 
-class GatewayHistoryItem(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
-    sender_name: str | None = None
-    created_at: datetime | None = None
-
-
-class GatewayRelationshipItem(BaseModel):
-    name: str
-    type: str  # "human" or "agent"
-    role: str | None = None  # e.g. "collaborator", "supervisor"
-    description: str | None = None
-    channels: list[str] = []  # e.g. ["feishu"], ["agent"]
-
-
-class GatewayMessageOut(BaseModel):
-    id: uuid.UUID
-    conversation_id: str | None = None
-    sender_agent_name: str | None = None
-    sender_user_name: str | None = None
-    sender_user_id: str | None = None
-    content: str
-    created_at: datetime | None = None
-    history: list[GatewayHistoryItem] = []
-    model: str | None = None
-    model_slot: str | None = None
-    runtime_session_key: str | None = None
-
-
-class GatewayPollResponse(BaseModel):
-    messages: list[GatewayMessageOut] = []
-    relationships: list[GatewayRelationshipItem] = []
-
-
 class GatewayReportRequest(BaseModel):
     message_id: uuid.UUID
     result: str = Field(min_length=1)

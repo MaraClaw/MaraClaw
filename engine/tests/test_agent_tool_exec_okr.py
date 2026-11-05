@@ -5,6 +5,9 @@ import uuid
 from datetime import date
 from types import SimpleNamespace
 from typing import Any, Self, override
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.core.json_types import JsonObject
 from app.services import activity_logger, agent_tools
@@ -104,7 +107,7 @@ async def test_get_okr_preserves_happy_board_output_fragments(monkeypatch) -> No
         AsyncMockish([company_objective, member_objective]),
     )
     monkeypatch.setattr(okr_dao.okr_key_result_dao, "list_for_objectives", AsyncMockish([company_kr, member_kr]))
-    monkeypatch.setattr(user_dao_mod.user_dao, "display_names_for_ids", AsyncMockish({USER_ID: "Alice"}))
+    monkeypatch.setattr(user_dao_mod.user_dao, "get_many_with_identity", AsyncMockish({USER_ID: _requester()}))
 
     result = await agent_tools._get_okr(
         AGENT_ID,
@@ -259,6 +262,130 @@ async def test_create_objective_preserves_success_and_permission_messages(monkey
         "Permission denied: non-admin requests may only create the requester's own personal OKRs. "
         "Creating company OKRs or other members' OKRs requires an org admin."
     )
+
+
+FOREIGN_TENANT_ID = uuid.UUID(int=9)
+FOREIGN_USER_ID = uuid.UUID("12121212-1212-4212-8212-121212121212")
+FOREIGN_MEMBER_ID = uuid.UUID("34343434-3434-4434-8434-343434343434")
+MOVED_MEMBER_ID = uuid.UUID("56565656-5656-4656-8656-565656565656")
+MOVED_USER_ID = uuid.UUID("78787878-7878-4878-8878-787878787878")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"owner_type": "unknown", "owner_id": str(USER_ID)},
+        {"owner_type": "user", "owner_id": "bad"},
+        {"owner_type": "agent", "owner_id": str(OBJECTIVE_ID)},
+        {"owner_type": "user", "owner_id": str(FOREIGN_USER_ID)},
+        {"owner_type": "user", "owner_id": str(FOREIGN_MEMBER_ID)},
+        {"owner_type": "user", "owner_id": str(MOVED_MEMBER_ID)},
+        {"period_start": "bad"},
+        {"period_end": "2025-12-31"},
+    ],
+    ids=[
+        "unknown-owner-type",
+        "malformed-owner-id",
+        "foreign-agent",
+        "foreign-user",
+        "foreign-member",
+        "member-linked-user-moved",
+        "malformed-period-start",
+        "reversed-period",
+    ],
+)
+async def test_create_objective_rejects_invalid_input_without_writing(monkeypatch, changes) -> None:
+    agent_dao = importlib.import_module("app.dao.agent_dao").agent_dao
+    user_dao = importlib.import_module("app.dao.user_dao").user_dao
+    org_member_dao = importlib.import_module("app.dao.org_member_dao").org_member_dao
+    objective_dao = importlib.import_module("app.dao.okr_dao").okr_objective_dao
+    monkeypatch.setattr(
+        agent_dao,
+        "get",
+        AsyncMock(
+            side_effect=lambda ident: (
+                _agent(is_system=True) if ident == AGENT_ID else SimpleNamespace(tenant_id=uuid.uuid4())
+            )
+        ),
+    )
+    users = {
+        USER_ID: _requester("org_admin"),
+        FOREIGN_USER_ID: SimpleNamespace(id=FOREIGN_USER_ID, tenant_id=FOREIGN_TENANT_ID),
+        MOVED_USER_ID: SimpleNamespace(id=MOVED_USER_ID, tenant_id=FOREIGN_TENANT_ID),
+    }
+    members = {
+        FOREIGN_MEMBER_ID: SimpleNamespace(id=FOREIGN_MEMBER_ID, tenant_id=FOREIGN_TENANT_ID, user_id=USER_ID),
+        MOVED_MEMBER_ID: SimpleNamespace(id=MOVED_MEMBER_ID, tenant_id=TENANT_ID, user_id=MOVED_USER_ID),
+    }
+    monkeypatch.setattr(user_dao, "get", AsyncMock(side_effect=users.get))
+    monkeypatch.setattr(org_member_dao, "get", AsyncMock(side_effect=members.get))
+    create = AsyncMock(return_value=SimpleNamespace(id=OBJECTIVE_ID, title="Ship"))
+    monkeypatch.setattr(objective_dao, "create", create)
+    arguments = {
+        "title": "Ship",
+        "owner_type": "company",
+        "period_start": "2026-01-01",
+        "period_end": "2026-03-31",
+        **changes,
+    }
+
+    result = await agent_tools._create_objective(AGENT_ID, USER_ID, arguments)
+
+    assert result.startswith("Invalid")
+    create.assert_not_awaited()
+
+
+async def test_create_objective_rejects_reversed_period(monkeypatch) -> None:
+    agent_dao = importlib.import_module("app.dao.agent_dao")
+    user_dao_mod = importlib.import_module("app.dao.user_dao")
+    okr_dao = importlib.import_module("app.dao.okr_dao")
+    writes = []
+
+    async def create_obj(*, obj_in):
+        writes.append(obj_in)
+        return SimpleNamespace(id=OBJECTIVE_ID, title="Ship")
+
+    monkeypatch.setattr(agent_dao.agent_dao, "get", AsyncMockish(_agent(is_system=True)))
+    monkeypatch.setattr(user_dao_mod.user_dao, "get", AsyncMockish(_requester("org_admin")))
+    monkeypatch.setattr(okr_dao.okr_objective_dao, "create", create_obj)
+    result = await agent_tools._create_objective(
+        AGENT_ID,
+        USER_ID,
+        {
+            "title": "Ship",
+            "owner_type": "company",
+            "period_start": "2026-03-31",
+            "period_end": "2026-01-01",
+        },
+    )
+    assert "period_end" in result
+    assert writes == []
+
+
+async def test_get_okr_omits_foreign_owner_names(monkeypatch) -> None:
+    agent_dao = importlib.import_module("app.dao.agent_dao")
+    settings_dao = importlib.import_module("app.dao.okr_settings_dao")
+    okr_dao = importlib.import_module("app.dao.okr_dao")
+    user_dao = importlib.import_module("app.dao.user_dao")
+    foreign = _requester()
+    foreign.tenant_id = uuid.UUID(int=9)
+    monkeypatch.setattr(agent_dao.agent_dao, "get", AsyncMockish(_agent()))
+    monkeypatch.setattr(settings_dao.okr_settings_dao, "get_by_tenant", AsyncMockish(_enabled_settings()))
+    monkeypatch.setattr(
+        okr_dao.okr_objective_dao,
+        "list_for_period",
+        AsyncMockish(
+            [
+                _objective(owner_type="user", owner_id=USER_ID),
+            ]
+        ),
+    )
+    monkeypatch.setattr(okr_dao.okr_key_result_dao, "list_for_objectives", AsyncMockish([]))
+    monkeypatch.setattr(user_dao.user_dao, "get_many_with_identity", AsyncMockish({USER_ID: foreign}))
+    result = await agent_tools._get_okr(AGENT_ID, {"period_start": "2026-01-01", "period_end": "2026-03-31"})
+    assert "Alice" not in result
+    assert f"user:{USER_ID}" in result
+    assert "Ship feature" in result
 
 
 async def test_create_key_result_preserves_missing_objective_message(monkeypatch) -> None:

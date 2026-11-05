@@ -15,13 +15,23 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.db.session import optional_connection_ctx
-from app.services.linkup.errors import is_quota_error
+from app.services.linkup.errors import (
+    LinkupDeadlineExceededError,
+    LinkupLimitError,
+    LinkupResponseTooLargeError,
+    is_quota_error,
+)
 
 BILLED_KINDS = frozenset({"search", "fetch", "research", "extract"})
 SCHEMA_VERSION = 1
 _QUERY_MAX = 500
 _DEPTH_MAX = 20
 _OUTPUT_TYPE_MAX = 40
+# error_class is VARCHAR(40). The proxy's own limit failures get names no upstream status can produce.
+LIMIT_ERROR_CLASSES: dict[type[LinkupLimitError], str] = {
+    LinkupResponseTooLargeError: "response_ceiling",
+    LinkupDeadlineExceededError: "deadline_exceeded",
+}
 
 
 def is_billed_call(method: str, path: str) -> bool:
@@ -124,6 +134,7 @@ async def record_linkup_call(
     latency_ms: int,
     key_id: UUID | None,
     quota_rotated: bool = False,
+    local_failure: LinkupLimitError | None = None,
 ) -> None:
     """Insert one event on a fresh connection. Never raises to the caller."""
     try:
@@ -137,6 +148,7 @@ async def record_linkup_call(
             latency_ms=latency_ms,
             key_id=key_id,
             quota_rotated=quota_rotated,
+            local_failure=local_failure,
         )
     except Exception:
         logger.exception("web search analytics capture failed")
@@ -153,6 +165,7 @@ async def _record_linkup_call(
     latency_ms: int,
     key_id: UUID | None,
     quota_rotated: bool = False,
+    local_failure: LinkupLimitError | None = None,
 ) -> None:
     settings = get_settings()
     if not settings.WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED:
@@ -180,6 +193,11 @@ async def _record_linkup_call(
 
     klass = status_class_for(status, body)
     error_class = "quota_rotated" if quota_rotated and klass == "ok" else (None if klass == "ok" else klass)
+    response_bytes = len(body.encode("utf-8"))
+    if local_failure is not None:
+        # The proxy's 502/504 body is its own; the event records what was read from upstream before the abort.
+        error_class = LIMIT_ERROR_CLASSES[type(local_failure)]
+        response_bytes = local_failure.bytes_read
     depth = json_as_str(payload.get("depth")) or json_as_str(payload.get("reasoningDepth"))
     output_type = json_as_str(payload.get("outputType") or payload.get("output_type"))
     job_id = None
@@ -213,7 +231,7 @@ async def _record_linkup_call(
                 "error_class": error_class,
                 "upstream_job_id": job_id,
                 "request_bytes": len(content) if content not in (None, b"") else 0,
-                "response_bytes": len(body.encode("utf-8")),
+                "response_bytes": response_bytes,
                 "export_state": export_state,
                 "schema_version": SCHEMA_VERSION,
             }

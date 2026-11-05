@@ -23,11 +23,21 @@ export const transferSummarySchema = z.object({
   reviewed_at: z.string().nullable(), reviewed_by_user_id: z.uuid().nullable(),
   admission_request_id: z.uuid().nullable(), review_reason: z.string().nullable(),
 }).readonly()
+export const transferSummaryPageSchema = z.object({
+  items: z.array(transferSummarySchema).readonly(),
+  next_cursor: z.string().min(1).max(2048).nullable(),
+}).readonly()
+export const transferPageRequestSchema = z.object({
+  limit: z.number().int().min(1).max(100),
+  cursor: z.string().min(1).max(2048).optional(),
+}).readonly()
 export const paymentReviewResponseSchema = z.object({
   status: z.literal('payment_review'), transfer_request: transferSummarySchema,
 }).readonly()
 export type TransferQuote = z.infer<typeof transferQuoteSchema>
 export type TransferSummary = z.infer<typeof transferSummarySchema>
+export type TransferSummaryPage = z.infer<typeof transferSummaryPageSchema>
+export type TransferPageRequest = z.infer<typeof transferPageRequestSchema>
 export type TransferSelection = Readonly<
   { transfer_choice: 'paid' } | { transfer_choice: 'free'; free_destructive_consent: true }
 >

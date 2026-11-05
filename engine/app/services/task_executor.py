@@ -4,55 +4,100 @@ Uses the same agent context (soul, memory, skills, relationships, tools)
 as the chat dialog. Supports tool-calling loop for autonomous execution.
 """
 
+import asyncio
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass
 
 from app.core.domain.activity import ActivityAction
-from app.core.domain.tasks import TaskStatus
+from app.core.domain.tasks import TaskStatus, TaskType
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
-from app.dao.task_dao import task_dao, task_log_dao
+from app.dao.task_dao import task_dao
+from app.records.task import TaskClaim
+from app.services.agent_setup_lock import drain_on_cancel
+from app.services.task_lease import TaskLeaseGuard, TaskLeaseLostError, claim_task, run_under_lease
 
 
-async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+class _RunFailureError(Exception):
+    """A run that cannot proceed; ``reason`` is what the task log records."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason: str = reason
+
+
+@dataclass(frozen=True, slots=True)
+class _Outcome:
+    title: str
+    task_type: TaskType
+    reply: str
+
+
+async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim | None = None) -> None:
     """Execute a task using the agent's configured LLM with full context.
 
     Uses the same context as chat dialog: build_agent_context for system prompt,
     agent tools for tool-calling, and a multi-round tool loop.
 
+    Runs only under a held claim: the trigger route claims before it schedules and passes
+    the claim in; every other caller claims here on entry. Whoever loses the claim does nothing.
+
     Flow:
       - todo tasks: pending → doing → done
       - supervision tasks: pending → doing → pending (stays active, just logs result)
+      - any failure, or cancellation: back to pending with the reason in the task log
     """
+    if claim is None:
+        claim = await claim_task(task_id, agent_id)
+        if claim is None:
+            logger.info(f"[TaskExec] Task {task_id} is missing or already running; not starting another run")
+            return
     logger.info(f"[TaskExec] Starting task {task_id} for agent {agent_id}")
 
-    # Step 1: Mark as doing
-    task = await task_dao.get(task_id)
-    if not task:
-        logger.warning(f"[TaskExec] Task {task_id} not found")
+    try:
+        outcome = await run_under_lease(claim, lambda guard: _run(claim, agent_id, guard))
+        await _complete(claim, agent_id, outcome)
+    except TaskLeaseLostError:
+        logger.warning(f"[TaskExec] Task {task_id} lost its lease; its run was cancelled")
+        await _release(claim, "Execution lease renewal failed; the run was cancelled")
+        return
+    except asyncio.CancelledError:
+        await drain_on_cancel(_release(claim, "Execution was cancelled before it finished"))
+        raise
+    except _RunFailureError as failure:
+        await _release(claim, failure.reason)
+        return
+    except Exception as error:
+        message = str(error) or repr(error)
+        logger.error(f"[TaskExec] Error: {message}")
+        await _release(claim, f"Execution error: {message[:150]}")
         return
 
-    _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.DOING})
-    _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": "🤖 Starting task execution..."})
 
+async def _run(claim: TaskClaim, agent_id: uuid.UUID, guard: TaskLeaseGuard) -> _Outcome:
+    task_id = claim.task_id
+    task = await task_dao.get_for_agent(task_id, agent_id)
+    if not task:
+        raise _RunFailureError("Task not found")
     task_title = task.title
     task_description = task.description or ""
     task_type = task.type  # 'todo' or 'supervision'
     supervision_target = task.supervision_target_name or ""
 
-    # Step 2: Load agent
+    # Load agent
     agent = await agent_dao.get(agent_id)
     if not agent:
-        await _log_error(task_id, "Digital employee not found")
-        if task_type == "supervision":
-            await _restore_supervision_status(task_id)
-        return
+        raise _RunFailureError("Digital employee not found")
     agent_name = agent.name
 
-    # Step 3: Build full agent context (same as chat dialog)
+    # Build full agent context (same as chat dialog)
     from app.services.agent_context import build_agent_context
 
-    static_prompt, dynamic_prompt = await build_agent_context(agent_id, agent_name, agent.role_description or "")
+    try:
+        static_prompt, dynamic_prompt = await build_agent_context(agent_id, agent_name, agent.role_description or "")
+    except Exception as error:
+        message = str(error) or repr(error)
+        raise _RunFailureError(f"Failed to build agent context: {message[:150]}") from error
 
     # Add task-execution-specific instructions
     task_addendum = """
@@ -72,7 +117,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
     system_prompt = f"{static_prompt}\n\n{dynamic_prompt}"
 
     # Build user prompt
-    if task_type == "supervision":
+    if task_type == TaskType.SUPERVISION:
         user_prompt = f"[Supervision Task] {task_title}"
         if task_description:
             user_prompt += f"\nTask description: {task_description}"
@@ -87,45 +132,41 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
             user_prompt += f"\nTask description: {task_description}"
         user_prompt += "\n\nComplete this task carefully and provide a detailed execution result."
 
-    # Step 4: Call LLM with unified failover support
+    # Call LLM with unified failover support
     from app.services.llm import call_agent_llm_with_tools
 
-    try:
-        logger.info(f"[TaskExec] Calling LLM with tools for task: {task_title}")
+    logger.info(f"[TaskExec] Calling LLM with tools for task: {task_title}")
 
-        reply = await call_agent_llm_with_tools(
-            agent_id=agent_id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_rounds=50,
-            session_id=str(task_id),
+    result = await call_agent_llm_with_tools(
+        agent_id=agent_id,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_rounds=50,
+        session_id=str(task_id),
+        guard=guard,
+    )
+    if result.status == "failure":
+        raise _RunFailureError(result.content)
+
+    logger.info(f"[TaskExec] LLM reply: {result.content[:80]}")
+    return _Outcome(title=task_title, task_type=task_type, reply=result.content)
+
+
+async def _complete(claim: TaskClaim, agent_id: uuid.UUID, outcome: _Outcome) -> None:
+    """Record the result under the claim token; a run that lost its claim writes nothing."""
+    task_id = claim.task_id
+    supervision = outcome.task_type == TaskType.SUPERVISION
+    if supervision:
+        # Supervision tasks stay active; just log the result
+        settled = await task_dao.complete(
+            claim, status=TaskStatus.PENDING, log=f"✅ Supervision completed\n\n{outcome.reply}"
         )
-
-        logger.info(f"[TaskExec] LLM reply: {reply[:80]}")
-    except Exception as e:
-        error_msg = str(e) or repr(e)
-        logger.error(f"[TaskExec] Error: {error_msg}")
-        await _log_error(task_id, f"Execution error: {error_msg[:150]}")
-        if task_type == "supervision":
-            await _restore_supervision_status(task_id)
+    else:
+        settled = await task_dao.complete(claim, status=TaskStatus.DONE, log=f"✅ Task completed\n\n{outcome.reply}")
+    if not settled:
+        logger.warning(f"[TaskExec] Task {task_id} no longer belongs to this run; its result was discarded")
         return
-
-    # Step 5: Save result and update status
-    task = await task_dao.get(task_id)
-    if task:
-        if task_type == "supervision":
-            # Supervision tasks stay active; just log the result
-            _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.PENDING})
-            _ = await task_log_dao.create(
-                obj_in={"task_id": task_id, "content": f"✅ Supervision completed\n\n{reply}"}
-            )
-        else:
-            _ = await task_dao.update(
-                db_obj=task,
-                obj_in={"status": TaskStatus.DONE, "completed_at": datetime.now(UTC)},
-            )
-            _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"✅ Task completed\n\n{reply}"})
-        logger.info(f"[TaskExec] Task {task_id} {'logged' if task_type == 'supervision' else 'completed'}!")
+    logger.info(f"[TaskExec] Task {task_id} {'logged' if supervision else 'completed'}!")
 
     # Log activity
     from app.services.activity_logger import log_activity
@@ -133,20 +174,24 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
     await log_activity(
         agent_id,
         ActivityAction.TASK_UPDATED,
-        f"{'Supervision' if task_type == 'supervision' else 'Task'} execution: {task_title[:60]}",
-        detail={"task_id": str(task_id), "task_type": task_type, "title": task_title, "reply": reply[:500]},
+        f"{'Supervision' if supervision else 'Task'} execution: {outcome.title[:60]}",
+        detail={
+            "task_id": str(task_id),
+            "task_type": outcome.task_type.value,
+            "title": outcome.title,
+            "reply": outcome.reply[:500],
+        },
         related_id=task_id,
     )
 
 
-async def _log_error(task_id: uuid.UUID, message: str) -> None:
-    """Add an error log to the task."""
-    logger.error(f"[TaskExec] Error for {task_id}: {message}")
-    _ = await task_log_dao.create(obj_in={"task_id": task_id, "content": f"❌ {message}"})
-
-
-async def _restore_supervision_status(task_id: uuid.UUID) -> None:
-    """Restore supervision task status back to pending after a failed execution."""
-    task = await task_dao.get(task_id)
-    if task and task.status == "doing":
-        _ = await task_dao.update(db_obj=task, obj_in={"status": TaskStatus.PENDING})
+async def _release(claim: TaskClaim, reason: str) -> None:
+    """Give the task back as pending with the reason logged; a stale claim changes nothing."""
+    logger.error(f"[TaskExec] Error for {claim.task_id}: {reason}")
+    try:
+        released = await task_dao.release(claim, log=f"❌ {reason}")
+    except Exception as error:
+        logger.error(f"[TaskExec] Could not release task {claim.task_id}; lease recovery will: {error}")
+        return
+    if not released:
+        logger.warning(f"[TaskExec] Task {claim.task_id} no longer belongs to this run; nothing was released")

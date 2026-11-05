@@ -1,16 +1,16 @@
 """Gateway API for OpenClaw agent communication.
 
 OpenClaw agents authenticate via X-Api-Key header and use these endpoints
-to poll for messages, report results, send messages, and send heartbeat pings.
+to report results, send messages, and send heartbeat pings.
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Header, HTTPException
 
+from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.core.permissions import evaluate_agent_relationship_status, evaluate_human_relationship_status
@@ -18,30 +18,20 @@ from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.chat_dao import chat_message_dao
 from app.dao.gateway_message_dao import gateway_message_dao
-from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.schemas.channel_response_contracts import (
     GatewayHeartbeatResponse,
     GatewaySendMessageResponse,
-    GatewaySetupGuideResponse,
     StatusAcknowledgement,
 )
 from app.schemas.schemas import (
-    GatewayHistoryItem,
-    GatewayMessageOut,
-    GatewayPollResponse,
-    GatewayRelationshipItem,
     GatewayReportRequest,
     GatewaySendMessageRequest,
 )
-from app.services.openclaw_gateway_delivery import claim_poll_batch, publish_report, record_report
-from app.services.openclaw_routing import enqueue_openclaw_message, poll_model_hint
-from app.services.openclaw_turns import completed_history, runtime_session_key
-from app.services.openclaw_update_gate import OpenClawUpdateGateError
-from app.services.shared_chat import shared_session_id
+from app.services.openclaw_gateway_delivery import publish_report, record_report
+from app.services.openclaw_routing import enqueue_openclaw_message
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -52,124 +42,6 @@ async def _get_agent_by_key(api_key: str) -> AgentRecord:
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return agent
-
-
-# ─── Poll for messages ──────────────────────────────────
-
-
-@router.get("/poll", response_model=GatewayPollResponse)
-async def poll_messages(x_api_key: str = Header(..., alias="X-Api-Key")) -> GatewayPollResponse:
-    """Claims pending messages and returns only the rows this call moved.
-
-    Also updates openclaw_last_seen for online status tracking.
-    """
-    agent = await _get_agent_by_key(x_api_key)
-    logger.debug("[Gateway] poll called agent={}", agent.id)
-
-    from app.services.openclaw_hot_cache import should_touch_last_seen
-
-    async with connection_ctx():
-        active = await agent_dao.touch_openclaw(agent, touch_last_seen=should_touch_last_seen(agent.id))
-    if active is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    agent = active
-    # The claim owns its transactions (guest flock first, then fresh authorization): none may be open around it.
-    try:
-        messages = await claim_poll_batch(agent.id)
-    except OpenClawUpdateGateError:
-        messages = []
-    guest_model, guest_slot = poll_model_hint(messages)
-
-    out = []
-    for msg in messages:
-        is_shared = msg.conversation_id == str(shared_session_id(agent.id))
-        # Resolve sender names
-        sender_agent_name = None
-        sender_user_name = None
-        if msg.sender_agent_id:
-            sender_agent = await agent_dao.get(msg.sender_agent_id)
-            sender_agent_name = sender_agent.name if sender_agent else None
-        if msg.sender_user_id:
-            sender_user_name = await user_dao.display_name_for_id(msg.sender_user_id)
-
-        # Fetch conversation history (last 10 messages) for context
-        history = []
-        if is_shared:
-            history = await completed_history(msg)
-        elif msg.conversation_id not in (None, ""):
-            hist_msgs = await chat_message_dao.list_for_session(
-                conversation_id=msg.conversation_id,
-                limit=10,
-            )
-            for h in hist_msgs:
-                # Resolve sender name for each history message
-                h_sender = None
-                if h.role == "user" and h.user_id:
-                    h_sender = await user_dao.display_name_for_id(h.user_id)
-                elif h.role == "assistant":
-                    h_sender = agent.name
-                history.append(
-                    GatewayHistoryItem(
-                        role=h.role,
-                        content=h.content or "",
-                        sender_name=h_sender,
-                        created_at=h.created_at,
-                    )
-                )
-
-        out.append(
-            GatewayMessageOut(
-                id=msg.id,
-                conversation_id=msg.conversation_id,
-                sender_agent_name=sender_agent_name,
-                sender_user_name=sender_user_name,
-                sender_user_id=str(msg.sender_user_id) if msg.sender_user_id else None,
-                content=msg.content,
-                created_at=msg.created_at,
-                history=history,
-                model=msg.guest_model_ref if is_shared else guest_model,
-                model_slot=msg.selected_slot if is_shared else guest_slot,
-                runtime_session_key=runtime_session_key(msg),
-            )
-        )
-
-    # Inbox turns should answer first; relationship catalogs wait for empty polls.
-    rel_items = [] if out else await _poll_relationships(agent)
-    return GatewayPollResponse(messages=out, relationships=rel_items)
-
-
-async def _poll_relationships(agent: AgentRecord) -> list[GatewayRelationshipItem]:
-    rel_items: list[GatewayRelationshipItem] = []
-    for r in await agent_relationship_dao.list_for_agent_with_members(agent.id):
-        status_info = await evaluate_human_relationship_status(r, source_agent=agent)
-        if r.member and status_info["access_status"] == "active":
-            channels = []
-            if getattr(r.member, "external_id", None) or getattr(r.member, "open_id", None):
-                channels.append("feishu")
-            if getattr(r.member, "email", None):
-                channels.append("email")
-            rel_items.append(
-                GatewayRelationshipItem(
-                    name=r.member.name,
-                    type="human",
-                    role=r.relation,
-                    description=r.description or None,
-                    channels=channels,
-                )
-            )
-    for r in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
-        status_info = await evaluate_agent_relationship_status(r)
-        if r.target_agent and status_info["access_status"] == "active":
-            rel_items.append(
-                GatewayRelationshipItem(
-                    name=r.target_agent.name,
-                    type="agent",
-                    role=r.relation,
-                    description=r.description or None,
-                    channels=["agent"],
-                )
-            )
-    return rel_items
 
 
 # ─── Report results ─────────────────────────────────────
@@ -185,9 +57,12 @@ async def report_result(
     agent = await _get_agent_by_key(x_api_key)
     logger.info("[Gateway] report called agent={} msg_id={}", agent.id, body.message_id)
 
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        await lock_tenants(db, (agent.tenant_id,))
+        await lock_user(db, agent.creator_id, agent.tenant_id)
+        await lock_agent(db, agent.id, agent.tenant_id)
         active = await agent_dao.lock_openclaw(agent)
-        if active is None:
+        if active is None or (active.creator_id, active.tenant_id) != (agent.creator_id, agent.tenant_id):
             raise HTTPException(status_code=401, detail="Invalid API key")
         agent = active
         won = await record_report(agent, body.message_id, body.result)
@@ -222,7 +97,7 @@ async def send_message(
     """OpenClaw agent sends a message to a person or another agent.
 
     Routes automatically based on target type:
-    - Agent target: enqueue for the peer guest; reply arrives on the next poll
+    - Agent target: enqueue for the peer guest; native execution settles its reply
     - Human target: send via available channel (feishu, etc.)
     """
     agent = await _get_agent_by_key(x_api_key)
@@ -262,13 +137,12 @@ async def send_message(
                 content=content,
                 sender_agent_id=agent.id,
                 conversation_id=conv_id,
-                await_wake=False,
             )
             return {
                 "status": "accepted",
                 "target": target_agent.name,
                 "type": "openclaw_agent",
-                "message": f"Message sent to {target_agent.name}. Reply will appear in your next poll.",
+                "message": f"Message sent to {target_agent.name}.",
             }
 
         # 2. Try to find target as a human (via relationships)
@@ -362,88 +236,3 @@ async def send_message(
         status_code=400,
         detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.external_id not in (None, '') else 'no'}, feishu_open_id={'yes' if target_member.open_id not in (None, '') else 'no'}",
     )
-
-
-# ─── Setup guide ────────────────────────────────────────
-
-
-@router.get("/setup-guide/{agent_id}", response_model=None)
-async def get_setup_guide(
-    agent_id: uuid.UUID, x_api_key: str = Header(..., alias="X-Api-Key")
-) -> GatewaySetupGuideResponse:
-    """Return the pre-filled Skill file and Heartbeat instruction for this agent."""
-    agent = await _get_agent_by_key(x_api_key)
-    if agent.id != agent_id:
-        raise HTTPException(status_code=403, detail="Key does not match this agent")
-
-    # Note: we use the raw key from the header since the agent already authenticated
-    from app.services.openclaw_inbox import guest_engine_base_url
-
-    base_url = guest_engine_base_url()
-
-    skill_content = f"""---
-name: maraclaw_sync
-description: Sync with MaraClaw platform - check inbox, submit results, and send messages.
----
-
-# MaraClaw Sync
-
-## When to use
-Check for new messages from the MaraClaw platform during every heartbeat cycle.
-You can also proactively send messages to people and agents in your relationships.
-
-## Instructions
-
-### 1. Check inbox
-Make an HTTP GET request:
-- URL: {base_url}/api/gateway/poll
-- Header: X-Api-Key: {x_api_key}
-
-The response contains a `messages` array. Each message includes:
-- `id` - unique message ID (use this for reporting)
-- `content` - the message text
-- `sender_user_name` - name of the MaraClaw user who sent it
-- `sender_user_id` - unique ID of the sender
-- `conversation_id` - the conversation this message belongs to
-- `history` - array of previous messages in this conversation for context
-- `model` - provider/model ref for this inbox batch (for example openai/gpt-5.4)
-- `model_slot` - "primary" (complex) or "secondary" (manageable)
-
-**IMPORTANT**: Process the entire inbox batch with `model`. If your current
-session is on a different model, switch first (`/model <model>`). Do not pick
-a cheaper model on your own. Mixed batches are already fail-closed to primary.
-
-The response also contains a `relationships` array describing your colleagues:
-- `name` - the person or agent name
-- `type` - "human" or "agent"
-- `role` - relationship type (e.g. collaborator, supervisor)
-- `channels` - available communication channels (e.g. ["feishu"], ["agent"])
-
-**IMPORTANT**: Use the `history` array to understand conversation context before replying.
-Different `sender_user_name` values mean different people - address them accordingly.
-
-### 2. Report results
-For each completed message, make an HTTP POST request:
-- URL: {base_url}/api/gateway/report
-- Header: X-Api-Key: {x_api_key}
-- Header: Content-Type: application/json
-- Body: {{"message_id": "<id from the message>", "result": "<your response>"}}
-
-### 3. Send a message to someone
-To proactively contact a person or agent, make an HTTP POST request:
-- URL: {base_url}/api/gateway/send-message
-- Header: X-Api-Key: {x_api_key}
-- Header: Content-Type: application/json
-- Body: {{"target": "<name of person or agent>", "content": "<your message>"}}
-
-The system auto-detects the best channel. For agents, the reply appears in your next poll.
-For humans, the message is delivered via their available channel (e.g. Feishu).
-"""
-
-    heartbeat_line = "- Check MaraClaw inbox using the maraclaw_sync skill and process any pending messages"
-
-    return {
-        "skill_filename": "maraclaw_sync.md",
-        "skill_content": skill_content,
-        "heartbeat_addition": heartbeat_line,
-    }

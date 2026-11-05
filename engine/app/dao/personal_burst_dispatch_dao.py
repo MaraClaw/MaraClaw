@@ -4,8 +4,6 @@ State changes require the caller's owning transaction and lock the shared chat s
 gateway row (the order claiming uses). Cancellation retains the header and originals; only the queue row leaves.
 """
 
-from dataclasses import dataclass
-from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
 
@@ -33,17 +31,6 @@ FROM gateway_messages g LEFT JOIN personal_burst_batches b ON b.gateway_id = g.i
 WHERE g.agent_id = %(agent)s AND g.conversation_id = %(conv)s AND g.status = 'pending'
 ORDER BY g.created_at, g.id LIMIT 1
 """
-_DUE_HEADS = f"""
-SELECT {columns_of("b")}, g.created_at AS gateway_created_at, {_ACTIVE} AS active
-FROM personal_burst_batches b JOIN gateway_messages g ON g.id = b.gateway_id AND g.status = 'pending'
-WHERE {_DUE} AND NOT EXISTS (
-    SELECT 1 FROM gateway_messages e WHERE e.agent_id = g.agent_id AND e.conversation_id = g.conversation_id
-      AND e.status = 'pending' AND (e.created_at, e.id) < (g.created_at, g.id))
-  AND (NOT %(available)s::boolean OR NOT {_ACTIVE})
-  AND (%(after_ready)s::timestamptz IS NULL
-       OR (b.ready_at, b.gateway_id) > (%(after_ready)s::timestamptz, %(after_id)s::uuid))
-ORDER BY b.ready_at, b.gateway_id LIMIT %(limit)s
-"""
 _OPEN = f"""
 SELECT {columns_of("b")} FROM personal_burst_batches b JOIN gateway_messages g ON g.id = b.gateway_id
 WHERE b.agent_id = %(agent)s AND b.shared_session_id = %(session)s AND b.state IN ('pending', 'sealed')
@@ -62,22 +49,6 @@ WHERE b.gateway_id = %(id)s AND b.state = 'pending' AND b.ready_at <= clock_time
   AND m.n = b.member_count AND m.top = b.member_count AND m.size = b.member_bytes
 RETURNING {columns_of("b")}
 """
-
-
-@dataclass(frozen=True, slots=True)
-class DueHeadCursor:
-    """Keyset position in the ``(ready_at, gateway_id)`` due order; the row itself may have left the queue."""
-
-    ready_at: datetime
-    gateway_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class DueHeadPage:
-    """One bounded page of due heads; ``next_after`` is ``None`` once the scan has reached the end."""
-
-    heads: tuple[PersonalBurstHead, ...]
-    next_after: DueHeadCursor | None
 
 
 @final
@@ -101,41 +72,6 @@ class PersonalBurstDispatchDAO(BaseDAO[PersonalBurstBatch]):
             active=row["active"] is True,
             batch=await self.get(gateway_id),
         )
-
-    async def due_heads(self, limit: int) -> list[PersonalBurstHead]:
-        """Durable reconciliation scan: batches that are due AND the actual oldest pending row of their lane."""
-        return list((await self.due_heads_page(limit)).heads)
-
-    async def due_heads_page(
-        self, limit: int, *, available_only: bool = False, after: DueHeadCursor | None = None
-    ) -> DueHeadPage:
-        """Keyset page of due lane heads in ``(ready_at, gateway_id)`` order.
-
-        ``available_only`` drops lanes with an unreported delivered turn BEFORE the page limit, so occupied lanes cannot
-        crowd out later ones. A lane's head is always its actual oldest pending row: an unready or non-batch head keeps
-        every younger row of that lane out of the page.
-        """
-        params = {
-            "available": available_only,
-            "after_ready": after.ready_at if after is not None else None,
-            "after_id": after.gateway_id if after is not None else None,
-            "limit": limit + 1,
-        }
-        async with self.session() as db:
-            rows = await db.fetchall(_DUE_HEADS, params)
-        heads = tuple(
-            PersonalBurstHead(
-                gateway_id=batch.gateway_id,
-                created_at=required_datetime(row["gateway_created_at"]),
-                due=True,
-                active=row["active"] is True,
-                batch=batch,
-            )
-            for row in rows[:limit]
-            for batch in (self.record_factory(row),)
-        )
-        last = heads[-1].batch if heads and len(rows) > limit else None
-        return DueHeadPage(heads, DueHeadCursor(last.ready_at, last.gateway_id) if last is not None else None)
 
     async def list_open(
         self, agent_id: UUID, shared_session_id: UUID, *, config_id: UUID | None = None

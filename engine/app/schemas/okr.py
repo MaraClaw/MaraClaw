@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from app.core.domain.okr import KeyResultStatus, PeriodFrequency
@@ -64,7 +66,7 @@ class ObjectiveOut(BaseModel):
 class ObjectiveCreate(BaseModel):
     title: str
     description: str | None = None
-    owner_type: str = "company"
+    owner_type: Literal["company", "user", "agent"] = "company"
     owner_id: str | None = None
     period_start: str
     period_end: str

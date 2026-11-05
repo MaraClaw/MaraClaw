@@ -35,6 +35,7 @@ from app.services import (
 )
 from app.services.agent_manager import agent_manager
 from builtin_keyword_fakes import IncludeAllKeyword
+from test_db_session import _FakeRawConnection, _wrap
 
 
 @pytest.fixture(autouse=True)
@@ -286,27 +287,24 @@ async def test_actual_docker_stop_runs_off_event_loop(monkeypatch):
 
 
 @pytest.mark.parametrize("status", ["idle", "creating", "error"])
-async def test_poll_promotes_even_when_last_seen_is_throttled(monkeypatch, status):
-    # Given: an externally hosted guest in a promotable state and a warm last-seen throttle.
+async def test_heartbeat_promotes_guest(monkeypatch, status):
+    # Given: an externally hosted guest in a promotable state.
     agent = replace(_agent(), status=status)
     monkeypatch.setattr(gateway, "_get_agent_by_key", AsyncMock(return_value=agent))
-    monkeypatch.setattr(openclaw_hot_cache, "should_touch_last_seen", lambda aid: False)
     promote = AsyncMock(return_value=replace(agent, status="running"))
     monkeypatch.setattr(agent_dao, "touch_openclaw", promote, raising=False)
-    monkeypatch.setattr(gateway, "claim_poll_batch", AsyncMock(return_value=[]))
-    monkeypatch.setattr(gateway, "_poll_relationships", AsyncMock(return_value=[]))
 
     @asynccontextmanager
     async def context():
         yield None
 
     monkeypatch.setattr(gateway, "connection_ctx", context, raising=False)
-    # When: the guest polls.
-    await gateway.poll_messages("key")
-    # Then: promotion is not lost to the timestamp throttle.
+    # When: the guest sends a heartbeat.
+    await gateway.heartbeat("key")
+    # Then: the guest is promoted.
     promote.assert_awaited_once()
     assert promote.await_args is not None
-    assert promote.await_args.kwargs["touch_last_seen"] is False
+    assert promote.await_args.args == (agent,)
 
 
 async def test_expired_heartbeat_disabled_container_retries_false_stop_after_commit(monkeypatch):
@@ -395,9 +393,8 @@ async def test_promotion_lock_wait_rereads_stop_before_claim(monkeypatch):
     monkeypatch.setattr(gateway, "connection_ctx", poll_context)
     monkeypatch.setattr(gateway, "_get_agent_by_key", AsyncMock(return_value=agent))
     claim = AsyncMock(return_value=[])
-    monkeypatch.setattr(gateway, "claim_poll_batch", claim)
     # When: the stop commits while the poll is waiting for the same mutex.
-    poll = asyncio.create_task(gateway.poll_messages("key"))
+    poll = asyncio.create_task(gateway.heartbeat("key"))
     await waiting.wait()
     persisted_status = "stopped"
     mutex.release()
@@ -425,8 +422,7 @@ async def test_repeated_quota_expiry_never_calls_docker(monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["send", "report"])
-@pytest.mark.parametrize("touch_last_seen", [False, True])
-async def test_stop_winning_lock_denies_send_and_report(monkeypatch, operation, touch_last_seen):
+async def test_stop_winning_lock_denies_send_and_report(monkeypatch, operation):
     # Given: auth saw the old snapshot while a stop transaction owns the tenant lock.
     agent = _agent()
     mutex = asyncio.Lock()
@@ -455,7 +451,7 @@ async def test_stop_winning_lock_denies_send_and_report(monkeypatch, operation, 
 
     @asynccontextmanager
     async def request_context():
-        yield None
+        yield _wrap(_FakeRawConnection())
 
     async def old_touch(**kwargs):
         await wait_for_stop()
@@ -472,13 +468,15 @@ async def test_stop_winning_lock_denies_send_and_report(monkeypatch, operation, 
     monkeypatch.setattr(agent_dao, "session", dao_context)
     monkeypatch.setattr(agent_dao, "update", update)
     monkeypatch.setattr(gateway, "connection_ctx", request_context)
+    monkeypatch.setattr(gateway, "lock_tenants", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_user", AsyncMock())
+    monkeypatch.setattr(gateway, "lock_agent", AsyncMock())
     monkeypatch.setattr(gateway, "_get_agent_by_key", AsyncMock(return_value=agent))
     monkeypatch.setattr(gateway, "record_report", record)
     monkeypatch.setattr(gateway, "publish_report", publish)
     monkeypatch.setattr(gateway.gateway_message_dao, "get_for_agent", AsyncMock(return_value=None))
     monkeypatch.setattr(gateway.agent_agent_relationship_dao, "list_for_agent_with_targets", AsyncMock(return_value=[]))
     monkeypatch.setattr(gateway.agent_relationship_dao, "list_for_agent_with_members", AsyncMock(return_value=[]))
-    monkeypatch.setattr(openclaw_hot_cache, "should_touch_last_seen", lambda _id: touch_last_seen)
     # When: stop commits before the request can acquire its admission lock.
     request = (
         gateway.send_message(GatewaySendMessageRequest(target="missing", content="hello"), "key")
@@ -515,6 +513,8 @@ async def test_enqueued_wake_uses_only_committed_clean_context(monkeypatch, roll
         observations.append((raw.commit.await_count, session.get_connection()))
 
     monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
+    pending = SimpleNamespace(id=uuid4(), content="hello", conversation_id=None)
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[pending]))
     # When: the owner commits or rolls back after scheduling a wake.
     try:
         async with session.connection_ctx():

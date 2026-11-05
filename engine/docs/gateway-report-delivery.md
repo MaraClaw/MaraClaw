@@ -1,7 +1,10 @@
 # Durable gateway report delivery
 
-The winning gateway completion transaction persists the authoritative result and chat
-history. Legacy destinations are inferred at completion; shared human IM turns persist
+Native Gateway terminal responses are settled by the engine through
+`settle_native_report` and `record_report`; the independent authenticated
+`POST /api/gateway/report` API also uses `record_report`. The first winning
+completion transaction persists the authoritative result and chat history.
+Other destinations are inferred at completion; shared human IM turns persist
 their independent provider intent atomically at enqueue. Claims require a completed
 source message, so accepted pending turns cannot send early. Worker-enabled processes
 run `gateway_report_relay` under `Runtime.tasks`; API-only and connector-only
@@ -29,9 +32,11 @@ revalidate identity even when an advisory check before preparation failed.
 Both agents must still match the intent's persisted tenant snapshot and original
 sender relationship. Destination inbox insertion and intent acknowledgement share
 one transaction. A failed acknowledgement raises and rolls back insertion and its
-deferred wake. The routing helper wakes the guest only after commit. A crash before
+deferred native dispatch. The routing helper schedules execution only after commit. A crash before
 commit leaves no destination row; a crash after commit leaves an acknowledged intent
-and a durable inbox row that polling can recover even if the wake was lost.
+and a durable pending gateway row that `openclaw_dispatch_reconciler` can recover
+even if the dispatch notification was lost. This recovery never replays a row
+already marked `delivered`; report-relay delivery retries are a separate queue.
 Replies preserve the source message's conversation ID. Missing or empty IDs use
 `gw_agent_{destination.id}_{message.agent_id}`, matching the previous publisher's
 agent-to-agent conversation routing.

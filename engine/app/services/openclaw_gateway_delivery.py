@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
-from app.config import get_settings
+from fastapi import HTTPException
+
+from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.logging import logger
+from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.gateway_message_dao import gateway_message_dao
@@ -17,12 +20,8 @@ from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.schemas.chat_wire import ChatEventType
-from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import normalize_channel_type
-from app.services.openclaw_shared_dispatch import claim_ready_shared
-from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
 
@@ -36,38 +35,25 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def delivery_cutoff(now: datetime) -> datetime:
-    return now - timedelta(seconds=get_settings().OPENCLAW_DELIVERY_TIMEOUT_SECONDS)
-
-
-async def claim_poll_batch(agent_id: UUID, *, now: datetime | None = None) -> list[GatewayMessageRecord]:
-    """Requeue expired deliveries and atomically claim the pending batch.
-
-    The Shared head comes only from the central claim (actual oldest head, readiness, fresh scope, exact model), which
-    owns its transaction and therefore must be called outside any other. It runs last, so a failure before it can
-    never strand a delivered Shared turn that no response carried (those are never requeued).
-
-    Raises ``OpenClawUpdateGateError`` before any requeue or claim.
-    """
-    await assert_work_allowed(agent_id)
-    _ = await load_agent_for_new_work(agent_id)
-    at = now or _utcnow()
-    shared_id = shared_session_id(agent_id)
-    async with connection_ctx():
-        requeued = await gateway_message_dao.requeue_stale_deliveries(
-            agent_id, stale_before=delivery_cutoff(at), exclude_conversation=str(shared_id)
-        )
-        messages = await gateway_message_dao.claim_pending(agent_id, now=at, exclude_conversation=str(shared_id))
-    if requeued:
-        logger.info("[Gateway] Requeued stale deliveries agent={} ids={}", agent_id, requeued)
+async def settle_native_report(agent: AgentRecord, message_id: UUID, result: str) -> RecordedReport | None:
+    """Take scope locks before the Shared session lock and reject a stale execution owner."""
     try:
-        shared = await claim_ready_shared(SharedDispatchRequest(agent_id, at))
-    except OpenClawUpdateGateError as gate:
-        logger.info("[Gateway] shared claim left pending for {}: {}", agent_id, gate.code)
-        return messages
-    if shared is not None:
-        messages.append(shared)
-    return messages
+        async with connection_ctx() as db:
+            await lock_tenants(db, (agent.tenant_id,))
+            await lock_user(db, agent.creator_id, agent.tenant_id)
+            await lock_agent(db, agent.id, agent.tenant_id)
+            memo_drop("agent", agent.id)
+            current = await agent_dao.get(agent.id)
+            if current is None or current.creator_id != agent.creator_id or current.tenant_id != agent.tenant_id:
+                return None
+            candidate = await gateway_message_dao.get_for_agent(message_id, current.id)
+            if candidate is None or candidate.status != "delivered":
+                return None
+            return await record_report(current, message_id, result)
+    except HTTPException as error:
+        if error.status_code in (404, 409):
+            return None
+        raise
 
 
 async def record_report(
@@ -130,10 +116,9 @@ async def record_report(
                     destination_id=sender.id,
                     tenant_id=agent.tenant_id,
                 )
-        if won.conversation_id == str(shared_session_id(agent.id)):
-            from app.services.openclaw_routing import wake_shared_lane
+        from app.services.openclaw_routing import wake_shared_lane
 
-            wake_shared_lane(agent, won.id)
+        wake_shared_lane(agent, won.id)
     return RecordedReport(message=won, assistant_message_id=assistant_message_id)
 
 

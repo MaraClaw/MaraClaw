@@ -1,6 +1,6 @@
 """Judge0 API-based sandbox backend."""
 
-import time
+import asyncio
 from typing import override
 
 import anyio
@@ -9,7 +9,14 @@ import httpx
 from app.core.json_types import json_as_int, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.core.outbound_policy import OutboundPolicyError
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import (
+    BaseSandboxBackend,
+    ExecutionDeadline,
+    ExecutionResult,
+    SandboxCapabilities,
+    TerminationReason,
+    active_execution_deadline,
+)
 from app.services.sandbox.config import ENDPOINT_BLOCKED_MESSAGE, SandboxConfig
 
 # Judge0 language IDs
@@ -83,7 +90,12 @@ class Judge0Backend(BaseSandboxBackend):
         if "timeout" in kwargs:
             raise TypeError("execute() no longer accepts 'timeout'; use 'exec_timeout'")
         timeout = exec_timeout
-        start_time = time.time()
+        supplied = kwargs.get("deadline")
+        deadline = (
+            supplied
+            if isinstance(supplied, ExecutionDeadline)
+            else active_execution_deadline.get() or ExecutionDeadline(timeout)
+        )
 
         # Get language ID
         lang_id = _JUDGE0_LANGUAGE_IDS.get(language.lower())
@@ -93,12 +105,15 @@ class Judge0Backend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=f"Unsupported language: {language}. Supported: {', '.join(_JUDGE0_LANGUAGE_IDS.keys())}",
             )
 
         try:
-            async with self.config.http_client(base_url=self.api_url, timeout=10.0) as client:
+            async with (
+                asyncio.timeout(deadline.remaining()),
+                self.config.http_client(base_url=self.api_url, timeout=deadline.remaining()) as client,
+            ):
                 # Step 1: Submit the code
                 submit_response = await client.post(
                     f"{self.api_url}/submissions",
@@ -108,7 +123,7 @@ class Judge0Backend(BaseSandboxBackend):
                         "cpu_time_limit": timeout,
                         "memory_limit": self.config.memory_limit,
                     },
-                    timeout=10.0,
+                    timeout=deadline.remaining(),
                 )
 
                 if submit_response.status_code != 201:
@@ -117,8 +132,9 @@ class Judge0Backend(BaseSandboxBackend):
                         stdout="",
                         stderr="",
                         exit_code=1,
-                        duration_ms=int((time.time() - start_time) * 1000),
+                        duration_ms=deadline.elapsed_ms(),
                         error=f"Failed to submit code: {submit_response.status_code}",
+                        termination=TerminationReason.BACKEND_ABORT,
                     )
 
                 submission = json_object_from_response(submit_response)
@@ -130,20 +146,20 @@ class Judge0Backend(BaseSandboxBackend):
                         stdout="",
                         stderr="",
                         exit_code=1,
-                        duration_ms=int((time.time() - start_time) * 1000),
+                        duration_ms=deadline.elapsed_ms(),
                         error="Failed to get submission token",
+                        termination=TerminationReason.BACKEND_ABORT,
                     )
 
                 # Step 2: Poll for result
-                max_retries = timeout * 2  # Poll every 0.5 seconds
-                for _ in range(max_retries):
-                    _ = await client.get(f"{self.api_url}/submissions/{token}", timeout=5.0)
-
+                while not deadline.expired:
                     result_response = await client.get(
                         f"{self.api_url}/submissions/{token}",
                         params={"fields": "stdout,stderr,status,time,memory,exit_code"},
-                        timeout=5.0,
+                        timeout=deadline.remaining(),
                     )
+
+                    result_response.raise_for_status()
 
                     if result_response.status_code == 200:
                         result = json_object_from_response(result_response)
@@ -151,16 +167,16 @@ class Judge0Backend(BaseSandboxBackend):
                         status = json_object_from(result.get("status"))
                         status_id_raw: object = status.get("id")
                         if not isinstance(status_id_raw, int) or isinstance(status_id_raw, bool):
-                            await anyio.sleep(0.5)
+                            await anyio.sleep(min(0.5, deadline.remaining()))
                             continue
 
                         # Check if still processing
                         if status_id_raw <= 2:  # In Queue or Processing
-                            await anyio.sleep(0.5)
+                            await anyio.sleep(min(0.5, deadline.remaining()))
                             continue
 
                         # Completed
-                        duration_ms = int((time.time() - start_time) * 1000)
+                        duration_ms = deadline.elapsed_ms()
                         stdout = json_as_str_or(result.get("stdout"))
                         stderr = json_as_str_or(result.get("stderr"))
                         exit_code = json_as_int(result.get("exit_code"), 1)
@@ -180,9 +196,14 @@ class Judge0Backend(BaseSandboxBackend):
                                 if status_id_raw == 3
                                 else json_as_str_or(status.get("description"), "Execution failed")
                             ),
+                            termination=(
+                                TerminationReason.PROVIDER_TIME_LIMIT
+                                if status_id_raw == 5
+                                else TerminationReason.COMPLETED
+                            ),
                         )
 
-                    await anyio.sleep(0.5)
+                    await anyio.sleep(min(0.5, deadline.remaining()))
 
                 # Timeout waiting for result
                 return ExecutionResult(
@@ -190,12 +211,13 @@ class Judge0Backend(BaseSandboxBackend):
                     stdout="",
                     stderr="",
                     exit_code=124,
-                    duration_ms=int((time.time() - start_time) * 1000),
+                    duration_ms=deadline.elapsed_ms(),
                     error=f"Code execution timed out after {timeout}s",
+                    termination=TerminationReason.SANDBOX_TIMEOUT,
                 )
 
-        except httpx.TimeoutException:
-            duration_ms = int((time.time() - start_time) * 1000)
+        except TimeoutError:
+            duration_ms = deadline.elapsed_ms()
             return ExecutionResult(
                 success=False,
                 stdout="",
@@ -203,6 +225,18 @@ class Judge0Backend(BaseSandboxBackend):
                 exit_code=124,
                 duration_ms=duration_ms,
                 error=f"Code execution timed out after {timeout}s",
+                termination=TerminationReason.SANDBOX_TIMEOUT,
+            )
+
+        except httpx.HTTPError:
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=1,
+                duration_ms=deadline.elapsed_ms(),
+                error="Judge0 HTTP transport or response failure",
+                termination=TerminationReason.BACKEND_ABORT,
             )
 
         except OutboundPolicyError:
@@ -212,12 +246,13 @@ class Judge0Backend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=ENDPOINT_BLOCKED_MESSAGE,
+                termination=TerminationReason.BACKEND_ABORT,
             )
 
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
+            duration_ms = deadline.elapsed_ms()
             logger.exception("[Judge0] Execution error")
             return ExecutionResult(
                 success=False,
@@ -226,4 +261,5 @@ class Judge0Backend(BaseSandboxBackend):
                 exit_code=1,
                 duration_ms=duration_ms,
                 error=f"Judge0 execution error: {str(e)[:200]}",
+                termination=TerminationReason.BACKEND_ABORT,
             )

@@ -1,4 +1,4 @@
-"""The one Shared-lane claim: immediate wake and guest poll both come through ``claim_ready_shared``.
+"""The one Shared-lane claim: native dispatch and pending recovery use ``claim_ready_shared``.
 
 Order, never reversed: guest-write flock -> one short database transaction { tenant/owner/agent shared locks ->
 shared chat-session lock -> the ACTUAL oldest pending head -> (Personal batch: fresh scope, seal, route) -> guest
@@ -87,7 +87,7 @@ async def claim_shared_turn(request: SharedDispatchRequest) -> SharedClaimResult
 
 async def _claim_in_transaction(request: SharedDispatchRequest) -> SharedClaimResult:
     agent_id, lane = request.agent_id, shared_session_id(request.agent_id)
-    # Unlocked fast exit: a stale read can only miss a claim (the next wake/poll retries), never make a wrong one.
+    # A stale fast-exit read only misses a claim; pending recovery retries under the lane lock.
     peek = await personal_burst_dispatch_dao.head(agent_id, lane)
     if peek is None:
         return _blocked("empty")

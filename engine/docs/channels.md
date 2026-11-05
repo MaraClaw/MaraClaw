@@ -75,16 +75,17 @@ quiet, with a maximum collection window of five seconds from the first member.
 Five seconds is not an execution deadline: an earlier active or uncertain shared
 turn, unavailable model, or guest update gate can still delay execution.
 
-There is one active shared human turn per agent. Both immediate wakes and guest
-polling check the actual FIFO head through `openclaw_shared_dispatch`; they cannot
-skip an unready head. A claimed turn's body and model selection are frozen. New
+There is one active shared human turn per agent. Committed immediate wakes and
+pending recovery claim the actual FIFO head through `openclaw_shared_dispatch`;
+they cannot skip an unready head. A claimed turn's body and model selection are frozen. New
 arrivals form a later turn, and an intervening web entry or different sender/route
 prevents appending to an earlier burst. Admission does not rewrite guest model
 configuration; dispatch applies the selected model under guest-write exclusion
 before committing the claim. Shared uncertain deliveries are not timeout-requeued.
 
-The worker/all role owns the required `personal_burst_reconciler` loop. It scans
-durable due heads at most one second apart and uses the normal owned wake admission.
+The worker/all role owns the required `openclaw_dispatch_reconciler` loop. It scans
+pending lane heads in keyset pages of 50 at a one-second interval and uses the normal
+owned wake admission; delivered work is not replayed.
 Missed in-process wakes and process restarts therefore do not erase pending bursts.
 Disconnect, ownership changes, or stale route fences cancel unclaimed bursts while
 retaining accepted transcript entries and their quota charges; they do not redirect

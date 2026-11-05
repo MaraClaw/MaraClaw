@@ -19,10 +19,13 @@ async def raw(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_FakeRawConnecti
     monkeypatch.setattr(session, "get_pool", lambda: _FakePool(connection))
     token = session._conn_ctx.set(None)
     background_tasks.start_background_tasks()
+    routing.open_wake_admission()
     try:
         yield connection
     finally:
         await background_tasks.drain_background_tasks(grace_seconds=0)
+        await routing.drain_wake_tasks(grace_seconds=0)
+        routing.open_wake_admission()
         background_tasks.start_background_tasks()
         session._conn_ctx.reset(token)
 
@@ -55,7 +58,7 @@ async def test_prepared_enqueue_defers_wake_until_commit(
     monkeypatch.setattr(routing, "_run_inbox_wake", wake)
     for name in ("ensure_agent_company_models", "load_agent_model_bundle", "select_turn_model"):
         monkeypatch.setattr(routing, name, AsyncMock(side_effect=AssertionError("preparation inside transaction")))
-    monkeypatch.setattr(routing.agent_manager, "write_guest_config", Mock(side_effect=AssertionError("config in tx")))
+    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[created]))
 
     async def enqueue() -> GatewayMessageRecord:
         async with session.connection_ctx():
@@ -118,3 +121,21 @@ async def test_prepared_enqueue_suppresses_duplicate_user_message(
     assert result is pending
     create.assert_not_awaited()
     scheduled.assert_called_once_with(agent, "hello", pending.id)
+
+
+async def test_shutdown_between_enqueue_and_commit_refuses_deferred_drain(
+    monkeypatch: pytest.MonkeyPatch, raw: _FakeRawConnection
+) -> None:
+    agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
+    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "openai/model", "complex", "rule")
+    created = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
+    monkeypatch.setattr(routing, "_insert_prepared_message", AsyncMock(return_value=created))
+    run = AsyncMock()
+    monkeypatch.setattr(routing, "_run_inbox_wake", run)
+    async with session.connection_ctx():
+        assert await routing.enqueue_prepared_openclaw_message(prepared) is created
+        routing.close_wake_admission()
+    await background_tasks.drain_background_tasks()
+    run.assert_not_awaited()
+    assert raw.commits == 1
+    assert not routing._wake_tasks

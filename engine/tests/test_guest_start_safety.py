@@ -109,7 +109,7 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     def fail(_directory):
         raise OSError("disk full")
 
-    monkeypatch.setattr(module, "write_maraclaw_sync_skill", fail)
+    monkeypatch.setattr(module, "prepare_native_gateway_files", fail)
     # When preparation fails (the HTTP boundary supplies the typed response).
     with pytest.raises(GuestStartPreflightError):
         await manager.replace_container(agent)

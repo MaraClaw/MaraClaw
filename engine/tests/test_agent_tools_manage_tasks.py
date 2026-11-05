@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +11,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.dao.task_dao import TaskDAO
+from app.records.task import TaskClaim, TaskRecord
 from app.services import agent_tools
 from app.services.agent_tools import ToolParameters
 
@@ -19,6 +23,11 @@ class FakeLogger:
 
     def error(self, message):
         self.errors.append(message)
+
+
+@asynccontextmanager
+async def _no_transaction():
+    yield
 
 
 @pytest.fixture
@@ -150,23 +159,30 @@ async def test_sync_tasks_to_file_logs_and_swallows_write_failure(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monkeypatch, tasks_tool, tmp_path):
+async def test_manage_tasks_creates_todo_claims_it_then_schedules_under_that_claim_and_syncs(
+    monkeypatch, tasks_tool, tmp_path
+):
     # Given
     agent_id = uuid.uuid4()
     user_id = uuid.uuid4()
     task_id = uuid.uuid4()
     created = SimpleNamespace(id=task_id, title="Ship")
+    owner = TaskClaim(task_id, uuid.uuid4())
     create = AsyncMock(return_value=created)
+    claim_task = AsyncMock(return_value=owner)
     sync_tasks_to_file = AsyncMock()
     execute_task = AsyncMock()
     scheduled = []
 
     def schedule(coroutine, description):
+        assert claim_task.await_count == 1
         scheduled.append((coroutine, description))
         coroutine.close()
 
     monkeypatch.setattr(tasks_tool.task_dao, "create", create)
+    monkeypatch.setattr(tasks_tool, "connection_ctx", _no_transaction)
     monkeypatch.setattr(tasks_tool, "_sync_tasks_to_file", sync_tasks_to_file)
+    monkeypatch.setattr("app.services.task_lease.claim_task", claim_task)
     monkeypatch.setattr("app.services.task_executor.execute_task", execute_task)
     monkeypatch.setattr(tasks_tool, "schedule_background_task", schedule)
 
@@ -190,7 +206,8 @@ async def test_manage_tasks_creates_todo_with_defaults_schedules_and_syncs(monke
         "supervision_channel": "feishu",
         "remind_schedule": None,
     }
-    execute_task.assert_called_once_with(task_id, agent_id)
+    claim_task.assert_awaited_once_with(task_id, agent_id)
+    execute_task.assert_called_once_with(task_id, agent_id, owner)
     assert len(scheduled) == 1
     assert scheduled[0][1] == f"execute task {task_id}"
     sync_tasks_to_file.assert_awaited_once_with(agent_id, tmp_path)
@@ -208,9 +225,12 @@ async def test_manage_tasks_creates_supervision_with_defaults_without_scheduling
     def unexpected_schedule(_coroutine):
         raise AssertionError("supervision task must not schedule execution")
 
+    claim_task = AsyncMock()
     monkeypatch.setattr(tasks_tool.task_dao, "create", create)
+    monkeypatch.setattr(tasks_tool, "connection_ctx", _no_transaction)
     monkeypatch.setattr(tasks_tool, "_sync_tasks_to_file", sync_tasks_to_file)
     monkeypatch.setattr("asyncio.create_task", unexpected_schedule)
+    monkeypatch.setattr("app.services.task_lease.claim_task", claim_task)
 
     # When
     result = await tasks_tool._manage_tasks(
@@ -226,6 +246,7 @@ async def test_manage_tasks_creates_supervision_with_defaults_without_scheduling
     obj_in = create.await_args.kwargs["obj_in"]
     assert obj_in["supervision_channel"] == "feishu"
     assert obj_in["type"] == "supervision"
+    claim_task.assert_not_awaited()
     sync_tasks_to_file.assert_awaited_once_with(agent_id, tmp_path)
 
 
@@ -375,3 +396,32 @@ async def test_manage_tasks_raises_key_error_for_missing_required_keys(monkeypat
     # When / Then
     with pytest.raises(KeyError):
         await tasks_tool._manage_tasks(uuid.uuid4(), uuid.uuid4(), tmp_path, arguments)
+
+
+@pytest.mark.asyncio
+async def test_update_status_writes_the_revocation_in_the_status_statement(monkeypatch, tasks_tool, tmp_path):
+    # Given
+    task = TaskRecord(id=uuid.uuid4(), agent_id=uuid.uuid4(), title="Ship", created_by=uuid.uuid4())
+    statements: list[str] = []
+
+    class RecordingDb:
+        async def fetchone(self, sql, _params):
+            statements.append(sql)
+            return asdict(task)
+
+    @asynccontextmanager
+    async def session():
+        yield RecordingDb()
+
+    monkeypatch.setattr(TaskDAO, "session", lambda _self: session())
+    monkeypatch.setattr(tasks_tool.task_dao, "find_first_by_title_ilike", AsyncMock(return_value=task))
+    monkeypatch.setattr(tasks_tool, "_sync_tasks_to_file", AsyncMock())
+
+    # When
+    await tasks_tool._manage_tasks(
+        task.agent_id, task.created_by, tmp_path, {"action": "update_status", "title": "Ship", "status": "done"}
+    )
+
+    # Then
+    assert len(statements) == 1
+    assert "claim_token" in statements[0].split(" RETURNING ")[0]

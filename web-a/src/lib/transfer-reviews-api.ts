@@ -4,6 +4,7 @@ import { apiRequest } from './http.ts'
 import { TransferChoiceSchema, TransferStatusSchema } from './engine-contracts.generated.ts'
 
 export const TRANSFER_REVIEW_LIMIT = 50
+export const transferReviewViewSchema = z.enum(['pending', 'recent'])
 export const TRANSFER_REASON_LIMIT = 2000
 export const transferIdSchema = z.uuid().brand<'TransferId'>()
 const timestampSchema = z.iso.datetime({ offset: true })
@@ -25,7 +26,10 @@ export const transferSummarySchema = z.object({
   review_reason: z.string().nullable(),
   admission_request_id: z.uuid().nullable(),
 }).readonly()
-const transferReviewsSchema = z.array(transferSummarySchema).readonly()
+export const transferReviewPageSchema = z.object({
+  items: z.array(transferSummarySchema).readonly(),
+  next_cursor: z.string().min(1).nullable(),
+}).readonly()
 export const transferReasonSchema = z.string().trim().max(TRANSFER_REASON_LIMIT, 'Use 2,000 characters or fewer.')
 export const transferDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
@@ -36,12 +40,16 @@ export const reviewTenantSchema = z.object({
 }).readonly()
 
 export type TransferId = z.infer<typeof transferIdSchema>
+export type TransferReviewView = z.infer<typeof transferReviewViewSchema>
+export type TransferReviewPage = z.infer<typeof transferReviewPageSchema>
 export type TransferSummary = z.infer<typeof transferSummarySchema>
 export type TransferDecision = z.infer<typeof transferDecisionSchema>
 export type ReviewTenant = z.infer<typeof reviewTenantSchema>
 
-export async function fetchTransferReviews(signal?: AbortSignal) {
-  return apiRequest(`/api/company-admissions/transfers/review?limit=${TRANSFER_REVIEW_LIMIT}`, { schema: transferReviewsSchema, signal })
+export async function fetchTransferReviews(view: TransferReviewView, cursor: string | null = null, signal?: AbortSignal) {
+  const query = new URLSearchParams({ view, limit: String(TRANSFER_REVIEW_LIMIT) })
+  if (cursor !== null) query.set('cursor', cursor)
+  return apiRequest(`/api/company-admissions/transfers/review/page?${query}`, { schema: transferReviewPageSchema, signal })
 }
 
 export async function fetchTransferDetail(id: TransferId, signal?: AbortSignal) {

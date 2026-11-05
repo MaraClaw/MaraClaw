@@ -137,7 +137,6 @@ async def test_reply_bounds_history_without_mutation_and_keeps_defaults(
             "conversation_id": str(handoff.session.id),
             "reply_session_id": None,
             "history": original[-8:] if original else None,
-            "await_wake": False,
         }
     ]
     assert handoff.operations == (["lookup", "enqueue"] if saved_content is None else ["lookup", "persist", "enqueue"])

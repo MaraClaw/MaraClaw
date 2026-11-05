@@ -8,9 +8,11 @@ from tests.test_channel_event_receipts_postgres import counts
 
 from app.core.json_types import uuid_from_row
 from app.dao.agent_dao import agent_dao
+from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
-from app.services import openclaw_gateway_delivery as delivery, openclaw_routing as routing
+from app.services import openclaw_routing as routing, openclaw_update_exclusion
 from app.services.channels.submissions import accept_channel_event
+from app.services.openclaw_native_claims import claim_ordinary_turn
 from app.services.quota_guard import AgentExpired
 
 __all__ = ["channel_db", "receipt_db"]
@@ -80,34 +82,47 @@ async def test_stopped_agent_still_accepts_a_new_channel_event(channel_db: Chann
     assert (await counts(fixture))["enqueued"] == 1
 
 
-@pytest.mark.parametrize("boundary", ["poll", "wake", "prepare", "enqueue"])
-async def test_accepted_queue_cannot_bypass_later_owner_disable(channel_db: ChannelDatabase, monkeypatch, boundary):
+@pytest.mark.parametrize("boundary", ["claim", "wake", "prepare", "enqueue"])
+async def test_accepted_queue_cannot_bypass_later_owner_disable(
+    channel_db: ChannelDatabase, monkeypatch, tmp_path, boundary
+):
     fixture = channel_db
     async with transaction(fixture.db.first):
         await accept_channel_event(fixture.event)
         stale_agent = await agent_dao.get(fixture.db.agent.id)
     assert stale_agent is not None
     await disable_owner(fixture)
-    wake = AsyncMock(return_value=True)
+    execute = AsyncMock()
     ensure = AsyncMock()
-    monkeypatch.setattr("app.services.openclaw_inbox.wake_openclaw_inbox", wake)
+    monkeypatch.setattr("app.services.openclaw_gateway_rpc.execute_gateway_turn", execute)
     monkeypatch.setattr(routing, "ensure_agent_company_models", ensure)
     async with transaction(fixture.db.first):
         message = await fixture.db.first.fetchone("SELECT id FROM gateway_messages")
         assert message is not None
+    message_id = uuid_from_row(message["id"])
+    monkeypatch.setattr(
+        openclaw_update_exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id)
+    )
+    await init_pool(conninfo=fixture.db.conninfo, min_size=1, max_size=4)
+    try:
         match boundary:
-            case "poll":
+            case "claim":
                 with pytest.raises(HTTPException):
-                    await delivery.claim_poll_batch(stale_agent.id)
+                    await claim_ordinary_turn(stale_agent, message_id)
             case "wake":
-                await routing._run_inbox_wake(stale_agent, "queued", uuid_from_row(message["id"]))
+                await routing._run_inbox_wake(stale_agent, "queued", message_id)
             case "prepare":
-                with pytest.raises(HTTPException):
-                    await routing.prepare_openclaw_message(agent=stale_agent, content="new work")
+                async with transaction(fixture.db.first):
+                    with pytest.raises(HTTPException):
+                        await routing.prepare_openclaw_message(agent=stale_agent, content="new work")
             case "enqueue":
-                prepared = routing.PreparedOpenClawMessage(stale_agent, "prepared", "primary", None, None, "test")
-                with pytest.raises(HTTPException):
-                    await routing.enqueue_prepared_openclaw_message(prepared)
+                async with transaction(fixture.db.first):
+                    prepared = routing.PreparedOpenClawMessage(stale_agent, "prepared", "primary", None, None, "test")
+                    with pytest.raises(HTTPException):
+                        await routing.enqueue_prepared_openclaw_message(prepared)
+    finally:
+        await close_pool()
+    async with transaction(fixture.db.first):
         assert await fixture.db.first.fetchval("SELECT status FROM gateway_messages") == "pending"
-    wake.assert_not_awaited()
+    execute.assert_not_awaited()
     ensure.assert_not_awaited()

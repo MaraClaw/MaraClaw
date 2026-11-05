@@ -9,7 +9,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | Admin APIs (platform + tenant) | `admin-apis.md` | Full inventory of `platform_admin` / `org_admin` HTTP APIs, genesis bootstrap, `must_change_password`, role matrix for `web-a` |
 | Channels | `channels.md` | Transport/maturity per IM product. **Cloud API WhatsApp**: signed webhook, per-message admission, 24-hour reply window from the signed inbound timestamp. **Personal QR WhatsApp**: self-chat only, durable burst collection, `WHATSAPP_PERSONAL_BURST_*` limits. Bridge process contract is not here: `../connectors/whatsapp/AGENTS.md` |
 | Shared human runtime | `shared-openclaw-runtime.md` | One shared human transcript lane per agent, FIFO head dispatch, destination contracts, guest session identity, focused verification |
-| Gateway reports | `gateway-report-delivery.md` | Durable `/gateway/report` completion, agent and IM destinations, chunk checkpoints, provider backoff, delivery-ambiguity limits |
+| Gateway reports | `gateway-report-delivery.md` | Native terminal settlement and independent `/gateway/report`, durable agent and IM destinations, chunk checkpoints, provider backoff, delivery-ambiguity limits |
 | Guest containers | `guest-containers.md` | Engine-side ownership/replacement, readiness deadlines, bootstrap handshake, admission limits; policy, not live-host validation |
 | AgentBay | `agentbay.md` | Env vars, API-key lookup order, diagnostics endpoint and CLI |
 | gogcli keyring | `gogcli-keyring-password.md` | Password file path, permissions, rotation and security notes |
@@ -26,7 +26,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 
 - Admin API docs should track `app/api/admin.py`, `tenants.py`, `enterprise.py`, `users.py`, `organization.py`, `tools.py`, `skills.py`, `auth.py` (login/password force-change), `app/services/platform_admin_seeder.py`, `app/services/tenant_provisioning.py`, and admin gates in `app/core/security.py` when roles, genesis bootstrap, or routes change.
 - Channel docs should track `app/api/whatsapp.py`, `app/api/whatsapp_personal.py`, `app/services/channels/` (`whatsapp_window.py`, `whatsapp_personal_*.py`, `personal_burst_*.py`) and the `WHATSAPP_PERSONAL_BURST_*` settings.
-- Shared-runtime and gateway docs should track `app/services/openclaw_shared_dispatch.py`, `openclaw_poll.py`, `shared_chat.py`, `gateway_report_relay.py` and `app/api/gateway.py`.
+- Shared-runtime and gateway docs should track `app/services/openclaw_shared_dispatch.py`, `openclaw_native_claims.py`, `openclaw_routing.py`, `openclaw_gateway_rpc.py`, `openclaw_gateway_delivery.py`, `openclaw_gateway_config.py`, `openclaw_dispatch_reconciler.py`, `shared_chat.py`, `gateway_report_relay.py`, `connectors/openclaw-dispatcher/gateway-rpc.mjs` and `app/api/gateway.py`.
 - Guest-container docs should track `app/services/guest_*.py` and `agent_start_*.py`.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.

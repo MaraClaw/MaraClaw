@@ -78,6 +78,7 @@ from app.schemas.okr import (
     ProgressUpdate,
     WorkReportOut,
 )
+from app.services.okr_owners import owner_names, resolve_owner
 from app.services.okr_periods import advance_period, compute_current_period, compute_period_for_date
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
@@ -498,24 +499,12 @@ async def list_objectives(
     for kr in all_krs:
         krs_by_obj.setdefault(kr.objective_id, []).append(kr)
 
-    user_owner_ids = [o.owner_id for o in objectives if o.owner_type == "user" and o.owner_id]
-    agent_owner_ids = [o.owner_id for o in objectives if o.owner_type == "agent" and o.owner_id]
-
-    user_names = await user_dao.display_names_for_ids(user_owner_ids) if user_owner_ids else {}
-    unresolved_ids = [oid for oid in user_owner_ids if oid not in user_names]
-    if unresolved_ids:
-        _ = user_names.update(await org_member_dao.names_for_ids(unresolved_ids))
-
-    agent_names = await agent_dao.names_for_ids(agent_owner_ids) if agent_owner_ids else {}
+    names = await owner_names(_require_tenant_id(user), objectives)
 
     def _resolve_name(obj: OKRObjectiveRecord) -> str | None:
         if not obj.owner_id:
             return None
-        if obj.owner_type == "user":
-            return user_names.get(obj.owner_id)
-        if obj.owner_type == "agent":
-            return agent_names.get(obj.owner_id)
-        return None
+        return names.get((obj.owner_type, obj.owner_id)) if obj.owner_type in ("user", "agent") else None
 
     return [_obj_to_out(o, krs_by_obj.get(o.id, []), owner_name=_resolve_name(o)) for o in objectives]
 
@@ -526,45 +515,36 @@ async def create_objective(body: ObjectiveCreate, user: UserRecord = Depends(get
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
 
+    tenant_id = _require_tenant_id(user)
     resolved_owner_id: uuid.UUID | None = None
-
-    if body.owner_id not in (None, ""):
-        candidate = uuid.UUID(body.owner_id)
-
-        if body.owner_type == "user":
-            if await user_dao.exists(candidate):
-                resolved_owner_id = candidate
-            else:
-                member = await org_member_dao.get(candidate)
-                if member:
-                    if member.user_id:
-                        resolved_owner_id = member.user_id
-                        logger.info(
-                            f"[create_objective] Resolved OrgMember.id {candidate} → user_id {resolved_owner_id}"
-                        )
-                    else:
-                        resolved_owner_id = candidate
-                        logger.info(
-                            f"[create_objective] Channel-only OrgMember {candidate} "
-                            "has no user_id - storing OrgMember.id as owner_id"
-                        )
-                else:
-                    raise HTTPException(
-                        422,
-                        f"owner_id '{body.owner_id}' does not match any User or OrgMember in this tenant",
-                    )
-        else:
-            resolved_owner_id = candidate
+    if body.owner_type != "company":
+        try:
+            candidate = uuid.UUID(body.owner_id or "")
+        except ValueError as exc:
+            raise HTTPException(422, "owner_id must be a valid UUID") from exc
+        resolved_owner_id = await resolve_owner(tenant_id, body.owner_type, candidate)
+        if resolved_owner_id is None:
+            raise HTTPException(422, "owner_id does not belong to this tenant")
+    try:
+        period_start = date.fromisoformat(body.period_start)
+    except ValueError as exc:
+        raise HTTPException(422, "period_start must be a valid date") from exc
+    try:
+        period_end = date.fromisoformat(body.period_end)
+    except ValueError as exc:
+        raise HTTPException(422, "period_end must be a valid date") from exc
+    if period_end < period_start:
+        raise HTTPException(422, "period_end must not precede period_start")
 
     obj = await okr_objective_dao.create(
         obj_in={
-            "tenant_id": _require_tenant_id(user),
+            "tenant_id": tenant_id,
             "title": body.title,
             "description": body.description,
             "owner_type": body.owner_type,
             "owner_id": resolved_owner_id,
-            "period_start": date.fromisoformat(body.period_start),
-            "period_end": date.fromisoformat(body.period_end),
+            "period_start": period_start,
+            "period_end": period_end,
         }
     )
     return _obj_to_out(obj)

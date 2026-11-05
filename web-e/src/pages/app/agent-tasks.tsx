@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/hooks/use-auth'
 import { canViewTriggerExecutions } from '@/lib/trigger-executions-query'
+import { canRunTask, taskRunErrorMessage } from '@/lib/task-run'
 import { TriggerExecutionHistory } from './trigger-execution-history'
 import {
   completeFocus,
@@ -57,6 +58,15 @@ export function AgentTasksPage() {
       toast.error('Unable to create task')
     },
   })
+  const runTask = useMutation({
+    mutationFn: (taskId: string) => triggerTask(agent.id, taskId),
+    onError(error) {
+      toast.error(taskRunErrorMessage(error))
+    },
+    onSettled() {
+      void queryClient.invalidateQueries({ queryKey: ['tasks', agent.id] })
+    },
+  })
 
   return (
     <div className="grid gap-8 p-6 lg:grid-cols-2">
@@ -81,7 +91,7 @@ export function AgentTasksPage() {
                   <p className="text-sm font-medium">{task.title}</p>
                   <p className="text-xs text-muted-foreground">{task.status ?? task.type}</p>
                 </button>
-                <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void triggerTask(agent.id, task.id).catch(scope.rethrowCurrent)}>
+                <Button size="sm" variant="outline" disabled={!canRunTask(task.status)} onClick={scope.effect(() => runTask.mutate(task.id))}>
                   Run
                 </Button>
               </div>
