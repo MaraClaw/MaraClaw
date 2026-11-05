@@ -18,6 +18,7 @@ class NotificationKind(StrEnum):
     AGENT_DELETION_RESOLVED = "agent_deletion_resolved"
     AGENT_OWNERSHIP_TRANSFERRED = "agent_ownership_transferred"
     ORGANIZATION_WELCOME = "organization_welcome"
+    ORGANIZATION_ADMISSION_PENDING = "organization_admission_pending"
     SYSTEM_ALERT = "system_alert"
     SYSTEM = "system"
     OPENCLAW_UPDATE = "openclaw_update"

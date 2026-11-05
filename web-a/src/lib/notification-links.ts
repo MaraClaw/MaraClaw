@@ -1,4 +1,4 @@
-const adminNotificationRoute = /^\/(?:|account|settings|notifications|admission-approvals(?:\/[a-zA-Z0-9_-]+)?|users(?:\/[a-zA-Z0-9_-]+)?|companies(?:\/[a-zA-Z0-9_-]+)?|search-engine|broadcast|models|tools)(?:[?#][^\s\\]*)?$/
+const adminNotificationRoute = /^\/(?:|account|settings|notifications|organization-admissions|admission-approvals(?:\/[a-zA-Z0-9_-]+)?|users(?:\/[a-zA-Z0-9_-]+)?|companies(?:\/[a-zA-Z0-9_-]+)?|search-engine|broadcast|models|tools)(?:[?#][^\s\\]*)?$/
 
 export function safeNotificationLink(link: string | null): string | null {
   if (link?.startsWith('/agent-deletion-requests')) {

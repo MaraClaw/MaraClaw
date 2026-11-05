@@ -17,6 +17,7 @@ export type UserDetail = AdminUser & {
   quota_message_period?: string
   quota_messages_used?: number
   quota_max_agents?: number
+  effective_max_agents?: number | null
   quota_agent_ttl_hours?: number
   agents: UserAgent[]
 }

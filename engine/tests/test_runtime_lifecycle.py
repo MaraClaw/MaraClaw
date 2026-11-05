@@ -162,6 +162,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         gateway_report_relay,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        organization_admission_email_worker,
         scheduler,
         scheduler_tasks,
         task_lease,
@@ -260,6 +261,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", broadcast)
+    monkeypatch.setattr(organization_admission_email_worker, "start_organization_admission_email_worker", loop)
     monkeypatch.setattr(readiness, "ping_pool", probe)
     monkeypatch.setattr(readiness, "ping_redis", probe)
     manager = ChildManager(events)
@@ -326,6 +328,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert start_reconciler_started.is_set() == role_enabled(roles, "worker")
     assert start_reconciler_stopped.is_set() == role_enabled(roles, "worker")
     assert ("broadcast_email" in names) == role_enabled(roles, "worker")
+    assert ("organization_admission_email" in names) == role_enabled(roles, "worker")
     assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
     assert ("task_lease_recovery" in names) == role_enabled(roles, "worker")

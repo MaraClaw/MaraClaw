@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -273,3 +274,122 @@ async def test_department_membership_pair_constraints(schema_db: DbConnection, c
                 await schema_db.execute(statement, {"user": user_id, "tenant": tenant_id, "department": foreign_id})
         case _:
             pytest.fail(f"Unknown membership scenario: {candidate}")
+
+
+async def test_legacy_tasks_without_lease_columns_are_upgraded_in_place(schema_db: DbConnection) -> None:
+    # Given a pre-lease tasks table holding rows, without the lease columns, constraint or index.
+    await bootstrap_db.main()
+    tenant_id, user_id, agent_id, task_id = uuid4(), uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Legacy', 'Legacy', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO tasks (id, agent_id, title, type, status, priority, assignee, created_by) "
+        "VALUES (%(task)s, %(agent)s, 'Keep me', 'todo', 'doing', 'high', 'self', %(user)s)",
+        {"task": task_id, "agent": agent_id, "user": user_id},
+    )
+    await schema_db.execute("DROP INDEX ix_tasks_lease_expires_at")
+    await schema_db.execute(
+        "ALTER TABLE tasks DROP CONSTRAINT tasks_check, DROP COLUMN claim_token, DROP COLUMN lease_expires_at"
+    )
+    # When bootstrap upgrades it and then reruns.
+    await bootstrap_db.main()
+    await bootstrap_db.main()
+    # Then rows survive with unleased state and the lease contract matches a fresh schema.
+    rows = await schema_db.fetchall("SELECT title, status, claim_token, lease_expires_at FROM tasks")
+    assert rows == [{"title": "Keep me", "status": "doing", "claim_token": None, "lease_expires_at": None}]
+    constraints = await schema_db.fetchall(
+        "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+        "WHERE conrelid = 'tasks'::regclass AND contype = 'c' AND conname NOT LIKE '%%not_null'"
+    )
+    assert constraints == [
+        {"conname": "tasks_check", "definition": "CHECK (((claim_token IS NULL) = (lease_expires_at IS NULL)))"}
+    ]
+    index = await schema_db.fetchall(
+        "SELECT indexdef LIKE '%%WHERE (claim_token IS NOT NULL)' AS is_partial "
+        "FROM pg_indexes WHERE indexname = 'ix_tasks_lease_expires_at'"
+    )
+    assert index == [{"is_partial": True}]
+    leased = await schema_db.fetchall(
+        "UPDATE tasks SET claim_token = gen_random_uuid(), lease_expires_at = now() + interval '1 minute' "
+        "WHERE id = %(task)s AND claim_token IS NULL RETURNING id",
+        {"task": task_id},
+    )
+    assert leased == [{"id": task_id}]
+    with pytest.raises(CheckViolationError):
+        await schema_db.execute("UPDATE tasks SET lease_expires_at = NULL WHERE id = %(task)s", {"task": task_id})
+
+
+_ADMISSION_CONSTRAINTS = (
+    "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+    "WHERE conrelid = 'organization_admission_requests'::regclass AND conname LIKE 'ck_organization_admission_%%' "
+    "ORDER BY conname"
+)
+_ADMISSION_COLUMNS = (
+    "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+    "WHERE table_schema = current_schema() AND table_name = 'organization_admission_requests' ORDER BY column_name"
+)
+
+
+async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: DbConnection) -> None:
+    # Given a fresh schema, recorded as the contract, then reverted to the pre-named-provisioning table with rows.
+    await bootstrap_db.main()
+    fresh_constraints = await schema_db.fetchall(_ADMISSION_CONSTRAINTS)
+    fresh_columns = await schema_db.fetchall(_ADMISSION_COLUMNS)
+    assert [row["conname"] for row in fresh_constraints] == [
+        "ck_organization_admission_name",
+        "ck_organization_admission_provisioned",
+    ]
+    await schema_db.execute(
+        "ALTER TABLE organization_admission_requests DROP CONSTRAINT ck_organization_admission_provisioned, "
+        "DROP CONSTRAINT ck_organization_admission_name, DROP COLUMN organization_name, DROP COLUMN provisioned_at, "
+        "DROP COLUMN provisioned_tenant_id, DROP COLUMN provisioned_admin_user_id"
+    )
+    for email, status, reviewed_at in (
+        ("pending@example.com", "pending", None),
+        ("approved@example.com", "approved", datetime.now(UTC)),
+    ):
+        await schema_db.execute(
+            "INSERT INTO organization_admission_requests (id,email,tier,plan,status,reviewed_at) "
+            "VALUES (gen_random_uuid(),%(email)s,'pro','{\"id\":\"pro\"}'::jsonb,%(status)s,%(reviewed_at)s)",
+            {"email": email, "status": status, "reviewed_at": reviewed_at},
+        )
+    # When bootstrap upgrades it and then reruns.
+    await bootstrap_db.main()
+    await bootstrap_db.main()
+    # Then rows survive as unnamed and unprovisioned, and the table matches the fresh definition.
+    rows = await schema_db.fetchall(
+        "SELECT email, status, organization_name, provisioned_at, provisioned_tenant_id, provisioned_admin_user_id "
+        "FROM organization_admission_requests ORDER BY email"
+    )
+    assert rows == [
+        {
+            "email": email,
+            "status": status,
+            "organization_name": None,
+            "provisioned_at": None,
+            "provisioned_tenant_id": None,
+            "provisioned_admin_user_id": None,
+        }
+        for email, status in (("approved@example.com", "approved"), ("pending@example.com", "pending"))
+    ]
+    assert await schema_db.fetchall(_ADMISSION_CONSTRAINTS) == fresh_constraints
+    assert await schema_db.fetchall(_ADMISSION_COLUMNS) == fresh_columns
+    with pytest.raises(CheckViolationError):
+        await schema_db.execute(
+            "UPDATE organization_admission_requests SET organization_name = 'Named', status = 'approved', "
+            "reviewed_at = now() WHERE email = 'pending@example.com'"
+        )
+    await schema_db.execute(
+        "UPDATE organization_admission_requests SET organization_name = 'Named' WHERE email = 'pending@example.com'"
+    )

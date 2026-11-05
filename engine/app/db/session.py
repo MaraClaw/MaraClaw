@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from app.core.logging import logger
 from app.db.connection import DbConnection
-from app.db.pool import get_pool
+from app.db.pool import durable_pool, get_pool
 
 _conn_ctx: ContextVar[DbConnection | None] = ContextVar("psycopg_conn_ctx", default=None)
 
@@ -116,6 +116,19 @@ async def connection_ctx() -> AsyncGenerator[DbConnection]:
         return
 
     pool = get_pool()
+    async with pool.connection() as raw, _own_transaction(DbConnection(raw)) as db:
+        yield db
+
+
+@asynccontextmanager
+async def durable_transaction() -> AsyncGenerator[DbConnection]:
+    """Commit on a connection of the durable pool, never joining the enclosing request transaction.
+
+    Use when a commit must be durable before the caller continues (a reservation ahead of an external write) and
+    the caller's own transaction holds unrelated uncommitted work or one of the main pool's connections. DAO calls
+    inside the block use this connection; the enclosing context connection is restored afterwards.
+    """
+    pool = await durable_pool()
     async with pool.connection() as raw, _own_transaction(DbConnection(raw)) as db:
         yield db
 

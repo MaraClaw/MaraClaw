@@ -22,6 +22,7 @@ const navItems = [
   { href: '#agents', label: 'Agents' },
   { href: '#how-it-works', label: 'How it works' },
   { href: '#integrations', label: 'Integrations' },
+  { href: '#pricing', label: 'Pricing' },
   { href: '#faq', label: 'FAQ' },
 ]
 
@@ -54,7 +55,7 @@ export function SiteHeader() {
           </span>
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-0.5 md:flex">
+        <nav aria-label="Primary" className="hidden items-center gap-0.5 lg:flex">
           {navItems.map((item) => (
             <a
               key={item.href}
@@ -66,7 +67,7 @@ export function SiteHeader() {
           ))}
         </nav>
 
-        <div className="hidden items-center gap-2 md:flex">
+        <div className="hidden items-center gap-2 lg:flex">
           <ThemeToggle />
           {signedIn ? (
             <>
@@ -83,13 +84,13 @@ export function SiteHeader() {
                 <Link to="/login">Sign in</Link>
               </Button>
               <Button size="sm" asChild>
-                <Link to="/register">Create account</Link>
+                <a href="#pricing">View plans</a>
               </Button>
             </>
           )}
         </div>
 
-        <div className="flex items-center gap-2 md:hidden">
+        <div className="flex items-center gap-2 lg:hidden">
           <ThemeToggle />
           <Sheet>
             <SheetTrigger asChild>
@@ -136,7 +137,7 @@ export function SiteHeader() {
                       </SheetClose>
                       <SheetClose asChild>
                         <Button asChild>
-                          <Link to="/register">Create account</Link>
+                          <a href="#pricing">View plans</a>
                         </Button>
                       </SheetClose>
                     </>

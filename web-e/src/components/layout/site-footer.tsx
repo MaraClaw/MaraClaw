@@ -10,6 +10,7 @@ const footerLinks = [
       { href: '#features', label: 'Features' },
       { href: '#agents', label: 'Agent roles' },
       { href: '#integrations', label: 'Integrations' },
+      { href: '#pricing', label: 'Pricing' },
       { href: '#faq', label: 'FAQ' },
     ],
   },
@@ -18,7 +19,7 @@ const footerLinks = [
     links: [
       { href: '#how-it-works', label: 'How it works' },
       { href: '#enterprise', label: 'Enterprise' },
-      { href: '#cta', label: 'Request a demo' },
+      { href: '#pricing', label: 'Request approval' },
       { href: '#contact', label: 'Contact' },
     ],
   },

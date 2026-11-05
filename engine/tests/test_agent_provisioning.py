@@ -81,6 +81,7 @@ async def test_regular_concurrent_creations_cannot_both_take_last_quota_slot(cre
 
     monkeypatch.setattr(agent_provisioning, "connection_ctx", serialized_transaction)
     monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota_guard.check_agent_creation_quota)
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(
         agent_provisioning.agent_dao,
         "count_active_for_creator",
@@ -120,6 +121,7 @@ async def test_regular_creation_uses_fresh_principal_not_dependency_snapshot(
             assert_never(unreachable)
     monkeypatch.setattr(agent_provisioning.user_dao, "get_with_identity", AsyncMock(return_value=fresh))
     monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota_guard.check_agent_creation_quota)
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_provisioning.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
 
     response = await client.post("/api/agents/", json={"name": "Fresh only"})

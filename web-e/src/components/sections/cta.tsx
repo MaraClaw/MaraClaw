@@ -22,13 +22,13 @@ export function Cta() {
                 Put OpenClaw agents to work for your company
               </h2>
               <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-                Request a demo and we will walk through roles, channels, tenancy,
-                and the control plane your operators need.
+                Explore the proposed organization plans and request approval for
+                your team and digital employees.
               </p>
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <Button size="lg" asChild>
-                  <a href="mailto:hello@maraclaw.com">
-                    Request a demo
+                  <a href="#pricing">
+                    View plans
                     <ArrowRight className="size-4" aria-hidden />
                   </a>
                 </Button>

@@ -41,6 +41,7 @@ CATEGORY_TYPE_MAP: dict[str, list[NotificationKind]] = {
         NotificationKind.APPROVAL_RESOLVED,
         NotificationKind.COMPANY_ADMISSION_PENDING,
         NotificationKind.COMPANY_ADMISSION_RESOLVED,
+        NotificationKind.ORGANIZATION_ADMISSION_PENDING,
     ],
     "social": [
         NotificationKind.PLAZA_COMMENT,

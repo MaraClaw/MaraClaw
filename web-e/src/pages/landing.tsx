@@ -8,6 +8,7 @@ import { Features } from '@/components/sections/features'
 import { Hero } from '@/components/sections/hero'
 import { HowItWorks } from '@/components/sections/how-it-works'
 import { Integrations } from '@/components/sections/integrations'
+import { Pricing } from '@/components/sections/pricing'
 
 export function LandingPage() {
   return (
@@ -26,6 +27,7 @@ export function LandingPage() {
         <HowItWorks />
         <Integrations />
         <Enterprise />
+        <Pricing />
         <Faq />
         <Cta />
       </main>

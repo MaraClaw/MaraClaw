@@ -104,6 +104,7 @@ async def assistant_creation(creation, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(agent_provisioning, "connection_ctx", serialized_transaction)
     monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota_guard.check_agent_creation_quota)
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(
         agent_provisioning.agent_dao,
         "count_active_for_creator",

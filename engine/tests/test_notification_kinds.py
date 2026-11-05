@@ -30,6 +30,7 @@ KINDS: list[tuple[NotificationKind, str]] = [
     (NotificationKind.AGENT_DELETION_RESOLVED, "agent_deletion_resolved"),
     (NotificationKind.AGENT_OWNERSHIP_TRANSFERRED, "agent_ownership_transferred"),
     (NotificationKind.ORGANIZATION_WELCOME, "organization_welcome"),
+    (NotificationKind.ORGANIZATION_ADMISSION_PENDING, "organization_admission_pending"),
     (NotificationKind.SYSTEM_ALERT, "system_alert"),
     (NotificationKind.SYSTEM, "system"),
     (NotificationKind.OPENCLAW_UPDATE, "openclaw_update"),

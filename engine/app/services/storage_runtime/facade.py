@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
-from app.services.storage_runtime.s3 import S3StorageBackend
+from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 
 _storage_backend: StorageBackend | None = None
 
@@ -22,7 +22,7 @@ def get_storage_backend() -> StorageBackend:
     settings = get_settings()
     backend = (settings.STORAGE_BACKEND or "local").strip().lower()
     if backend == "s3":
-        primary = S3StorageBackend(
+        primary = ManagedS3StorageBackend(
             bucket=settings.S3_BUCKET,
             prefix=settings.S3_PREFIX,
             region=settings.S3_REGION,

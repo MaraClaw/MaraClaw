@@ -1,4 +1,4 @@
-import { ContractError, enumMemberNames, record, referenceName, strings, isJsonValue } from "./document.mjs";
+import { ContractError, enumMemberNames, isPrimitiveEnum, record, referenceName, strings, isJsonValue } from "./document.mjs";
 import { constraints, stringExpression, validateKeywords } from "./constraints.mjs";
 
 export function compileDocument(document) {
@@ -14,7 +14,7 @@ export function compileDocument(document) {
     visiting.add(name);
     const schema = document.schemas[name];
     const expression = isJsonValue(schema, name) ? "z.json()" : compile(schema, name);
-    const values = schema.enum?.every(value => typeof value === "string")
+    const values = isPrimitiveEnum(schema)
       ? `export const ${exported}Values = ${json(schema.enum)} as const;\n` : "";
     const members = enumMemberNames(schema, name);
     const named = members === undefined ? "" : `export const ${exported} = { ${members.map((member, index) =>

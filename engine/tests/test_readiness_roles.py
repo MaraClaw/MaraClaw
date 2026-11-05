@@ -45,6 +45,7 @@ async def test_actual_start_registers_required_role_evidence(
         gateway_report_relay,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        organization_admission_email_worker,
         scheduler,
         trigger_daemon,
     )
@@ -96,6 +97,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
+    monkeypatch.setattr(organization_admission_email_worker, "start_organization_admission_email_worker", loop)
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)

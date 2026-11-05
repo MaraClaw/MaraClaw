@@ -16,6 +16,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |
 | OpenClaw image helpers | Guest image project `docker/openclaw/AGENTS.md` | Entrypoint/CMD chain, pins, keyring file rule; the guest image recipe, build and publish live in the sibling guest image project, outside this monorepo |
 | OpenClaw upgrades | `openclaw-updates.md` | Global notices, per-agent worker cutover/rollback, work and write gates, HTTP contract |
+| Managed storage quota | `managed-storage-quota.md` | Per-agent S3 byte ledger: scope and exclusive prefix ownership, reservation/settle protocol, ambiguous outcomes, tree delete, transfer preflight, 413/507/503 contract, open retirement decision |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
 | Product contracts | `chat-attachments.md`, `chat-history.md`, `company-admissions.md`, `broadcast-email-delivery.md`, `member-timezone.md`, `system-alerts.md` | One feature each; read the matching file before changing that API or table |
 | Refactoring packets | `refactoring/` | July 2026 briefs (stale metrics). Org-sync references are historical: provider directory sync is retired. `psycopg-migration.md` is **historical dual-stack**. |
@@ -30,6 +31,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - Guest-container docs should track `app/services/guest_*.py` and `agent_start_*.py`.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.
+- Managed storage quota docs should track `app/services/storage_runtime/quota_*.py`, `facade.py`, `app/dao/agent_storage_dao.py`, `app/db/pool.py` (`durable_pool`), `app/services/company_transfer_disposition.py` and the `agent_storage_*` tables.
 - Search-analytics docs should track `app/services/linkup/`, `app/api/admin_search_analytics.py`, `app/api/linkup_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
 - gogcli credential docs should track `app/services/gogcli_runtime.py` and the guest image project's `Dockerfile.openclaw` and `docker/openclaw/` scripts.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.

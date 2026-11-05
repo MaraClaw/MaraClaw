@@ -26,7 +26,7 @@ export const UserRole = { PLATFORM_ADMIN: "platform_admin", ORG_ADMIN: "org_admi
 export const UserRoleSchema = z.intersection(z.union([z.literal("platform_admin"), z.literal("org_admin"), z.literal("agent_admin"), z.literal("member")]), z.string());
 export type UserRole = z.infer<typeof UserRoleSchema>;
 
-export const AdminUserSummarySchema = z.looseObject({ ["agents_count"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["quota_agent_ttl_hours"]: z.number().refine(Number.isInteger), ["quota_max_agents"]: z.number().refine(Number.isInteger), ["quota_message_limit"]: z.number().refine(Number.isInteger), ["quota_message_period"]: z.string(), ["quota_messages_used"]: z.number().refine(Number.isInteger), ["role"]: UserRoleSchema, ["source"]: z.string().optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
+export const AdminUserSummarySchema = z.looseObject({ ["agents_count"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["effective_max_agents"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["quota_agent_ttl_hours"]: z.number().refine(Number.isInteger), ["quota_max_agents"]: z.number().refine(Number.isInteger), ["quota_message_limit"]: z.number().refine(Number.isInteger), ["quota_message_period"]: z.string(), ["quota_messages_used"]: z.number().refine(Number.isInteger), ["role"]: UserRoleSchema, ["source"]: z.string().optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
 export type AdminUserSummary = z.infer<typeof AdminUserSummarySchema>;
 
 export const AdmissionDecisionSchema = z.looseObject({ ["decision"]: z.intersection(z.union([z.literal("approved"), z.literal("rejected")]), z.string()), ["reason"]: z.union([z.string().refine(value => [...value].length <= 2000), z.null()]).optional() });
@@ -614,9 +614,9 @@ export type NotificationBroadcastEmailStatusResponse = z.infer<typeof Notificati
 export const NotificationBroadcastResponseSchema = z.looseObject({ ["agents_notified"]: z.number().refine(Number.isInteger), ["broadcast_id"]: z.guid(), ["emails_sent"]: z.number().refine(Number.isInteger), ["ok"]: z.boolean(), ["users_notified"]: z.number().refine(Number.isInteger) });
 export type NotificationBroadcastResponse = z.infer<typeof NotificationBroadcastResponseSchema>;
 
-export const NotificationKindValues = ["mention","plaza_reply","plaza_comment","broadcast","approval_pending","approval_resolved","autonomy_l2","company_admission_pending","company_admission_resolved","company_admission_created","agent_deletion_requested","agent_deletion_resolved","agent_ownership_transferred","organization_welcome","system_alert","system","openclaw_update"] as const;
-export const NotificationKind = { MENTION: "mention", PLAZA_REPLY: "plaza_reply", PLAZA_COMMENT: "plaza_comment", BROADCAST: "broadcast", APPROVAL_PENDING: "approval_pending", APPROVAL_RESOLVED: "approval_resolved", AUTONOMY_L2: "autonomy_l2", COMPANY_ADMISSION_PENDING: "company_admission_pending", COMPANY_ADMISSION_RESOLVED: "company_admission_resolved", COMPANY_ADMISSION_CREATED: "company_admission_created", AGENT_DELETION_REQUESTED: "agent_deletion_requested", AGENT_DELETION_RESOLVED: "agent_deletion_resolved", AGENT_OWNERSHIP_TRANSFERRED: "agent_ownership_transferred", ORGANIZATION_WELCOME: "organization_welcome", SYSTEM_ALERT: "system_alert", SYSTEM: "system", OPENCLAW_UPDATE: "openclaw_update" } as const;
-export const NotificationKindSchema = z.intersection(z.union([z.literal("mention"), z.literal("plaza_reply"), z.literal("plaza_comment"), z.literal("broadcast"), z.literal("approval_pending"), z.literal("approval_resolved"), z.literal("autonomy_l2"), z.literal("company_admission_pending"), z.literal("company_admission_resolved"), z.literal("company_admission_created"), z.literal("agent_deletion_requested"), z.literal("agent_deletion_resolved"), z.literal("agent_ownership_transferred"), z.literal("organization_welcome"), z.literal("system_alert"), z.literal("system"), z.literal("openclaw_update")]), z.string());
+export const NotificationKindValues = ["mention","plaza_reply","plaza_comment","broadcast","approval_pending","approval_resolved","autonomy_l2","company_admission_pending","company_admission_resolved","company_admission_created","agent_deletion_requested","agent_deletion_resolved","agent_ownership_transferred","organization_welcome","organization_admission_pending","system_alert","system","openclaw_update"] as const;
+export const NotificationKind = { MENTION: "mention", PLAZA_REPLY: "plaza_reply", PLAZA_COMMENT: "plaza_comment", BROADCAST: "broadcast", APPROVAL_PENDING: "approval_pending", APPROVAL_RESOLVED: "approval_resolved", AUTONOMY_L2: "autonomy_l2", COMPANY_ADMISSION_PENDING: "company_admission_pending", COMPANY_ADMISSION_RESOLVED: "company_admission_resolved", COMPANY_ADMISSION_CREATED: "company_admission_created", AGENT_DELETION_REQUESTED: "agent_deletion_requested", AGENT_DELETION_RESOLVED: "agent_deletion_resolved", AGENT_OWNERSHIP_TRANSFERRED: "agent_ownership_transferred", ORGANIZATION_WELCOME: "organization_welcome", ORGANIZATION_ADMISSION_PENDING: "organization_admission_pending", SYSTEM_ALERT: "system_alert", SYSTEM: "system", OPENCLAW_UPDATE: "openclaw_update" } as const;
+export const NotificationKindSchema = z.intersection(z.union([z.literal("mention"), z.literal("plaza_reply"), z.literal("plaza_comment"), z.literal("broadcast"), z.literal("approval_pending"), z.literal("approval_resolved"), z.literal("autonomy_l2"), z.literal("company_admission_pending"), z.literal("company_admission_resolved"), z.literal("company_admission_created"), z.literal("agent_deletion_requested"), z.literal("agent_deletion_resolved"), z.literal("agent_ownership_transferred"), z.literal("organization_welcome"), z.literal("organization_admission_pending"), z.literal("system_alert"), z.literal("system"), z.literal("openclaw_update")]), z.string());
 export type NotificationKind = z.infer<typeof NotificationKindSchema>;
 
 export const NotificationResponseSchema = z.looseObject({ ["archived_at"]: z.union([z.string(), z.null()]), ["body"]: z.string(), ["created_at"]: z.union([z.string(), z.null()]), ["id"]: z.string(), ["is_read"]: z.boolean(), ["link"]: z.union([z.string(), z.null()]), ["ref_id"]: z.union([z.string(), z.null()]), ["sender_name"]: z.union([z.string(), z.null()]), ["title"]: z.string(), ["type"]: NotificationKindSchema });
@@ -670,6 +670,71 @@ export type OrgAdminOut = z.infer<typeof OrgAdminOutSchema>;
 
 export const OrgUsersPageOutSchema = z.looseObject({ ["items"]: z.array(AuthUserSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
 export type OrgUsersPageOut = z.infer<typeof OrgUsersPageOutSchema>;
+
+export const OrganizationAdditionalAccountMonthlyUsdValues = [12,10,8] as const;
+export const OrganizationAdditionalAccountMonthlyUsd = { PRO: 12, MAX: 10, ULTRA: 8 } as const;
+export const OrganizationAdditionalAccountMonthlyUsdSchema = z.intersection(z.union([z.literal(12), z.literal(10), z.literal(8)]), z.number().refine(Number.isInteger));
+export type OrganizationAdditionalAccountMonthlyUsd = z.infer<typeof OrganizationAdditionalAccountMonthlyUsdSchema>;
+
+export const OrganizationAdmissionAcknowledgmentSchema = z.looseObject({ ["status"]: z.intersection(z.literal("pending"), z.string()).optional() });
+export type OrganizationAdmissionAcknowledgment = z.infer<typeof OrganizationAdmissionAcknowledgmentSchema>;
+
+export const OrganizationAdmissionDecisionRequestSchema = z.strictObject({ ["decision"]: ApprovalActionSchema, ["note"]: z.union([z.string().refine(value => [...value].length <= 1000), z.null()]).optional() });
+export type OrganizationAdmissionDecisionRequest = z.infer<typeof OrganizationAdmissionDecisionRequestSchema>;
+
+export const CredentialEmailStatusValues = ["pending","sent","failed"] as const;
+export const CredentialEmailStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("sent"), z.literal("failed")]), z.string());
+export type CredentialEmailStatus = z.infer<typeof CredentialEmailStatusSchema>;
+
+export const OrganizationCurrencyValues = ["USD"] as const;
+export const OrganizationCurrency = { USD: "USD" } as const;
+export const OrganizationCurrencySchema = z.intersection(z.literal("USD"), z.string());
+export type OrganizationCurrency = z.infer<typeof OrganizationCurrencySchema>;
+
+export const OrganizationPlanIdValues = ["pro","max","ultra"] as const;
+export const OrganizationPlanId = { PRO: "pro", MAX: "max", ULTRA: "ultra" } as const;
+export const OrganizationPlanIdSchema = z.intersection(z.union([z.literal("pro"), z.literal("max"), z.literal("ultra")]), z.string());
+export type OrganizationPlanId = z.infer<typeof OrganizationPlanIdSchema>;
+
+export const OrganizationMaxAccountsValues = [25,75,200] as const;
+export const OrganizationMaxAccounts = { PRO: 25, MAX: 75, ULTRA: 200 } as const;
+export const OrganizationMaxAccountsSchema = z.intersection(z.union([z.literal(25), z.literal(75), z.literal(200)]), z.number().refine(Number.isInteger));
+export type OrganizationMaxAccounts = z.infer<typeof OrganizationMaxAccountsSchema>;
+
+export const OrganizationAgentLimitValues = [2,5,10] as const;
+export const OrganizationAgentLimit = { PRO: 2, MAX: 5, ULTRA: 10 } as const;
+export const OrganizationAgentLimitSchema = z.intersection(z.union([z.literal(2), z.literal(5), z.literal(10)]), z.number().refine(Number.isInteger));
+export type OrganizationAgentLimit = z.infer<typeof OrganizationAgentLimitSchema>;
+
+export const OrganizationFileLimitBytesValues = [26214400,52428800,104857600] as const;
+export const OrganizationFileLimitBytes = { PRO: 26214400, MAX: 52428800, ULTRA: 104857600 } as const;
+export const OrganizationFileLimitBytesSchema = z.intersection(z.union([z.literal(26214400), z.literal(52428800), z.literal(104857600)]), z.number().refine(Number.isInteger));
+export type OrganizationFileLimitBytes = z.infer<typeof OrganizationFileLimitBytesSchema>;
+
+export const OrganizationPlanNameValues = ["Pro","Max","Ultra"] as const;
+export const OrganizationPlanName = { PRO: "Pro", MAX: "Max", ULTRA: "Ultra" } as const;
+export const OrganizationPlanNameSchema = z.intersection(z.union([z.literal("Pro"), z.literal("Max"), z.literal("Ultra")]), z.string());
+export type OrganizationPlanName = z.infer<typeof OrganizationPlanNameSchema>;
+
+export const OrganizationStorageLimitBytesValues = [1073741824,5368709120,10737418240] as const;
+export const OrganizationStorageLimitBytes = { PRO: 1073741824, MAX: 5368709120, ULTRA: 10737418240 } as const;
+export const OrganizationStorageLimitBytesSchema = z.intersection(z.union([z.literal(1073741824), z.literal(5368709120), z.literal(10737418240)]), z.number().refine(Number.isInteger));
+export type OrganizationStorageLimitBytes = z.infer<typeof OrganizationStorageLimitBytesSchema>;
+
+export const OrganizationPlanSchema = z.strictObject({ ["additional_account_monthly_usd"]: OrganizationAdditionalAccountMonthlyUsdSchema, ["currency"]: OrganizationCurrencySchema, ["id"]: OrganizationPlanIdSchema, ["included_accounts"]: z.number().min(1).refine(Number.isInteger), ["max_accounts"]: OrganizationMaxAccountsSchema, ["max_agents_per_account"]: OrganizationAgentLimitSchema, ["max_file_size_bytes"]: OrganizationFileLimitBytesSchema, ["monthly_price_usd"]: z.number().min(0).refine(Number.isInteger), ["name"]: OrganizationPlanNameSchema, ["storage_limit_bytes"]: OrganizationStorageLimitBytesSchema });
+export type OrganizationPlan = z.infer<typeof OrganizationPlanSchema>;
+
+export const OrganizationAdmissionItemSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["credential_email_error"]: z.union([z.string(), z.null()]), ["credential_email_status"]: z.union([CredentialEmailStatusSchema, z.null()]), ["email"]: z.string(), ["id"]: z.guid(), ["organization_name"]: z.union([z.string(), z.null()]), ["plan"]: OrganizationPlanSchema, ["review_note"]: z.union([z.string(), z.null()]), ["reviewed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["reviewed_by"]: z.union([z.guid(), z.null()]), ["status"]: ApprovalStatusSchema, ["tier"]: OrganizationPlanIdSchema });
+export type OrganizationAdmissionItem = z.infer<typeof OrganizationAdmissionItemSchema>;
+
+export const OrganizationAdmissionPageSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(OrganizationAdmissionItemSchema) });
+export type OrganizationAdmissionPage = z.infer<typeof OrganizationAdmissionPageSchema>;
+
+export const OrganizationAdmissionRequestSchema = z.strictObject({ ["email"]: z.email(), ["organization_name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200), ["tier"]: OrganizationPlanIdSchema });
+export type OrganizationAdmissionRequest = z.infer<typeof OrganizationAdmissionRequestSchema>;
+
+export const OrganizationPlansResponseSchema = z.looseObject({ ["plans"]: z.array(OrganizationPlanSchema) });
+export type OrganizationPlansResponse = z.infer<typeof OrganizationPlansResponseSchema>;
 
 export const OwnershipTransferRequestSchema = z.strictObject({ ["agent_ids"]: z.array(z.guid()).min(1).max(100), ["from_user_id"]: z.guid(), ["to_user_id"]: z.guid() });
 export type OwnershipTransferRequest = z.infer<typeof OwnershipTransferRequestSchema>;
@@ -927,7 +992,7 @@ export type UserActiveUpdate = z.infer<typeof UserActiveUpdateSchema>;
 export const UserAgentOutSchema = z.looseObject({ ["id"]: z.guid(), ["is_expired"]: z.boolean().optional(), ["is_system"]: z.boolean(), ["last_active_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["name"]: z.string(), ["role_description"]: z.union([z.string(), z.null()]).optional(), ["status"]: AgentStatusSchema });
 export type UserAgentOut = z.infer<typeof UserAgentOutSchema>;
 
-export const UserDetailOutSchema = z.looseObject({ ["agents"]: z.array(UserAgentOutSchema).optional(), ["agents_count"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["quota_agent_ttl_hours"]: z.number().refine(Number.isInteger), ["quota_max_agents"]: z.number().refine(Number.isInteger), ["quota_message_limit"]: z.number().refine(Number.isInteger), ["quota_message_period"]: z.string(), ["quota_messages_used"]: z.number().refine(Number.isInteger), ["role"]: UserRoleSchema, ["source"]: z.string().optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
+export const UserDetailOutSchema = z.looseObject({ ["agents"]: z.array(UserAgentOutSchema).optional(), ["agents_count"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["effective_max_agents"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["quota_agent_ttl_hours"]: z.number().refine(Number.isInteger), ["quota_max_agents"]: z.number().refine(Number.isInteger), ["quota_message_limit"]: z.number().refine(Number.isInteger), ["quota_message_period"]: z.string(), ["quota_messages_used"]: z.number().refine(Number.isInteger), ["role"]: UserRoleSchema, ["source"]: z.string().optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
 export type UserDetailOut = z.infer<typeof UserDetailOutSchema>;
 
 export const UserLoginSchema = z.looseObject({ ["login_identifier"]: z.email(), ["password"]: z.string(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });

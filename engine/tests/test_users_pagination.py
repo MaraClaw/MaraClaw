@@ -54,6 +54,7 @@ def page_query(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     query = AsyncMock(return_value=[])
     monkeypatch.setattr(users_api.user_dao, "list_for_tenant_page", query)
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creators", AsyncMock(return_value={}))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     return query
 
 
@@ -169,6 +170,7 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
     page_query.return_value = [first, second, UserRecord(id=UUID(int=12))]
     counts = AsyncMock(return_value={first.id: 3})
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creators", counts)
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     response = await _request(_actor(), {"limit": 2})
     assert response.status_code == 200
     page = users_api.UsersPageOut.model_validate_json(response.content)
@@ -187,6 +189,7 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
             "quota_max_agents": 8,
             "quota_agent_ttl_hours": 0,
             "agents_count": 3,
+            "effective_max_agents": None,
             "created_at": NOW.isoformat(),
             "source": "web",
         },
@@ -204,6 +207,7 @@ async def test_serializes_existing_public_fields_when_page_has_lookahead(
             "quota_max_agents": 2,
             "quota_agent_ttl_hours": 0,
             "agents_count": 0,
+            "effective_max_agents": 2,
             "created_at": None,
             "source": "registered",
         },
@@ -230,6 +234,7 @@ async def test_legacy_array_when_existing_endpoint_is_requested(page_query: Asyn
     count = AsyncMock(return_value=2)
     monkeypatch.setattr(users_api.user_dao, "list_for_tenant_ordered", legacy)
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", count)
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     result = await users_api.list_users(tenant_id=str(FOREIGN), current_user=_actor())
     assert isinstance(result, list)
     assert [item.agents_count for item in result] == [2]

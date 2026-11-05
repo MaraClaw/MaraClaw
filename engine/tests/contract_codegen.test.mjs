@@ -68,12 +68,24 @@ for (const metadata of [null, "NAME", [1], [], ["ONE"], ["ONE", "ONE"], ["bad-na
   });
 }
 
-for (const schema of [{ type: "string" }, { enum: [] }, { enum: [1] }]) {
-  test(`enum metadata without a concrete string vocabulary is rejected: ${JSON.stringify(schema)}`, () => {
+for (const schema of [{ type: "string" }, { enum: [] }, { enum: [1, "one"] }, { enum: [null] }]) {
+  test(`enum metadata without a concrete string or numeric vocabulary is rejected: ${JSON.stringify(schema)}`, () => {
     // Given / When / Then
-    assert.throws(() => generate(fixture({ Kind: { ...schema, "x-enum-varnames": ["ONE"] } })), /nonempty string enum/);
+    assert.throws(() => generate(fixture({ Kind: { ...schema, "x-enum-varnames": ["ONE"] } })), /nonempty string or numeric enum/);
   });
 }
+
+test("numeric enums export tuples and named objects and reject every value outside the set", async () => {
+  // Given
+  const document = fixture({ Limit: { type: "integer", enum: [2, 5, 10], "x-enum-varnames": ["PRO", "MAX", "ULTRA"] } });
+  // When
+  const { Limit, LimitValues, LimitSchema } = await runtime(document);
+  // Then
+  assert.deepEqual(LimitValues, [2, 5, 10]);
+  assert.deepEqual(Limit, { PRO: 2, MAX: 5, ULTRA: 10 });
+  assert.deepEqual(LimitValues.map(value => LimitSchema.parse(value)), [2, 5, 10]);
+  for (const rejected of [0, 1, 3, 11, 2.5, "2", true, null]) assert.equal(LimitSchema.safeParse(rejected).success, false);
+});
 
 for (const conflicting of ["KindSchema", "KindValues", "z"]) {
   test(`named enum export collisions are rejected: ${conflicting}`, () => {

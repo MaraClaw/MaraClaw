@@ -19,7 +19,7 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 - Use `get_storage_backend()` from `facade.py`; do not construct concrete backends from callers except tests/backend internals.
 - The facade caches one process-local backend. Settings changes after first call do not switch backends unless the cache is reset.
 - `STORAGE_BACKEND=local` uses `LocalStorageBackend(STORAGE_LOCAL_ROOT or AGENT_DATA_DIR)`.
-- `STORAGE_BACKEND=s3` uses `S3StorageBackend`; with `STORAGE_LOCAL_FALLBACK_ENABLED=true`, it wraps S3 primary plus local fallback.
+- `STORAGE_BACKEND=s3` uses `ManagedS3StorageBackend` (an `S3StorageBackend` that meters agent keys); with `STORAGE_LOCAL_FALLBACK_ENABLED=true`, it wraps that S3 primary plus local fallback.
 - Fallback storage is read-through migration. Writes go only to primary; deletes hit both.
 - During migration, hold the legacy source read-only outside this wrapper. Legacy objects count as occupied for atomic creation. Every promotion uses primary atomic creation and returns the primary winner, including materialized paths and presigned reads. Repeated primary disappearance is bounded to three promotion attempts.
 
@@ -32,3 +32,13 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 - Upload callers must attempt `create_bytes_if_absent` directly, not check `exists` then write. Advance to a new filename only on `conflict`; bound filename attempts. Set response filename/key only after `ok`; never delete a conflict winner or hide provider failures. Use the accepted candidate for content type, extraction, materialization, and response fields.
 - Do not assume local files are authoritative when S3/fallback is enabled.
 - `ensure_local_path()` can raise for backends that cannot materialize local files.
+
+## Managed Quota (S3 only)
+
+Contract and protocol: `../../../docs/managed-storage-quota.md`. Read it before touching any mutation path.
+
+- Scope: logical bytes of current objects under `<agent UUID>/` in managed S3, per the agent's current `plan_for(tier_for_tenant(agent.tenant_id))`. Direct guest/local writes, shared `enterprise_info_<tenant>/` keys and object versions are outside it. Unpaid agents have no ceilings but their managed objects are recorded for later paid-transfer checks. Everything under an agent UUID prefix is exclusively owned by the facade: nothing else may write, replace or delete there.
+- `ManagedS3StorageBackend` (`quota_s3.py`) is the only S3 mutation path for agent keys; `quota_ledger.py` / `quota_batch.py` own the ledger transactions, `quota_tree.py` the paged tree delete, `quota_outcomes.py` the classification, `quota_keys.py` the key parsing, `quota_transfer.py` the company-transfer preflight. Never construct `S3StorageBackend` for production use or call boto3 on an agent prefix.
+- A reservation commits (durable pool, never the request transaction) before the provider call; reserve, call and settle run shielded. Refund only after provider-confirmed deletion. An unknown outcome keeps its charge and blocks the key; no timeout, HEAD miss or list miss releases it.
+- Typed `StorageQuotaError`s map to 413/507/503 in `app/main.py`; do not catch them to continue writing or convert them to generic 500s. Do not add a soft or fail-open fallback.
+- Fallback promotions use `create_bytes_if_absent` on the managed primary, so they are charged and can fail with these errors.

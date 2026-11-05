@@ -76,6 +76,7 @@ from app.services.enterprise_llm import (
 )
 from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_api_key
 from app.services.openclaw_update_exclusion import guest_write_exclusion
+from app.services.quota_guard import QuotaExceeded, check_agent_renewal_quota
 
 __all__ = ["agent_manager", "router"]
 
@@ -714,7 +715,15 @@ async def update_agent(
                     }
                 )
 
-    agent = await agent_dao.update(db_obj=agent, obj_in=update_data)
+    if update_data.get("is_expired") is False:
+        async with connection_ctx() as db:
+            try:
+                await check_agent_renewal_quota(db, agent)
+            except QuotaExceeded as exc:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+            agent = await agent_dao.update(db_obj=agent, obj_in=update_data)
+    else:
+        agent = await agent_dao.update(db_obj=agent, obj_in=update_data)
 
     if "name" in update_data or "avatar_url" in update_data:
         p = await participant_dao.get_by_type_ref("agent", agent_id)

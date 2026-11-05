@@ -179,7 +179,7 @@ async def test_creation_uses_fresh_admin_exemption_without_cached_principal(monk
     monkeypatch.setattr(user_dao, "get", read)
     monkeypatch.setattr(agent_dao, "count_active_for_creator", count)
 
-    await quota_guard.check_agent_creation_quota(actor)
+    await quota_guard.check_agent_creation_quota(actor, actor.tenant_id)
 
     read.assert_not_awaited()
     count.assert_not_awaited()
@@ -193,7 +193,7 @@ async def test_creation_checks_fresh_member_limit_instead_of_cached_allowance(mo
     monkeypatch.setattr(agent_dao, "count_active_for_creator", count)
 
     with pytest.raises(quota_guard.QuotaExceeded) as error:
-        await quota_guard.check_agent_creation_quota(actor)
+        await quota_guard.check_agent_creation_quota(actor, actor.tenant_id)
 
     assert error.value.quota_type == "max_agents"
     read.assert_not_awaited()

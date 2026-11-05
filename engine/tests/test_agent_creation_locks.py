@@ -147,8 +147,9 @@ async def test_shared_provisioning_locks_tenants_then_fresh_actor_before_quota(m
         assert db.operations[-1] == ("creator", creator)
         return actor
 
-    async def quota(principal):
+    async def quota(principal, tenant_id):
         assert principal is actor
+        assert tenant_id == target
         db.operations.append(("quota", creator))
 
     async def update(*, db_obj, obj_in):

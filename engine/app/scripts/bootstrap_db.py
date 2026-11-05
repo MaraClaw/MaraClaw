@@ -1,6 +1,7 @@
 """Initialize a fresh database from the authoritative, rerunnable baseline.
 
-Existing databases are not upgraded. Schema errors are fatal.
+The only supported legacy upgrade is the explicit ``tasks`` lease-column block in the baseline.
+Schema errors are fatal.
 """
 
 from __future__ import annotations

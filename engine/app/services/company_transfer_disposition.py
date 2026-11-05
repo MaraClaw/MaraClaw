@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import assert_never
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -13,6 +14,9 @@ from app.records.company_admission import CompanyAdmissionRecord
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice
 from app.records.user import UserRecord
 from app.services.company_transfer_guards import require_admission_transfer, require_default_source
+from app.services.quota_guard import agent_capacity
+from app.services.storage_runtime.quota_errors import StorageTransferBlockedError
+from app.services.storage_runtime.quota_transfer import require_destination_storage
 
 
 async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, fenced_ids: frozenset[UUID]) -> None:
@@ -24,6 +28,12 @@ async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, f
         raise HTTPException(409, {"code": "transfer_assets_changed", "retryable": True})
     if transfer is None:
         return
+    if transfer.choice is TransferChoice.PAID:
+        await require_destination_capacity(user, transfer, agents)
+        try:
+            await require_destination_storage(transfer.target_tenant_id, [agent.id for agent in agents])
+        except StorageTransferBlockedError as exc:
+            raise HTTPException(409, exc.detail) from exc
     async with connection_ctx() as db:
         for agent in sorted(agents, key=lambda item: item.id):
             from app.dao.whatsapp_personal_dao import revoke
@@ -48,6 +58,22 @@ async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, f
         from app.services.company_transfer_cleanup import reconcile_transfer_cleanup
 
         schedule_background_task(reconcile_transfer_cleanup(), description="complete transfer runtime cleanup")
+
+
+async def require_destination_capacity(
+    user: UserRecord, transfer: CompanyTransferRecord, agents: Sequence[AgentRecord]
+) -> None:
+    """A tiered destination takes the whole incoming ordinary batch or none of it, before any migration write."""
+    capacity = await agent_capacity(user, transfer.target_tenant_id, tiered_only=True)
+    incoming = sum(1 for agent in agents if not agent.is_system and not agent.is_expired)
+    if capacity is not None and capacity.refuses(incoming):
+        raise HTTPException(
+            409,
+            {
+                "code": "transfer_destination_quota_exceeded",
+                "message": f"Agent limit reached in the destination ({capacity.used}+{incoming}/{capacity.limit}).",
+            },
+        )
 
 
 async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> None:

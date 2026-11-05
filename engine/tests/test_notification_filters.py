@@ -27,7 +27,16 @@ FILTERS: list[tuple[str | None, list[str] | None]] = [
     (None, None),
     ("all", None),
     ("tool", ["autonomy_l2"]),
-    ("approval", ["approval_pending", "approval_resolved", "company_admission_pending", "company_admission_resolved"]),
+    (
+        "approval",
+        [
+            "approval_pending",
+            "approval_resolved",
+            "company_admission_pending",
+            "company_admission_resolved",
+            "organization_admission_pending",
+        ],
+    ),
     ("social", ["plaza_comment", "plaza_reply", "mention", "broadcast"]),
     ("broadcast", ["broadcast"]),
 ]
