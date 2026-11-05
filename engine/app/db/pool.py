@@ -8,12 +8,14 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.db.errors import DbError
 from app.db.types import configure_connection
 from app.db.url import normalize_psycopg_conninfo
 
 type EnginePool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
 _pool: EnginePool | None = None
+_durable: tuple[EnginePool, EnginePool] | None = None
 
 
 def get_pool() -> EnginePool:
@@ -83,9 +85,52 @@ async def _check_pooled_connection(conn: AsyncConnection[DictRow]) -> None:
         raise OSError("psycopg connection is closed")
 
 
+async def _configure_durable(conn: AsyncConnection[DictRow]) -> None:
+    configure_connection(conn)
+
+
+async def durable_pool() -> EnginePool:
+    """Second pool on the process database for commits that must not join a request transaction.
+
+    A request holding a connection of the main pool may wait here; nothing holding a connection of this pool waits
+    on the main pool, so a saturated request pool cannot starve it. It is opened on first use from the main pool's
+    own connection settings and follows that pool if it is replaced.
+    """
+    global _durable
+    try:
+        source = get_pool()
+    except RuntimeError as exc:
+        raise DbError("database pool is not initialized", orig=exc) from exc
+    held = _durable
+    if held is None or held[0] is not source:
+        pool: EnginePool = AsyncConnectionPool(
+            conninfo=source.conninfo,
+            min_size=0,
+            max_size=source.max_size,
+            timeout=source.timeout,
+            open=False,
+            configure=_configure_durable,
+            check=_check_pooled_connection,
+            kwargs={"autocommit": False, "row_factory": dict_row},
+            name="maraclaw-durable",
+            max_idle=source.max_idle,
+            max_lifetime=source.max_lifetime,
+        )
+        _durable = (source, pool)
+        if held is not None:
+            await held[1].close()
+    else:
+        pool = held[1]
+    await pool.open()
+    return pool
+
+
 async def close_pool() -> None:
     """Close the global pool if open."""
-    global _pool
+    global _pool, _durable
+    if _durable is not None:
+        durable, _durable = _durable[1], None
+        await durable.close()
     if _pool is None:
         return
     await _pool.close()
@@ -106,5 +151,6 @@ async def ping_pool() -> bool:
 
 def reset_pool_for_tests() -> None:
     """Clear the module-global pool reference without closing (tests only)."""
-    global _pool
+    global _pool, _durable
     _pool = None
+    _durable = None

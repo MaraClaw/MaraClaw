@@ -1,5 +1,8 @@
 from collections.abc import Mapping
-from typing import NotRequired, Protocol, TypedDict, TypeIs, Unpack
+from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, TypeIs, Unpack
+
+if TYPE_CHECKING:
+    from botocore.config import Config
 
 from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.utils import normalize_storage_key
@@ -19,6 +22,7 @@ class S3ListArguments(TypedDict):
     Prefix: NotRequired[str]
     Delimiter: NotRequired[str]
     MaxKeys: NotRequired[int]
+    ContinuationToken: NotRequired[str]
 
 
 class S3PutArguments(S3ObjectArguments):
@@ -51,7 +55,7 @@ class S3Client(Protocol):
 
     def delete_object(self, **kwargs: Unpack[S3ObjectArguments]) -> object: ...
 
-    def delete_objects(self, **kwargs: Unpack[S3DeleteArguments]) -> object: ...
+    def delete_objects(self, **kwargs: Unpack[S3DeleteArguments]) -> Mapping[str, object]: ...
 
 
 def _is_s3_client(value: object) -> TypeIs[S3Client]:
@@ -92,7 +96,7 @@ class S3Connection(StorageBackend):
             return False
         return "storage.googleapis.com" in self.endpoint_url
 
-    def _boto_config(self) -> object:
+    def _boto_config(self) -> Config:
         from botocore.config import Config
 
         if self._is_gcs():

@@ -134,6 +134,14 @@ class FallbackStorageBackend(StorageBackend):
         return await self.primary.write_bytes_if_match(key, data, condition=condition, content_type=content_type)
 
     @override
+    async def delete_if_match(self, key: str, *, condition: WriteCondition | None = None) -> ConditionalWriteResult:
+        await self._promote_file(key)
+        result = await self.primary.delete_if_match(key, condition=condition)
+        if result.ok:
+            await self.fallback.delete(key)
+        return result
+
+    @override
     async def local_path_for(self, key: str) -> Path | None:
         if await self._promote_file(key):
             return await self.primary.local_path_for(key)
