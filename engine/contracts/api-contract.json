@@ -10012,6 +10012,11 @@
           },
           "owner_type": {
             "default": "company",
+            "enum": [
+              "company",
+              "user",
+              "agent"
+            ],
             "title": "Owner Type",
             "type": "string"
           },

@@ -71,6 +71,7 @@ async def test_okr_owner_email_resolves_to_membership_in_agent_tenant(monkeypatc
     )
     monkeypatch.setattr(okr_write_objectives, "_okr_access_module", lambda: access)
     monkeypatch.setattr(okr_write_objectives.user_dao, "find_by_email_or_display_name", lookup)
+    monkeypatch.setattr(okr_write_objectives.user_dao, "get", AsyncMock(return_value=owner))
     monkeypatch.setattr(okr_write_objectives.okr_objective_dao, "create", create)
 
     result = await okr_write_objectives._create_objective(
