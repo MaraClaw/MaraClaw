@@ -223,3 +223,4 @@ __marimo__/
 *.docker/
 *docker-data/
 engine/coverage.json
+docs/
