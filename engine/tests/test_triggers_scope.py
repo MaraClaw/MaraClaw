@@ -2,14 +2,21 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal, assert_never
+from types import TracebackType
+from typing import Literal, Self, assert_never, cast
 
 import pytest
 from fastapi import HTTPException
+from psycopg import AsyncConnection
+from psycopg.rows import DictRow
+from psycopg.types.json import Jsonb
 
 from app.api import triggers as triggers_api
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, object_mapping_from
+from app.dao.trigger_dao import agent_trigger_dao
+from app.db import session as session_module
+from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.trigger import AgentTriggerRecord
 from app.records.user import UserRecord
@@ -26,6 +33,7 @@ class TriggerScope:
     denied_status: int | None = None
     calls: list[str] = field(default_factory=list[str])
     updates: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
+    merges: list[tuple[uuid.UUID, dict[str, object]]] = field(default_factory=list[tuple[uuid.UUID, dict[str, object]]])
     deleted: list[uuid.UUID] = field(default_factory=list[uuid.UUID])
 
     async def check_access(self, user: UserRecord, agent_id: uuid.UUID) -> tuple[AgentRecord, str]:
@@ -50,6 +58,11 @@ class TriggerScope:
         self.calls.append("update")
         self.updates.append(dict(obj_in))
         return db_obj
+
+    async def merge_user_config(self, trigger_id: uuid.UUID, user_config: Mapping[str, object]) -> bool:
+        self.calls.append("merge")
+        self.merges.append((trigger_id, dict(user_config)))
+        return True
 
     async def delete(self, *, record_id: uuid.UUID) -> None:
         self.calls.append("delete")
@@ -209,10 +222,90 @@ async def test_patch_preserves_server_owned_credentials(
 
     result = await triggers_api.update_trigger(scope.agent.id, scope.trigger.id, body, user=scope.user)
 
-    expected = {**original, **{key: value for key, value in (incoming or {}).items() if key not in ("token", "secret")}}
+    expected = {key: value for key, value in (incoming or {}).items() if key not in ("token", "secret")}
     assert result == {"ok": True}
-    assert scope.updates == [{"config": expected}]
+    assert scope.updates == []
+    assert scope.merges == [(scope.trigger.id, expected)]
     assert scope.trigger.config == original
+
+
+async def test_patch_cannot_overwrite_internal_poll_state(scope: TriggerScope):
+    scope.access_level = "manage"
+    scope.trigger.config = {"url": "https://old.example", "_last_value": "up", "_poll_seq": 7}
+    incoming: JsonObject = {"url": "https://new.example", "_last_value": "forged", "_poll_seq": 0, "_other": 1}
+    body = triggers_api.TriggerUpdate(config=incoming, is_enabled=True)
+
+    await triggers_api.update_trigger(scope.agent.id, scope.trigger.id, body, user=scope.user)
+
+    # Only user keys reach the SQL-side merge, which keeps the row's current internal keys
+    assert scope.merges == [(scope.trigger.id, {"url": "https://new.example"})]
+    assert scope.updates == [{"is_enabled": True}]
+    assert scope.calls == ["access", "get", "update", "merge"]
+    assert scope.trigger.config == {"url": "https://old.example", "_last_value": "up", "_poll_seq": 7}
+
+
+class _Cursor:
+    def __init__(self, raw: _Raw) -> None:
+        self.raw = raw
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, _kind: type[BaseException] | None, _exc: BaseException | None, _tb: TracebackType | None
+    ) -> bool:
+        return False
+
+    async def execute(self, query: str, params: dict[str, object]) -> None:
+        self.raw.executed.append((" ".join(query.split()), params))
+
+    async def fetchone(self) -> dict[str, object] | None:
+        return {"id": self.raw.executed[-1][1]["trigger_id"]} if self.raw.found else None
+
+
+class _Raw:
+    def __init__(self, *, found: bool = True) -> None:
+        self.found = found
+        self.executed: list[tuple[str, dict[str, object]]] = []
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self)
+
+
+async def test_merge_user_config_runs_in_sql_and_resets_the_baseline_on_source_change():
+    raw = _Raw()
+    token = session_module._conn_ctx.set(DbConnection(cast("AsyncConnection[DictRow]", raw)))
+    trigger_id = uuid.uuid4()
+    try:
+        merged = await agent_trigger_dao.merge_user_config(
+            trigger_id, {"url": "https://new.example", "interval_min": 9}
+        )
+    finally:
+        session_module._conn_ctx.reset(token)
+
+    assert merged is True
+    [(sql, params)] = raw.executed
+    # The merge is evaluated against the row's current config, never a Python-side copy
+    assert "SET config = CASE WHEN type = 'poll' AND ( config->'url' IS DISTINCT FROM" in sql
+    assert "(config || %(user_config)s::jsonb)->'url'" in sql
+    assert "COALESCE(config->'json_path', '\"$\"'::jsonb)" in sql
+    assert "THEN ((config || %(user_config)s::jsonb) - '_last_value') || jsonb_build_object(" in sql
+    assert "'_poll_seq', COALESCE((config->>'_poll_seq')::bigint, 0) + 1" in sql
+    assert "ELSE config || %(user_config)s::jsonb END WHERE id = %(trigger_id)s RETURNING id" in sql
+    assert set(params) == {"trigger_id", "user_config"}
+    assert params["trigger_id"] == trigger_id
+    assert cast("Jsonb", params["user_config"]).obj == {"url": "https://new.example", "interval_min": 9}
+
+
+async def test_merge_user_config_rejects_internal_keys_before_touching_the_database():
+    raw = _Raw()
+    token = session_module._conn_ctx.set(DbConnection(cast("AsyncConnection[DictRow]", raw)))
+    try:
+        with pytest.raises(ValueError, match="_poll_seq"):
+            _ = await agent_trigger_dao.merge_user_config(uuid.uuid4(), {"url": "x", "_poll_seq": 0})
+    finally:
+        session_module._conn_ctx.reset(token)
+    assert raw.executed == []
 
 
 @pytest.mark.parametrize("expires_at", ["2030-01-02T03:04:05+00:00", None])

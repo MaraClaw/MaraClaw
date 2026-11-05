@@ -10,12 +10,12 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 
 ## Module Responsibilities
 
-- `evaluator.py` owns trigger condition semantics for `cron`, `once`, `interval`, `poll`, `on_message`, and deterministic OKR handlers.
+- `evaluator.py` owns trigger condition semantics for `cron`, `once`, `interval`, `poll`, `on_message`, and deterministic OKR handlers. `poll_check` returns a `PollObservation` and never writes config.
 - `queue.py` inserts `trigger_executions` rows (`TriggerExecutionRecord`) with idempotency keys and webhook payload handling.
-- `dispatch.py` converts due triggers into queued executions and claims ready invocations grouped by agent.
+- `dispatch.py` converts due triggers into queued executions (polls via `_enqueue_poll_observation`) and claims ready invocations grouped by agent.
 - `executions.py` owns claiming, first-start accounting, fenced five-minute leases, the lease hold that renews and stops lost work, recovery, and runtime trigger cloning.
 - `invoker.py` runs chat/LLM/delivery/audit inside the lease hold, checks the hold before each side effect, confirms ownership after the LLM returns, joins the heartbeat, then writes fenced terminal status.
-- `keys.py` builds deterministic idempotency keys.
+- `keys.py` builds deterministic idempotency keys and owns `poll_sequence` / `POLL_OBSERVED_KEY`.
 
 ## Invariants
 
@@ -36,5 +36,14 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 - Reload trigger/agent rows via DAOs after a long LLM call; do not hold a stale `connection_ctx` across the invoke.
 - Poll triggers use the shared core public-destination policy and pinned HTTP client; preserve this SSRF boundary and the existing no-redirect behavior.
 - `on_message` matching must continue excluding internal trigger reflection sessions to avoid loops.
+
+## Event Identity
+
+- Poll state lives in trigger config JSON (no columns): `_last_value` baseline and monotonic `_poll_seq` (absent = 0). `_poll_observed` is in-memory only, set by `evaluate_trigger` for `enqueue_due_trigger`; never persist it.
+- A poll change enqueues, then `agent_trigger_dao.advance_poll_baseline(expected_seq=...)` in the same `connection_ctx` transaction, after `try_enqueue`. Zero rows matched → `PollBaselineLostError` rolls the execution back; the loser never adopts its observation. Enqueue failure leaves the baseline, so the next poll re-sees the change.
+- First poll and non-entering `fire_on=match` values only advance the baseline (still conditional, never an execution). Match fires each time the value enters `match_value`.
+- Keys: poll `poll:{trigger}:{_poll_seq + 1}` (A-B-A-B → three runs); `on_message` `on_message:{trigger}:{_matched_message_id}`. Never hash values or message text.
+- Never write internal underscore keys through `BaseDAO.update` (whole-config replace rolls the baseline back). User edits go through `merge_user_config` (SQL-side merge; `url`/`json_path` change drops `_last_value` and bumps `_poll_seq`). The agent-facing trigger update tool still replaces config wholesale.
+- `from_agent_name` resolves only agents in the trigger agent's tenant.
 - A2A wake depth, TTL, and dedup guards live in `trigger_daemon.py`, not this package.
 - Webhook dedup depends on unique `(trigger_id, idempotency_key)` semantics.
