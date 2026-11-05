@@ -6,6 +6,7 @@ All DingTalk token acquisition should go through this manager.
 
 import asyncio
 import time
+from json import JSONDecodeError
 
 import httpx
 
@@ -59,6 +60,7 @@ class DingTalkTokenManager:
                         "https://api.dingtalk.com/v1.0/oauth2/accessToken",
                         json={"appKey": app_key, "appSecret": app_secret},
                     )
+                    _ = resp.raise_for_status()
                     data = json_object_from_response(resp)
                     token = json_as_str(data.get("accessToken"))
                     expires_in = json_as_int(data.get("expireIn"), 7200)
@@ -77,8 +79,13 @@ class DingTalkTokenManager:
 
                     logger.error(f"[DingTalk Token] Failed to get token: {data}")
                     return None
-            except Exception as e:
+            except httpx.HTTPStatusError as e:
+                if e.response.is_server_error:
+                    raise
                 logger.error(f"[DingTalk Token] Error getting token: {e}")
+                return None
+            except JSONDecodeError as e:
+                logger.error(f"[DingTalk Token] Invalid token response: {e}")
                 return None
 
     async def get_corp_token(self, app_key: str, app_secret: str) -> str | None:

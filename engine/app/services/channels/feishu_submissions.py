@@ -9,6 +9,7 @@ from app.records.channel_config import ChannelConfigRecord
 from app.services.feishu_service import feishu_service
 from app.services.storage import store_agent_upload
 
+from .media_limits import MediaBudget, MediaTooLargeError, too_large_note
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
 
@@ -74,12 +75,26 @@ async def accept_feishu_event(config: ChannelConfigRecord, event: JsonObject) ->
         return True
     enriched = text
     saved = text
+    budget = MediaBudget()
     for media_id in media:
         resource_type = "file" if kind == "file" else "image"
-        data = await feishu_service.download_message_resource(
-            config.app_id or "", config.app_secret or "", message_id, media_id, resource_type
-        )
         filename = json_as_str_or(body.get("file_name")) or f"image_{media_id[-8:]}.jpg"
+        try:
+            data = await feishu_service.download_message_resource(
+                config.app_id or "",
+                config.app_secret or "",
+                message_id,
+                media_id,
+                resource_type,
+                max_bytes=budget.limit_for(filename),
+            )
+        except MediaTooLargeError as error:
+            budget.spend(error.read)
+            note = too_large_note(filename, error.limit)
+            enriched = f"{enriched}\n{note}".strip()
+            saved = f"{saved}\n{note}".strip()
+            continue
+        budget.spend(len(data))
         _, workspace_path, _ = await store_agent_upload(
             config.agent_id, filename, data, content_type="image/jpeg" if resource_type == "image" else None
         )

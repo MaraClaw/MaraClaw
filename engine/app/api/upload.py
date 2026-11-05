@@ -13,6 +13,7 @@ from app.core.security import get_current_user
 from app.records.user import UserRecord
 from app.schemas.content_response_files import ChatUploadResponse
 from app.services.document_parser import (
+    IMAGE_EXTENSIONS,
     IMAGE_UPLOAD_MAX_BYTES,
     MAX_INPUT_BYTES,
     OFFICE_EXTENSIONS,
@@ -30,7 +31,6 @@ from app.services.storage import ensure_local_path, get_storage_backend, guess_c
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 EXTRACTABLE = TEXT_EXTENSIONS | OFFICE_EXTENSIONS
 
 MIME_MAP = {

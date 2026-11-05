@@ -33,6 +33,8 @@ from app.core.json_types import (
 from app.core.security import create_access_token
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
 from app.records.user import UserRecord
+from app.services.channels.media_limits import read_capped
+from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
@@ -611,14 +613,24 @@ class FeishuService:
         return await self.send_message(app_id, app_secret, creator_open_id, "text", text_content)
 
     async def download_message_resource(
-        self, app_id: str, app_secret: str, message_id: str, file_key: str, resource_type: str = "file"
+        self,
+        app_id: str,
+        app_secret: str,
+        message_id: str,
+        file_key: str,
+        resource_type: str = "file",
+        *,
+        max_bytes: int | None = None,
     ) -> bytes:
-        """Download a file or image from a Feishu message.
+        """Stream a file or image from a Feishu message into memory.
 
         Args:
             resource_type: "file" or "image"
-        Returns raw file bytes.
+            max_bytes: decoded-byte ceiling; defaults to the web chat image or file upload cap for ``resource_type``.
+        Returns raw file bytes. Raises ``MediaTooLargeError`` as soon as the ceiling is passed.
         """
+        if max_bytes is None:
+            max_bytes = IMAGE_UPLOAD_MAX_BYTES if resource_type == "image" else MAX_INPUT_BYTES
         async with httpx.AsyncClient(timeout=30) as client:
             typed_client: httpx.AsyncClient = client
             token_resp: httpx.Response = await typed_client.post(
@@ -628,14 +640,15 @@ class FeishuService:
                     "app_secret": app_secret,
                 },
             )
+            _ = token_resp.raise_for_status()
             app_token = _app_access_token(token_resp)
-            resp: httpx.Response = await typed_client.get(
+            async with typed_client.stream(
+                "GET",
                 f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
                 params={"type": resource_type},
                 headers={"Authorization": f"Bearer {app_token}"},
-            )
-            _ = resp.raise_for_status()
-            return resp.content
+            ) as resp:
+                return await read_capped(resp, max_bytes)
 
     async def upload_and_send_file(
         self,

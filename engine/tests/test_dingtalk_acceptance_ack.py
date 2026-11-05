@@ -5,10 +5,14 @@ from uuid import uuid4
 
 import anyio
 import dingtalk_stream
+import httpx
 import pytest
 
 from app.api import dingtalk
+from app.services import dingtalk_stream as dingtalk_media
+from app.services.channels.media_limits import MediaTooLargeError
 from app.services.dingtalk_stream import DingTalkStreamManager
+from channel_media_fixtures import serve
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -99,3 +103,50 @@ async def test_dispatch_rejects_unavailable_acceptance_loop(unavailable):
     finally:
         if loop is not None and unavailable == "stopped":
             loop.close()
+
+
+async def test_download_file_signals_oversize_and_permanent_failures_but_lets_a_5xx_propagate(monkeypatch):
+    # Given: a provider that serves 503, 403 and an oversize body from three URLs
+    def handler(request):
+        if request.url.path == "/unavailable":
+            return httpx.Response(503)
+        if request.url.path == "/forbidden":
+            return httpx.Response(403)
+        return httpx.Response(200, content=b"x" * 16)
+
+    serve(monkeypatch, handler)
+    # When / Then: oversize has its own signal, a 5xx keeps its retry signal, an expired URL still reports None
+    with pytest.raises(httpx.HTTPStatusError):
+        await dingtalk_media._download_file("https://files.invalid/unavailable", 1024)
+    assert await dingtalk_media._download_file("https://files.invalid/forbidden", 1024) is None
+    with pytest.raises(MediaTooLargeError):
+        await dingtalk_media._download_file("https://files.invalid/large", 8)
+    assert await dingtalk_media._download_file("https://files.invalid/large", 16) == b"x" * 16
+
+
+async def test_download_file_lets_a_timeout_propagate(monkeypatch):
+    # Given
+    def handler(request):
+        raise httpx.ReadTimeout("slow provider", request=request)
+
+    serve(monkeypatch, handler)
+    # When / Then
+    with pytest.raises(httpx.ReadTimeout):
+        await dingtalk_media._download_file("https://files.invalid/slow", 1024)
+
+
+async def test_media_download_url_lookup_lets_a_5xx_propagate_and_reports_a_refusal_as_none(monkeypatch):
+    # Given: DingTalk answers the lookup with 503, then a 403 error body, then a download URL
+    answers = iter(
+        [
+            httpx.Response(503, text="<html>bad gateway</html>"),
+            httpx.Response(403, json={"code": "Forbidden.AccessDenied"}),
+            httpx.Response(200, json={"downloadUrl": "https://files.invalid/f"}),
+        ]
+    )
+    serve(monkeypatch, lambda _: next(answers))
+    # When / Then
+    with pytest.raises(httpx.HTTPStatusError):
+        await dingtalk_media._get_media_download_url("token", "code", "robot")
+    assert await dingtalk_media._get_media_download_url("token", "code", "robot") is None
+    assert await dingtalk_media._get_media_download_url("token", "code", "robot") == "https://files.invalid/f"

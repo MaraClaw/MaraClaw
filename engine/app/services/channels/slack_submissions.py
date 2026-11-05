@@ -7,6 +7,7 @@ from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.records.channel_config import ChannelConfigRecord
 from app.services.storage import store_agent_upload
 
+from .media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
 
@@ -35,15 +36,24 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
     if await is_channel_event_replay(native):
         return True
     enriched = text
+    budget = MediaBudget()
     for file in files:
         url = json_as_str_or(file.get("url_private_download")) or json_as_str_or(file.get("url_private"))
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            response = await client.get(url, headers={"Authorization": f"Bearer {config.app_secret or ''}"})
-            response.raise_for_status()
         filename = json_as_str_or(file.get("name")) or f"slack_{json_as_str_or(file.get('id'))}.bin"
-        _, workspace_path, _ = await store_agent_upload(
-            config.agent_id, filename, response.content, content_type=str(response.headers.get("content-type") or "")
-        )
+        try:
+            limit = budget.limit_for(filename)
+            async with (
+                httpx.AsyncClient(timeout=30, follow_redirects=True) as client,
+                client.stream("GET", url, headers={"Authorization": f"Bearer {config.app_secret or ''}"}) as response,
+            ):
+                data = await read_capped(response, limit)
+                content_type = str(response.headers.get("content-type") or "")
+        except MediaTooLargeError as error:
+            budget.spend(error.read)
+            enriched = f"{enriched}\n{too_large_note(filename, error.limit)}".strip()
+            continue
+        budget.spend(len(data))
+        _, workspace_path, _ = await store_agent_upload(config.agent_id, filename, data, content_type=content_type)
         enriched = f"{enriched}\n[file:{workspace_path}]".strip()
     await accept_channel_event(native, content=enriched, saved_content=enriched)
     return True
