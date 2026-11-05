@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { archivedSession, chatPath, complete, firstSession, message, navigateChat, prepareChat } from './chat-identity-fixture'
+import { archivedSession, chatPath, complete, firstSession, message, navigateChat, prepareChat, sessionRow } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
 test('opening chat ensures the empty shared conversation instead of the newest private primary', async ({ page }) => {
@@ -82,4 +82,51 @@ test('idle shared history refresh picks up another human and IM turns without a 
   expect(socket.sent).toEqual([])
   complete(socket.route, message('im-reply', 'Reply from a connected channel'))
   await expect(page.locator('article')).toHaveCount(2)
+})
+
+test('older conversations load on demand and no row repeats', async ({ page }) => {
+  const chat = await prepareChat(page)
+  chat.setSessions(Array.from({ length: 70 }, (_, index) => sessionRow(index + 1)))
+  await page.goto(`/app/agents/${originalAgent.id}/chat`)
+  await chat.socket()
+  const conversations = page.getByRole('navigation', { name: 'Other conversations' })
+  await conversations.getByRole('button', { name: 'Other conversations', exact: true }).click()
+  await expect(conversations.getByRole('link')).toHaveCount(51)
+  await expect(conversations.getByRole('link', { name: /^Shared conversation/ })).toHaveCount(1)
+  await expect(conversations.getByRole('link', { name: /^Older thread 70\b/ })).toHaveCount(0)
+  await conversations.getByRole('button', { name: 'Load older conversations' }).click()
+  await expect(conversations.getByRole('link', { name: /^Older thread 70\b/ })).toBeVisible()
+  await expect(conversations.getByRole('link')).toHaveCount(71)
+  await expect(conversations.getByRole('button', { name: /older conversations/ })).toHaveCount(0)
+  expect(chat.sessionRequests).toEqual([
+    { scope: 'all', limit: '50', cursor: null },
+    { scope: 'all', limit: '50', cursor: 'after-50' },
+  ])
+})
+
+test('a session opened by URL beyond the loaded pages resolves through the authorized lookup', async ({ page }) => {
+  const chat = await prepareChat(page)
+  const deep = { ...sessionRow(200), source_channel: 'agent' }
+  chat.setSessions([...Array.from({ length: 120 }, (_, index) => sessionRow(index + 1)), deep])
+  await page.goto(chatPath(deep.id))
+  // The lookup, not the first 50 rows, proves this peer-agent session is writable.
+  expect((await chat.socket()).session).toBe(deep.id)
+  await expect(page.getByRole('textbox', { name: `Message ${originalAgent.name}` })).toBeVisible()
+  expect(chat.lookups).toEqual([deep.id])
+  expect(chat.sessionRequests).toHaveLength(1)
+  // A session on a loaded page needs no lookup and stays read-only.
+  await navigateChat(page, chatPath(sessionRow(3).id))
+  await expect(page.getByText('Archived conversation. Read-only history.', { exact: true })).toBeVisible()
+  expect(chat.lookups).toEqual([deep.id])
+})
+
+test('a lookup the engine refuses leaves a URL-opened session read-only', async ({ page }) => {
+  const chat = await prepareChat(page)
+  chat.setSessions(Array.from({ length: 60 }, (_, index) => sessionRow(index + 1)))
+  const missing = sessionRow(900).id
+  await page.goto(chatPath(missing))
+  await expect(page.getByText('Archived conversation. Read-only history.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: `Message ${originalAgent.name}` })).toHaveCount(0)
+  expect(chat.lookups).toEqual([missing])
+  expect(chat.sockets).toEqual([])
 })

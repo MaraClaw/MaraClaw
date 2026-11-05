@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { originalAgent, prepareWorkspace } from './session-fencing-fixture'
+import { originalAgent, originalUser, prepareWorkspace } from './session-fencing-fixture'
 
 const controlPath = `/api/agents/${originalAgent.id}/control/`
 const ownerToken = 'fixture-control-owner'
@@ -11,8 +11,12 @@ async function prepareControl(page: Page) {
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
   await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
   await page.route(`**/api/agents/${originalAgent.id}/credentials/`, (route) => route.fulfill({ json: [] }))
-  await page.route(`**/api/agents/${originalAgent.id}/sessions?**`, (route) => route.fulfill({
-    json: [{ id: 'control-session', title: 'Control thread', source_channel: 'shared' }],
+  await page.route(`**/api/agents/${originalAgent.id}/sessions/page?**`, (route) => route.fulfill({
+    json: {
+      items: [{ id: 'control-session', agent_id: originalAgent.id, user_id: originalUser.id, title: 'Control thread',
+        source_channel: 'shared', created_at: '2030-01-01T00:00:00Z' }],
+      next_cursor: null, has_more: false,
+    },
   }))
   await page.clock.install()
   const errors: string[] = []

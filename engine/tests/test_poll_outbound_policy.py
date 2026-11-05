@@ -63,25 +63,43 @@ async def test_poll_blocks_forbidden_destinations_before_client_creation(monkeyp
     persist = AsyncMock()
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
     monkeypatch.setattr(evaluator, "public_http_client", forbidden_client)
-    monkeypatch.setattr(evaluator.agent_trigger_dao, "get", persist)
+    monkeypatch.setattr(evaluator.agent_trigger_dao, "advance_poll_baseline", persist)
 
     result = await evaluator.poll_check(_trigger({"url": url}))
 
-    assert result is False
+    assert result is None
     persist.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
-        ({}, False),
-        ({"_last_value": "ready"}, False),
-        ({"_last_value": "pending"}, True),
-        ({"fire_on": "match", "match_value": "ready"}, True),
-        ({"fire_on": "match", "match_value": "pending"}, False),
+        # A first poll only establishes the baseline, for both fire modes.
+        ({}, evaluator.PollObservation(value="ready", expected_seq=0, fire=False)),
+        (
+            {"fire_on": "match", "match_value": "ready"},
+            evaluator.PollObservation(value="ready", expected_seq=0, fire=False),
+        ),
+        # An unchanged value records nothing.
+        ({"_last_value": "ready"}, None),
+        ({"_last_value": "ready", "fire_on": "match", "match_value": "ready"}, None),
+        # A change fires and carries the sequence the baseline write must still find.
+        (
+            {"_last_value": "pending", "_poll_seq": 4},
+            evaluator.PollObservation(value="ready", expected_seq=4, fire=True),
+        ),
+        # fire_on=match fires on entering the match value, and only moves the baseline when leaving it or elsewhere.
+        (
+            {"_last_value": "pending", "fire_on": "match", "match_value": "ready"},
+            evaluator.PollObservation(value="ready", expected_seq=0, fire=True),
+        ),
+        (
+            {"_last_value": "pending", "fire_on": "match", "match_value": "other"},
+            evaluator.PollObservation(value="ready", expected_seq=0, fire=False),
+        ),
     ],
 )
-async def test_public_poll_preserves_fire_and_persistence(monkeypatch, state, expected) -> None:
+async def test_public_poll_returns_observation_without_writing(monkeypatch, state, expected) -> None:
     def resolve(host: str, port: int, **kwargs: Unpack[SocketTypeKeyword]):
         assert host == "public.example"
         return [(socket.AF_INET, kwargs["type"], 6, "", ("93.184.216.34", port))]
@@ -106,20 +124,23 @@ async def test_public_poll_preserves_fire_and_persistence(monkeypatch, state, ex
             **state,
         }
     )
-    persist = AsyncMock()
+    original = dict(trigger.config)
+    writes = {name: AsyncMock() for name in ("get", "update", "advance_poll_baseline")}
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
     monkeypatch.setattr(evaluator, "public_http_client", client)
-    monkeypatch.setattr(evaluator.agent_trigger_dao, "get", AsyncMock(return_value=trigger))
-    monkeypatch.setattr(evaluator.agent_trigger_dao, "update", persist)
+    for name, write in writes.items():
+        monkeypatch.setattr(evaluator.agent_trigger_dao, name, write)
 
     result = await evaluator.poll_check(trigger)
 
-    assert result is expected
+    assert result == expected
     assert len(requests) == 1
     assert requests[0].method == "POST"
     assert requests[0].headers["X-Poll"] == "yes"
     assert str(requests[0].url) == "https://public.example/poll"
-    persist.assert_awaited_once_with(db_obj=trigger, obj_in={"config": {**trigger.config, "_last_value": "ready"}})
+    assert trigger.config == original
+    for write in writes.values():
+        write.assert_not_awaited()
 
 
 async def test_poll_connection_policy_error_does_not_persist(monkeypatch) -> None:
@@ -132,11 +153,11 @@ async def test_poll_connection_policy_error_does_not_persist(monkeypatch) -> Non
     persist = AsyncMock()
     monkeypatch.setattr(evaluator, "validate_public_url", validate)
     monkeypatch.setattr(evaluator, "public_http_client", blocked_client)
-    monkeypatch.setattr(evaluator.agent_trigger_dao, "get", persist)
+    monkeypatch.setattr(evaluator.agent_trigger_dao, "advance_poll_baseline", persist)
 
     result = await evaluator.poll_check(_trigger({"url": "https://public.example/poll"}))
 
-    assert result is False
+    assert result is None
     persist.assert_not_awaited()
 
 
@@ -157,10 +178,10 @@ async def test_poll_does_not_follow_redirect_or_persist_redirect_response(monkey
     persist = AsyncMock()
     monkeypatch.setattr(evaluator, "validate_public_url", validate)
     monkeypatch.setattr(evaluator, "public_http_client", client)
-    monkeypatch.setattr(evaluator.agent_trigger_dao, "get", persist)
+    monkeypatch.setattr(evaluator.agent_trigger_dao, "advance_poll_baseline", persist)
 
     result = await evaluator.poll_check(_trigger({"url": "https://public.example/poll"}))
 
-    assert result is False
+    assert result is None
     assert [str(request.url) for request in requests] == ["https://public.example/poll"]
     persist.assert_not_awaited()

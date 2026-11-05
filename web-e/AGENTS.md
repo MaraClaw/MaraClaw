@@ -1,7 +1,7 @@
 # web-e - end-user web UI
 
-**Generated:** 2026-11-01
-**Commit:** a591022e
+**Generated:** 2026-11-05
+**Commit:** 0056d92a
 **Branch:** 2026November
 
 Parent: [monorepo router](../AGENTS.md). Prefer the deepest guide below; engine routes/tests remain behavior truth.

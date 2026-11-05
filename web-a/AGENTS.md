@@ -1,7 +1,7 @@
 # web-a - Admin Console
 
-**Generated:** 2026-11-01
-**Commit:** a591022e
+**Generated:** 2026-11-05
+**Commit:** 0056d92a
 **Branch:** 2026November
 
 Parent: `../AGENTS.md`. Follow the owning child guide below for implementation details.

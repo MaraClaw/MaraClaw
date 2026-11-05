@@ -1,19 +1,23 @@
 """Notification API - list, archive, read state, and broadcast."""
 
+import hashlib
+import json
 import uuid
 from typing import Annotated, ClassVar, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
+from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction
 from app.records.broadcast_email import BroadcastEmailStatus, NewBroadcastEmail
+from app.records.broadcast_submission import BroadcastSubmissionRecord
 from app.records.user import UserRecord
 from app.schemas.notification_responses import (
     NotificationBroadcastEmailCancellationResponse,
@@ -261,14 +265,54 @@ async def cancel_broadcast_email(
     return {**_email_status_response(result.status), "cancelled_now": result.cancelled_now}
 
 
+_SMTP_UNCONFIGURED = (
+    "Organization SMTP is not configured. Ask your genesis administrator to configure SMTP in Settings."
+)
+
+
+async def _email_configured(tenant_id: uuid.UUID) -> bool:
+    from app.services.system_email_service import resolve_email_config_async
+
+    return bool(await resolve_email_config_async(tenant_id))
+
+
+def _broadcast_fingerprint(req: BroadcastRequest) -> str:
+    payload = json.dumps(
+        {"title": req.title, "body": req.body, "send_email": req.send_email},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _replayed_broadcast(submission: BroadcastSubmissionRecord, fingerprint: str) -> NotificationBroadcastResponse:
+    if submission.fingerprint != fingerprint:
+        raise HTTPException(409, "Idempotency-Key was already used for a different broadcast")
+    return {
+        "ok": True,
+        "broadcast_id": submission.broadcast_id,
+        "users_notified": submission.users_notified,
+        "agents_notified": submission.agents_notified,
+        "emails_sent": submission.emails_sent,
+    }
+
+
 @router.post("/notifications/broadcast")
 async def broadcast_notification(
     req: BroadcastRequest,
     current_user: UserRecord = Depends(get_current_user),
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None,
 ) -> NotificationBroadcastResponse:
     """Send a notification to all users and agents in the current tenant.
-    Requires org_admin or platform_admin role."""
+    Requires org_admin or platform_admin role.
+
+    With an ``Idempotency-Key``, a retry by the same sender and tenant replays the committed result
+    without sending anything; the same key with a different payload is a 409.
+    """
     tenant_id = _broadcast_tenant(current_user)
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must be nonempty")
 
     from app.services.notification_service import send_notification
 
@@ -277,18 +321,35 @@ async def broadcast_notification(
     count_agents = 0
     count_emails = 0
     broadcast_id = uuid.uuid4()
+    fingerprint = _broadcast_fingerprint(req)
 
-    if req.send_email:
-        from app.services.system_email_service import resolve_email_config_async
-
-        email_config = await resolve_email_config_async(tenant_id)
-        if not email_config:
-            raise HTTPException(
-                400,
-                "Organization SMTP is not configured. Ask your genesis administrator to configure SMTP in Settings.",
-            )
+    if idempotency_key is not None:
+        # Replay precedes every other read so later membership or SMTP changes cannot alter the answer.
+        prior = await broadcast_submission_dao.get_for_key(tenant_id, current_user.id, idempotency_key)
+        if prior is not None:
+            return _replayed_broadcast(prior, fingerprint)
+    elif req.send_email and not await _email_configured(tenant_id):
+        raise HTTPException(400, _SMTP_UNCONFIGURED)
 
     async with connection_ctx():
+        submission_id: uuid.UUID | None = None
+        if idempotency_key is not None:
+            # Claim inside the fan-out transaction: a concurrent claim blocks on the unique key until this
+            # one commits (then replays) or rolls back (then proceeds).
+            claim = await broadcast_submission_dao.claim(
+                tenant_id=tenant_id,
+                sender_id=current_user.id,
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                broadcast_id=broadcast_id,
+            )
+            if not claim.created:
+                return _replayed_broadcast(claim.submission, fingerprint)
+            submission_id = claim.submission.id
+            if req.send_email and not await _email_configured(tenant_id):
+                await broadcast_submission_dao.release(submission_id)
+                raise HTTPException(400, _SMTP_UNCONFIGURED)
+
         users = await user_dao.list_active_for_tenant(
             tenant_id,
             exclude_user_id=current_user.id,
@@ -331,6 +392,10 @@ async def broadcast_notification(
                     for user in users
                     if user.email not in (None, "")
                 ]
+            )
+        if submission_id is not None:
+            await broadcast_submission_dao.record_counts(
+                submission_id, users=count_users, agents=count_agents, emails=count_emails
             )
         await flush_request_transaction()
 

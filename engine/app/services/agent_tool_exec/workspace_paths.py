@@ -30,6 +30,14 @@ def _agent_workspace_root(agent_id: uuid.UUID, *, workspace_root: Path) -> Path:
     return workspace_root / str(agent_id)
 
 
+def _resolves_within_root(path: Path, root: Path) -> bool:
+    """True when ``path`` resolves (following symlinks) to a location inside the resolved ``root``."""
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError, RuntimeError:
+        return False
+
+
 def _normalize_tool_rel_path(rel_path: str) -> str:
     normalized = unicodedata.normalize("NFC", (rel_path or "").strip()).replace("\\", "/")
     return re.sub(r"/+", "/", normalized).lstrip("./")
@@ -77,9 +85,15 @@ def _resolve_tool_source_path(
     parent = candidate.parent
     if parent.exists():
         wanted = collapse_filename_for_match(candidate.name)
+        escaped = False
         for sibling in parent.iterdir():
-            if collapse_filename_for_match(sibling.name) == wanted:
-                return sibling
+            if collapse_filename_for_match(sibling.name) != wanted:
+                continue
+            if _resolves_within_root(sibling, root):
+                return sibling.resolve()
+            escaped = True
+        if escaped:
+            raise ValueError("Access denied for this path")
     return candidate
 
 

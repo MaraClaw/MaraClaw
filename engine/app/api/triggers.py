@@ -135,10 +135,15 @@ async def update_trigger(
         raise HTTPException(404, "Trigger not found")
 
     updates = object_mapping_from(body.model_dump(exclude_unset=True))
+    user_config: JsonObject | None = None
     if "config" in updates:
-        config = dict(json_object_from(trigger.config))
-        config.update({key: value for key, value in (body.config or {}).items() if key not in ("token", "secret")})
-        updates["config"] = config
+        del updates["config"]
+        # Credentials and internal underscore keys (poll baseline, sequence) are server-owned.
+        user_config = {
+            key: value
+            for key, value in (body.config or {}).items()
+            if key not in ("token", "secret") and not key.startswith("_")
+        }
     expires_at = updates.get("expires_at")
     if expires_at is not None:
         if isinstance(expires_at, datetime):
@@ -149,6 +154,9 @@ async def update_trigger(
                 updates["expires_at"] = datetime.fromisoformat(expires_text)
     if updates:
         _ = await agent_trigger_dao.update(db_obj=trigger, obj_in=updates)
+    if user_config is not None:
+        # Merged in SQL against the row's current config, so a concurrent poll baseline advance is kept.
+        _ = await agent_trigger_dao.merge_user_config(trigger.id, user_config)
 
     return {"ok": True}
 

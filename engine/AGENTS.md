@@ -1,7 +1,7 @@
 # Engine Platform Guide
 
-**Generated:** 2026-11-01
-**Commit:** a591022e
+**Generated:** 2026-11-05
+**Commit:** 0056d92a
 **Branch:** 2026November
 
 Monorepo router: `../AGENTS.md`. This guide owns engine-wide rules; nested guides own local contracts.

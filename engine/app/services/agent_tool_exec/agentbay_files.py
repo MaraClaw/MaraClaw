@@ -33,7 +33,7 @@ async def _agentbay_file_transfer(agent_id: uuid.UUID | None, ws: Path, argument
 
     def resolve_workspace(rel_path: str) -> tuple[str | None, str]:
         local = (ws / rel_path).resolve()
-        if not str(local).startswith(str(ws.resolve())):
+        if not local.is_relative_to(ws.resolve()):
             return None, "Permission denied: path must be inside the agent workspace"
         return str(local), ""
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypeIs
 from urllib.parse import urlparse
@@ -27,8 +29,22 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord
+from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, poll_sequence
 
 MIN_POLL_INTERVAL_MINUTES = 5
+
+
+@dataclass(frozen=True, slots=True)
+class PollObservation:
+    """One poll result that differs from the stored baseline.
+
+    ``expected_seq`` is the sequence the baseline write must still find; ``fire`` says whether the observation
+    also warrants an execution (a first poll or a non-entering match only moves the baseline).
+    """
+
+    value: str
+    expected_seq: int
+    fire: bool
 
 
 def _config_number(value: JsonValue) -> int | float | None:
@@ -311,10 +327,21 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
         base = trigger.last_fired_at or trigger.created_at
         if base is None or (now - base) < timedelta(minutes=interval_min):
             return False
-        return await poll_check(trigger)
+        observation = await poll_check(trigger)
+        if observation is None:
+            return False
+        if not observation.fire:
+            # Baseline-only change: conditional, so a concurrent worker or config edit is never overwritten.
+            _ = await agent_trigger_dao.advance_poll_baseline(
+                trigger.id, expected_seq=observation.expected_seq, value=observation.value
+            )
+            return False
+        # Handed to `enqueue_due_trigger`, which advances the baseline in the transaction that enqueues.
+        trigger.config[POLL_OBSERVED_KEY] = observation.value
+        return True
 
     if t == "on_message":
-        return await check_new_agent_messages(trigger)
+        return await check_new_agent_messages(trigger) is not None
 
     if t == "webhook":
         return False
@@ -322,19 +349,24 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
     return False
 
 
-async def poll_check(trigger: AgentTriggerRecord) -> bool:
+async def poll_check(trigger: AgentTriggerRecord) -> PollObservation | None:
+    """Fetch the poll target and compare it with the stored baseline; never writes config.
+
+    Returns None when nothing needs recording. A first poll yields a baseline-only observation. With
+    ``fire_on=match`` an execution is warranted only when the value enters the match value.
+    """
     cfg = _json_config(trigger.config)
     url = cfg.get("url")
     if not isinstance(url, str) or not url:
-        return False
+        return None
     try:
         url = await validate_public_url(url)
         method = cfg.get("method", "GET")
         if not isinstance(method, str):
-            return False
+            return None
         headers = _config_headers(cfg.get("headers", {}))
         if headers is None:
-            return False
+            return None
         async with public_http_client(timeout=10, follow_redirects=False) as client:
             resp = await client.request(method, url, headers=headers)
             _ = resp.raise_for_status()
@@ -342,32 +374,22 @@ async def poll_check(trigger: AgentTriggerRecord) -> bool:
         data = json_value_from_response(resp)
         json_path = cfg.get("json_path", "$")
         if not isinstance(json_path, str):
-            return False
-        current_value = extract_json_path(data, json_path)
-        current_str = str(current_value)
-        fire_on = cfg.get("fire_on", "change")
-        should_fire = False
-        if fire_on == "match":
-            should_fire = current_str == str(cfg.get("match_value", ""))
-        else:
-            last_value = cfg.get("_last_value")
-            should_fire = last_value is not None and current_str != last_value
+            return None
+        current_str = str(extract_json_path(data, json_path))
+        previous = cfg.get("_last_value")
+        previous = previous if isinstance(previous, str) else None
+        if previous == current_str:
+            return None
 
-        cfg["_last_value"] = current_str
-        try:
-            row = await agent_trigger_dao.get(trigger.id)
-            if row:
-                _ = await agent_trigger_dao.update(db_obj=row, obj_in={"config": cfg})
-        except Exception as e:
-            logger.warning(f"Failed to persist poll _last_value for {trigger.name}: {e}")
-
-        return should_fire
+        rule_met = cfg.get("fire_on", "change") != "match" or current_str == str(cfg.get("match_value", ""))
+        fire = previous is not None and rule_met
+        return PollObservation(value=current_str, expected_seq=poll_sequence(cfg), fire=fire)
     except OutboundPolicyError as exc:
         logger.warning("Poll blocked by outbound policy for trigger {}: {}", trigger.id, exc)
-        return False
+        return None
     except Exception as e:
         logger.warning(f"Poll failed for trigger {trigger.name}: {e}")
-        return False
+        return None
 
 
 def extract_json_path(data: object, path: str) -> object:
@@ -385,12 +407,13 @@ def extract_json_path(data: object, path: str) -> object:
     return current
 
 
-async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
+async def check_new_agent_messages(trigger: AgentTriggerRecord) -> str | None:
+    """Return the id of the newest matching chat message, or None; the match is recorded on the trigger config."""
     cfg = _json_config(trigger.config)
     from_agent_name = cfg.get("from_agent_name")
     from_user_name = cfg.get("from_user_name")
     if (from_agent_name is None or not from_agent_name) and (from_user_name is None or not from_user_name):
-        return False
+        return None
 
     since = trigger.last_fired_at or trigger.created_at
     if trigger.fire_count == 0 and not trigger.last_fired_at:
@@ -406,24 +429,32 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
             if isinstance(from_agent_name, list):
                 from_agent_name = from_agent_name[0] if from_agent_name else ""
             if not isinstance(from_agent_name, str):
-                return False
+                return None
             safe_agent_name = from_agent_name.replace("%", "").replace("_", r"\_")
             async with connection_ctx() as db:
+                # Only agents in the trigger agent's own tenant can be named; a tenantless trigger agent matches none.
                 source_agent = await db.fetchone(
-                    "SELECT id FROM agents WHERE name ILIKE %(pattern)s LIMIT 1",
-                    {"pattern": f"%{safe_agent_name}%"},
+                    """
+                    SELECT a.id
+                    FROM agents a
+                    JOIN agents ta ON ta.id = %(trigger_agent_id)s
+                    WHERE a.name ILIKE %(pattern)s
+                      AND a.tenant_id = ta.tenant_id
+                    LIMIT 1
+                    """,
+                    {"pattern": f"%{safe_agent_name}%", "trigger_agent_id": trigger.agent_id},
                 )
             if source_agent is None:
-                return False
+                return None
 
             from_participant = await participant_dao.get_by_type_ref("agent", uuid_from_row(source_agent["id"]))
             if not from_participant:
-                return False
+                return None
 
             async with connection_ctx() as db:
                 msg = await db.fetchone(
                     """
-                    SELECT cm.content
+                    SELECT cm.id, cm.content
                     FROM chat_messages cm
                     JOIN chat_sessions cs ON cm.conversation_id = cs.id::text
                     WHERE cm.participant_id = %(participant_id)s
@@ -440,17 +471,15 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                     },
                 )
             if msg is None:
-                return False
-            cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
-            cfg["_matched_from"] = from_agent_name
-            return True
+                return None
+            return _record_matched_message(cfg, msg, from_agent_name)
 
         if from_user_name is not None and from_user_name:
             agent = await agent_dao.get(trigger.agent_id)
             if isinstance(from_user_name, list):
                 from_user_name = from_user_name[0] if from_user_name else ""
             if not isinstance(from_user_name, str):
-                return False
+                return None
             safe_user_name = from_user_name.replace("%", "").replace("_", r"\_")
             pattern = f"%{safe_user_name}%"
 
@@ -488,7 +517,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                 if target_user is not None:
                     msg = await db.fetchone(
                         """
-                        SELECT cm.content
+                        SELECT cm.id, cm.content
                         FROM chat_messages cm
                         JOIN chat_sessions cs ON cm.conversation_id = cs.id::text
                         WHERE cs.agent_id = %(agent_id)s
@@ -509,7 +538,7 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                 else:
                     msg = await db.fetchone(
                         """
-                        SELECT cm.content
+                        SELECT cm.id, cm.content
                         FROM chat_messages cm
                         JOIN chat_sessions cs ON cm.conversation_id = cs.id::text
                         WHERE cs.agent_id = %(agent_id)s
@@ -532,12 +561,18 @@ async def check_new_agent_messages(trigger: AgentTriggerRecord) -> bool:
                     )
 
             if msg is None:
-                return False
-            cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
-            cfg["_matched_from"] = from_user_name
-            return True
+                return None
+            return _record_matched_message(cfg, msg, from_user_name)
     except Exception as e:
         logger.warning(f"on_message check failed for trigger {trigger.name}: {e}")
-        return False
+        return None
 
-    return False
+    return None
+
+
+def _record_matched_message(cfg: JsonObject, msg: Mapping[str, object], matched_from: str) -> str:
+    message_id = str_from_row(msg.get("id"))
+    cfg["_matched_message"] = str_from_row(msg.get("content"))[:2000]
+    cfg["_matched_message_id"] = message_id
+    cfg["_matched_from"] = matched_from
+    return message_id

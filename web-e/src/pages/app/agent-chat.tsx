@@ -7,13 +7,20 @@ import { toast } from 'sonner'
 import { ChatMarkdown } from '@/components/chat/markdown'
 import { ChatMessageContent } from '@/components/chat/message-content'
 import { HistoryControl } from '@/components/chat/history-control'
+import { SessionList } from '@/components/chat/session-list'
 import { SkillMentionInput } from '@/components/chat/skill-mention-input'
 import { Button } from '@/components/ui/button'
 import { installedAgentSkillsOptions } from '@/hooks/agent-skills-options'
 import { useChatHistory } from '@/hooks/use-chat-history'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
-import { useMutation as useWorkspaceMutation, useQuery as useWorkspaceQuery } from '@/hooks/session-workspace'
+import {
+  useInfiniteQuery as useWorkspaceInfiniteQuery,
+  useMutation as useWorkspaceMutation,
+  useQuery as useWorkspaceQuery,
+} from '@/hooks/session-workspace'
 import { authSession } from '@/lib/auth-session'
+import { getSession, listSessionsPage, SESSION_PAGE_SIZE, type SessionListScope } from '@/lib/chat-sessions-api'
+import { chatSessionKey, chatSessionsKey, distinctSessions } from '@/lib/chat-sessions-query'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
@@ -27,7 +34,6 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import { chatUploadLimit, formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   createSession,
-  listSessions,
   uploadChatFile,
   type AgentOut,
 } from '@/lib/workspace-api'
@@ -100,11 +106,15 @@ export function AgentChatPage() {
     queuedSendRef.current = null
   }), [owner])
 
-  const sessionsQuery = useQuery({
-    queryKey: ['sessions', agent.id],
-    queryFn: () => listSessions(agent.id, user?.id === agent.creator_id ? 'all' : 'mine'),
+  const listScope: SessionListScope = user?.id === agent.creator_id ? 'all' : 'mine'
+  const sessionsQuery = useWorkspaceInfiniteQuery<Awaited<ReturnType<typeof listSessionsPage>>, Error, string | null>({
+    queryKey: chatSessionsKey(agent.id, listScope),
+    initialPageParam: null,
+    queryFn: ({ pageParam, signal }) => listSessionsPage(agent.id, listScope, { cursor: pageParam, limit: SESSION_PAGE_SIZE, owner, signal }),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: authSession.isCurrent(mountedOwner) && Boolean(token),
   })
+  const loadedSessions = useMemo(() => distinctSessions(sessionsQuery.data?.pages), [sessionsQuery.data])
 
   const uploadPolicy = useWorkspaceQuery({
     queryKey: ['upload-policy'],
@@ -120,7 +130,15 @@ export function AgentChatPage() {
     refetchOnMount: 'always',
   })
   const activeId = sessionId ?? sharedSessionQuery.data?.id
-  const activeSession = sessionsQuery.data?.find((session) => session.id === activeId)
+  const loadedSession = loadedSessions.find((session) => session.id === activeId)
+  // A URL-opened session may sit on a page that is not loaded yet: ask the server, which re-checks access.
+  const lookupQuery = useWorkspaceQuery({
+    queryKey: chatSessionKey(agent.id, sessionId ?? ''),
+    queryFn: ({ signal }) => getSession(agent.id, sessionId ?? '', { owner, signal }),
+    enabled: authSession.isCurrent(mountedOwner) && Boolean(token) && Boolean(sessionId) && !sessionsQuery.isPending && !loadedSession,
+    retry: false,
+  })
+  const activeSession = loadedSession ?? lookupQuery.data
     ?? (sharedSessionQuery.data?.id === activeId ? sharedSessionQuery.data : undefined)
   const writable = archivedId !== activeId && (!sessionId || isWritableSession(activeSession))
   const installedSkillsQuery = useWorkspaceQuery({
@@ -531,6 +549,9 @@ export function AgentChatPage() {
           className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4 [overflow-anchor:none]"
           aria-busy={busy}
         >
+          <SessionList agentId={agent.id} sessions={loadedSessions} activeId={activeId} hasMore={Boolean(sessionsQuery.hasNextPage)}
+            loadingMore={sessionsQuery.isFetchingNextPage} error={sessionsQuery.isFetchNextPageError ? sessionsQuery.error : null}
+            onLoadMore={() => { if (isCurrent() && !sessionsQuery.isFetching) void sessionsQuery.fetchNextPage({ cancelRefetch: false }) }} />
           <HistoryControl ready={historyQuery.data !== undefined} loading={Boolean(activeId) && historyQuery.isLoading}
             error={historyQuery.error} hasEarlier={historyQuery.hasEarlier} loadingEarlier={historyQuery.loadingEarlier}
             earlierError={historyQuery.earlierError} onRefresh={() => { if (isCurrent()) void historyQuery.refetch() }}

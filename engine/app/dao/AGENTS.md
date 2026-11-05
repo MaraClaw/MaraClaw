@@ -11,6 +11,8 @@ Pure-psycopg repositories returning `app.records` dataclasses.
 - Lambdas today: `UserDAO`, `SkillDAO` - do not copy that pattern. `skills.is_builtin` / `is_default` have no SQL default.
 - Largest DAOs: `agent_dao.py`, `chat_dao.py`. Keep new queries in the owning DAO.
 - Tenant name search: `tenant_dao.search_by_name` uses generated `name_tsv` + prefix `to_tsquery('simple', 'mara:*')`. Tokens must stay `[a-z0-9]` (see `tenant_name_tsquery`).
+- Partial JSONB state (e.g. trigger `_last_value` / `_poll_seq`) uses a conditional `config || jsonb_build_object(...)` UPDATE with a `WHERE` on the expected value, not `BaseDAO.update` (whole-row replace loses concurrent writes).
+- Keyset paging over nullable sort keys needs an explicit NULL branch in the cursor predicate (`chat_dao.list_page`); never OFFSET.
 - New table: baseline SQL → record → DAO singleton → `dao/__init__.py`. If the table FKs to tenants/agents/users **without** `ON DELETE CASCADE`, add a static delete in `tenant_dao.delete_cascade` **before** the parent row.
 
 ## Covered

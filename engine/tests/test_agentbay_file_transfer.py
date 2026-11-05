@@ -140,3 +140,89 @@ async def test_failed_environment_bridge_still_cleans_temporary_file(monkeypatch
     assert result == "Transfer failed (download from browser): download failed"
     assert len(temporary_paths) == 1
     assert not (await asyncio.to_thread(Path(temporary_paths[0]).exists))
+
+
+def _install_forbidden_agentbay_client(monkeypatch) -> None:
+    async def get_client(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("AgentBay client must not be requested for a path outside the workspace")
+
+    monkeypatch.setitem(
+        sys.modules, "app.services.agentbay_client", SimpleNamespace(get_agentbay_client_for_agent=get_client)
+    )
+
+
+@pytest.mark.parametrize("via", ["parent_traversal", "symlinked_directory", "symlinked_file"])
+@pytest.mark.asyncio
+async def test_workspace_transfer_rejects_prefix_sibling_targets(monkeypatch, tmp_path: Path, via: str) -> None:
+    agent_id = uuid.uuid4()
+    workspace = tmp_path / str(agent_id)
+    sibling = tmp_path / f"{agent_id}-other"
+    workspace.mkdir()
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("secret")
+    (workspace / "dir-link").symlink_to(sibling, target_is_directory=True)
+    (workspace / "file-link.txt").symlink_to(sibling / "secret.txt")
+    rel_path = {
+        "parent_traversal": f"../{agent_id}-other/secret.txt",
+        "symlinked_directory": "dir-link/secret.txt",
+        "symlinked_file": "file-link.txt",
+    }[via]
+    _install_forbidden_agentbay_client(monkeypatch)
+
+    upload = await agentbay_files._agentbay_file_transfer(
+        agent_id, workspace, {"from_type": "workspace", "from_path": rel_path, "to_type": "code", "to_path": "/remote"}
+    )
+    download = await agentbay_files._agentbay_file_transfer(
+        agent_id,
+        workspace,
+        {"from_type": "code", "from_path": "/remote", "to_type": "workspace", "to_path": rel_path},
+    )
+
+    assert upload == "Permission denied: path must be inside the agent workspace"
+    assert download == "Permission denied: path must be inside the agent workspace"
+    assert (sibling / "secret.txt").read_text() == "secret"
+    assert sorted(path.name for path in sibling.iterdir()) == ["secret.txt"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_transfer_follows_symlinks_that_stay_inside_workspace(monkeypatch, tmp_path: Path) -> None:
+    uploads: list[str] = []
+
+    class Filesystem:
+        def upload_file(self, local: str, _remote: str) -> SimpleNamespace:
+            uploads.append(Path(local).read_text())
+            return SimpleNamespace(success=True, bytes_sent=4, error_message="")
+
+        def download_file(self, _remote: str, local: str) -> SimpleNamespace:
+            Path(local).write_text("down")
+            return SimpleNamespace(success=True, bytes_received=4, error_message="")
+
+    class Client:
+        _session = SimpleNamespace(file_system=Filesystem())
+
+    async def get_client(*_args: object, **_kwargs: object) -> Client:
+        return Client()
+
+    monkeypatch.setitem(
+        sys.modules, "app.services.agentbay_client", SimpleNamespace(get_agentbay_client_for_agent=get_client)
+    )
+    workspace = tmp_path / str(uuid.uuid4())
+    (workspace / "real").mkdir(parents=True)
+    (workspace / "real" / "report.txt").write_text("body")
+    (workspace / "alias").symlink_to(workspace / "real", target_is_directory=True)
+
+    upload = await agentbay_files._agentbay_file_transfer(
+        uuid.uuid4(),
+        workspace,
+        {"from_type": "workspace", "from_path": "alias/report.txt", "to_type": "code", "to_path": "/remote"},
+    )
+    download = await agentbay_files._agentbay_file_transfer(
+        uuid.uuid4(),
+        workspace,
+        {"from_type": "code", "from_path": "/remote", "to_type": "workspace", "to_path": "alias/out.txt"},
+    )
+
+    assert upload == "Transferred workspace/alias/report.txt → [code]/remote (4 bytes)"
+    assert uploads == ["body"]
+    assert download.endswith("File available in workspace at: alias/out.txt")
+    assert (workspace / "real" / "out.txt").read_text() == "down"

@@ -4,27 +4,47 @@ import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { broadcastDraftSchema, sendBroadcast } from '../src/lib/broadcast-api.ts'
-import { ApiError } from '../src/lib/http.ts'
+import { broadcastDraftSchema, sendBroadcast, type BroadcastSubmission } from '../src/lib/broadcast-api.ts'
+import { ApiError, apiRequest } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { canSendBroadcast } from '../src/lib/types/auth.ts'
 import { adminUser, createFixture } from './helpers.ts'
 
 const counts = { ok: true, broadcast_id: '0d75651c-8c6c-4404-9046-50e1b3ff6dd2', users_notified: 7, agents_notified: 3, emails_sent: 5 }
 const draft = { title: '  Maintenance  ', body: 'First line\nSecond line', send_email: false }
+const key = '5d2f6d54-7a4b-4f47-9d63-6c2b2f1f2a10'
 
 test('broadcast posts the exact current-tenant payload and parses distinct counts', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(counts))
   // When
-  const result = await sendBroadcast(draft)
+  const result = await sendBroadcast(draft, key)
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/notifications/broadcast')
   assert.equal(options?.method, 'POST')
   assert.equal(options?.body, JSON.stringify(draft))
+  assert.equal(new Headers(options?.headers).get('Idempotency-Key'), key)
   assert.deepEqual(result, counts)
   assert.equal(Object.isFrozen(result), true)
+})
+
+test('broadcast cannot be sent without an idempotency key', () => {
+  // Given / When
+  // @ts-expect-error the key is a required argument
+  const withoutKey: () => unknown = () => sendBroadcast(draft)
+  // Then
+  assert.equal(typeof withoutKey, 'function')
+  assert.equal(sendBroadcast.length, 2)
+})
+
+test('requests without an idempotency key send no Idempotency-Key header', async (t) => {
+  // Given
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json({}))
+  // When
+  await apiRequest('/api/anything')
+  // Then
+  assert.equal(new Headers(fetch.mock.calls[0]?.arguments[1]?.headers).has('Idempotency-Key'), false)
 })
 
 for (const malformed of [
@@ -37,7 +57,7 @@ for (const malformed of [
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json(malformed))
     // When
-    const pending = sendBroadcast(draft)
+    const pending = sendBroadcast(draft, key)
     // Then
     await assert.rejects(pending, z.ZodError)
   })
@@ -48,7 +68,7 @@ test('broadcast accepts zero counts without inventing recipients', async (t) => 
   const empty = { ...counts, users_notified: 0, agents_notified: 0, emails_sent: 0 }
   t.mock.method(globalThis, 'fetch', async () => Response.json(empty))
   // When
-  const result = await sendBroadcast({ ...draft, body: '', send_email: true })
+  const result = await sendBroadcast({ ...draft, body: '', send_email: true }, key)
   // Then
   assert.deepEqual(result, empty)
 })
@@ -61,7 +81,7 @@ for (const [status, detail] of [
     // Given
     const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ detail }, { status }))
     // When
-    const pending = sendBroadcast(draft)
+    const pending = sendBroadcast(draft, key)
     // Then
     await assert.rejects(pending, (error) => error instanceof ApiError && error.status === status && error.detail === detail && error.message === detail)
     assert.equal(fetch.mock.callCount(), 1)
@@ -101,13 +121,13 @@ for (const token of ['token-a', 'token-b']) for (const status of [200, 403]) {
     t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
     const callbacks: string[] = []
     const mutation = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), {
-      mutationFn: sendBroadcast,
+      mutationFn: (submission: BroadcastSubmission) => sendBroadcast(submission.draft, submission.idempotencyKey),
       retry: false,
       onSuccess: () => { callbacks.push('success/reset/confirmation/notification') },
       onError: () => { callbacks.push('error/confirmation/notification') },
       onSettled: () => { callbacks.push('unlock') },
     }))
-    const rejected = assert.rejects(mutation.mutate(draft), StaleSessionError)
+    const rejected = assert.rejects(mutation.mutate({ draft, idempotencyKey: key }), StaleSessionError)
     await started.promise
     // When
     policy.replace(token)

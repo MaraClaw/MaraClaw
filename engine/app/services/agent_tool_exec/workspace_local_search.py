@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .workspace_paths import _resolves_within_root
+
 
 def _search_files(
     ws: Path,
@@ -43,7 +45,10 @@ def _search_files(
     results = []
     total_matches = 0
     files_searched = 0
+    root = ws_for_relative.resolve()
     for file_path in search_path.rglob(file_pattern):
+        if not _resolves_within_root(file_path, root):
+            continue
         if not file_path.is_file():
             continue
         if file_path.name.startswith("."):
@@ -127,6 +132,8 @@ def _find_files(
     except Exception as error:
         return f"Invalid glob pattern: {error}"
 
+    root = ws_for_relative.resolve()
+    matches = [match for match in matches if _resolves_within_root(match, root)]
     if not matches:
         return f"No files matching pattern: {pattern}"
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { apiRequest } from './http.ts'
+import { ApiError, apiRequest } from './http.ts'
 import {
   BroadcastRequestSchema, NotificationBroadcastEmailCancellationResponseSchema,
   NotificationBroadcastEmailStatusResponseSchema, NotificationBroadcastResponseSchema,
@@ -27,12 +27,41 @@ const broadcastResultSchema = NotificationBroadcastResponseSchema.strip().extend
 
 export type BroadcastResult = z.infer<typeof broadcastResultSchema>
 
-export async function sendBroadcast(payload: BroadcastDraft): Promise<BroadcastResult> {
+/** A reviewed draft with the key that makes resending it safe. */
+export type BroadcastSubmission = Readonly<{ draft: BroadcastDraft; idempotencyKey: string }>
+
+export async function sendBroadcast(payload: BroadcastDraft, idempotencyKey: string): Promise<BroadcastResult> {
   return apiRequest('/api/notifications/broadcast', {
     schema: broadcastResultSchema,
     method: 'POST',
     body: payload,
+    idempotencyKey,
   })
+}
+
+function sameDraft(left: BroadcastDraft, right: BroadcastDraft): boolean {
+  return left.title === right.title && left.body === right.body && left.send_email === right.send_email
+}
+
+/** Reuse the key of an unconfirmed attempt at this exact draft; any other draft gets a fresh key. */
+export function reviewBroadcast(
+  draft: BroadcastDraft,
+  attempt: BroadcastSubmission | null,
+  mintKey: () => string = () => crypto.randomUUID(),
+): BroadcastSubmission {
+  return Object.freeze({ draft, idempotencyKey: attempt && sameDraft(attempt.draft, draft) ? attempt.idempotencyKey : mintKey() })
+}
+
+/** The attempt to keep for a retry after a failure; a 409 means the server tied the key to another broadcast. */
+export function attemptAfterFailure(attempt: BroadcastSubmission, error: unknown): BroadcastSubmission | null {
+  return error instanceof ApiError && error.status === 409 ? null : attempt
+}
+
+export function broadcastFailureMessage(error: Error): string {
+  if (!(error instanceof ApiError)) return 'Could not confirm the broadcast result.'
+  return error.status === 409
+    ? 'This request key was already used for a different broadcast. Review your draft and send it again.'
+    : error.message
 }
 
 const emailStatusFields = {

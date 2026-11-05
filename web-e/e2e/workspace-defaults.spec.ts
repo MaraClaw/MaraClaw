@@ -42,11 +42,17 @@ for (const selection of ['default', 'query archive', 'query peer', 'explicit'] a
     await prepareWorkspace(page)
     await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
     await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
-    const shared = { id: 'shared', title: 'Shared thread', source_channel: 'shared', user_id: 'creator-not-viewer', is_primary: true }
-    await page.route(`**/api/agents/${originalAgent.id}/sessions*`, (route) => route.fulfill({ json: route.request().method() === 'POST' ? shared : [
-      { id: 'archive', title: 'Another human private primary', source_channel: 'web', is_primary: true },
-      shared, { id: 'peer', title: 'Agent peer thread', source_channel: 'agent' },
-    ] }))
+    const row = { agent_id: originalAgent.id, user_id: 'creator-not-viewer', created_at: '2030-01-01T00:00:00Z' }
+    const shared = { ...row, id: 'shared', title: 'Shared thread', source_channel: 'shared', is_primary: true }
+    await page.route(`**/api/agents/${originalAgent.id}/sessions`, (route) => route.fulfill({ json: shared }))
+    await page.route(`**/api/agents/${originalAgent.id}/sessions/page?**`, (route) => route.fulfill({ json: {
+      items: [
+        { ...row, id: 'archive', title: 'Another human private primary', source_channel: 'web', is_primary: true },
+        shared, { ...row, id: 'peer', title: 'Agent peer thread', source_channel: 'agent' },
+      ],
+      next_cursor: null, has_more: false,
+    } }))
+    await page.route(`**/api/agents/${originalAgent.id}/credentials/`, (route) => route.fulfill({ json: [] }))
     const bodies: unknown[] = []
     await page.route(`**/api/agents/${originalAgent.id}/control/*`, async (route) => {
       if (new URL(route.request().url()).pathname.endsWith('/lock')) bodies.push(route.request().postDataJSON())

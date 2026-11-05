@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, Literal, final
 from uuid import UUID, uuid4
 
 from app.core.json_types import (
@@ -50,6 +51,15 @@ _MESSAGE_COLUMNS = (
     "attachments",
     "created_at",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SessionPosition:
+    """Sort key of the last session on a page: (last_message_at, created_at, id)."""
+
+    last_message_at: datetime | None
+    created_at: datetime
+    id: UUID
 
 
 @final
@@ -235,6 +245,62 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 "   OR (peer_agent_id = %(agent_id)s AND source_channel = 'agent') "
                 "ORDER BY last_message_at DESC NULLS LAST, created_at DESC",
                 {"agent_id": agent_id},
+            )
+            return [ChatSessionRecord.from_row(row) for row in rows]
+
+    async def list_page(
+        self,
+        *,
+        agent_id: UUID,
+        user_id: UUID,
+        scope: Literal["mine", "all"],
+        exclude_id: UUID,
+        limit: int,
+        after: SessionPosition | None = None,
+    ) -> Sequence[ChatSessionRecord]:
+        """Keyset page of non-empty sessions, newest activity first, excluding ``exclude_id`` (the shared session).
+
+        ``mine`` and ``all`` mirror ``list_for_user`` and ``list_all_for_agent``. Empty sessions are dropped
+        with EXISTS so a page is never short because of them. ``last_message_at`` is nullable and sorts last,
+        so the cursor predicate needs a separate branch for a NULL boundary.
+        """
+        params: dict[str, Any] = {"agent_id": agent_id, "exclude_id": exclude_id, "limit": limit}
+        if scope == "all":
+            scope_sql = (
+                "(cs.agent_id = %(agent_id)s OR (cs.peer_agent_id = %(agent_id)s AND cs.source_channel = 'agent'))"
+            )
+            message_agent_sql = ""
+        else:
+            scope_sql = (
+                "cs.agent_id = %(agent_id)s AND cs.user_id = %(user_id)s AND cs.is_group IS FALSE "
+                "AND cs.source_channel NOT IN ('agent', 'trigger')"
+            )
+            message_agent_sql = " AND m.agent_id = %(agent_id)s"
+            params["user_id"] = user_id
+        keyset_sql = ""
+        if after is not None:
+            params.update(c_created_at=after.created_at, c_id=after.id)
+            if after.last_message_at is None:
+                keyset_sql = (
+                    " AND (cs.last_message_at IS NULL AND (cs.created_at, cs.id) < (%(c_created_at)s, %(c_id)s))"
+                )
+            else:
+                params["c_last_message_at"] = after.last_message_at
+                keyset_sql = (
+                    " AND (cs.last_message_at < %(c_last_message_at)s"
+                    " OR (cs.last_message_at = %(c_last_message_at)s"
+                    " AND (cs.created_at, cs.id) < (%(c_created_at)s, %(c_id)s))"
+                    " OR cs.last_message_at IS NULL)"
+                )
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('cs')} FROM chat_sessions cs "
+                f"WHERE {scope_sql} AND cs.id <> %(exclude_id)s "
+                "AND EXISTS (SELECT 1 FROM chat_messages m "
+                f"WHERE m.conversation_id = cs.id::text{message_agent_sql}){keyset_sql} "
+                "ORDER BY cs.last_message_at DESC NULLS LAST, cs.created_at DESC, cs.id DESC "
+                "LIMIT %(limit)s",
+                params,
             )
             return [ChatSessionRecord.from_row(row) for row in rows]
 

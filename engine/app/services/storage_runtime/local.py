@@ -32,7 +32,7 @@ class LocalStorageBackend(StorageBackend):
         normalized = normalize_storage_key(key)
         full = (self.root / normalized).resolve()
         root_resolved = self.root.resolve()
-        if not str(full).startswith(str(root_resolved)):
+        if not full.is_relative_to(root_resolved):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
         return full
 

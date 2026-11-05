@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 from croniter import croniter
 
 from app.core.json_types import json_object_from
 from app.records.trigger import AgentTriggerRecord
+
+POLL_OBSERVED_KEY = "_poll_observed"
+"""In-memory only: the observed value `evaluate_trigger` hands to `enqueue_due_trigger`; never persisted."""
+
+
+def poll_sequence(cfg: Mapping[str, object]) -> int:
+    """Stored per-trigger poll sequence; an absent or malformed value counts as 0 (legacy rows)."""
+    value = cfg.get("_poll_seq")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
 
 
 def build_scheduled_execution_key(trigger: AgentTriggerRecord, now: datetime) -> str:
@@ -42,14 +53,12 @@ def build_scheduled_execution_key(trigger: AgentTriggerRecord, now: datetime) ->
         return f"cron:{trigger.id}:{due_at.astimezone(UTC).isoformat()}"
 
     if trigger_type == "on_message":
-        matched_from = str(cfg.get("_matched_from") or "")
-        matched_message = str(cfg.get("_matched_message") or "")
-        digest = hashlib.sha256(f"{matched_from}\n{matched_message}".encode()).hexdigest()
-        return f"on_message:{trigger.id}:{digest}"
+        message_id = cfg.get("_matched_message_id")
+        if not isinstance(message_id, str) or not message_id:
+            raise ValueError("Trigger on_message requires the matched chat message id")
+        return f"on_message:{trigger.id}:{message_id}"
 
     if trigger_type == "poll":
-        current_value = str(cfg.get("_last_value") or "")
-        digest = hashlib.sha256(current_value.encode("utf-8")).hexdigest()
-        return f"poll:{trigger.id}:{digest}"
+        return f"poll:{trigger.id}:{poll_sequence(cfg) + 1}"
 
     return f"{trigger_type}:{trigger.id}:{now.replace(microsecond=0).isoformat()}"

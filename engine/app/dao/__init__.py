@@ -9,6 +9,7 @@ from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
+from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -78,6 +79,7 @@ __all__ = [
     "approval_request_dao",
     "audit_log_dao",
     "broadcast_email_dao",
+    "broadcast_submission_dao",
     "channel_config_dao",
     "channel_event_receipt_dao",
     "chat_message_dao",

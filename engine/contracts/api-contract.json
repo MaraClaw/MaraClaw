@@ -12791,6 +12791,39 @@
         "title": "SessionOut",
         "type": "object"
       },
+      "SessionPageOut": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SessionOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "SessionPageOut",
+        "type": "object"
+      },
       "SettingUpdate": {
         "properties": {
           "value": {
@@ -23857,7 +23890,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -23879,6 +23914,102 @@
           }
         ],
         "summary": "Create Session",
+        "tags": [
+          "chat-sessions"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/sessions/page": {
+      "get": {
+        "description": "Keyset page of the same rows as the list route; the shared session leads the first page only.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "'mine' or 'all'",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "mine",
+              "description": "'mine' or 'all'",
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sessions after the shared one; the first page adds the shared",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Sessions after the shared one; the first page adds the shared",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Sessions Page",
         "tags": [
           "chat-sessions"
         ]
@@ -23931,6 +24062,63 @@
           }
         ],
         "summary": "Delete Session",
+        "tags": [
+          "chat-sessions"
+        ]
+      },
+      "get": {
+        "description": "One session the caller may read, in the list-row shape that matches their scope.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e732f7b73657373696f6e5f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Session",
         "tags": [
           "chat-sessions"
         ]
@@ -32878,8 +33066,28 @@
     },
     "/api/notifications/broadcast": {
       "post": {
-        "description": "Send a notification to all users and agents in the current tenant.\nRequires org_admin or platform_admin role.",
+        "description": "Send a notification to all users and agents in the current tenant.\nRequires org_admin or platform_admin role.\n\nWith an ``Idempotency-Key``, a retry by the same sender and tenant replays the committed result\nwithout sending anything; the same key with a different payload is a 409.",
         "operationId": "post_2f6170692f6e6f74696669636174696f6e732f62726f616463617374",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -39989,6 +40197,8 @@
       "ChannelConfigOut",
       "ChannelType",
       "ChatEventType",
+      "ChatMessageEntry",
+      "ChatMessagePage",
       "ChatRejectionReason",
       "ChatServerEvent",
       "ChatTicketRequest",
@@ -40000,6 +40210,7 @@
       "ControlEnvironment",
       "ControlStatus",
       "ConversationMessageResponse",
+      "CreateSessionIn",
       "CurrentUrlRequest",
       "DelegateRequest",
       "DeletionDetail",
@@ -40073,6 +40284,7 @@
       "OrgUsersPageOut",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
+      "PatchSessionIn",
       "PeriodOut",
       "PermissionAccessLevel",
       "PermissionGrantScope",
@@ -40107,6 +40319,8 @@
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
       "SelectedNotificationsRequest",
+      "SessionOut",
+      "SessionPageOut",
       "SlackChannelPayload",
       "TaskCreate",
       "TaskLogCreate",
@@ -40210,6 +40424,7 @@
       "AtlassianTestResponse",
       "AtlassianTestSuccess",
       "AtlassianToolPreview",
+      "AttachmentRef",
       "AuthUser",
       "BroadcastRequest",
       "BulkToolUpdateItem",
@@ -40226,6 +40441,8 @@
       "ChannelType",
       "ChatAttachmentReference",
       "ChatEventType",
+      "ChatMessageEntry",
+      "ChatMessagePage",
       "ChatRejectionReason",
       "ChatServerEvent",
       "ChatTicketRequest",
@@ -40240,6 +40457,7 @@
       "ControlStatus",
       "ConversationMessageResponse",
       "CorrelatedTurnRejectedEvent",
+      "CreateSessionIn",
       "CredentialCapture",
       "CredentialCaptureCreate",
       "CredentialCaptureReplace",
@@ -40343,6 +40561,7 @@
       "OrgUsersPageOut",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
+      "PatchSessionIn",
       "PeriodFrequency",
       "PeriodOut",
       "PermissionAccessLevel",
@@ -40384,6 +40603,8 @@
       "SearchAnalyticsTimeBucket",
       "SearchAnalyticsTrendingQuery",
       "SelectedNotificationsRequest",
+      "SessionOut",
+      "SessionPageOut",
       "SlackChannelPayload",
       "StringErrorEvent",
       "SubmissionRejectionReason",

@@ -125,7 +125,7 @@ for (const retireOwner of [false, true]) {
     const chat = await prepareChat(page)
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
-    await page.route('**/api/agents/*/sessions?*', (route) => route.fulfill({ json: [] }))
+    await page.route('**/api/agents/*/sessions/page?*', (route) => route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }))
     await page.route('**/api/agents/*/sessions', async (route) => {
       requested.resolve()
       await release.promise

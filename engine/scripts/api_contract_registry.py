@@ -47,6 +47,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "agents",
         "auth",
         "channel_catalog",
+        "chat_sessions",
         "member_auth",
         "company_admissions",
         "departments",

@@ -69,6 +69,62 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             return await super().update(db_obj=db_obj, obj_in={**obj_in, "self_disabled": False})
         return await super().update(db_obj=db_obj, obj_in=obj_in)
 
+    async def advance_poll_baseline(self, trigger_id: UUID, *, expected_seq: int, value: str) -> bool:
+        """Store a poll observation as the new baseline, only if the sequence is still ``expected_seq``.
+
+        Touches just the internal ``_last_value`` and ``_poll_seq`` config keys (an absent sequence counts as 0).
+        Returns False when another writer advanced the sequence first, so the caller never adopts its observation.
+        """
+        async with self.session() as db:
+            row = await db.fetchone(
+                """
+                UPDATE agent_triggers
+                SET config = config || jsonb_build_object(
+                    '_last_value', %(value)s::text,
+                    '_poll_seq', %(expected_seq)s::bigint + 1
+                )
+                WHERE id = %(trigger_id)s
+                  AND COALESCE((config->>'_poll_seq')::bigint, 0) = %(expected_seq)s
+                RETURNING id
+                """,
+                {"trigger_id": trigger_id, "expected_seq": expected_seq, "value": value},
+            )
+            return row is not None
+
+    async def merge_user_config(self, trigger_id: UUID, user_config: Mapping[str, object]) -> bool:
+        """Merge user-edited config keys into the row's current config inside the UPDATE statement.
+
+        Internal underscore keys are never accepted from callers, and the merge keeps whatever internal keys the
+        row holds now, so a concurrent baseline advance is not rolled back. Changing a poll trigger's ``url`` or
+        ``json_path`` drops ``_last_value`` and bumps ``_poll_seq``: the next poll re-establishes the baseline,
+        and an observation of the old source loses its conditional update.
+        """
+        internal = sorted(key for key in user_config if key.startswith("_"))
+        if internal:
+            raise ValueError(f"User config cannot set internal keys: {', '.join(internal)}")
+
+        from app.db.types import as_jsonb
+
+        async with self.session() as db:
+            row = await db.fetchone(
+                """
+                UPDATE agent_triggers
+                SET config = CASE
+                    WHEN type = 'poll' AND (
+                        config->'url' IS DISTINCT FROM (config || %(user_config)s::jsonb)->'url'
+                        OR COALESCE(config->'json_path', '"$"'::jsonb)
+                            IS DISTINCT FROM COALESCE((config || %(user_config)s::jsonb)->'json_path', '"$"'::jsonb)
+                    ) THEN ((config || %(user_config)s::jsonb) - '_last_value')
+                        || jsonb_build_object('_poll_seq', COALESCE((config->>'_poll_seq')::bigint, 0) + 1)
+                    ELSE config || %(user_config)s::jsonb
+                END
+                WHERE id = %(trigger_id)s
+                RETURNING id
+                """,
+                {"trigger_id": trigger_id, "user_config": as_jsonb(dict(user_config))},
+            )
+            return row is not None
+
     async def record_first_starts(self, execution_ids: Sequence[UUID], *, now: datetime) -> None:
         """Record first starts with trigger row locks already held by the caller (claim)."""
         if not execution_ids:

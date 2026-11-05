@@ -9,8 +9,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
-import { broadcastDraftSchema, sendBroadcast, type BroadcastDraft, type BroadcastResult } from '@/lib/broadcast-api'
-import { ApiError } from '@/lib/http'
+import {
+  attemptAfterFailure, broadcastDraftSchema, broadcastFailureMessage, reviewBroadcast, sendBroadcast,
+  type BroadcastDraft, type BroadcastResult, type BroadcastSubmission,
+} from '@/lib/broadcast-api'
 import { BroadcastEmailProgress } from './broadcast-email-progress'
 
 const emptyDraft = { title: '', body: '', send_email: false }
@@ -25,7 +27,8 @@ export function BroadcastPage() {
   const focusRequested = useRef<'review' | 'draft' | 'error' | 'success' | null>(null)
   const reviewHeading = useRef<HTMLHeadingElement>(null)
   const feedback = useRef<HTMLDivElement>(null)
-  const [snapshot, setSnapshot] = useState<BroadcastDraft | null>(null)
+  const attempt = useRef<BroadcastSubmission | null>(null)
+  const [snapshot, setSnapshot] = useState<BroadcastSubmission | null>(null)
   const [result, setResult] = useState<BroadcastResult | null>(null)
   const [sendError, setSendError] = useState<Error | null>(null)
   const form = useForm<BroadcastDraft>({ resolver: zodResolver(broadcastDraftSchema), defaultValues: emptyDraft })
@@ -39,10 +42,11 @@ export function BroadcastPage() {
   }, [])
 
   const sending = useSessionMutation({
-    mutationFn: sendBroadcast,
+    mutationFn: ({ draft, idempotencyKey }: BroadcastSubmission) => sendBroadcast(draft, idempotencyKey),
     retry: false,
     onSuccess: (data) => {
       if (!active.current || !isSessionCurrent()) return
+      attempt.current = null
       focusRequested.current = 'success'
       setSnapshot(null)
       setSendError(null)
@@ -50,8 +54,9 @@ export function BroadcastPage() {
       form.reset(emptyDraft)
       toast.success('Broadcast sent')
     },
-    onError: (error) => {
+    onError: (error, submission) => {
       if (!active.current || !isSessionCurrent()) return
+      attempt.current = attemptAfterFailure(submission, error)
       focusRequested.current = 'error'
       setSnapshot(null)
       setSendError(error)
@@ -89,7 +94,7 @@ export function BroadcastPage() {
       <div ref={feedback} tabIndex={-1} role={sendError ? 'alert' : 'status'} className="empty:hidden focus-visible:outline-2 focus-visible:outline-ring">
         {sendError ? (
           <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-card p-4 text-sm">
-            <p className="font-medium text-destructive">Broadcast failed: {sendError instanceof ApiError ? sendError.message : 'Could not confirm the broadcast result.'}</p>
+            <p className="font-medium text-destructive">Broadcast failed: {broadcastFailureMessage(sendError)}</p>
             <p>Your draft is kept below. Review it again before another attempt. A failed request does not guarantee that nothing was sent.</p>
           </div>
         ) : result ? (
@@ -123,9 +128,9 @@ export function BroadcastPage() {
               <p className="mt-1 text-sm text-muted-foreground">{audience}</p>
             </div>
             <dl className="flex min-w-0 flex-col gap-4">
-              <div><dt className="text-sm text-muted-foreground">Title</dt><dd className="mt-1 whitespace-pre-wrap font-medium">{snapshot.title}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Body</dt><dd className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{snapshot.body || 'No body'}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Email</dt><dd className="mt-1 text-sm">{snapshot.send_email ? 'Also queue email for eligible user addresses' : 'In-app notifications only; email is off'}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">Title</dt><dd className="mt-1 whitespace-pre-wrap font-medium">{snapshot.draft.title}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">Body</dt><dd className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{snapshot.draft.body || 'No body'}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">Email</dt><dd className="mt-1 text-sm">{snapshot.draft.send_email ? 'Also queue email for eligible user addresses' : 'In-app notifications only; email is off'}</dd></div>
             </dl>
             <p className="text-sm text-muted-foreground">Sending is not retried automatically. Email queue counts do not confirm delivery.</p>
             <div className="flex flex-wrap gap-3">
@@ -134,6 +139,7 @@ export function BroadcastPage() {
               <Button type="button" className={`${buttonMotion} sm:ml-auto`} disabled={sending.isPending} onClick={() => {
                 if (submitting.current || !active.current || !isSessionCurrent()) return
                 submitting.current = true
+                attempt.current = snapshot
                 sending.mutate(snapshot)
               }}>{sending.isPending ? 'Sending broadcast...' : 'Send broadcast'}</Button>
             </div>
@@ -152,7 +158,7 @@ export function BroadcastPage() {
               focusRequested.current = 'review'
               setSendError(null)
               setResult(null)
-              setSnapshot(Object.freeze({ ...values }))
+              setSnapshot(reviewBroadcast(Object.freeze({ ...values }), attempt.current))
             })}>
               <div className="flex flex-col gap-2">
                 <Label htmlFor={`${id}-title`}>Title</Label>
