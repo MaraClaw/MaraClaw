@@ -32878,8 +32878,28 @@
     },
     "/api/notifications/broadcast": {
       "post": {
-        "description": "Send a notification to all users and agents in the current tenant.\nRequires org_admin or platform_admin role.",
+        "description": "Send a notification to all users and agents in the current tenant.\nRequires org_admin or platform_admin role.\n\nWith an ``Idempotency-Key``, a retry by the same sender and tenant replays the committed result\nwithout sending anything; the same key with a different payload is a 409.",
         "operationId": "post_2f6170692f6e6f74696669636174696f6e732f62726f616463617374",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

@@ -1629,6 +1629,21 @@ CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_broadcast_emails_scope ON broadcast_emails (tenant_id, broadcast_id);
 
+CREATE TABLE IF NOT EXISTS broadcast_submissions (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    fingerprint TEXT NOT NULL,
+    broadcast_id UUID NOT NULL UNIQUE,
+    users_notified INTEGER NOT NULL DEFAULT 0 CHECK (users_notified >= 0),
+    agents_notified INTEGER NOT NULL DEFAULT 0 CHECK (agents_notified >= 0),
+    emails_sent INTEGER NOT NULL DEFAULT 0 CHECK (emails_sent >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, sender_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_broadcast_submissions_sender ON broadcast_submissions (sender_id);
+
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,
 	request_id UUID NOT NULL,

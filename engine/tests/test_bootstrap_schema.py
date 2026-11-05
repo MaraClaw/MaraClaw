@@ -196,3 +196,16 @@ def test_baseline_defines_openclaw_upgrade_journal_and_image_pin() -> None:
         in sql
     )
     assert "FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE" in sql
+
+
+def test_broadcast_submissions_are_unique_per_sender_key_and_cascade_with_tenant() -> None:
+    # Given the fresh-install receipt statement.
+    sql = BASELINE.read_text(encoding="utf-8")
+    statement = next(
+        body for body in _statement_bodies(sql) if body.startswith("CREATE TABLE IF NOT EXISTS broadcast_submissions")
+    )
+    # Then one tenant sender cannot hold two receipts for a key, and receipts leave with their tenant or sender.
+    assert "UNIQUE (tenant_id, sender_id, idempotency_key)" in statement
+    assert "tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE" in statement
+    assert "sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE" in statement
+    assert "ALTER TABLE broadcast_submissions" not in sql
