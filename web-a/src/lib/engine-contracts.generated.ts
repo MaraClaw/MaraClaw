@@ -287,6 +287,15 @@ export const ChatEventType = { CONNECTED: "connected", TURN_ACCEPTED: "turn_acce
 export const ChatEventTypeSchema = z.intersection(z.union([z.literal("connected"), z.literal("turn_accepted"), z.literal("turn_rejected"), z.literal("chunk"), z.literal("thinking"), z.literal("tool_call"), z.literal("agentbay_live"), z.literal("workspace_draft"), z.literal("status"), z.literal("info"), z.literal("error"), z.literal("done"), z.literal("onboarded"), z.literal("trigger_notification")]), z.string());
 export type ChatEventType = z.infer<typeof ChatEventTypeSchema>;
 
+export const AttachmentRefSchema = z.looseObject({ ["name"]: z.string(), ["path"]: z.string() });
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+export const ChatMessageEntrySchema = z.looseObject({ ["attachments"]: z.array(AttachmentRefSchema).optional(), ["client_submission_id"]: z.union([z.string(), z.null()]).optional(), ["content"]: z.string(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["entry_id"]: z.string(), ["message_id"]: z.string(), ["participant_id"]: z.string().optional(), ["role"]: z.string(), ["sender_name"]: z.string().optional(), ["thinking"]: z.string().optional(), ["toolArgs"]: JsonOutputValueSchema.optional(), ["toolName"]: z.string().optional(), ["toolResult"]: z.string().optional(), ["toolStatus"]: z.string().optional(), ["toolThinking"]: z.string().optional() });
+export type ChatMessageEntry = z.infer<typeof ChatMessageEntrySchema>;
+
+export const ChatMessagePageSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(ChatMessageEntrySchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ChatMessagePage = z.infer<typeof ChatMessagePageSchema>;
+
 export const ChatRejectionReasonValues = ["quota_exceeded","agent_expired","no_company_model","enqueue_failed","guest_config_failed","invalid_submission_id","submission_conflict","invalid_attachments","openclaw_update_required","openclaw_update_in_progress"] as const;
 export const ChatRejectionReason = { QUOTA_EXCEEDED: "quota_exceeded", AGENT_EXPIRED: "agent_expired", NO_COMPANY_MODEL: "no_company_model", ENQUEUE_FAILED: "enqueue_failed", GUEST_CONFIG_FAILED: "guest_config_failed", INVALID_SUBMISSION_ID: "invalid_submission_id", SUBMISSION_CONFLICT: "submission_conflict", INVALID_ATTACHMENTS: "invalid_attachments", OPENCLAW_UPDATE_REQUIRED: "openclaw_update_required", OPENCLAW_UPDATE_IN_PROGRESS: "openclaw_update_in_progress" } as const;
 export const ChatRejectionReasonSchema = z.intersection(z.union([z.literal("quota_exceeded"), z.literal("agent_expired"), z.literal("no_company_model"), z.literal("enqueue_failed"), z.literal("guest_config_failed"), z.literal("invalid_submission_id"), z.literal("submission_conflict"), z.literal("invalid_attachments"), z.literal("openclaw_update_required"), z.literal("openclaw_update_in_progress")]), z.string());
@@ -386,6 +395,9 @@ export type ControlEnvironment = z.infer<typeof ControlEnvironmentSchema>;
 
 export const ConversationMessageResponseSchema = z.looseObject({ ["content"]: z.string(), ["created_at"]: z.union([z.string(), z.null()]), ["id"]: z.string(), ["role"]: z.string(), ["sender_name"]: z.union([z.string(), z.null()]).optional() });
 export type ConversationMessageResponse = z.infer<typeof ConversationMessageResponseSchema>;
+
+export const CreateSessionInSchema = z.looseObject({ ["title"]: z.union([z.string(), z.null()]).optional() });
+export type CreateSessionIn = z.infer<typeof CreateSessionInSchema>;
 
 export const CurrentUrlRequestSchema = z.looseObject({ ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type CurrentUrlRequest = z.infer<typeof CurrentUrlRequestSchema>;
@@ -665,6 +677,9 @@ export type OwnershipTransferRequest = z.infer<typeof OwnershipTransferRequestSc
 export const OwnershipTransferResponseSchema = z.looseObject({ ["cancelled_deletion_request_ids"]: z.array(z.string()), ["transferred"]: z.array(z.string()) });
 export type OwnershipTransferResponse = z.infer<typeof OwnershipTransferResponseSchema>;
 
+export const PatchSessionInSchema = z.looseObject({ ["title"]: z.string() });
+export type PatchSessionIn = z.infer<typeof PatchSessionInSchema>;
+
 export const PeriodOutSchema = z.looseObject({ ["end"]: z.string(), ["is_current"]: z.boolean(), ["label"]: z.string(), ["start"]: z.string() });
 export type PeriodOut = z.infer<typeof PeriodOutSchema>;
 
@@ -787,6 +802,12 @@ export type SearchAnalyticsTrendingQuery = z.infer<typeof SearchAnalyticsTrendin
 
 export const SelectedNotificationsRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
 export type SelectedNotificationsRequest = z.infer<typeof SelectedNotificationsRequestSchema>;
+
+export const SessionOutSchema = z.looseObject({ ["agent_id"]: z.string(), ["created_at"]: z.string(), ["group_name"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.string(), ["is_group"]: z.boolean().optional(), ["is_primary"]: z.boolean().optional(), ["last_message_at"]: z.union([z.string(), z.null()]).optional(), ["message_count"]: z.number().refine(Number.isInteger).optional(), ["participant_type"]: z.string().optional(), ["peer_agent_id"]: z.union([z.string(), z.null()]).optional(), ["peer_agent_name"]: z.union([z.string(), z.null()]).optional(), ["source_channel"]: z.string().optional(), ["title"]: z.string(), ["unread_count"]: z.number().refine(Number.isInteger).optional(), ["user_id"]: z.string(), ["username"]: z.union([z.string(), z.null()]).optional() });
+export type SessionOut = z.infer<typeof SessionOutSchema>;
+
+export const SessionPageOutSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(SessionOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type SessionPageOut = z.infer<typeof SessionPageOutSchema>;
 
 export const SlackChannelPayloadSchema = z.looseObject({ ["bot_token"]: z.string().optional(), ["signing_secret"]: z.string().optional() });
 export type SlackChannelPayload = z.infer<typeof SlackChannelPayloadSchema>;
