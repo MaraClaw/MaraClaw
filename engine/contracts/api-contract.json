@@ -28408,6 +28408,73 @@
         ]
       }
     },
+    "/api/company-admissions/transfers/mine/page": {
+      "get": {
+        "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f6d696e652f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferReviewPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mine Page",
+        "tags": [
+          "company-admissions"
+        ]
+      }
+    },
     "/api/company-admissions/transfers/review": {
       "get": {
         "operationId": "get_2f6170692f636f6d70616e792d61646d697373696f6e732f7472616e73666572732f726576696577",

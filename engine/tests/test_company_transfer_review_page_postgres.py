@@ -57,6 +57,7 @@ async def _insert(
     *,
     choice: str = "paid",
     status: str = "payment_review",
+    applicant: UUID | None = None,
 ) -> None:
     await connection.execute(
         "INSERT INTO company_transfer_requests (id, applicant_user_id, source_tenant_id, target_tenant_id, choice, "
@@ -65,7 +66,7 @@ async def _insert(
         "%(consent)s, %(created_at)s)",
         {
             "id": UUID(int=number),
-            "applicant": UUID(int=10_000 + number),
+            "applicant": applicant or UUID(int=10_000 + number),
             "source": SOURCE,
             "target": TARGET,
             "choice": choice,
@@ -162,3 +163,20 @@ async def test_recent_view_includes_every_paid_status_and_excludes_free(
     await _insert(database, 9, STAMP + timedelta(seconds=9), choice="free", status="admission_created")
     assert await _walk(client, {"view": "recent"}) == [[4, 3, 2, 1]]
     assert await _walk(client, {"view": "pending"}) == [[1]]
+
+
+async def test_member_pages_use_applicant_keyset_for_free_and_paid_ties(
+    client: httpx.AsyncClient, database: DbConnection
+) -> None:
+    for number, choice, status in ((1, "paid", "rejected"), (2, "free", "admission_created"), (3, "paid", "withdrawn")):
+        await _insert(database, number, STAMP, choice=choice, status=status, applicant=UUID(int=1))
+    await _insert(database, 4, STAMP)
+    path = "/api/company-admissions/transfers/mine/page"
+    first = TransferReviewPage.model_validate_json((await client.get(path, params={"limit": 2})).content)
+    assert [item.id.int for item in first.items] == [3, 2]
+    assert first.next_cursor is not None
+    second = TransferReviewPage.model_validate_json(
+        (await client.get(path, params={"limit": 2, "cursor": first.next_cursor})).content
+    )
+    assert [item.id.int for item in second.items] == [1]
+    assert second.next_cursor is None

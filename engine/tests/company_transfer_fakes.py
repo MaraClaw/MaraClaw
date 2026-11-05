@@ -54,6 +54,17 @@ class TransferStore:
     async def for_admission(self, admission_id: UUID) -> CompanyTransferRecord | None:
         return next((row for row in self.rows.values() if row.admission_request_id == admission_id), None)
 
+    async def list_member_page(
+        self, applicant_id: UUID, *, limit: int, before: tuple[datetime, UUID] | None = None
+    ) -> list[CompanyTransferRecord]:
+        rows = [
+            row
+            for row in self.rows.values()
+            if row.applicant_user_id == applicant_id and (before is None or (row.created_at, row.id) < before)
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+        return rows[: limit + 1]
+
     async def list_review_page(
         self, view: TransferReviewView, *, limit: int, before: tuple[datetime, UUID] | None = None
     ) -> list[CompanyTransferRecord]:

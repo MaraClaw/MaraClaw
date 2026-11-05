@@ -7,7 +7,7 @@ from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.records.company_transfer import TransferReviewView
 from app.records.user import UserRecord
 from app.schemas.company_transfer import PaymentDecision, TransferQuote, TransferReviewPage, TransferSummary
-from app.services.company_transfer_cursor import TransferReviewCursor
+from app.services.company_transfer_cursor import TransferMemberCursor, TransferReviewCursor
 from app.services.company_transfer_guards import quote as transfer_quote
 from app.services.company_transfer_review import decide_payment, require_payment_reviewer, withdraw_transfer
 
@@ -24,6 +24,24 @@ async def mine(
     limit: int = Query(50, ge=1, le=100), user: UserRecord = Depends(get_current_user)
 ) -> list[TransferSummary]:
     return [TransferSummary.model_validate(row) for row in await transfers.list_requests(user.id, limit)]
+
+
+@router.get("/transfers/mine/page", response_model=TransferReviewPage)
+async def mine_page(
+    limit: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    user: UserRecord = Depends(get_current_user),
+) -> TransferReviewPage:
+    position = TransferMemberCursor.decode(cursor) if cursor is not None else None
+    rows = await transfers.list_member_page(
+        user.id, limit=limit, before=(position.created_at, position.id) if position is not None else None
+    )
+    items = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        next_cursor = TransferMemberCursor(version=1, scope="member", created_at=last.created_at, id=last.id).encode()
+    return TransferReviewPage(items=[TransferSummary.model_validate(row) for row in items], next_cursor=next_cursor)
 
 
 @router.get("/transfers/review", response_model=list[TransferSummary])

@@ -1,5 +1,6 @@
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from json import dumps
 from uuid import UUID, uuid4
@@ -195,3 +196,54 @@ async def test_cursor_issued_for_one_view_is_rejected_for_the_other(
     # Then only the bound view accepts it.
     assert cross.status_code == 400
     assert same.status_code == 200
+
+
+async def test_member_pages_include_all_choices_and_only_authenticated_applicant(
+    transfer_fixture: TransferFixture, app: FastAPI, client: AsyncClient
+) -> None:
+    app.dependency_overrides[get_current_user] = lambda: transfer_fixture.applicant
+    for number, choice, status in ((1, "paid", "rejected"), (2, "free", "admission_created"), (3, "paid", "withdrawn")):
+        row_id = seed(transfer_fixture, number, STAMP, choice=choice, status=status)
+        transfer_fixture.transfers.rows[row_id] = replace(
+            transfer_fixture.transfers.rows[row_id], applicant_user_id=transfer_fixture.applicant.id
+        )
+    seed(transfer_fixture, 4, STAMP)
+    path = "/api/company-admissions/transfers/mine/page"
+    first = TransferReviewPage.model_validate_json((await client.get(path, params={"limit": 2})).content)
+    assert [item.id.int for item in first.items] == [3, 2]
+    assert first.next_cursor is not None
+    second = TransferReviewPage.model_validate_json(
+        (await client.get(path, params={"limit": 2, "cursor": first.next_cursor})).content
+    )
+    assert [item.id.int for item in second.items] == [1]
+    assert second.next_cursor is None
+    app.dependency_overrides[get_current_user] = lambda: transfer_fixture.reviewer
+    other = await client.get(path, params={"cursor": first.next_cursor})
+    assert other.json() == {"items": [], "next_cursor": None}
+
+
+async def test_member_and_review_cursors_are_isolated(transfer_fixture: TransferFixture, client: AsyncClient) -> None:
+    for number in (1, 2):
+        row_id = seed(transfer_fixture, number, STAMP)
+        transfer_fixture.transfers.rows[row_id] = replace(
+            transfer_fixture.transfers.rows[row_id], applicant_user_id=transfer_fixture.reviewer.id
+        )
+    member_path = "/api/company-admissions/transfers/mine/page"
+    member = (await client.get(member_path, params={"limit": 1})).json()["next_cursor"]
+    review = (await client.get(PAGE_PATH, params={"limit": 1})).json()["next_cursor"]
+    wrong_version = (
+        urlsafe_b64encode(
+            dumps({"version": 2, "scope": "member", "created_at": STAMP.isoformat(), "id": str(uuid4())}).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    for path, cursor in (
+        (member_path, review),
+        (PAGE_PATH, member),
+        (member_path, "%%%"),
+        (member_path, wrong_version),
+    ):
+        response = await client.get(path, params={"cursor": cursor})
+        assert response.status_code == 400
+        assert response.json() == {"detail": "Invalid cursor"}

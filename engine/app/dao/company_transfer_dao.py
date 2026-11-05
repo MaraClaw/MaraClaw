@@ -46,6 +46,23 @@ class CompanyTransferDAO(BaseDAO[CompanyTransferRecord]):
             )
             return [self.record_factory(row) for row in rows]
 
+    async def list_member_page(
+        self, applicant_id: UUID, *, limit: int, before: tuple[datetime, UUID] | None = None
+    ) -> list[CompanyTransferRecord]:
+        params: dict[str, object] = {"applicant_id": applicant_id, "limit": limit + 1}
+        predicate = "applicant_user_id=%(applicant_id)s"
+        if before is not None:
+            predicate += " AND (created_at,id) < (%(created_at)s,%(request_id)s)"
+            params.update(created_at=before[0], request_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT * FROM company_transfer_requests WHERE "
+                + predicate
+                + " ORDER BY created_at DESC,id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [self.record_factory(row) for row in rows]
+
     async def list_review_page(
         self, view: TransferReviewView, *, limit: int, before: tuple[datetime, UUID] | None = None
     ) -> list[CompanyTransferRecord]:
