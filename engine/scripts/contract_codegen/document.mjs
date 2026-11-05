@@ -44,11 +44,17 @@ function publicSymbol(name, location) {
   return name;
 }
 
+export function isPrimitiveEnum(schema) {
+  return Array.isArray(schema.enum) && schema.enum.length > 0 &&
+    (schema.enum.every(value => typeof value === "string") ||
+      schema.enum.every(value => typeof value === "number" && Number.isFinite(value)));
+}
+
 export function enumMemberNames(schema, location) {
   if (!Object.hasOwn(schema, "x-enum-varnames")) return undefined;
   const names = strings(schema["x-enum-varnames"], `${location}.x-enum-varnames`);
-  if (!Array.isArray(schema.enum) || schema.enum.length === 0 || schema.enum.some(value => typeof value !== "string")) {
-    throw new ContractError(location, "enum member metadata requires a nonempty string enum");
+  if (!isPrimitiveEnum(schema)) {
+    throw new ContractError(location, "enum member metadata requires a nonempty string or numeric enum");
   }
   if (names.length !== schema.enum.length) throw new ContractError(location, "enum member count differs from enum values");
   if (names.some(name => !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name))) {
