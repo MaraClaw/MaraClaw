@@ -62,7 +62,11 @@ export function UserDetailPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <UserStat label="Agents" value={person.agents_count} />
             <UserStat label="Messages used" value={person.quota_messages_used} />
-            <UserStat label="Agent quota" value={person.quota_max_agents} />
+            <UserStat
+              label="Agent quota"
+              value={person.effective_max_agents === undefined ? person.quota_max_agents : person.effective_max_agents}
+              nullLabel="Unlimited"
+            />
           </div>
 
           <Card>
@@ -122,12 +126,20 @@ export function UserDetailPage() {
   )
 }
 
-function UserStat({ label, value }: { label: string; value: number | undefined }) {
+function UserStat({
+  label,
+  value,
+  nullLabel = '—',
+}: {
+  label: string
+  value: number | null | undefined
+  nullLabel?: string
+}) {
   return (
     <div className="rounded-xl border border-border bg-card px-3.5 py-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 font-display text-xl font-semibold tabular-nums">
-        {value == null ? '—' : value.toLocaleString()}
+        {value === undefined ? '—' : value === null ? nullLabel : value.toLocaleString()}
       </p>
     </div>
   )

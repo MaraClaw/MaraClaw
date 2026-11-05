@@ -65,6 +65,10 @@ export function canReviewAdmissions(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && user.is_genesis === true
 }
 
+export function canReviewOrganizationAdmissions(user: UserOut | null | undefined): boolean {
+  return user?.role === 'platform_admin' && user.is_genesis === true && user.is_active === true
+}
+
 export function canReviewAgentDeletions(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active
 }

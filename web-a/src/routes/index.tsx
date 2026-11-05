@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 
 import { AdminShell } from '@/components/layout/admin-shell'
 import { useAuth } from '@/hooks/use-auth'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
@@ -27,6 +27,7 @@ const UsersPage = lazy(() => import('@/pages/users').then((module) => ({ default
 const NotificationsPage = lazy(() => import('@/pages/notifications').then((module) => ({ default: module.NotificationsPage })))
 const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) => ({ default: module.AdminAuditPage })))
 const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
+const OrganizationAdmissionsPage = lazy(() => import('@/pages/organization-admissions').then((module) => ({ default: module.OrganizationAdmissionsPage })))
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
 const TransferPaymentsPage = lazy(() => import('@/pages/transfer-payments').then((module) => ({ default: module.TransferPaymentsPage })))
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
@@ -46,6 +47,11 @@ function InvitationsRoute() {
 function AdmissionReviewRoute() {
   const { user } = useAuth()
   return canReviewAdmissions(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
+function OrganizationAdmissionReviewRoute() {
+  const { user } = useAuth()
+  return canReviewOrganizationAdmissions(user) ? <Outlet /> : <Navigate to="/" replace />
 }
 
 function AgentDeletionReviewRoute() {
@@ -79,6 +85,9 @@ export function AppRouter() {
               <Route element={<AdmissionReviewRoute />}>
                 <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
                 <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />
+              </Route>
+              <Route element={<OrganizationAdmissionReviewRoute />}>
+                <Route path="organization-admissions" element={<OrganizationAdmissionsPage />} />
               </Route>
               <Route element={<BroadcastRoute />}>
                 <Route path="broadcast" element={<BroadcastPage />} />
