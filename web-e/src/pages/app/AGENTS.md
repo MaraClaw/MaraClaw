@@ -24,10 +24,10 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/agents` | `agents-list.tsx` | workspace-api |
 | `/app/agents/new` | `agent-new.tsx` | workspace-api; Private defaults to `user`, Company-wide to `company`, Department to `custom` + one `department_ids` entry in the creation POST. Options use `org-departments-api`; creator manages, department members use. Always OpenClaw |
 | `/app/agents/:agentId` | `AgentLayout` | GET `/api/agents/:id`; outlet `{ agent: AgentOut }` — most tabs must **not** refetch |
-| `…/chat` (+ `:sessionId`) | `agent-chat.tsx` | `useChatHistory` cursor-paged history (`chat-history-query`) with `HistoryControl` and `useChatScroll`, plus `connectAgentChat` WS; session list and uploads still via workspace-api |
+| `…/chat` (+ `:sessionId`) | `agent-chat.tsx` | `useChatHistory` cursor-paged history (`chat-history-query`) with `HistoryControl` and `useChatScroll`, plus `connectAgentChat` WS; the session list is an infinite query keyed `['sessions', agentId, scope]` (`all` for the creator, else `mine`) behind `SessionList`; a URL-opened session absent from loaded pages resolves via `getSession`; uploads via workspace-api |
 | `…/activity` | `agent-activity.tsx` | activity-api cursor pages with an action-type filter (infinite query, no cache retention). Manage-only: the tab is hidden without `manage` access and the page refuses `use`; a 403 evicts cached summaries and downgrades the cached access level |
 | `…/files` `skills` `tools` `tasks` `schedules` `channels` `relationships` `permissions` `settings` | `agent-*.tsx` | workspace-api facade; `settings` also uses lifecycle, setup and expiry hooks |
-| `…/control` | `agent-control.tsx` | control-api lock/screenshot/click/type/drag/keys; env `browser`\|`computer`\|`code` |
+| `…/control` | `agent-control.tsx` | control-api lock/screenshot/click/type/drag/keys; env `browser`\|`computer`\|`code`; its own `['sessions', agentId, 'control', 'mine']` first page, filtered by `isWritableSession`, never chat's cache |
 | `…/credentials` | `agent-credentials.tsx` | control-api vault + gogcli; **manage** only |
 | `…/pages` | `agent-pages.tsx` | control-api publish `.html` → `/p/{id}` |
 | `…/playwright` | `agent-playwright.tsx` | workspace-api `agentbay_browser_*` + `.crabbox` |
@@ -44,7 +44,7 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 - Permissions tab department grants: `components/agent-department-access.tsx` + `lib/agent-departments-api.ts` (query `['permission-departments', agentId]`). Custom list only; level is `use`, not `manage`. Saving Private or Whole company clears them. Admins create the departments on web-a Users.
 - Directory org departments: `components/org-departments.tsx` + `org-department-card.tsx`, cache key remains `['local-departments']`. Members read `/api/departments/options`; only `org_admin` can rename here. Rename refreshes department names and the `permissions` / `permission-departments` prefixes. Creation and membership stay in web-a Users; never use the privileged `GET /api/departments` for members.
 - Forms: most tabs are useState + sonner, not RHF. Motion wrappers are marketing-only.
-- Query keys invented in pages (`['agent', id]`, `['sessions', agent.id]`, `['plaza', …]`) — keep consistent when sharing.
+- Query keys invented in pages (`['agent', id]`, `['sessions', agent.id, scope]`, `['plaza', …]`) — keep consistent when sharing. Chat and Take Control deliberately do not share a sessions key (`lib/chat-sessions-query.ts`).
 
 ## ANTI-PATTERNS
 

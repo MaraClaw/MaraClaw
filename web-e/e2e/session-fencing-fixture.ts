@@ -137,7 +137,12 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         await route.fulfill({ json: lifecycleReady })
         return
       case `/api/agents/${delayedAgent.id}/sessions`:
-        await route.fulfill({ json: request.method() === 'POST' ? delayedSession : [delayedSession] })
+        expect(request.method()).toBe('POST')
+        await route.fulfill({ json: delayedSession })
+        return
+      case `/api/agents/${delayedAgent.id}/sessions/page`:
+        expect(request.method()).toBe('GET')
+        await route.fulfill({ json: { items: [delayedSession], next_cursor: null, has_more: false } })
         return
       case `/api/agents/${delayedAgent.id}`:
         await route.fulfill({ json: delayedAgent })

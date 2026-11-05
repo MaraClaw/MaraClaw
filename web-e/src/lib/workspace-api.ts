@@ -54,10 +54,6 @@ export type SkillRow = {
   description?: string
 }
 
-export async function listSessions(agentId: string, scope = 'mine'): Promise<ChatSession[]> {
-  return apiRequest(`/api/agents/${agentId}/sessions?scope=${scope}`)
-}
-
 export async function createSession(agentId: string, title?: string): Promise<ChatSession> {
   return apiRequest(`/api/agents/${agentId}/sessions`, { method: 'POST', body: { title } })
 }

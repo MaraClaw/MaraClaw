@@ -15,6 +15,7 @@ Scope: message bodies, attachment dialogs, native download controls, local previ
 - `markdown.tsx`: `ChatMarkdown`, limited escaped markup rendering.
 - `message-content.tsx`: `ChatMessageContent`, message text and attachment-card composition.
 - `office-viewer.ts`: `createOfficeViewer` and `NavigableOfficeViewer`, uniform Office adapter.
+- `session-list.tsx`: `SessionList`, a collapsed `Other conversations` navigation at the top of the scrolling thread (never a header or sidebar: the chat panel must keep filling the workspace). It lists loaded sessions as links (shared first, then `username` or title) and offers Load older conversations; it renders nothing when only the shared session exists and no further page does. Data comes from the paged sessions query in `agent-chat.tsx`.
 - `skill-mention-input.tsx`: native composer and installed-skill picker; accent chips are an aria-hidden, noninteractive background mirror, never a second editor.
 
 ## Invariants

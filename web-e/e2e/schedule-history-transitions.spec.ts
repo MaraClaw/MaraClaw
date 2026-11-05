@@ -79,7 +79,7 @@ test('agent navigation resets the selected schedule and its accumulated history'
   await page.route('**/api/agents/', (route) => route.fulfill({ json: [originalAgent, secondAgent] }))
   await page.route(`**/api/agents/${secondAgent.id}`, (route) => route.fulfill({ json: secondAgent }))
   await page.route(`**/api/agents/${secondAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
-  await page.route(`**/api/agents/${secondAgent.id}/sessions*`, (route) => route.fulfill({ json: [] }))
+  await page.route(`**/api/agents/${secondAgent.id}/sessions/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }))
   await page.route(`**/api/agents/${secondAgent.id}/schedules/`, (route) => route.fulfill({ json: [savedSchedule] }))
   await page.route(`**/api/agents/${secondAgent.id}/schedules/${savedSchedule.id}/history/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null } }))
   await page.route(`**${historyPath}*`, (route) => route.fulfill({ json: { items: [historyRun('original-agent-only')], next_cursor: 'older' } }))

@@ -16,7 +16,9 @@ import {
   controlType,
   controlUnlock,
 } from '@/lib/control-api'
-import { createSession, listSessions, type AgentOut } from '@/lib/workspace-api'
+import { listSessionsPage } from '@/lib/chat-sessions-api'
+import { controlSessionsKey } from '@/lib/chat-sessions-query'
+import { createSession, type AgentOut } from '@/lib/workspace-api'
 import { controlSessionId, isWritableSession } from '@/lib/chat/sessions'
 import { useControlLease } from './use-control-lease'
 import { ControlCaptureFields } from './control-capture-fields'
@@ -25,13 +27,18 @@ export function AgentControlPage() {
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const [params, setParams] = useSearchParams()
-  const sessions = useQuery({ queryKey: ['sessions', agent.id], queryFn: () => listSessions(agent.id, 'mine') })
+  // The first page of the member's own sessions leads with the shared one and holds every session Take Control can drive.
+  const sessions = useQuery({
+    queryKey: controlSessionsKey(agent.id),
+    queryFn: ({ signal }) => listSessionsPage(agent.id, 'mine', { owner: scope.owner, signal }),
+  })
+  const loadedSessions = sessions.data?.items ?? []
   const sharedSession = useQuery({
     queryKey: ['shared-session', agent.id], queryFn: () => createSession(agent.id),
-    enabled: sessions.isSuccess && !sessions.data.some((session) => session.source_channel === 'shared'),
+    enabled: sessions.isSuccess && !loadedSessions.some((session) => session.source_channel === 'shared'),
   })
   const [selectedSessionId, setSessionId] = useState(params.get('session') ?? '')
-  const availableSessions = (sessions.data ?? []).filter(isWritableSession)
+  const availableSessions = loadedSessions.filter(isWritableSession)
   if (sharedSession.data && !availableSessions.some((session) => session.id === sharedSession.data.id)) availableSessions.push(sharedSession.data)
   const sessionId = controlSessionId(availableSessions, selectedSessionId) ?? ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')

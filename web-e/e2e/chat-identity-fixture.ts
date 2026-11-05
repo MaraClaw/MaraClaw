@@ -27,9 +27,23 @@ export async function navigateChat(page: Page, path: string) {
   expect(await page.evaluate(() => document.documentElement.dataset.chatNavigation)).toBe(marker)
 }
 
+export type SessionRow = {
+  readonly id: string; readonly agent_id: string; readonly user_id: string; readonly title: string
+  readonly source_channel: string; readonly is_primary: boolean; readonly created_at: string
+  readonly last_message_at?: string; readonly message_count: number; readonly unread_count: number
+}
+export const sessionRow = (index: number, agent_id = originalAgent.id): SessionRow => ({
+  id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, agent_id, user_id: originalUser.id,
+  title: `Older thread ${index}`, source_channel: 'web', is_primary: false, created_at: '2029-06-01T00:00:00Z',
+  last_message_at: new Date(Date.UTC(2029, 5, 1) - index * 60_000).toISOString(), message_count: 1, unread_count: 0,
+})
+
 export async function prepareChat(page: Page, initial: readonly ChatMessage[] = []) {
   await prepareWorkspace(page)
   let history = initial
+  let sessionRows: readonly SessionRow[] | undefined
+  const sessionRequests: { readonly scope: string | null; readonly limit: string | null; readonly cursor: string | null }[] = []
+  const lookups: string[] = []
   let onboarded = originalAgent.onboarded_for_me
   let requests = 0
   let ensures = 0
@@ -64,13 +78,33 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       ensures++
       return route.fulfill({ json: shared })
     }
-    if (path.endsWith('/sessions')) return route.fulfill({ json: [{
+    const defaults: readonly SessionRow[] = [{
       id: archivedSession, agent_id: agent.id, user_id: originalUser.id, title: 'Archived private thread',
       source_channel: 'web', is_primary: true, created_at: '2031-01-01T00:00:00Z', message_count: 1, unread_count: 0,
-    }, shared, {
+    }, {
       id: secondSession, agent_id: agent.id, user_id: originalUser.id, title: 'Identity thread 2',
       source_channel: 'agent', created_at: '2030-01-01T00:00:00Z', message_count: 1, unread_count: 0,
-    }] })
+    }]
+    const rows = sessionRows ?? defaults
+    if (path.endsWith('/sessions/page')) {
+      // Keyset paging in the engine's shape: the shared row leads the first page only; cursors are opaque.
+      expect(route.request().method()).toBe('GET')
+      const params = new URL(route.request().url()).searchParams
+      sessionRequests.push({ scope: params.get('scope'), limit: params.get('limit'), cursor: params.get('cursor') })
+      const limit = Number(params.get('limit'))
+      const start = params.get('cursor') === null ? 0 : Number(params.get('cursor')?.replace('after-', ''))
+      const end = Math.min(rows.length, start + limit)
+      return route.fulfill({ json: {
+        items: [...(start === 0 ? [shared] : []), ...rows.slice(start, end)],
+        next_cursor: end < rows.length ? `after-${end}` : null, has_more: end < rows.length,
+      } })
+    }
+    const lookup = /\/sessions\/([^/]+)$/.exec(path)
+    if (lookup?.[1] && route.request().method() === 'GET') {
+      lookups.push(lookup[1])
+      const found = [shared, ...rows].find((row) => row.id === lookup[1])
+      return found ? route.fulfill({ json: found }) : route.fulfill({ status: 404, json: { detail: 'Session not found' } })
+    }
     if (path.endsWith('/messages/page')) {
       const params = new URL(route.request().url()).searchParams
       expect(route.request().method()).toBe('GET')
@@ -112,7 +146,8 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     route.send(JSON.stringify({ type: 'connected', session_id: url.searchParams.get('session_id') }))
   })
   return {
-    sockets, tickets, requests: () => requests, ensures: () => ensures,
+    sockets, tickets, sessionRequests, lookups, requests: () => requests, ensures: () => ensures,
+    setSessions: (rows: readonly SessionRow[]) => { sessionRows = rows },
     holdNextTicket: () => {
       const gate = { requested: Promise.withResolvers<void>(), response: Promise.withResolvers<number>(), finished: Promise.withResolvers<void>() }
       delayedTicket = gate
