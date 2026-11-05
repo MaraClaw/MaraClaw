@@ -1,9 +1,14 @@
+import time
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
+import anyio
 import pytest
 from tests.test_background_llm import background_case, tool_response
 
 from app.dao.agent_dao import agent_dao
+from app.records.task import TaskClaim
+from app.services import task_lease
 from app.services.llm import caller
 from app.services.llm.background_guard import BackgroundCallOutcome, ScheduleLeaseLostError
 from test_finish_protocol import _finish_response
@@ -191,4 +196,48 @@ async def test_background_rechecks_ownership_after_daily_charge(monkeypatch):
 
     # Then: the charged request is never dispatched by the stale owner.
     assert state.client.messages_seen == []
+    assert state.client.closed
+
+
+@pytest.mark.parametrize("phase", ["quota", "provider"])
+async def test_task_lease_database_revocation_stops_dispatch(monkeypatch, phase):
+    # Given: a real task lease guard whose local window is open while the database still owns the row.
+    state = background_case(monkeypatch, [tool_response(), _finish_response("done")])
+    owned = True
+
+    async def renew(_claim, *, lease_seconds):
+        return owned
+
+    monkeypatch.setattr(task_lease.task_dao, "renew", renew)
+    guard = task_lease.TaskLeaseGuard(TaskClaim(uuid4(), uuid4()))
+    await guard.renew_within(anyio.current_time() + 60, time.time() + 60)
+
+    async def revoke_during(*_args, **_kwargs):
+        nonlocal owned
+        owned = False
+
+    if phase == "quota":
+
+        async def charge(_agent_id):
+            await revoke_during()
+            return state.agent
+
+        monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+    else:
+        complete = state.client.complete
+
+        async def revoking_complete(**kwargs):
+            await revoke_during()
+            return await complete(**kwargs)
+
+        monkeypatch.setattr(state.client, "complete", revoking_complete)
+
+    # When: only the database row is revoked while quota admission or the provider call is awaited.
+    with pytest.raises(task_lease.TaskLeaseLostError):
+        await caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=guard)
+
+    # Then: no model call starts after revocation, and no tool runs on a response from a revoked owner.
+    assert len(state.client.messages_seen) == (0 if phase == "quota" else 1)
+    assert state.executed == []
+    assert state.usage == []
     assert state.client.closed

@@ -107,7 +107,7 @@ class BackgroundToolLoop:
                 except QuotaExceeded:
                     await flush_usage()
                     raise
-                self.ensure_held()
+                await self.confirm()
                 try:
                     response = await client.complete(
                         messages=api_messages,

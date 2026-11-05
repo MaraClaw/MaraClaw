@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar, final
+from enum import StrEnum
+from typing import Any, ClassVar, final, override
 from uuid import UUID, uuid4
 
 from app.core.domain.tasks import TaskStatus, TaskType
@@ -41,6 +42,8 @@ _LOG_COLUMNS = ("id", "task_id", "content", "created_at")
 
 # The lease clock is the database's, so engine processes with skewed clocks agree on expiry.
 _LEASE_UNTIL = "clock_timestamp() + make_interval(secs => %(lease_seconds)s::float8)"
+
+_CLAIM_COLUMNS = ("claim_token", "lease_expires_at")
 
 # Settling is fenced on the claim token and writes its log entry in the same statement.
 _SETTLE_DONE = """
@@ -148,6 +151,34 @@ class TaskDAO(BaseDAO[TaskRecord]):
                 {"agent_id": agent_id, "pattern": f"%{title}%"},
             )
             return TaskRecord.from_row(row) if row is not None else None
+
+    @override
+    async def update(self, *, db_obj: TaskRecord, obj_in: Mapping[str, object]) -> TaskRecord:
+        """Write the given columns; a changed status revokes the live claim in that same statement.
+
+        Metadata-only edits and a status equal to the stored one leave the claim alone, so the run
+        and its settle (fenced on the token) stay valid. The comparison reads the row, not ``db_obj``.
+        """
+        data = {k: v for k, v in obj_in.items() if k in self.columns and k not in (self.pk, *_CLAIM_COLUMNS)}
+        if not data:
+            return db_obj
+        params: dict[str, object] = {self.pk: db_obj.id}
+        assignments: list[str] = []
+        for column, value in data.items():
+            params[column] = value.value if isinstance(value, StrEnum) else value
+            assignments.append(f"{column} = %({column})s")
+        if "status" in data:
+            assignments.extend(
+                f"{column} = CASE WHEN status IS DISTINCT FROM %(status)s THEN NULL ELSE {column} END"
+                for column in _CLAIM_COLUMNS
+            )
+        assignments.append("updated_at = now()")
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"UPDATE tasks SET {', '.join(assignments)} WHERE id = %(id)s RETURNING {self._select_list()}",
+                params,
+            )
+        return TaskRecord.from_row(row) if row is not None else db_obj
 
     async def claim(self, task_id: UUID, agent_id: UUID, *, lease_seconds: float) -> TaskClaim | None:
         """Atomically start a run: ``doing`` plus a fresh owner token, unless an unexpired lease exists.

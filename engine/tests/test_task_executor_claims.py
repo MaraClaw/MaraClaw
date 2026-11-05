@@ -9,6 +9,7 @@ from app.core.domain.tasks import TaskStatus, TaskType
 from app.records.agent import AgentRecord
 from app.records.task import TaskClaim, TaskRecord
 from app.services import activity_logger, agent_context, llm, task_executor, task_lease
+from app.services.llm.background_guard import BackgroundCallOutcome
 
 
 @pytest.fixture
@@ -17,7 +18,14 @@ def logs() -> list[str]:
 
 
 @pytest.fixture
-def run(monkeypatch: pytest.MonkeyPatch, logs: list[str]) -> TaskRecord:
+def activity(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    logged = AsyncMock()
+    monkeypatch.setattr(activity_logger, "log_activity", logged)
+    return logged
+
+
+@pytest.fixture
+def run(monkeypatch: pytest.MonkeyPatch, logs: list[str], activity: AsyncMock) -> TaskRecord:
     task = TaskRecord(id=uuid4(), agent_id=uuid4(), title="Report", created_by=uuid4())
 
     async def claim(*_args: object, **_kwargs: object) -> TaskClaim | None:
@@ -48,8 +56,9 @@ def run(monkeypatch: pytest.MonkeyPatch, logs: list[str]) -> TaskRecord:
         task_executor.agent_dao, "get", AsyncMock(return_value=AgentRecord(task.agent_id, "Alex", task.created_by))
     )
     monkeypatch.setattr(agent_context, "build_agent_context", AsyncMock(return_value=("static", "dynamic")))
-    monkeypatch.setattr(llm, "call_agent_llm_with_tools", AsyncMock(return_value="Report delivered"))
-    monkeypatch.setattr(activity_logger, "log_activity", AsyncMock())
+    monkeypatch.setattr(
+        llm, "call_agent_llm_with_tools", AsyncMock(return_value=BackgroundCallOutcome("success", "Report delivered"))
+    )
     return task
 
 
@@ -124,13 +133,13 @@ async def test_renewal_failure_cancels_active_llm_and_releases(
     async def clock(_seconds: float) -> None:
         await started.wait()
 
-    async def call(**_kwargs: object) -> str:
+    async def call(**_kwargs: object) -> BackgroundCallOutcome:
         started.set()
         try:
             await asyncio.Event().wait()
         finally:
             cancelled.set()
-        return "unreachable"
+        return BackgroundCallOutcome("success", "unreachable")
 
     monkeypatch.setattr(task_lease.anyio, "sleep", clock)
     monkeypatch.setattr(task_executor.task_dao, "renew", AsyncMock(side_effect=[True, renew_failure]))
@@ -140,6 +149,42 @@ async def test_renewal_failure_cancels_active_llm_and_releases(
     assert run.status == TaskStatus.PENDING
     assert run.claim_token is None
     assert "renewal failed" in logs[-1]
+
+
+@pytest.mark.parametrize("task_type", [TaskType.TODO, TaskType.SUPERVISION])
+async def test_failure_outcome_returns_to_pending_with_the_reason_logged(
+    run: TaskRecord, monkeypatch: pytest.MonkeyPatch, task_type: TaskType, logs: list[str], activity: AsyncMock
+) -> None:
+    run.type = task_type
+    outcome = BackgroundCallOutcome("failure", "[Error] provider down")
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", AsyncMock(return_value=outcome))
+    await task_executor.execute_task(run.id, run.agent_id)
+    assert run.status == TaskStatus.PENDING
+    assert run.claim_token is None
+    assert run.completed_at is None
+    assert logs == ["❌ [Error] provider down"]
+    activity.assert_not_awaited()
+
+
+async def test_revoked_run_stops_at_its_next_checkpoint_without_settle_log_or_activity(
+    run: TaskRecord, monkeypatch: pytest.MonkeyPatch, logs: list[str], activity: AsyncMock
+) -> None:
+    rounds: list[str] = []
+
+    async def call(*, guard: task_lease.TaskLeaseGuard, **_kwargs: object) -> BackgroundCallOutcome:
+        await guard.confirm()
+        rounds.append("first")
+        run.status, run.claim_token = TaskStatus.DONE, None  # a PATCH or update_status revoked the run
+        await guard.confirm()
+        rounds.append("second")
+        return BackgroundCallOutcome("success", "late")
+
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", call)
+    await task_executor.execute_task(run.id, run.agent_id)
+    assert rounds == ["first"]
+    assert run.status == TaskStatus.DONE
+    assert logs == []
+    activity.assert_not_awaited()
 
 
 async def test_recovery_does_not_execute_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,6 +222,6 @@ async def test_delayed_renewal_response_does_not_extend_the_confirmed_deadline(m
     monkeypatch.setattr(task_lease.anyio, "sleep", advance)
     monkeypatch.setattr(task_lease.task_dao, "renew", renew)
     with pytest.raises(task_lease.TaskLeaseLostError):
-        await task_lease.run_under_lease(TaskClaim(uuid4(), uuid4()), work)
+        await task_lease.run_under_lease(TaskClaim(uuid4(), uuid4()), lambda _guard: work())
     assert cancelled.is_set()
     assert renewals == 2

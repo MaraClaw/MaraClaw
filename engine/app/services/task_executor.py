@@ -15,7 +15,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.task_dao import task_dao
 from app.records.task import TaskClaim
 from app.services.agent_setup_lock import drain_on_cancel
-from app.services.task_lease import TaskLeaseLostError, claim_task, run_under_lease
+from app.services.task_lease import TaskLeaseGuard, TaskLeaseLostError, claim_task, run_under_lease
 
 
 class _RunFailureError(Exception):
@@ -55,7 +55,7 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim
     logger.info(f"[TaskExec] Starting task {task_id} for agent {agent_id}")
 
     try:
-        outcome = await run_under_lease(claim, lambda: _run(claim, agent_id))
+        outcome = await run_under_lease(claim, lambda guard: _run(claim, agent_id, guard))
         await _complete(claim, agent_id, outcome)
     except TaskLeaseLostError:
         logger.warning(f"[TaskExec] Task {task_id} lost its lease; its run was cancelled")
@@ -74,7 +74,7 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim
         return
 
 
-async def _run(claim: TaskClaim, agent_id: uuid.UUID) -> _Outcome:
+async def _run(claim: TaskClaim, agent_id: uuid.UUID, guard: TaskLeaseGuard) -> _Outcome:
     task_id = claim.task_id
     task = await task_dao.get_for_agent(task_id, agent_id)
     if not task:
@@ -137,16 +137,19 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
 
     logger.info(f"[TaskExec] Calling LLM with tools for task: {task_title}")
 
-    reply = await call_agent_llm_with_tools(
+    result = await call_agent_llm_with_tools(
         agent_id=agent_id,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         max_rounds=50,
         session_id=str(task_id),
+        guard=guard,
     )
+    if result.status == "failure":
+        raise _RunFailureError(result.content)
 
-    logger.info(f"[TaskExec] LLM reply: {reply[:80]}")
-    return _Outcome(title=task_title, task_type=task_type, reply=reply)
+    logger.info(f"[TaskExec] LLM reply: {result.content[:80]}")
+    return _Outcome(title=task_title, task_type=task_type, reply=result.content)
 
 
 async def _complete(claim: TaskClaim, agent_id: uuid.UUID, outcome: _Outcome) -> None:

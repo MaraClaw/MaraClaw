@@ -7,6 +7,7 @@ from app.api.background_tasks import schedule_background_task
 from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.logging import logger
 from app.dao.task_dao import task_dao
+from app.db.session import connection_ctx
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str
 
 
@@ -56,25 +57,30 @@ async def _manage_tasks(
             priority = TaskPriority(args.get("priority", "medium"))
         except ValueError:
             return "Invalid task type or priority"
-        task = await task_dao.create(
-            obj_in={
-                "agent_id": agent_id,
-                "title": title,
-                "description": args.get("description"),
-                "type": task_type,
-                "priority": priority,
-                "created_by": user_id,
-                "status": TaskStatus.PENDING,
-                "supervision_target_name": args.get("supervision_target_name"),
-                "supervision_channel": args.get("supervision_channel", "feishu"),
-                "remind_schedule": args.get("remind_schedule"),
-            }
-        )
+        from app.services.task_lease import claim_task
+
+        # Claimed with the row in one transaction, so a start that never runs is recovered through the lease.
+        async with connection_ctx():
+            task = await task_dao.create(
+                obj_in={
+                    "agent_id": agent_id,
+                    "title": title,
+                    "description": args.get("description"),
+                    "type": task_type,
+                    "priority": priority,
+                    "created_by": user_id,
+                    "status": TaskStatus.PENDING,
+                    "supervision_target_name": args.get("supervision_target_name"),
+                    "supervision_channel": args.get("supervision_channel", "feishu"),
+                    "remind_schedule": args.get("remind_schedule"),
+                }
+            )
+            claim = await claim_task(task.id, agent_id) if task_type == "todo" else None
 
         if task_type == "todo":
             from app.services.task_executor import execute_task
 
-            schedule_background_task(execute_task(task.id, agent_id), f"execute task {task.id}")
+            schedule_background_task(execute_task(task.id, agent_id, claim), f"execute task {task.id}")
             await _sync_tasks_to_file(agent_id, ws)
             return f"✅ Task created: {title} - auto-execution started"
         # Supervision task - reminder engine will pick it up

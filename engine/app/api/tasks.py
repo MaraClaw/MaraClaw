@@ -70,12 +70,15 @@ async def create_task(
 
     task_out = await _enrich_task_out(task)
 
-    # Todo execution starts after the request commits.
+    # Claimed in the request transaction, so a start that never runs is recovered through the lease.
+    # The run itself starts after the request commits.
     if data.type == "todo":
         from app.api.background_tasks import schedule_background_task
         from app.services.task_executor import execute_task
+        from app.services.task_lease import claim_task
 
-        schedule_background_task(execute_task(task.id, agent_id), "execute task")
+        claim = await claim_task(task.id, agent_id)
+        schedule_background_task(execute_task(task.id, agent_id, claim), "execute task")
 
     return task_out
 

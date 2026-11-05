@@ -32,6 +32,11 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
             await raw.execute("""
                 CREATE TABLE tasks (
                     id uuid PRIMARY KEY, agent_id uuid NOT NULL, status text NOT NULL DEFAULT 'pending',
+                    title text NOT NULL DEFAULT 'Task', description text, type text NOT NULL DEFAULT 'todo',
+                    priority text NOT NULL DEFAULT 'medium', assignee text NOT NULL DEFAULT 'self',
+                    created_by uuid NOT NULL DEFAULT gen_random_uuid(), due_date timestamptz,
+                    supervision_target_user_id uuid, supervision_target_name text, supervision_channel text,
+                    remind_schedule text, created_at timestamptz DEFAULT now(),
                     claim_token uuid, lease_expires_at timestamptz, completed_at timestamptz,
                     updated_at timestamptz DEFAULT now(),
                     CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL))
@@ -147,3 +152,36 @@ async def test_expired_owner_cannot_renew_or_publish_success(database: DbConnect
     assert not await dao.complete(claim, status=TaskStatus.DONE, log="late todo")
     assert not await dao.complete(claim, status=TaskStatus.PENDING, log="late supervision")
     assert await database.fetchval("SELECT count(*) FROM task_logs") == 0
+
+
+async def test_status_change_revokes_the_claim_in_the_update_that_writes_it(database: DbConnection):
+    dao = TaskDAO()
+    claim = await dao.claim(TASK, AGENT, lease_seconds=120)
+    assert claim is not None
+    task = await dao.get_for_agent(TASK, AGENT)
+    assert task is not None
+
+    updated = await dao.update(db_obj=task, obj_in={"status": TaskStatus.DONE})
+
+    assert (updated.status, updated.claim_token, updated.lease_expires_at) == (TaskStatus.DONE, None, None)
+    assert not await dao.renew(claim, lease_seconds=120)
+    assert not await dao.complete(claim, status=TaskStatus.DONE, log="late result")
+    assert not await dao.release(claim, log="late failure")
+    assert await database.fetchval("SELECT count(*) FROM task_logs") == 0
+
+
+async def test_metadata_edit_and_same_status_submission_keep_the_claim(database: DbConnection):
+    del database
+    dao = TaskDAO()
+    claim = await dao.claim(TASK, AGENT, lease_seconds=120)
+    assert claim is not None
+    task = await dao.get_for_agent(TASK, AGENT)
+    assert task is not None
+
+    renamed = await dao.update(db_obj=task, obj_in={"title": "Renamed", "priority": "high"})
+    resubmitted = await dao.update(db_obj=task, obj_in={"status": TaskStatus.DOING, "title": "Again"})
+
+    assert renamed.claim_token == claim.token
+    assert (resubmitted.status, resubmitted.claim_token) == (TaskStatus.DOING, claim.token)
+    assert await dao.renew(claim, lease_seconds=120)
+    assert await dao.complete(claim, status=TaskStatus.DONE, log="finished")
