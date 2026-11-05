@@ -11,11 +11,14 @@ from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.participant_dao import participant_dao
 from app.services.audit_logger import write_audit_log
+from app.services.openclaw_update_exclusion import guest_write_section
+from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.storage_runtime.facade import get_storage_backend
 from app.services.storage_runtime.utils import normalize_storage_key
 
 from .a2a_context import _build_a2a_context, _resolve_target_agent
 from .a2a_handlers import _a2a_handle_openclaw
+from .publish import _published_page_storage_key
 from .registry import ToolArguments
 
 
@@ -28,8 +31,10 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
     if not agent_name or not rel_path:
         return "❌ Please provide both agent_name and file_path"
 
+    source_key = _published_page_storage_key(from_agent_id, rel_path)
+    if source_key is None:
+        return "❌ Access denied: path is outside the workspace"
     storage = get_storage_backend()
-    source_key = normalize_storage_key(f"{from_agent_id}/{rel_path}")
     if not await storage.is_file(source_key):
         return f"❌ Source file not found: {rel_path}"
     source_entry = await storage.stat(source_key)
@@ -39,7 +44,10 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
     if file_size > max_file_size:
         size_mb = file_size / (1024 * 1024)
         return f"❌ File too large ({size_mb:.1f} MB). Maximum allowed is 50 MB."
-    source_bytes = await storage.read_bytes(source_key)
+    try:
+        source_bytes = await storage.read_bytes_bounded(source_key, max_file_size)
+    except StorageReadLimitExceededError:
+        return "❌ File too large. Maximum allowed is 50 MB."
     source_name = Path(rel_path).name
 
     try:
@@ -91,35 +99,38 @@ async def _send_file_to_agent(from_agent_id: uuid.UUID, args: ToolArguments) -> 
 
         ts = datetime.now(UTC)
         stamp = ts.strftime("%Y%m%d_%H%M%S_%f")
-        delivered_name = source_name
-        target_rel_path = f"workspace/inbox/files/{delivered_name}"
-        target_key = normalize_storage_key(f"{target_id}/{target_rel_path}")
-        while await storage.exists(target_key):
-            delivered_name = f"{stamp}_{source_name}"
-            target_rel_path = f"workspace/inbox/files/{delivered_name}"
-            target_key = normalize_storage_key(f"{target_id}/{target_rel_path}")
+        async with guest_write_section(target_id):
+            for attempt in range(10):
+                delivered_name = source_name if attempt == 0 else f"{stamp}_{attempt}_{source_name}"
+                target_rel_path = f"workspace/inbox/files/{delivered_name}"
+                target_key = normalize_storage_key(f"{target_id}/{target_rel_path}")
+                result = await storage.create_bytes_if_absent(target_key, source_bytes)
+                if result.ok:
+                    break
+                if not result.conflict:
+                    return "❌ Agent file send error: could not create recipient file"
+            else:
+                return "❌ Agent file send error: recipient file names are occupied"
 
-        await storage.write_bytes(target_key, source_bytes)
-
-        sender_short = str(from_agent_id)[:8]
-        note_rel_path = f"workspace/inbox/{stamp}_{sender_short}_file_delivery.md"
-        note_key = normalize_storage_key(f"{target_id}/{note_rel_path}")
-        note_lines = [
-            f"# File delivery from {source_agent_name}",
-            "",
-            f"- Time (UTC): {ts.isoformat()}",
-            f"- Sender: {source_agent_name}",
-            f"- Source path: {rel_path}",
-            f"- Delivered file: {target_rel_path}",
-            "",
-        ]
-        if delivery_note:
-            note_lines.append("## Note")
-            note_lines.append(delivery_note)
-            note_lines.append("")
-        note_lines.append("## Action")
-        note_lines.append(f'- Read the file via `read_file(path="{target_rel_path}")`')
-        await storage.write_text(note_key, "\n".join(note_lines), encoding="utf-8")
+            sender_short = str(from_agent_id)[:8]
+            note_rel_path = f"workspace/inbox/{stamp}_{sender_short}_file_delivery.md"
+            note_key = normalize_storage_key(f"{target_id}/{note_rel_path}")
+            note_lines = [
+                f"# File delivery from {source_agent_name}",
+                "",
+                f"- Time (UTC): {ts.isoformat()}",
+                f"- Sender: {source_agent_name}",
+                f"- Source path: {rel_path}",
+                f"- Delivered file: {target_rel_path}",
+                "",
+            ]
+            if delivery_note:
+                note_lines.append("## Note")
+                note_lines.append(delivery_note)
+                note_lines.append("")
+            note_lines.append("## Action")
+            note_lines.append(f'- Read the file via `read_file(path="{target_rel_path}")`')
+            await storage.write_text(note_key, "\n".join(note_lines), encoding="utf-8")
 
         await write_audit_log(
             action="collaboration:file_send",

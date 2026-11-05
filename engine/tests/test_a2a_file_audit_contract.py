@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from types import SimpleNamespace
@@ -13,7 +14,12 @@ from app.core.json_types import JsonObject
 from app.records.agent import AgentRecord
 from app.services import activity_logger, audit_logger
 from app.services.agent_tool_exec import a2a_send
-from app.services.storage_runtime.base import StorageBackend, StorageEntry
+from app.services.storage_runtime.base import (
+    ConditionalWriteResult,
+    StorageBackend,
+    StorageEntry,
+    StorageReadLimitExceededError,
+)
 
 
 class MemoryStorage(StorageBackend):
@@ -31,6 +37,22 @@ class MemoryStorage(StorageBackend):
     @override
     async def read_bytes(self, key: str) -> bytes:
         return self.files[key]
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+        data = self.files[key]
+        if len(data) > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, len(data))
+        return data
+
+    @override
+    async def create_bytes_if_absent(
+        self, key: str, data: bytes, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        if key in self.files:
+            return ConditionalWriteResult(ok=False, conflict=True)
+        self.files[key] = data
+        return ConditionalWriteResult(ok=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -67,6 +89,12 @@ def delivery(monkeypatch: pytest.MonkeyPatch) -> Delivery:
     activity = AsyncMock()
     chat_message = AsyncMock()
     monkeypatch.setattr(a2a_send, "get_storage_backend", lambda: storage)
+
+    @asynccontextmanager
+    async def allowed(_agent_id):
+        yield
+
+    monkeypatch.setattr(a2a_send, "guest_write_section", allowed)
     monkeypatch.setattr(a2a_send.agent_dao, "get", AsyncMock(return_value=source))
     monkeypatch.setattr(a2a_send.agent_dao, "list_by_names_for_tenant", AsyncMock(return_value=[target]))
     monkeypatch.setattr(
@@ -87,6 +115,58 @@ def delivery(monkeypatch: pytest.MonkeyPatch) -> Delivery:
     monkeypatch.setattr(a2a_send.chat_message_dao, "insert_message", chat_message)
     monkeypatch.setattr(a2a_send.chat_session_dao, "update", AsyncMock())
     return Delivery(source, target, storage, activity, chat_message)
+
+
+@pytest.mark.parametrize("path", ["../other/memory/MEMORY.md", "/workspace/report.bin", "workspace/../report.bin"])
+async def test_delivery_rejects_unsafe_source_before_storage(
+    delivery: Delivery, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    def forbidden():
+        pytest.fail("unsafe paths must not access storage")
+
+    monkeypatch.setattr(a2a_send, "get_storage_backend", forbidden)
+    result = await a2a_send._send_file_to_agent(
+        delivery.source.id, {"agent_name": delivery.target.name, "file_path": path}
+    )
+    assert result.startswith("❌")
+
+
+async def test_delivery_refuses_growth_after_stat(delivery: Delivery, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def overflow(_key: str, max_bytes: int) -> bytes:
+        raise StorageReadLimitExceededError(max_bytes, max_bytes + 1)
+
+    monkeypatch.setattr(delivery.storage, "read_bytes_bounded", overflow)
+    result = await a2a_send._send_file_to_agent(
+        delivery.source.id, {"agent_name": delivery.target.name, "file_path": "workspace/report.bin"}
+    )
+    assert "too large" in result
+    assert all(not key.startswith(str(delivery.target.id)) for key in delivery.storage.files)
+
+
+async def test_delivery_keeps_existing_file_on_collision(delivery: Delivery, monkeypatch: pytest.MonkeyPatch) -> None:
+    key = f"{delivery.target.id}/workspace/inbox/files/report.bin"
+    delivery.storage.files[key] = b"existing"
+    monkeypatch.setattr(a2a_send, "write_audit_log", AsyncMock())
+    result = await a2a_send._send_file_to_agent(
+        delivery.source.id, {"agent_name": delivery.target.name, "file_path": "workspace/report.bin"}
+    )
+    assert result.startswith("✅")
+    assert delivery.storage.files[key] == b"existing"
+    assert sum(value == b"\x00canonical delivery\xff" for value in delivery.storage.files.values()) == 2
+
+
+async def test_delivery_gate_refusal_delivers_nothing(delivery: Delivery, monkeypatch: pytest.MonkeyPatch) -> None:
+    @asynccontextmanager
+    async def denied(_agent_id):
+        raise RuntimeError("recipient unavailable")
+        yield
+
+    monkeypatch.setattr(a2a_send, "guest_write_section", denied)
+    result = await a2a_send._send_file_to_agent(
+        delivery.source.id, {"agent_name": delivery.target.name, "file_path": "workspace/report.bin"}
+    )
+    assert result.startswith("❌")
+    assert all(not key.startswith(str(delivery.target.id)) for key in delivery.storage.files)
 
 
 async def test_memory_storage_preserves_bytes_and_text() -> None:
@@ -168,3 +248,13 @@ def test_file_delivery_depends_on_central_audit_writer_only() -> None:
     # Then: an unreachable compatibility writer is still a forbidden ownership seam.
     assert dependencies["write_audit_log"] is audit_logger.write_audit_log
     assert "audit_log_dao" not in dependencies
+
+
+@pytest.mark.parametrize("path", ["../other/memory/MEMORY.md", "/etc/passwd", "C:\\secret"])
+async def test_file_delivery_rejects_invalid_source_before_storage(delivery: Delivery, monkeypatch, path: str):
+    def forbidden():
+        pytest.fail("invalid path reached storage")
+
+    monkeypatch.setattr(a2a_send, "get_storage_backend", forbidden)
+    result = await a2a_send._send_file_to_agent(delivery.source.id, {"agent_name": "Receiver", "file_path": path})
+    assert "❌" in result
