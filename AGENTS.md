@@ -1,7 +1,7 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-11-01
-**Commit:** a591022e
+**Generated:** 2026-11-05
+**Commit:** 0056d92a
 **Branch:** 2026November
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  

@@ -13,6 +13,12 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - `openclaw_updates.py` is mounted with `API_PREFIX` (`/admin/openclaw-updates` platform-admin publish, `/openclaw-updates/{id}`, `/agents/{id}/openclaw-update`). Guest-visible file/upload mutators carry `Depends(guest_write_exclusion)` (409 during an active run); `OpenClawUpdateGateError` maps to 423/409 in `main.py`. Contract: `../../docs/openclaw-updates.md`.
 - `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/departments`, and singular `/department`).
 
+## Sessions, triggers, broadcasts
+
+- `chat_sessions.py` is audited (`AUDITED_HTTP_MODULES`). `GET /{id}/sessions/page` (`scope` `mine|all`, `limit` 1..200 default 50, opaque versioned cursor bound to agent + scope) keyset-pages via `chat_session_dao.list_page`; the shared session leads page one only, outside `limit`. Bad/foreign cursor → 400, never 500; `all` without `can_view_all_agent_chat_sessions` → 403. `GET /{id}/sessions/{session_id}` is the authorized single lookup (history access rule). Register `/sessions/page` before `/{session_id}`. The unpaged `GET /sessions` remains for compatibility; `web-e` no longer calls it.
+- `triggers.py` `PATCH`: strips `token`/`secret`/underscore keys, writes config only via `agent_trigger_dao.merge_user_config` (SQL merge), never a whole-config update. See `../services/trigger_runtime/AGENTS.md`.
+- `notification.py` broadcast: optional `Idempotency-Key` (1..200, blank → 422, same as `schedules.py` manual runs). Replay lookup precedes SMTP and audience reads; the key is claimed (`broadcast_submission_dao.claim`, `ON CONFLICT DO NOTHING`) inside the fan-out `connection_ctx`, so rollback leaves no receipt and concurrent retries serialize on the unique key. Same key, different `title`/`body`/`send_email` → 409 (422 stays validation). `_broadcast_tenant` stays the first gate.
+
 ## Org departments
 
 - `GET/POST /departments`: `org_admin` is own-tenant; `platform_admin` must pass `tenant_id`. Duplicate name → 409. Create locks in the router and does not bump ACL.
