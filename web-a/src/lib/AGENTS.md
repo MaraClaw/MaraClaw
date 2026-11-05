@@ -11,7 +11,7 @@ Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 | File | Role |
 |------|------|
 | `api.ts` | `getApiBaseUrl` / `apiUrl`. Empty `VITE_API_BASE_URL` = same-origin. Hostname `0.0.0.0` → `''`. |
-| `http.ts` | `apiRequest` (= `createApiRequest(adminSession, fetch)`), `ApiError`, `formatApiDetail`. Optional Zod-like `schema` parses the body. 204 → `undefined`. See 401 policy below. |
+| `http.ts` | `apiRequest` (= `createApiRequest(adminSession, fetch)`), `ApiError`, `formatApiDetail`. Optional Zod-like `schema` parses the body; optional `idempotencyKey` → `Idempotency-Key` header. 204 → `undefined`. See 401 policy below. |
 | `auth-storage.ts` | `maraclaw-admin-token` only, plus `listenForTokenChanges` (cross-tab `storage` events). |
 | `auth-api.ts` | login, `/me`, forgot/reset/change. Public calls pass `token: null`. Reads accept `signal`; new reads should too. |
 | `admin-session.ts` | The shared `adminSession` policy over `auth-storage.ts`. |
@@ -33,7 +33,7 @@ Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 | `search-analytics-api.ts` | PA summary / timeseries / orgs / trending / export. |
 | `admin-audit-api.ts`, `admin-audit-window.ts` | Validated audit logs: PA `/api/admin/audit-logs`, OA `/api/users/admin-audit-logs`, each with a `/page` cursor variant (`start_at`/`end_at` window, `target_type`). OA scope omits tenant and actor filters. |
 | `admissions-api.ts` | Review pagination, detail and decisions via `/api/company-admissions`; Zod DTOs. |
-| `broadcast-api.ts` | Validated broadcast payload/result for `POST /api/notifications/broadcast`, plus email status and cancel. |
+| `broadcast-api.ts` | Validated broadcast payload/result for `POST /api/notifications/broadcast`, plus email status and cancel. `sendBroadcast(draft, idempotencyKey)` requires a key; `reviewBroadcast` reuses an unconfirmed attempt's key only for an identical draft, `attemptAfterFailure` drops it on 409, `broadcastFailureMessage` maps 409 to the key-reused copy. |
 | `notification-links.ts` | Allowlist internal admin notification destinations (deletion links need an exact UUID); unsafe links return `null`. |
 | `notifications-api.ts` | Current-user notification pages (`view` is `active` or `archived`), unread count, single/all/selected read, unread, archive and restore. |
 | `openclaw-update-storage.ts` | Admin-scoped `sessionStorage` for validated OpenClaw update requests. |

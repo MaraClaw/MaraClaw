@@ -6,7 +6,10 @@ import { z } from 'zod'
 import { broadcastEmailStatusOptions } from '../src/hooks/broadcast-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { ownQueryClient } from '../src/hooks/session-query-client.ts'
-import { broadcastIdSchema, cancelBroadcastEmail, fetchBroadcastEmailStatus, type BroadcastEmailStatus, type BroadcastId } from '../src/lib/broadcast-api.ts'
+import {
+  attemptAfterFailure, broadcastFailureMessage, broadcastIdSchema, cancelBroadcastEmail, fetchBroadcastEmailStatus, reviewBroadcast,
+  type BroadcastEmailStatus, type BroadcastId,
+} from '../src/lib/broadcast-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { createFixture } from './helpers.ts'
@@ -164,3 +167,56 @@ for (const token of ['token-a', 'token-b']) for (const code of [200, 503]) {
     assert.deepEqual(callbacks, [])
   })
 }
+
+const reviewed = { title: 'Maintenance', body: 'Tonight', send_email: true }
+let minted = 0
+const mint = () => `key-${++minted}`
+
+test('a failed send keeps its key so the same reviewed draft retries idempotently', () => {
+  // Given a first review and a send that failed without a confirmed result
+  const first = reviewBroadcast(reviewed, null, mint)
+  const attempt = attemptAfterFailure(first, new TypeError('network'))
+  // When the operator reviews the identical draft again
+  const retry = reviewBroadcast({ ...reviewed }, attempt, mint)
+  // Then the key is reused
+  assert.equal(retry.idempotencyKey, first.idempotencyKey)
+  assert.deepEqual(retry.draft, reviewed)
+})
+
+for (const change of [{ title: 'Maintenance 2' }, { body: 'Tomorrow' }, { send_email: false }]) {
+  test(`editing the draft (${Object.keys(change)[0]}) mints a new key`, () => {
+    // Given an unconfirmed attempt
+    const first = reviewBroadcast(reviewed, null, mint)
+    const attempt = attemptAfterFailure(first, new ApiError(503, 'unavailable'))
+    // When the draft changes
+    const next = reviewBroadcast({ ...reviewed, ...change }, attempt, mint)
+    // Then it is a new broadcast with a new key
+    assert.notEqual(next.idempotencyKey, first.idempotencyKey)
+  })
+}
+
+test('a confirmed send leaves nothing to retry, so the next review mints a new key', () => {
+  // Given a successful send clears the attempt
+  const first = reviewBroadcast(reviewed, null, mint)
+  // When the same text is composed again
+  const next = reviewBroadcast(reviewed, null, mint)
+  // Then it is a separate broadcast
+  assert.notEqual(next.idempotencyKey, first.idempotencyKey)
+})
+
+test('a 409 releases the key and explains that it belonged to a different broadcast', () => {
+  // Given the engine rejects the key as bound to another payload
+  const first = reviewBroadcast(reviewed, null, mint)
+  const conflict = new ApiError(409, 'Idempotency-Key was already used for a different broadcast')
+  // When the failure is handled
+  const attempt = attemptAfterFailure(first, conflict)
+  // Then the key is dropped and the operator sees the 409 explanation
+  assert.equal(attempt, null)
+  assert.match(broadcastFailureMessage(conflict), /already used for a different broadcast/)
+  assert.equal(reviewBroadcast(reviewed, attempt, mint).idempotencyKey === first.idempotencyKey, false)
+})
+
+test('other failures keep their message and unknown errors stay unconfirmed', () => {
+  assert.equal(broadcastFailureMessage(new ApiError(400, 'Organization SMTP is not configured.')), 'Organization SMTP is not configured.')
+  assert.equal(broadcastFailureMessage(new TypeError('network')), 'Could not confirm the broadcast result.')
+})

@@ -42,6 +42,7 @@ export type RequestOptions = {
   readonly body?: unknown
   readonly token?: string | null
   readonly signal?: AbortSignal
+  readonly idempotencyKey?: string
 }
 
 export type ResponseSchema<T> = {
@@ -68,6 +69,7 @@ export function createApiRequest(policy: SessionPolicy, transport: Transport) {
       ? (options.signal ? AbortSignal.any([owner.signal, options.signal]) : owner.signal)
       : options.signal
     if (token) headers.Authorization = `Bearer ${token}`
+    if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey
 
     let body: string | undefined
     if (options.body !== undefined) {
