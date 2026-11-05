@@ -621,6 +621,18 @@
             ],
             "title": "Display Name"
           },
+          "effective_max_agents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agents this account may own in its organization: the organization tier's cap when the organization was provisioned through an approved admission (quota_max_agents is then not applied), otherwise quota_max_agents, or null for an uncapped administrator.",
+            "title": "Effective Max Agents"
+          },
           "email": {
             "anyOf": [
               {
@@ -5170,6 +5182,14 @@
         "title": "CredentialCaptureReplace",
         "type": "object"
       },
+      "CredentialEmailStatus": {
+        "enum": [
+          "pending",
+          "sent",
+          "failed"
+        ],
+        "type": "string"
+      },
       "CurrentUrlRequest": {
         "description": "Request to get the current page URL from the browser session.",
         "properties": {
@@ -9476,6 +9496,7 @@
           "agent_deletion_resolved",
           "agent_ownership_transferred",
           "organization_welcome",
+          "organization_admission_pending",
           "system_alert",
           "system",
           "openclaw_update"
@@ -9497,6 +9518,7 @@
           "AGENT_DELETION_RESOLVED",
           "AGENT_OWNERSHIP_TRANSFERRED",
           "ORGANIZATION_WELCOME",
+          "ORGANIZATION_ADMISSION_PENDING",
           "SYSTEM_ALERT",
           "SYSTEM",
           "OPENCLAW_UPDATE"
@@ -10506,6 +10528,386 @@
         ],
         "title": "OrgUsersPageOut",
         "type": "object"
+      },
+      "OrganizationAdditionalAccountMonthlyUsd": {
+        "description": "Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live.",
+        "enum": [
+          12,
+          10,
+          8
+        ],
+        "title": "OrganizationAdditionalAccountMonthlyUsd",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationAdmissionAcknowledgment": {
+        "description": "Generic acknowledgment: identical for new and repeated requests, so it never discloses request state.",
+        "properties": {
+          "status": {
+            "const": "pending",
+            "default": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "OrganizationAdmissionAcknowledgment",
+        "type": "object"
+      },
+      "OrganizationAdmissionDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalAction"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "OrganizationAdmissionDecisionRequest",
+        "type": "object"
+      },
+      "OrganizationAdmissionItem": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_email_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Email Error"
+          },
+          "credential_email_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CredentialEmailStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/OrganizationPlan"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "id",
+          "organization_name",
+          "email",
+          "tier",
+          "plan",
+          "status",
+          "created_at",
+          "reviewed_at",
+          "reviewed_by",
+          "review_note",
+          "credential_email_status",
+          "credential_email_error"
+        ],
+        "title": "OrganizationAdmissionItem",
+        "type": "object"
+      },
+      "OrganizationAdmissionPage": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationAdmissionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "OrganizationAdmissionPage",
+        "type": "object"
+      },
+      "OrganizationAdmissionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "organization_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "organization_name",
+          "email",
+          "tier"
+        ],
+        "title": "OrganizationAdmissionRequest",
+        "type": "object"
+      },
+      "OrganizationAgentLimit": {
+        "description": "Ordinary agents one account (organization admins included) may own, per tier; the only place the numbers live.",
+        "enum": [
+          2,
+          5,
+          10
+        ],
+        "title": "OrganizationAgentLimit",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationCurrency": {
+        "description": "ISO currency codes supported by organization pricing plans.",
+        "enum": [
+          "USD"
+        ],
+        "title": "OrganizationCurrency",
+        "type": "string",
+        "x-enum-varnames": [
+          "USD"
+        ]
+      },
+      "OrganizationFileLimitBytes": {
+        "description": "Largest single managed file in bytes, per tier; the only place the numbers live.",
+        "enum": [
+          26214400,
+          52428800,
+          104857600
+        ],
+        "title": "OrganizationFileLimitBytes",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationMaxAccounts": {
+        "description": "Most human accounts (organization admin included) a tier quotes, per tier; the only place the numbers live.",
+        "enum": [
+          25,
+          75,
+          200
+        ],
+        "title": "OrganizationMaxAccounts",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationPlan": {
+        "additionalProperties": false,
+        "description": "Whole-USD monthly commercial terms. The human account count includes the org admin; model charges are separate.",
+        "properties": {
+          "additional_account_monthly_usd": {
+            "$ref": "#/components/schemas/OrganizationAdditionalAccountMonthlyUsd"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/OrganizationCurrency"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "included_accounts": {
+            "minimum": 1.0,
+            "title": "Included Accounts",
+            "type": "integer"
+          },
+          "max_accounts": {
+            "$ref": "#/components/schemas/OrganizationMaxAccounts"
+          },
+          "max_agents_per_account": {
+            "$ref": "#/components/schemas/OrganizationAgentLimit"
+          },
+          "max_file_size_bytes": {
+            "$ref": "#/components/schemas/OrganizationFileLimitBytes"
+          },
+          "monthly_price_usd": {
+            "minimum": 0.0,
+            "title": "Monthly Price Usd",
+            "type": "integer"
+          },
+          "name": {
+            "$ref": "#/components/schemas/OrganizationPlanName"
+          },
+          "storage_limit_bytes": {
+            "$ref": "#/components/schemas/OrganizationStorageLimitBytes"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "currency",
+          "monthly_price_usd",
+          "included_accounts",
+          "additional_account_monthly_usd",
+          "max_accounts",
+          "max_agents_per_account",
+          "storage_limit_bytes",
+          "max_file_size_bytes"
+        ],
+        "title": "OrganizationPlan",
+        "type": "object"
+      },
+      "OrganizationPlanId": {
+        "enum": [
+          "pro",
+          "max",
+          "ultra"
+        ],
+        "title": "OrganizationPlanId",
+        "type": "string",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationPlanName": {
+        "description": "Display names of the public organization tiers.",
+        "enum": [
+          "Pro",
+          "Max",
+          "Ultra"
+        ],
+        "title": "OrganizationPlanName",
+        "type": "string",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationPlansResponse": {
+        "properties": {
+          "plans": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationPlan"
+            },
+            "title": "Plans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plans"
+        ],
+        "title": "OrganizationPlansResponse",
+        "type": "object"
+      },
+      "OrganizationStorageLimitBytes": {
+        "description": "Logical bytes of current managed S3 objects one agent may hold, per tier; the only place the numbers live.",
+        "enum": [
+          1073741824,
+          5368709120,
+          10737418240
+        ],
+        "title": "OrganizationStorageLimitBytes",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
       },
       "OwnershipTransferRequest": {
         "additionalProperties": false,
@@ -15836,6 +16238,18 @@
             ],
             "title": "Display Name"
           },
+          "effective_max_agents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agents this account may own in its organization: the organization tier's cap when the organization was provisioned through an approved admission (quota_max_agents is then not applied), otherwise quota_max_agents, or null for an uncapped administrator.",
+            "title": "Effective Max Agents"
+          },
           "email": {
             "anyOf": [
               {
@@ -17249,6 +17663,182 @@
         "summary": "Publish Openclaw Update",
         "tags": [
           "openclaw-updates"
+        ]
+      }
+    },
+    "/api/admin/organization-admissions": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f6f7267616e697a6174696f6e2d61646d697373696f6e73",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ApprovalStatus",
+              "default": "pending"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAdmissionPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Admissions",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
+    "/api/admin/organization-admissions/{request_id}/decision": {
+      "post": {
+        "operationId": "post_2f6170692f61646d696e2f6f7267616e697a6174696f6e2d61646d697373696f6e732f7b726571756573745f69647d2f6465636973696f6e",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationAdmissionDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAdmissionItem"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Admission",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
+    "/api/admin/organization-admissions/{request_id}/retry-email": {
+      "post": {
+        "operationId": "post_2f6170692f61646d696e2f6f7267616e697a6174696f6e2d61646d697373696f6e732f7b726571756573745f69647d2f72657472792d656d61696c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAdmissionItem"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Admission Email",
+        "tags": [
+          "organization-admissions"
         ]
       }
     },
@@ -35122,6 +35712,68 @@
         ]
       }
     },
+    "/api/organization-admissions": {
+      "post": {
+        "operationId": "post_2f6170692f6f7267616e697a6174696f6e2d61646d697373696f6e73",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationAdmissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAdmissionAcknowledgment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Admission",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
+    "/api/organization-plans": {
+      "get": {
+        "operationId": "get_2f6170692f6f7267616e697a6174696f6e2d706c616e73",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationPlansResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Organization Plans",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
     "/api/pages/": {
       "post": {
         "description": "Publish an HTML workspace file as a public /p/{short_id} page.",
@@ -40282,6 +40934,20 @@
       "OrgAdminCreateResponse",
       "OrgAdminOut",
       "OrgUsersPageOut",
+      "OrganizationAdditionalAccountMonthlyUsd",
+      "OrganizationAdmissionAcknowledgment",
+      "OrganizationAdmissionDecisionRequest",
+      "OrganizationAdmissionItem",
+      "OrganizationAdmissionPage",
+      "OrganizationAdmissionRequest",
+      "OrganizationAgentLimit",
+      "OrganizationCurrency",
+      "OrganizationFileLimitBytes",
+      "OrganizationMaxAccounts",
+      "OrganizationPlanId",
+      "OrganizationPlanName",
+      "OrganizationPlansResponse",
+      "OrganizationStorageLimitBytes",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PatchSessionIn",
@@ -40461,6 +41127,7 @@
       "CredentialCapture",
       "CredentialCaptureCreate",
       "CredentialCaptureReplace",
+      "CredentialEmailStatus",
       "CurrentUrlRequest",
       "DelegateRequest",
       "DeletionAgent",
@@ -40559,6 +41226,21 @@
       "OrgAdminCreateResponse",
       "OrgAdminOut",
       "OrgUsersPageOut",
+      "OrganizationAdditionalAccountMonthlyUsd",
+      "OrganizationAdmissionAcknowledgment",
+      "OrganizationAdmissionDecisionRequest",
+      "OrganizationAdmissionItem",
+      "OrganizationAdmissionPage",
+      "OrganizationAdmissionRequest",
+      "OrganizationAgentLimit",
+      "OrganizationCurrency",
+      "OrganizationFileLimitBytes",
+      "OrganizationMaxAccounts",
+      "OrganizationPlan",
+      "OrganizationPlanId",
+      "OrganizationPlanName",
+      "OrganizationPlansResponse",
+      "OrganizationStorageLimitBytes",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PatchSessionIn",

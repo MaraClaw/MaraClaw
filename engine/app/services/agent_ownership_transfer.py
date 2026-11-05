@@ -20,9 +20,9 @@ from app.services.agent_deletion_resolution import cancel_pending_for_agents
 from app.services.company_admissions import fresh_user
 from app.services.company_transfer_fence import fence_agents
 from app.services.notification_service import send_notification
+from app.services.quota_guard import agent_capacity
 
 END_USER_ROLES = frozenset({"member", "agent_admin"})
-_QUOTA_EXEMPT_ROLES = frozenset({"platform_admin", "org_admin"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,14 +68,12 @@ def _check_parties(change: OwnershipChange, source: UserRecord, target: UserReco
 
 
 async def _check_quota(target: UserRecord, agents: list[AgentRecord]) -> None:
-    if target.role in _QUOTA_EXEMPT_ROLES:
-        return
+    capacity = await agent_capacity(target, target.tenant_id)
     incoming = sum(1 for agent in agents if not agent.is_expired)
-    current = await agent_dao.count_active_for_creator(target.id)
-    if current + incoming > target.quota_max_agents:
+    if capacity is not None and capacity.refuses(incoming):
         raise _conflict(
             "target_quota_exceeded",
-            f"Agent limit reached ({current}+{incoming}/{target.quota_max_agents}).",
+            f"Agent limit reached ({capacity.used}+{incoming}/{capacity.limit}).",
         )
 
 

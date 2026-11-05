@@ -343,7 +343,7 @@ async def test_creation_quota_is_checked_inside_creation_transaction(creation, m
     # Given a quota guard that observes the transaction protecting the insert.
     store, client = creation
 
-    async def quota(_user):
+    async def quota(_user, _tenant_id):
         assert store.in_transaction, "quota must be serialized with creation"
 
     monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", quota)

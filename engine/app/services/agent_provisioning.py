@@ -62,7 +62,7 @@ async def provision_agent(
     context: AgentProvisioning, data: AgentCreate, *, setup_pending: bool = False
 ) -> tuple[AgentRecord, str]:
     try:
-        await check_agent_creation_quota(context.actor)
+        await check_agent_creation_quota(context.actor, context.tenant_id)
     except QuotaExceeded as exc:
         raise HTTPException(403, exc.message) from exc
 

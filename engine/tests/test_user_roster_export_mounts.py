@@ -34,6 +34,7 @@ async def test_mounted_user_page_enters_crud_binding(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(main.app.dependency_overrides, get_current_user, lambda: actor)
     monkeypatch.setattr(users_api.user_dao, "list_for_tenant_page", AsyncMock(return_value=[]))
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creators", AsyncMock(return_value={}))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
         response = await client.get("/api/users/page")

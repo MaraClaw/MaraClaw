@@ -39,6 +39,8 @@ from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.onboarding_dao import user_tenant_onboarding_dao
 from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
+from app.dao.organization_admission_dao import organization_admission_dao
+from app.dao.organization_admission_email_dao import organization_admission_email_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.personal_burst_dao import personal_burst_dao
 from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
@@ -106,6 +108,8 @@ __all__ = [
     "okr_settings_dao",
     "org_department_dao",
     "org_member_dao",
+    "organization_admission_dao",
+    "organization_admission_email_dao",
     "participant_dao",
     "personal_burst_dao",
     "personal_burst_dispatch_dao",

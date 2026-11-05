@@ -326,6 +326,7 @@ async def test_users_list_quota_and_org_admin_surface(monkeypatch):
     member = _user(role="member", tenant_id=tenant_id)
     monkeypatch.setattr(users_api.user_dao, "list_for_tenant_ordered", AsyncMock(return_value=[member]))
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=1))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     listed = await users_api.list_users(current_user=org)
     assert listed[0].agents_count == 1
 
@@ -359,6 +360,7 @@ async def test_set_user_active_org_admin(monkeypatch):
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(side_effect=[member, deactivated]))
     monkeypatch.setattr(users_api, "set_end_user_active", AsyncMock(return_value=deactivated))
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     out = await users_api.set_user_active(member.id, users_api.UserActiveUpdate(is_active=False), org)
     assert out.is_active is False
 
@@ -388,6 +390,7 @@ async def test_get_user_detail_includes_agents(monkeypatch):
     monkeypatch.setattr(users_api.user_dao, "get_with_identity", AsyncMock(return_value=member))
     list_agents = AsyncMock(return_value=[agent])
     monkeypatch.setattr(users_api.agent_dao, "list_for_creator", list_agents)
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     detail = await users_api.get_user_detail(member.id, org)
     assert detail.id == member.id
     assert detail.agents_count == 1
@@ -429,6 +432,7 @@ async def test_set_user_active_platform_admin_cross_tenant(monkeypatch):
     toggle = AsyncMock(return_value=deactivated)
     monkeypatch.setattr(users_api, "set_end_user_active", toggle)
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     out = await users_api.set_user_active(member.id, users_api.UserActiveUpdate(is_active=False), pa)
     assert out.is_active is False
     toggle.assert_awaited_once()
@@ -454,6 +458,7 @@ async def test_list_users_org_admin_ignores_foreign_tenant_id(monkeypatch):
     listed = AsyncMock(return_value=[member])
     monkeypatch.setattr(users_api.user_dao, "list_for_tenant_ordered", listed)
     monkeypatch.setattr(users_api.agent_dao, "count_active_for_creator", AsyncMock(return_value=0))
+    monkeypatch.setattr(users_api, "tier_for_tenant", AsyncMock(return_value=None))
     rows = await users_api.list_users(tenant_id=str(uuid.uuid4()), current_user=org)
     assert len(rows) == 1
     listed.assert_awaited_once()

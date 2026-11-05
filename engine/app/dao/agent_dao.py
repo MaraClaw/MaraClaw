@@ -552,6 +552,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return int_from_row(value)
 
+    async def count_ordinary_for_creator(self, creator_id: UUID, tenant_id: UUID) -> int:
+        """Non-expired, non-system agents the creator owns in exactly ``tenant_id`` (any lifecycle status)."""
+        async with self.session() as db:
+            value = await db.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE creator_id = %(creator_id)s AND tenant_id = %(tenant_id)s "
+                "AND is_expired IS FALSE AND is_system IS FALSE",
+                {"creator_id": creator_id, "tenant_id": tenant_id},
+            )
+            return int_from_row(value)
+
     async def count_active_for_creators(self, creator_ids: Sequence[UUID]) -> dict[UUID, int]:
         if not creator_ids:
             return {}

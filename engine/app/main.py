@@ -19,6 +19,7 @@ from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
+from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 settings = get_settings()
 
@@ -42,6 +43,11 @@ async def public_base_url_not_configured(_request: Request, exc: PublicBaseUrlNo
 
 @app.exception_handler(OpenClawUpdateGateError)
 async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(StorageQuotaError)
+async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
@@ -104,6 +110,7 @@ from app.api.okr import router as okr_router
 from app.api.onboarding import router as onboarding_router
 from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
+from app.api.organization_admissions import router as organization_admissions_router
 from app.api.pages import public_router as pages_public_router, router as pages_router
 from app.api.plaza import router as plaza_router
 from app.api.relationships import router as relationships_router
@@ -152,6 +159,7 @@ app.include_router(activity_router, prefix=settings.API_PREFIX, dependencies=_CR
 app.include_router(messages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tenants_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(company_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(organization_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(schedules_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tools_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(files_upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

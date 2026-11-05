@@ -1,6 +1,6 @@
 """Audited HTTP owners and concrete non-route wire types (never copied values)."""
 
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -28,6 +28,16 @@ from app.core.notification_kinds import NotificationKind
 from app.records.agent_deletion_request import CancelReason, DeletionStatus
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.company_transfer import TransferChoice, TransferStatus
+from app.records.organization_plan import (
+    OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationAgentLimit,
+    OrganizationCurrency,
+    OrganizationFileLimitBytes,
+    OrganizationMaxAccounts,
+    OrganizationPlanId,
+    OrganizationPlanName,
+    OrganizationStorageLimitBytes,
+)
 from app.schemas.chat_wire import CHAT_SERVER_EVENT_ADAPTER, ChatEventType, ChatRejectionReason
 from app.schemas.schemas import ApprovalDecisionRequest
 
@@ -56,6 +66,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "okr",
         "onboarding",
         "organization",
+        "organization_admissions",
         "schedules",
         "tasks",
         "tools",
@@ -75,7 +86,7 @@ AUDITED_HTTP_MODULES = frozenset(
     )
 )
 
-ENUM_TYPES: tuple[type[StrEnum], ...] = (
+ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     ActivityAction,
     AgentAccessReason,
     AgentPermissionScope,
@@ -104,6 +115,14 @@ ENUM_TYPES: tuple[type[StrEnum], ...] = (
     AdmissionStatus,
     TransferChoice,
     TransferStatus,
+    OrganizationPlanId,
+    OrganizationPlanName,
+    OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationCurrency,
+    OrganizationMaxAccounts,
+    OrganizationAgentLimit,
+    OrganizationStorageLimitBytes,
+    OrganizationFileLimitBytes,
     ChatRejectionReason,
     ChatEventType,
 )

@@ -498,6 +498,81 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
 CREATE INDEX IF NOT EXISTS ix_company_admission_review
     ON company_admission_requests(target_tenant_id,status,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS organization_admission_requests (
+    id UUID PRIMARY KEY,
+    organization_name VARCHAR(200) CONSTRAINT ck_organization_admission_name
+        CHECK (organization_name = btrim(organization_name) AND organization_name <> ''),
+    email VARCHAR(320) NOT NULL CHECK (email = lower(btrim(email)) AND email <> ''),
+    tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
+    plan JSONB NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    review_note TEXT,
+    provisioned_at TIMESTAMPTZ,
+    provisioned_tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
+    provisioned_admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    CHECK ((status='pending' AND reviewed_at IS NULL AND reviewed_by IS NULL AND review_note IS NULL)
+        OR (status IN ('approved','rejected') AND reviewed_at IS NOT NULL)),
+    CONSTRAINT ck_organization_admission_provisioned CHECK (
+        (provisioned_at IS NULL OR status='approved')
+        AND ((provisioned_tenant_id IS NULL AND provisioned_admin_user_id IS NULL) OR provisioned_at IS NOT NULL)
+        AND (status<>'approved' OR organization_name IS NULL OR provisioned_at IS NOT NULL))
+);
+
+-- Explicit legacy upgrade: requests created before named provisioning lack these columns. One statement
+-- adds them with the same named checks as the fresh definition; rows are kept (name NULL, never
+-- provisioned) and reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'organization_admission_requests'
+			AND column_name = 'organization_name'
+	) THEN
+		ALTER TABLE organization_admission_requests
+			ADD COLUMN organization_name VARCHAR(200),
+			ADD COLUMN provisioned_at TIMESTAMPTZ,
+			ADD COLUMN provisioned_tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
+			ADD COLUMN provisioned_admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+			ADD CONSTRAINT ck_organization_admission_name
+				CHECK (organization_name = btrim(organization_name) AND organization_name <> ''),
+			ADD CONSTRAINT ck_organization_admission_provisioned CHECK (
+				(provisioned_at IS NULL OR status='approved')
+				AND ((provisioned_tenant_id IS NULL AND provisioned_admin_user_id IS NULL) OR provisioned_at IS NOT NULL)
+				AND (status<>'approved' OR organization_name IS NULL OR provisioned_at IS NOT NULL));
+	END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
+    ON organization_admission_requests(email) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS ix_organization_admission_status
+    ON organization_admission_requests(status,created_at DESC,id DESC);
+
+CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
+    request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
+    identity_id UUID NOT NULL,
+    to_email VARCHAR(320) NOT NULL,
+    credential_fingerprint CHAR(64) NOT NULL,
+    payload BYTEA,
+    message_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deliver_by TIMESTAMPTZ NOT NULL DEFAULT (now() + INTERVAL '72 hours'),
+    claim_token UUID,
+    lease_expires_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    settled_at TIMESTAMPTZ,
+    CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL)),
+    CHECK ((status = 'pending') = (settled_at IS NULL)),
+    CHECK (status <> 'pending' OR payload IS NOT NULL),
+    CHECK (status <> 'sent' OR payload IS NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_organization_admission_emails_due
+    ON organization_admission_credential_emails (available_at, request_id) WHERE status = 'pending';
+
 CREATE TABLE IF NOT EXISTS company_transfer_requests (
     id UUID PRIMARY KEY,
     applicant_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -723,6 +798,36 @@ CREATE TABLE IF NOT EXISTS agent_deletion_cleanup (
 
 CREATE INDEX IF NOT EXISTS ix_agent_deletion_cleanup_pending
 ON agent_deletion_cleanup(attempts,created_at,agent_id) WHERE phase <> 'completed';
+
+-- Managed S3 byte accounting (storage_runtime/AGENTS.md). No foreign keys: object accounting must survive agent,
+-- user and tenant deletion until the objects themselves are removed. The usage row is the per-agent serialization
+-- point; charged_bytes always equals the sum of GREATEST(committed_bytes, reserved_bytes) over the agent's objects.
+CREATE TABLE IF NOT EXISTS agent_storage_usage (
+    agent_id UUID PRIMARY KEY,
+    charged_bytes BIGINT NOT NULL DEFAULT 0 CHECK (charged_bytes >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A settled row holds only committed_bytes. A pending row (operation_id set) keeps its conservative charge until an
+-- exact outcome is observed: reserved_bytes is what an unconfirmed write may leave, expected_etag the MD5 that proves
+-- it landed, and outcome_unknown marks that the provider call has finished without a usable answer.
+CREATE TABLE IF NOT EXISTS agent_storage_objects (
+    agent_id UUID NOT NULL,
+    object_key TEXT NOT NULL,
+    committed_bytes BIGINT NOT NULL DEFAULT 0 CHECK (committed_bytes >= 0),
+    reserved_bytes BIGINT NOT NULL DEFAULT 0 CHECK (reserved_bytes >= 0),
+    operation_id UUID,
+    operation_kind TEXT CHECK (operation_kind IN ('write', 'delete')),
+    outcome_unknown BOOLEAN NOT NULL DEFAULT false,
+    expected_etag TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, object_key),
+    CHECK ((operation_id IS NULL) = (operation_kind IS NULL)),
+    CHECK (operation_id IS NOT NULL OR (reserved_bytes = 0 AND NOT outcome_unknown AND expected_etag IS NULL)),
+    CHECK (operation_kind IS DISTINCT FROM 'delete' OR reserved_bytes = 0)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_storage_objects_pending
+    ON agent_storage_objects(updated_at) WHERE operation_id IS NOT NULL;
 
 -- No foreign keys: cancelled start cleanup must survive agent, user and tenant deletion.
 CREATE TABLE IF NOT EXISTS agent_start_operations (
@@ -1728,6 +1833,20 @@ CREATE TABLE IF NOT EXISTS tasks (
 	FOREIGN KEY(created_by) REFERENCES users (id), 
 	FOREIGN KEY(supervision_target_user_id) REFERENCES users (id)
 );
+
+-- Explicit legacy upgrade: tasks created before durable leases lack both columns. One statement adds
+-- them with the check (matching the inline fresh definition) so rows are kept, unleased, and reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'tasks' AND column_name = 'claim_token'
+	) THEN
+		ALTER TABLE tasks
+			ADD COLUMN claim_token UUID,
+			ADD COLUMN lease_expires_at TIMESTAMP WITH TIME ZONE,
+			ADD CONSTRAINT tasks_check CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL));
+	END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_tasks_lease_expires_at ON tasks (lease_expires_at) WHERE claim_token IS NOT NULL;
 

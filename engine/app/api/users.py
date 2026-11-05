@@ -17,6 +17,7 @@ from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import UserPagePosition, user_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.channel_response_contracts import UserRoleResponse
@@ -31,6 +32,8 @@ from app.services.admin_provisioning import (
     set_end_user_active,
     set_peer_admin_active,
 )
+from app.services.organization_plans import tier_for_tenant
+from app.services.quota_guard import agent_limit_for_tier
 from app.services.tenant_provisioning import AdminEmailTakenError
 from app.services.user_roster_export import export_user_roster
 
@@ -72,6 +75,14 @@ class AdminUserSummary(BaseModel):
     quota_agent_ttl_hours: int
     # Computed
     agents_count: int = 0
+    effective_max_agents: int | None = Field(
+        default=None,
+        description=(
+            "Agents this account may own in its organization: the organization tier's cap when the organization "
+            "was provisioned through an approved admission (quota_max_agents is then not applied), otherwise "
+            "quota_max_agents, or null for an uncapped administrator."
+        ),
+    )
     # Source info
     created_at: str | None = None
     source: str = "registered"  # 'registered' | 'feishu' | 'dingtalk' | 'wecom' | etc.
@@ -101,7 +112,7 @@ class _UsersPageCursor(BaseModel):
     user_id: uuid.UUID
 
 
-def _user_out(u: UserRecord, agents_count: int = 0) -> AdminUserSummary:
+def _user_out(u: UserRecord, agents_count: int = 0, *, tier: OrganizationPlanId | None) -> AdminUserSummary:
     return AdminUserSummary(
         id=u.id,
         email=u.email or "",
@@ -116,6 +127,7 @@ def _user_out(u: UserRecord, agents_count: int = 0) -> AdminUserSummary:
         quota_max_agents=u.quota_max_agents,
         quota_agent_ttl_hours=u.quota_agent_ttl_hours,
         agents_count=agents_count,
+        effective_max_agents=agent_limit_for_tier(u, tier).limit,
         created_at=u.created_at.isoformat() if u.created_at else None,
         source=(u.registration_source or "registered"),
     )
@@ -145,10 +157,11 @@ async def list_users(
 
     users = await user_dao.list_for_tenant_ordered(tenant_uuid, include_identity=True)
 
+    tier = await tier_for_tenant(tenant_uuid)
     out: list[AdminUserSummary] = []
     for u in users:
         agents_count = await agent_dao.count_active_for_creator(u.id)
-        out.append(_user_out(u, agents_count=agents_count))
+        out.append(_user_out(u, agents_count=agents_count, tier=tier))
     return out
 
 
@@ -222,8 +235,9 @@ async def list_users_page(
             user_id=last.id,
         )
         next_cursor = urlsafe_b64encode(next_position.model_dump_json().encode()).decode().rstrip("=")
+    tier = await tier_for_tenant(tenant_uuid)
     return UsersPageOut(
-        items=[_user_out(user, agents_count=counts.get(user.id, 0)) for user in page],
+        items=[_user_out(user, agents_count=counts.get(user.id, 0), tier=tier) for user in page],
         next_cursor=next_cursor,
     )
 
@@ -267,7 +281,7 @@ async def update_user_quota(
         )
 
     agents_count = await agent_dao.count_active_for_creator(user.id)
-    return _user_out(user, agents_count=agents_count)
+    return _user_out(user, agents_count=agents_count, tier=await tier_for_tenant(user.tenant_id))
 
 
 class UserAgentOut(BaseModel):
@@ -322,7 +336,7 @@ async def set_user_active(
 
     refreshed = await user_dao.get_with_identity(updated.id) or updated
     agents_count = await agent_dao.count_active_for_creator(refreshed.id)
-    return _user_out(refreshed, agents_count=agents_count)
+    return _user_out(refreshed, agents_count=agents_count, tier=await tier_for_tenant(refreshed.tenant_id))
 
 
 # ─── Role Management ───────────────────────────────────
@@ -546,7 +560,7 @@ async def get_user_detail(
 
     agents = await agent_dao.list_for_creator(target.id, tenant_id=target.tenant_id)
     agents_count = len(agents)
-    base = _user_out(target, agents_count=agents_count)
+    base = _user_out(target, agents_count=agents_count, tier=await tier_for_tenant(target.tenant_id))
     detail = UserDetailOut.model_validate(base)
     detail.agents = [
         UserAgentOut(
