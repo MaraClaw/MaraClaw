@@ -882,6 +882,46 @@ async def test_flush_temp_workspace_only_writes_changed_files(monkeypatch):
     assert storage.files[f"{agent_id}/workspace/other.md"] == b"# Other\n"
 
 
+async def test_flush_skips_escaping_symlink_and_writes_other_files(monkeypatch, tmp_path):
+    from app.services.agent_tool_exec import workspace_temp
+
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend()
+    monkeypatch.setattr(workspace_temp, "get_storage_backend", lambda: storage)
+    temp_ws = await workspace_temp._prepare_temp_workspace(agent_id, paths=["workspace"])
+    try:
+        outside = tmp_path / "secret.md"
+        outside.write_text("secret")
+        (temp_ws.root / "workspace/link.md").symlink_to(outside)
+        (temp_ws.root / "workspace/good.md").write_text("good")
+        result = await workspace_temp.flush_temp_workspace(temp_ws)
+    finally:
+        temp_ws.cleanup()
+
+    assert result["updated"] == ["workspace/good.md"]
+    assert storage.files == {f"{agent_id}/workspace/good.md": b"good"}
+
+
+async def test_flush_skips_escaping_symlink_and_flushes_other_files(monkeypatch, tmp_path):
+    from app.services.agent_tool_exec import workspace_temp
+
+    agent_id = uuid.uuid4()
+    backend = MemoryStorageBackend({f"{agent_id}/workspace/input.md": b"old"})
+    monkeypatch.setattr(workspace_temp, "get_storage_backend", lambda: backend)
+    temp = await workspace_temp._prepare_temp_workspace(agent_id, paths=["workspace"])
+    try:
+        (temp.root / "workspace/input.md").write_bytes(b"new")
+        secret = tmp_path / "secret"
+        secret.write_bytes(b"secret")
+        (temp.root / "workspace/escape").symlink_to(secret)
+        result = await workspace_temp.flush_temp_workspace(temp)
+    finally:
+        temp.cleanup()
+    assert result["updated"] == ["workspace/input.md"]
+    assert backend.files[f"{agent_id}/workspace/input.md"] == b"new"
+    assert f"{agent_id}/workspace/escape" not in backend.files
+
+
 @pytest.mark.asyncio
 async def test_flush_temp_workspace_fails_on_conflict(monkeypatch):
     agent_id = uuid.uuid4()

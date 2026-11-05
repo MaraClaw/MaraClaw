@@ -56,7 +56,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
 
     if file_path:
         full_path = (ws / file_path).resolve()
-        if not str(full_path).startswith(str(ws)):
+        if not full_path.is_relative_to(Path(await anyio.Path(ws).resolve())):
             return "❌ Access denied: path is outside the workspace"
         if not full_path.exists():
             return f"❌ File not found: {file_path}"

@@ -19,6 +19,20 @@ from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import file_download_tickets
 from app.services.storage_runtime.local import LocalStorageBackend
+from app.services.workspace_collaboration import safe_agent_path
+
+
+def test_safe_agent_path_rejects_sibling_symlink_and_accepts_symlinked_root(tmp_path):
+    root = tmp_path / "agent"
+    sibling = tmp_path / "agent.rollback-run"
+    root.mkdir()
+    sibling.mkdir()
+    (root / "escape").symlink_to(sibling, target_is_directory=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    with pytest.raises(ValueError):
+        safe_agent_path(alias, "escape/secret")
+    assert safe_agent_path(alias, "nested/file") == root / "nested/file"
 
 
 def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
@@ -30,6 +44,16 @@ def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
         is_active=True,
         identity=identity,
     )
+
+
+def test_safe_agent_path_rejects_symlink_to_rollback_sibling(tmp_path):
+    base = tmp_path / "agent"
+    sibling = tmp_path / "agent.rollback-1"
+    base.mkdir()
+    sibling.mkdir()
+    (base / "link").symlink_to(sibling, target_is_directory=True)
+    with pytest.raises(ValueError):
+        safe_agent_path(base, "link/secret.md")
 
 
 @pytest.mark.parametrize("suffix", ["docx", "pptx", "xls"])
