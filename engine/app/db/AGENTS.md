@@ -14,7 +14,7 @@ Live psycopg3 data-access layer. SQLAlchemy is gone from `app/`.
 | `url.py` | Accept native `postgresql://` / `postgres://` URLs or libpq keyword conninfo; reject driver schemes and the `ssl` query alias (use `sslmode`) |
 | `pool.py` | `init_pool` / `close_pool` / `ping_pool` |
 | `connection.py` | `DbConnection` (`execute`, `fetch*`, maps errors) |
-| `session.py` | `connection_ctx` / `get_db` / `bind_crud_connection` / `optional_connection_ctx` / `transaction` / `run_after_commit` |
+| `session.py` | `connection_ctx` / `get_db` / `bind_crud_connection` / `optional_connection_ctx` / `transaction` / `durable_transaction` / `run_after_commit` |
 | `errors.py` | `DbError`, `UniqueViolationError`, `ForeignKeyViolationError`, `CheckViolationError`, `LockNotAvailableError` (`NOWAIT` / `lock_timeout`) |
 | `types.py` | `dict_row`, `as_jsonb` |
 
@@ -24,6 +24,7 @@ Live psycopg3 data-access layer. SQLAlchemy is gone from `app/`.
 - `run_after_commit(on_commit, on_rollback=None)` queues synchronous callbacks on the owning top-level `connection_ctx` or `transaction(db=...)`. `on_commit` runs after the commit and the deferred flushes (also after `flush_request_transaction`); `on_rollback` runs when the commit is not reached, including on cancellation. Nested joins share the outer queue, raw savepoints are not callback-aware, and with no open scope `on_commit` runs at once. A failing callback is logged and the rest still run.
 - `app.runtime.lifecycle.Runtime.start()` opens the pool **before** bootstrap seeders and role-gated workers/connectors. `get_pool()` raises if unset.
 - Pool hygiene: `DATABASE_POOL_MAX_IDLE` (600s) / `DATABASE_POOL_MAX_LIFETIME` (1800s) plus a cheap `closed` check on checkout - not `SELECT 1`.
+- `durable_transaction()` commits on a connection of `durable_pool()` (a second pool opened on first use from the main pool's settings, closed by `close_pool`) and never joins the request transaction. Use it only when a commit must be durable before the caller proceeds (managed storage reservations). Code holding a durable connection must never wait on the main pool.
 - `get_db()` exists. Short CRUD routers bind `bind_crud_connection` from `app.main` so DAOs share one checkout.
 - Do **not** attach `bind_crud_connection` to websocket, connector inbound, gateway, or AgentBay control (LLM / long I/O).
 - Uninitialized pool: `bind_crud_connection` is a no-op (ASGI unit tests).
