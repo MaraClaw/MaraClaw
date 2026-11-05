@@ -393,3 +393,51 @@ async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: D
     await schema_db.execute(
         "UPDATE organization_admission_requests SET organization_name = 'Named' WHERE email = 'pending@example.com'"
     )
+
+
+_APPROVAL_COLUMNS = (
+    "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns "
+    "WHERE table_schema = current_schema() AND table_name = 'approval_requests' ORDER BY ordinal_position"
+)
+
+
+async def test_legacy_approvals_without_execution_args_are_upgraded_in_place(schema_db: DbConnection) -> None:
+    # Given a fresh schema recorded as the contract, then reverted to the pre-replay table holding a pending row.
+    await bootstrap_db.main()
+    fresh_columns = await schema_db.fetchall(_APPROVAL_COLUMNS)
+    assert fresh_columns[-1]["column_name"] == "execution_args"
+    tenant_id, user_id, agent_id, approval_id = uuid4(), uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Legacy', 'Legacy', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO approval_requests (id, agent_id, action_type, details, status) "
+        "VALUES (%(approval)s, %(agent)s, 'write_workspace_files', "
+        '\'{"tool": "write_file", "args": "{}"}\'::json, \'pending\')',
+        {"approval": approval_id, "agent": agent_id},
+    )
+    await schema_db.execute("ALTER TABLE approval_requests DROP COLUMN execution_args")
+    # When bootstrap upgrades it and then reruns.
+    await bootstrap_db.main()
+    await bootstrap_db.main()
+    # Then the row survives without stored arguments and the table matches the fresh definition.
+    rows = await schema_db.fetchall("SELECT id, details, status, execution_args FROM approval_requests")
+    assert rows == [
+        {
+            "id": approval_id,
+            "details": {"tool": "write_file", "args": "{}"},
+            "status": "pending",
+            "execution_args": None,
+        }
+    ]
+    assert await schema_db.fetchall(_APPROVAL_COLUMNS) == fresh_columns

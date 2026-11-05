@@ -82,7 +82,7 @@ async def test_approval_audit_is_atomic_and_remote_work_follows_commit(monkeypat
     async def notify(**kwargs):
         assert session.get_connection() is None
         assert owned_pool.active == 0
-        assert effects == ["resolved", "audited"]
+        assert effects == ["resolved", "audited", *(["audited"] if action == "approve" else [])]
 
     service = autonomy_module.AutonomyService()
     monkeypatch.setattr(autonomy_module.approval_request_dao, "get", AsyncMock(return_value=pending))

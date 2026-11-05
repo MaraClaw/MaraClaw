@@ -1144,10 +1144,24 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	resolved_at TIMESTAMP WITH TIME ZONE, 
 	resolved_by UUID, 
+	execution_args JSONB, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(resolved_by) REFERENCES users (id)
 );
+
+-- Explicit legacy upgrade: approvals created before exact replay lack the private full-argument column. One
+-- statement adds it nullable (matching the fresh definition, which also places it last) so rows are kept, a NULL
+-- keeps the old details-based replay, and reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'approval_requests'
+			AND column_name = 'execution_args'
+	) THEN
+		ALTER TABLE approval_requests ADD COLUMN execution_args JSONB;
+	END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS audit_logs (
 	id UUID NOT NULL, 

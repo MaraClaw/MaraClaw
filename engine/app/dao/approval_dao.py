@@ -23,6 +23,8 @@ _COLUMNS = (
     "resolved_at",
     "resolved_by",
 )
+# Private replay payload: only the claiming ``resolve`` selects it, never list/get queries.
+_REPLAY_COLUMNS = (*_COLUMNS, "execution_args")
 
 
 @final
@@ -39,20 +41,23 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         agent_id: UUID,
         action_type: str,
         details: dict[str, Any] | None = None,
+        execution_args: dict[str, Any] | None = None,
     ) -> ApprovalRequestRecord:
-        """Insert a pending approval and return the created row."""
+        """Insert a pending approval and return the created row without its private ``execution_args``."""
         approval_id = uuid4()
         async with self.session() as db:
             row = await db.fetchone(
                 "INSERT INTO approval_requests "
-                "(id, agent_id, action_type, details, status, created_at) "
-                "VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, 'pending', %(created_at)s) "
+                "(id, agent_id, action_type, details, execution_args, status, created_at) "
+                "VALUES (%(id)s, %(agent_id)s, %(action_type)s, %(details)s, %(execution_args)s, 'pending', "
+                "%(created_at)s) "
                 f"RETURNING {self._select_list()}",
                 {
                     "id": approval_id,
                     "agent_id": agent_id,
                     "action_type": action_type,
                     "details": as_jsonb(details or {}),
+                    "execution_args": None if execution_args is None else as_jsonb(execution_args),
                     "created_at": datetime.now(UTC),
                 },
             )
@@ -66,33 +71,25 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         *,
         status: ApprovalStatus,
         resolved_by: UUID,
-    ) -> ApprovalRequestRecord:
-        """Mark an approval approved/rejected and return the refreshed row."""
-        resolved_at = datetime.now(UTC)
+    ) -> ApprovalRequestRecord | None:
+        """Claim a pending approval as approved/rejected; ``None`` when it was no longer pending.
+
+        The transition is conditional on ``status = 'pending'``, so exactly one concurrent resolver gets the row
+        (with its private ``execution_args``) and every other caller gets ``None``.
+        """
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE approval_requests SET status = %(status)s, "
                 "resolved_at = %(resolved_at)s, resolved_by = %(resolved_by)s "
-                f"WHERE id = %(id)s RETURNING {self._select_list()}",
+                f"WHERE id = %(id)s AND status = 'pending' RETURNING {', '.join(_REPLAY_COLUMNS)}",
                 {
                     "id": approval.id,
                     "status": status.value,
-                    "resolved_at": resolved_at,
+                    "resolved_at": datetime.now(UTC),
                     "resolved_by": resolved_by,
                 },
             )
-            if row is None:
-                return ApprovalRequestRecord(
-                    id=approval.id,
-                    agent_id=approval.agent_id,
-                    action_type=approval.action_type,
-                    details=approval.details,
-                    status=status,
-                    created_at=approval.created_at,
-                    resolved_at=resolved_at,
-                    resolved_by=resolved_by,
-                )
-            return ApprovalRequestRecord.from_row(row)
+            return None if row is None else ApprovalRequestRecord.from_row(row)
 
     async def list_for_agent(
         self,
