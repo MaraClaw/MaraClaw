@@ -15,7 +15,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 | `landing.tsx` | `/` | Composer only: Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta. Hashes stay on `/`. Copy in `@/components/sections/*`. |
 | `login.tsx` | `/login` | RHF+Zod. `useAuth().login`. Multi-tenant picker; unverified → `/verify-email`. `needs_org_confirm` → `/join`, except a `/transfer#code=` continuation is kept. |
 | `register.tsx` | `/register` | `fetchRegistrationConfig` (invite gate), `checkDuplicate`, `registerRequest`. Optional or required `invitation_code`; a returned admission request routes to `/app/admissions/:id`. Cannot mint `platform_admin`. |
-| `sso-callback.tsx` | `/sso/callback` | `oauthCallback` or `bindProvider` (`SSO_INTENT_KEY`). Multi-tenant picker. Bind → `/app/settings`. |
+| `sso-callback.tsx` | `/sso/callback` | `oauthCallback` or `bindProvider` (`SSO_INTENT_KEY`) with the server-issued state kept in sessionStorage (never the URL's); a missing or differing stored state fails before any request. Multi-tenant picker. Bind → `/app/settings`. |
 | `forgot-password.tsx` | `/forgot-password` | `forgotPasswordRequest`. No session. |
 | `reset-password.tsx` | `/reset-password` | `?token=` (≥20 chars). `resetPasswordRequest`. |
 | `verify-email.tsx` | `/verify-email` | `?code=` or form. `verifyEmailRequest` then `/join` or `/app`. |

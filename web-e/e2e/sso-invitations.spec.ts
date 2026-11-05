@@ -14,6 +14,7 @@ async function prepareInvitationSso(page: Page, options: {
   await prepareTransfers(page, { anonymous: true, tenantless: options.tenantless })
   const bodies: unknown[] = []
   const providerUrls: string[] = []
+  const issued: string[] = []
   await page.route('**/api/auth/providers', (route) => route.fulfill({ json: [
     { id: 'example', provider_type: 'example', name: 'Synthetic SSO', is_active: true },
   ] }))
@@ -22,11 +23,13 @@ async function prepareInvitationSso(page: Page, options: {
     const url = new URL(request.url())
     expect(request.method()).toBe('GET')
     expect(request.headers().authorization).toBeUndefined()
-    expect([...url.searchParams.keys()].sort()).toEqual(['redirect_uri', 'state'])
+    expect([...url.searchParams.keys()].sort()).toEqual(['intent', 'redirect_uri'])
+    expect(url.searchParams.get('intent')).toBe('sign_in')
     expect(url.searchParams.get('redirect_uri')).toBe(`${url.origin}/sso/callback`)
-    expect(url.searchParams.get('state')).toMatch(/^[0-9a-f-]{36}$/)
-    const authorizationUrl = `https://sso.example.test/authorize?${url.searchParams}`
-    await route.fulfill({ json: { authorization_url: authorizationUrl } })
+    const state = `server-state-${issued.length + 1}`
+    issued.push(state)
+    const authorizationUrl = `https://sso.example.test/authorize?${new URLSearchParams({ redirect_uri: url.searchParams.get('redirect_uri') ?? '', state })}`
+    await route.fulfill({ json: { authorization_url: authorizationUrl, state } })
   })
   await page.route('https://sso.example.test/**', async (route) => {
     providerUrls.push(route.request().url())
@@ -44,11 +47,11 @@ async function prepareInvitationSso(page: Page, options: {
     await route.fulfill(options.failure
       ? { status: 403, json: { detail: 'Synthetic SSO refused' } }
       : { json: options.selection && bodies.length === 1
-        ? { requires_tenant_selection: true, pending_token: 'pending-sso', login_identifier: member.email, tenants: [{ tenant_id: source.id, tenant_name: source.name }] }
+        ? { requires_tenant_selection: true, pending_token: 'pending-sso', login_identifier: member.email, tenants: [{ tenant_id: source.id, tenant_name: source.name, tenant_slug: source.slug }] }
         : { access_token: 'source-token', user: { ...member, tenant_id: options.tenantless ? null : source.id }, needs_org_confirm: options.tenantless ?? false },
       })
   })
-  return { bodies, providerUrls }
+  return { bodies, providerUrls, issued }
 }
 
 for (const tenantless of [false, true]) {
@@ -64,15 +67,16 @@ for (const tenantless of [false, true]) {
       await page.getByRole('button', { name: 'Synthetic SSO', exact: true }).click()
       if (selection) {
         await expect(page.getByRole('heading', { name: 'Choose organization' })).toBeVisible()
-        await page.getByRole('button', { name: source.name, exact: true }).click()
+        await page.getByRole('button', { name: source.name }).click()
       }
       // Then the invitation is restored only to the local form and is consumed from storage/URL.
       await expect(page).toHaveURL(tenantless ? '/join' : '/transfer')
       await expect(page.getByLabel('Invitation code', { exact: true })).toHaveValue('synthetic-invite')
       await expect(page.getByText(target.name, { exact: true })).toHaveCount(0)
+      expect(sso.issued).toHaveLength(1)
       expect(sso.bodies).toEqual(selection
-        ? [{ code: 'sso-code' }, { pending_token: 'pending-sso', tenant_id: source.id }]
-        : [{ code: 'sso-code' }])
+        ? [{ code: 'sso-code', state: sso.issued[0] }, { pending_token: 'pending-sso', tenant_id: source.id }]
+        : [{ code: 'sso-code', state: sso.issued[0] }])
       expect(sso.providerUrls).toHaveLength(1)
       expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith('maraclaw-sso-')))).toEqual([])
       const stored = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))
@@ -158,7 +162,7 @@ test('SSO bind ignores a stored invitation and returns to settings', async ({ pa
   await page.goto('/sso/callback?code=bind-code&state=bind-state')
   // Then
   await expect(page).toHaveURL('/app/settings')
-  expect(bodies).toEqual([{ provider_type: 'example', code: 'bind-code' }])
+  expect(bodies).toEqual([{ provider_type: 'example', code: 'bind-code', state: 'bind-state' }])
   expect(await page.evaluate((key) => sessionStorage.getItem(key), continuationKey)).toBeNull()
 })
 

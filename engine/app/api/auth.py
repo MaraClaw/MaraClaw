@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+from redis.exceptions import RedisError
 
 from app.api.background_tasks import schedule_background_task
 from app.config import Settings
@@ -60,10 +61,11 @@ from app.schemas.schemas import (
     UserUpdate,
     VerifyEmailRequest,
 )
-from app.services import chat_tickets
+from app.services import chat_tickets, oauth_state
 from app.services.auth_audience import AuthAudience, require_member_identity, require_member_user
 from app.services.auth_provider import BaseAuthProvider
 from app.services.auth_results import AuthRegistration, AuthSession
+from app.services.oauth_state import MAX_REDIRECT_URI_LENGTH, OAuthIntent
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -112,6 +114,7 @@ class OAuthPendingUserInfo(BaseModel):
 
 class OAuthPendingCache(BaseModel):
     provider_type: str
+    audience: AuthAudience
     user_info: OAuthPendingUserInfo
     token_data: JsonObject
     allowed_tenant_ids: list[uuid.UUID] = []
@@ -926,46 +929,45 @@ _OAUTH_PENDING_PREFIX = "oauth_pending:"
 _OAUTH_PENDING_TTL = 600  # 10 minutes
 
 
-async def _cache_oauth_pending(
-    pending_token: str,
-    provider_type: str,
-    user_info: OAuthPendingUserInfo,
-    token_data: JsonObject,
-    allowed_tenant_ids: list[uuid.UUID] | None = None,
-) -> None:
+async def _cache_oauth_pending(pending_token: str, pending: OAuthPendingCache) -> None:
     """Store OAuth intermediate data in Redis for the two-step tenant-selection flow."""
     from app.core.events import get_redis
 
-    r = await get_redis()
-    payload = OAuthPendingCache(
-        provider_type=provider_type,
-        user_info=user_info,
-        token_data=token_data,
-        allowed_tenant_ids=allowed_tenant_ids or [],
-    ).model_dump_json()
-    _ = await r.set(f"{_OAUTH_PENDING_PREFIX}{pending_token}", payload, ex=_OAUTH_PENDING_TTL)
+    try:
+        r = await get_redis()
+        stored = await r.set(
+            f"{_OAUTH_PENDING_PREFIX}{pending_token}", pending.model_dump_json(), nx=True, ex=_OAUTH_PENDING_TTL
+        )
+    except RedisError as exc:
+        raise oauth_state.unavailable() from exc
+    if not bool(stored):
+        raise oauth_state.unavailable()
 
 
 async def _get_oauth_pending(pending_token: str) -> OAuthPendingCache | None:
-    """Retrieve (and delete) cached OAuth data from Redis. Returns None if expired/missing."""
+    """Atomically read and delete cached OAuth data. Returns None if expired, replayed or unreadable."""
     from app.core.events import get_redis
 
-    r = await get_redis()
-    raw = await r.get(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
-    if raw is None or not raw:
+    try:
+        r = await get_redis()
+        raw = await r.getdel(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
+    except RedisError as exc:
+        raise oauth_state.unavailable() from exc
+    if raw is None:
         return None
-    # Single-use: delete immediately after retrieval
-    _ = await r.delete(f"{_OAUTH_PENDING_PREFIX}{pending_token}")
-    return OAuthPendingCache.model_validate_json(raw)
+    try:
+        return OAuthPendingCache.model_validate_json(raw)
+    except ValidationError:
+        return None
 
 
 @router.get("/{provider}/authorize", response_model=OAuthAuthorizeResponse)
 async def authorize(
     provider: str,
-    redirect_uri: str = Query(..., description="OAuth callback URI"),
-    state: str = Query("", description="CSRF state parameter"),
+    redirect_uri: str = Query(..., min_length=1, max_length=MAX_REDIRECT_URI_LENGTH, description="OAuth callback URI"),
+    intent: OAuthIntent = Query(OAuthIntent.SIGN_IN, description="Whether the callback signs in or binds an identity"),
 ):
-    """Start OAuth authorization flow for a provider."""
+    """Start OAuth authorization flow for a provider; the server mints the single-use state."""
     from app.services.auth_registry import auth_provider_registry
 
     # Get provider
@@ -973,6 +975,8 @@ async def authorize(
         auth_provider = _snapshot_oauth_provider(await auth_provider_registry.get_provider(provider))
     if not auth_provider:
         raise HTTPException(status_code=404, detail=f"Provider '{provider}' not supported")
+
+    state = await oauth_state.issue(provider, redirect_uri, intent)
 
     # Generate authorization URL
     try:
@@ -983,7 +987,7 @@ async def authorize(
         logger.error(f"Failed to generate authorization URL for {provider}: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate authorization URL") from e
 
-    return OAuthAuthorizeResponse(authorization_url=auth_url)
+    return OAuthAuthorizeResponse(authorization_url=auth_url, state=state)
 
 
 @router.post("/{provider}/callback", response_model=TokenResponse | MultiTenantResponse)
@@ -1006,11 +1010,12 @@ async def oauth_callback_flow(
 ) -> AuthSession | MultiTenantResponse:
     """Handle OAuth callback - supports a two-step flow for multi-tenant selection.
 
-    Step 1 (code provided): exchange code with provider, detect multiple tenants,
-    cache user_info in Redis, return MultiTenantResponse with opaque pending_token.
+    Step 1 (code + state provided): consume the server-issued state, exchange the code with the
+    provider using the redirect URI stored at authorize, detect multiple tenants, cache user_info in
+    Redis, return MultiTenantResponse with opaque pending_token.
 
-    Step 2 (pending_token + tenant_id provided): retrieve cached user_info from Redis,
-    call find_or_create_user with the chosen tenant_id, return TokenResponse.
+    Step 2 (pending_token + tenant_id provided): atomically redeem the pending token for this
+    provider and audience, call find_or_create_user with the chosen tenant_id, return TokenResponse.
     """
     import uuid as _uuid
 
@@ -1019,7 +1024,7 @@ async def oauth_callback_flow(
     # ── Step 2: User has selected a tenant ───────────────────────────────────
     if data.pending_token not in (None, "") and data.tenant_id not in (None, ""):
         pending = await _get_oauth_pending(data.pending_token)
-        if not pending:
+        if not pending or pending.provider_type != provider or pending.audience is not audience:
             raise HTTPException(
                 status_code=400,
                 detail="OAuth session expired or invalid. Please sign in again.",
@@ -1075,6 +1080,9 @@ async def oauth_callback_flow(
     # ── Step 1: Exchange code, detect multi-tenant ────────────────────────────
     if data.code in (None, ""):
         raise HTTPException(status_code=400, detail="Missing authorization code")
+    if data.state in (None, ""):
+        raise HTTPException(status_code=400, detail="Missing OAuth state")
+    stored_state = await oauth_state.consume(data.state, provider, OAuthIntent.SIGN_IN)
 
     async with connection_ctx():
         auth_provider = _snapshot_oauth_provider(await auth_provider_registry.get_provider(provider))
@@ -1083,7 +1091,7 @@ async def oauth_callback_flow(
 
     try:
         # Perform external network requests outside transaction
-        token_data = await auth_provider.exchange_code_for_token(data.code, data.redirect_uri)
+        token_data = await auth_provider.exchange_code_for_token(data.code, stored_state.redirect_uri)
         access_token = token_data.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise HTTPException(status_code=400, detail="Failed to get access token from provider")
@@ -1127,19 +1135,22 @@ async def oauth_callback_flow(
         pending_token = _uuid.uuid4().hex
         await _cache_oauth_pending(
             pending_token,
-            provider,
-            OAuthPendingUserInfo(
-                provider_type=user_info.provider_type,
-                provider_union_id=user_info.provider_union_id,
-                provider_user_id=user_info.provider_user_id,
-                name=user_info.name,
-                email=user_info.email,
-                avatar_url=user_info.avatar_url,
-                mobile=user_info.mobile,
-                raw_data=user_info.raw_data,
+            OAuthPendingCache(
+                provider_type=provider,
+                audience=audience,
+                user_info=OAuthPendingUserInfo(
+                    provider_type=user_info.provider_type,
+                    provider_union_id=user_info.provider_union_id,
+                    provider_user_id=user_info.provider_user_id,
+                    name=user_info.name,
+                    email=user_info.email,
+                    avatar_url=user_info.avatar_url,
+                    mobile=user_info.mobile,
+                    raw_data=user_info.raw_data,
+                ),
+                token_data=token_data,
+                allowed_tenant_ids=list(tenant_ids),
             ),
-            token_data,
-            allowed_tenant_ids=list(tenant_ids),
         )
 
         tenant_choices = [
@@ -1184,6 +1195,8 @@ async def bind_identity_flow(
     from app.services.auth_registry import auth_provider_registry
     from app.services.sso_service import sso_service
 
+    stored_state = await oauth_state.consume(data.state, provider, OAuthIntent.BIND)
+
     # Get provider outside transaction
     async with connection_ctx():
         auth_provider = _snapshot_oauth_provider(await auth_provider_registry.get_provider(provider))
@@ -1192,7 +1205,7 @@ async def bind_identity_flow(
 
     try:
         # Exchange code for token (network call) outside transaction
-        token_data = await auth_provider.exchange_code_for_token(data.code)
+        token_data = await auth_provider.exchange_code_for_token(data.code, stored_state.redirect_uri)
         access_token = token_data.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise HTTPException(status_code=400, detail="Failed to get access token from provider")

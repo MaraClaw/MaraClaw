@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { authSession, type SessionOwner } from './auth-session.ts'
 import { joinOrgResponseSchema, memberLoginSchema, memberRegisterSchema, memberTokenSchema, userOutSchema } from './types/auth.ts'
 import { TenantChoiceSchema } from './engine-contracts.generated.ts'
+import type { SsoIntent } from './sso-storage.ts'
 import { paymentReviewResponseSchema, type TransferInput } from './types/company-transfers.ts'
 import type {
   AuthProvider,
@@ -198,23 +199,31 @@ export async function listAuthProviders(tenantId?: string | null, owner?: Sessio
   return apiRequest<AuthProvider[]>(`/api/auth/providers${query}`, { token: null, ...requestContext(owner) })
 }
 
+const authorizeResponseSchema = z.object({ authorization_url: z.string().min(1), state: z.string().min(1) })
+export type AuthorizeResponse = z.infer<typeof authorizeResponseSchema>
+
+/** The server mints the single-use state; callers keep the returned one and never choose their own. */
 export async function authorizeProvider(
   provider: string,
   redirectUri: string,
-  authorization: string | { readonly state: string; readonly owner: SessionOwner },
-): Promise<{ authorization_url: string }> {
-  const state = typeof authorization === 'string' ? authorization : authorization.state
-  const owner = typeof authorization === 'string' ? undefined : authorization.owner
-  const query = new URLSearchParams({ redirect_uri: redirectUri, state })
+  intent: SsoIntent,
+  owner?: SessionOwner,
+): Promise<AuthorizeResponse> {
+  const query = new URLSearchParams({ redirect_uri: redirectUri, intent })
   return apiRequest(`/api/auth/${encodeURIComponent(provider)}/authorize?${query.toString()}`, {
+    schema: authorizeResponseSchema,
     token: null,
     ...requestContext(owner),
   })
 }
 
+export type OauthCallbackBody =
+  | { readonly code: string; readonly state: string }
+  | { readonly pending_token: string; readonly tenant_id: string }
+
 export async function oauthCallback(
   provider: string,
-  body: { code?: string; pending_token?: string; tenant_id?: string },
+  body: OauthCallbackBody,
   owner?: SessionOwner,
 ): Promise<TokenResponse | MultiTenantResponse> {
   return memberSessionRequest(`/api/member/auth/${encodeURIComponent(provider)}/callback`, {
@@ -225,10 +234,10 @@ export async function oauthCallback(
   })
 }
 
-export async function bindProvider(provider: string, code: string, owner?: SessionOwner): Promise<UserOut> {
+export async function bindProvider(provider: string, code: string, state: string, owner?: SessionOwner): Promise<UserOut> {
   return apiRequest(`/api/member/auth/${encodeURIComponent(provider)}/bind`, {
     schema: userOutSchema, method: 'POST',
-    body: { provider_type: provider, code },
+    body: { provider_type: provider, code, state },
     ...requestContext(owner),
   })
 }

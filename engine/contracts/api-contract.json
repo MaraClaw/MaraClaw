@@ -4566,16 +4566,34 @@
       "CommentCreate": {
         "properties": {
           "author_id": {
-            "format": "uuid",
-            "title": "Author Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Id"
           },
           "author_name": {
-            "title": "Author Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Name"
           },
           "author_type": {
             "default": "human",
+            "enum": [
+              "human",
+              "agent"
+            ],
             "title": "Author Type",
             "type": "string"
           },
@@ -4586,9 +4604,7 @@
           }
         },
         "required": [
-          "content",
-          "author_id",
-          "author_name"
+          "content"
         ],
         "title": "CommentCreate",
         "type": "object"
@@ -7229,11 +7245,18 @@
           "provider_type": {
             "title": "Provider Type",
             "type": "string"
+          },
+          "state": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
           }
         },
         "required": [
           "provider_type",
-          "code"
+          "code",
+          "state"
         ],
         "title": "IdentityBindRequest",
         "type": "object"
@@ -9770,10 +9793,15 @@
           "authorization_url": {
             "title": "Authorization Url",
             "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
           }
         },
         "required": [
-          "authorization_url"
+          "authorization_url",
+          "state"
         ],
         "title": "OAuthAuthorizeResponse",
         "type": "object"
@@ -9805,6 +9833,7 @@
           "redirect_uri": {
             "anyOf": [
               {
+                "maxLength": 2048,
                 "type": "string"
               },
               {
@@ -9814,8 +9843,16 @@
             "title": "Redirect Uri"
           },
           "state": {
-            "title": "State",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
           },
           "tenant_id": {
             "anyOf": [
@@ -9829,11 +9866,16 @@
             "title": "Tenant Id"
           }
         },
-        "required": [
-          "state"
-        ],
         "title": "OAuthCallbackRequest",
         "type": "object"
+      },
+      "OAuthIntent": {
+        "enum": [
+          "sign_in",
+          "bind"
+        ],
+        "title": "OAuthIntent",
+        "type": "string"
       },
       "OKRSettingsOut": {
         "properties": {
@@ -11516,16 +11558,34 @@
       "PostCreate": {
         "properties": {
           "author_id": {
-            "format": "uuid",
-            "title": "Author Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Id"
           },
           "author_name": {
-            "title": "Author Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Name"
           },
           "author_type": {
             "default": "human",
+            "enum": [
+              "human",
+              "agent"
+            ],
             "title": "Author Type",
             "type": "string"
           },
@@ -11548,9 +11608,7 @@
           }
         },
         "required": [
-          "content",
-          "author_id",
-          "author_name"
+          "content"
         ],
         "title": "PostCreate",
         "type": "object"
@@ -27992,7 +28050,7 @@
     },
     "/api/auth/{provider}/authorize": {
       "get": {
-        "description": "Start OAuth authorization flow for a provider.",
+        "description": "Start OAuth authorization flow for a provider; the server mints the single-use state.",
         "operationId": "get_2f6170692f617574682f7b70726f76696465727d2f617574686f72697a65",
         "parameters": [
           {
@@ -28011,20 +28069,21 @@
             "required": true,
             "schema": {
               "description": "OAuth callback URI",
+              "maxLength": 2048,
+              "minLength": 1,
               "title": "Redirect Uri",
               "type": "string"
             }
           },
           {
-            "description": "CSRF state parameter",
+            "description": "Whether the callback signs in or binds an identity",
             "in": "query",
-            "name": "state",
+            "name": "intent",
             "required": false,
             "schema": {
-              "default": "",
-              "description": "CSRF state parameter",
-              "title": "State",
-              "type": "string"
+              "$ref": "#/components/schemas/OAuthIntent",
+              "default": "sign_in",
+              "description": "Whether the callback signs in or binds an identity"
             }
           }
         ],
@@ -36235,11 +36294,18 @@
           {
             "in": "query",
             "name": "author_id",
-            "required": true,
+            "required": false,
             "schema": {
-              "format": "uuid",
-              "title": "Author Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Author Id"
             }
           },
           {
@@ -36248,6 +36314,10 @@
             "required": false,
             "schema": {
               "default": "human",
+              "enum": [
+                "human",
+                "agent"
+              ],
               "title": "Author Type",
               "type": "string"
             }
@@ -40924,6 +40994,7 @@
       "NotificationUnreadCountResponse",
       "OAuthAuthorizeResponse",
       "OAuthCallbackRequest",
+      "OAuthIntent",
       "OKRSettingsOut",
       "OKRSettingsUpdate",
       "ObjectiveCreate",
@@ -41211,6 +41282,7 @@
       "NotificationUnreadCountResponse",
       "OAuthAuthorizeResponse",
       "OAuthCallbackRequest",
+      "OAuthIntent",
       "OKRSettingsOut",
       "OKRSettingsUpdate",
       "ObjectiveCreate",

@@ -45,9 +45,10 @@ export function SsoCallbackPage() {
   const state = searchParams.get('state')
   const code = searchParams.get('code')
   const provider = searchParams.get('provider') || transaction.provider
+  const storedState = transaction.state
   const validationError = !provider || !code
     ? 'This sign-in link is missing a provider or authorization code.'
-    : transaction.state && state && transaction.state !== state
+    : !storedState || storedState !== state
       ? 'This sign-in attempt expired. Start again from the login page.'
       : null
   const error = validationError ?? requestError
@@ -60,12 +61,12 @@ export function SsoCallbackPage() {
       continuation.current = null
       return
     }
-    if (!provider || !code) return
+    if (!provider || !code || !storedState) return
     const intent = transaction.intent
     let cancelled = false
     request.current ??= intent === 'bind'
-      ? bindProvider(provider, code, expectedOwner).then(() => undefined)
-      : oauthCallback(provider, { code }, expectedOwner)
+      ? bindProvider(provider, code, storedState, expectedOwner).then(() => undefined)
+      : oauthCallback(provider, { code, state: storedState }, expectedOwner)
     void request.current
       .then((result) => {
         if (cancelled) return
@@ -105,7 +106,7 @@ export function SsoCallbackPage() {
         setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'SSO sign-in failed.')
       })
     return () => { cancelled = true }
-  }, [applySession, navigate, provider, code, validationError, transaction, capture, isCurrent])
+  }, [applySession, navigate, provider, code, storedState, validationError, transaction, capture, isCurrent])
 
   async function chooseTenant(tenant: TenantChoice) {
     const expectedOwner = transaction.owner

@@ -537,7 +537,7 @@ export type HTTPValidationError = z.infer<typeof HTTPValidationErrorSchema>;
 export const HandoverRequestSchema = z.looseObject({ ["new_creator_id"]: z.guid() });
 export type HandoverRequest = z.infer<typeof HandoverRequestSchema>;
 
-export const IdentityBindRequestSchema = z.looseObject({ ["code"]: z.string(), ["provider_type"]: z.string() });
+export const IdentityBindRequestSchema = z.looseObject({ ["code"]: z.string(), ["provider_type"]: z.string(), ["state"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 128) });
 export type IdentityBindRequest = z.infer<typeof IdentityBindRequestSchema>;
 
 export const IdentityUnbindRequestSchema = z.looseObject({ ["provider_type"]: z.string() });
@@ -631,11 +631,15 @@ export type NotificationReadResponse = z.infer<typeof NotificationReadResponseSc
 export const NotificationUnreadCountResponseSchema = z.looseObject({ ["unread_count"]: z.number().refine(Number.isInteger) });
 export type NotificationUnreadCountResponse = z.infer<typeof NotificationUnreadCountResponseSchema>;
 
-export const OAuthAuthorizeResponseSchema = z.looseObject({ ["authorization_url"]: z.string() });
+export const OAuthAuthorizeResponseSchema = z.looseObject({ ["authorization_url"]: z.string(), ["state"]: z.string() });
 export type OAuthAuthorizeResponse = z.infer<typeof OAuthAuthorizeResponseSchema>;
 
-export const OAuthCallbackRequestSchema = z.looseObject({ ["code"]: z.union([z.string(), z.null()]).optional(), ["pending_token"]: z.union([z.string(), z.null()]).optional(), ["redirect_uri"]: z.union([z.string(), z.null()]).optional(), ["state"]: z.string(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
+export const OAuthCallbackRequestSchema = z.looseObject({ ["code"]: z.union([z.string(), z.null()]).optional(), ["pending_token"]: z.union([z.string(), z.null()]).optional(), ["redirect_uri"]: z.union([z.string().refine(value => [...value].length <= 2048), z.null()]).optional(), ["state"]: z.union([z.string().refine(value => [...value].length <= 128), z.null()]).optional(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
 export type OAuthCallbackRequest = z.infer<typeof OAuthCallbackRequestSchema>;
+
+export const OAuthIntentValues = ["sign_in","bind"] as const;
+export const OAuthIntentSchema = z.intersection(z.union([z.literal("sign_in"), z.literal("bind")]), z.string());
+export type OAuthIntent = z.infer<typeof OAuthIntentSchema>;
 
 export const PeriodFrequencyValues = ["monthly","quarterly","custom"] as const;
 export const PeriodFrequencySchema = z.intersection(z.union([z.literal("monthly"), z.literal("quarterly"), z.literal("custom")]), z.string());

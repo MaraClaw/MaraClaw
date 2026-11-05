@@ -6,6 +6,7 @@ import {
   readSsoContinuation,
   SSO_CONTINUATION_KEY,
   SSO_INTENT_KEY,
+  SSO_STATE_KEY,
   storeSsoTransaction,
 } from '../src/lib/sso-storage.ts'
 
@@ -29,11 +30,12 @@ afterEach(() => {
 })
 
 const transaction = { state: 'random-state', provider: 'example' }
+const signIn = { ...transaction, intent: 'sign_in' as const }
 const path = `/transfer#code=${encodeURIComponent('opaque/code &?#=%')}`
 
 test('SSO restores the exact local invitation only for its transaction', () => {
   // Given
-  storeSsoTransaction(transaction, { from: { pathname: path } })
+  storeSsoTransaction(signIn, { from: { pathname: path } })
   // When
   const destination = readSsoContinuation(transaction, transaction)
   // Then
@@ -49,9 +51,9 @@ for (const pathname of [
 ]) {
   test(`SSO discards unsafe or noncanonical router continuation ${pathname}`, () => {
     // Given a prior invitation that must not survive a new sign-in.
-    storeSsoTransaction(transaction, { from: { pathname: path } })
+    storeSsoTransaction(signIn, { from: { pathname: path } })
     // When
-    storeSsoTransaction(transaction, { from: { pathname } })
+    storeSsoTransaction(signIn, { from: { pathname } })
     // Then
     assert.equal(readSsoContinuation(transaction, transaction), null)
     assert.equal(sessionStorage.getItem(SSO_CONTINUATION_KEY), null)
@@ -65,7 +67,7 @@ for (const callback of [
 ]) {
   test(`SSO refuses invitation continuation for callback ${JSON.stringify(callback)}`, () => {
     // Given
-    storeSsoTransaction(transaction, { from: { pathname: path } })
+    storeSsoTransaction(signIn, { from: { pathname: path } })
     // When
     const destination = readSsoContinuation(transaction, callback)
     // Then
@@ -80,7 +82,7 @@ for (const stored of [
 ]) {
   test(`SSO refuses malformed or unrelated stored continuation ${stored}`, () => {
     // Given
-    storeSsoTransaction(transaction, null)
+    storeSsoTransaction(signIn, null)
     sessionStorage.setItem(SSO_CONTINUATION_KEY, stored)
     // When
     const destination = readSsoContinuation(transaction, transaction)
@@ -91,19 +93,30 @@ for (const stored of [
 
 test('SSO bind intent never resumes an invitation', () => {
   // Given
-  storeSsoTransaction(transaction, { from: { pathname: path } })
+  storeSsoTransaction(signIn, { from: { pathname: path } })
   // When
   const destination = readSsoContinuation({ ...transaction, intent: 'bind' }, transaction)
   // Then
   assert.equal(destination, null)
 })
 
+test('SSO bind stores its intent and never keeps an invitation continuation', () => {
+  // Given a stale invitation from an earlier sign-in
+  storeSsoTransaction(signIn, { from: { pathname: path } })
+  // When a bind transaction replaces it
+  storeSsoTransaction({ ...transaction, intent: 'bind' }, { from: { pathname: path } })
+  // Then the bind intent is stored with the server state and no continuation survives
+  assert.equal(sessionStorage.getItem(SSO_STATE_KEY), transaction.state)
+  assert.equal(sessionStorage.getItem(SSO_INTENT_KEY), 'bind')
+  assert.equal(sessionStorage.getItem(SSO_CONTINUATION_KEY), null)
+})
+
 test('new SSO login replaces stale bind intent and invitation continuation', () => {
   // Given
-  storeSsoTransaction(transaction, { from: { pathname: path } })
+  storeSsoTransaction(signIn, { from: { pathname: path } })
   sessionStorage.setItem(SSO_INTENT_KEY, 'bind')
   // When
-  storeSsoTransaction({ state: 'new-state', provider: 'other-provider' }, null)
+  storeSsoTransaction({ state: 'new-state', provider: 'other-provider', intent: 'sign_in' }, null)
   // Then
   assert.equal(sessionStorage.getItem(SSO_INTENT_KEY), null)
   assert.equal(sessionStorage.getItem(SSO_CONTINUATION_KEY), null)
@@ -111,7 +124,7 @@ test('new SSO login replaces stale bind intent and invitation continuation', () 
 
 test('consuming SSO clears its sensitive transaction without clearing unrelated storage', () => {
   // Given
-  storeSsoTransaction(transaction, { from: { pathname: path } })
+  storeSsoTransaction(signIn, { from: { pathname: path } })
   sessionStorage.setItem('unrelated', 'preserved')
   // When
   consumeSsoTransaction(transaction)
@@ -121,12 +134,12 @@ test('consuming SSO clears its sensitive transaction without clearing unrelated 
 })
 
 for (const replacement of [
-  { state: 'new-state', provider: transaction.provider },
-  { state: transaction.state, provider: 'other-provider' },
+  { state: 'new-state', provider: transaction.provider, intent: 'sign_in' as const },
+  { state: transaction.state, provider: 'other-provider', intent: 'sign_in' as const },
 ]) {
   test(`late SSO cleanup preserves newer transaction ${JSON.stringify(replacement)}`, () => {
     // Given
-    storeSsoTransaction(transaction, null)
+    storeSsoTransaction(signIn, null)
     storeSsoTransaction(replacement, { from: { pathname: path } })
     // When
     consumeSsoTransaction(transaction)

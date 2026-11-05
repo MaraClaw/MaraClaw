@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
+from tests.oauth_state_fakes import REDIRECT_URI, install_state_redis, sign_in_state
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -18,7 +19,7 @@ from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import ForgotPasswordRequest, IdentityBindRequest, OAuthCallbackRequest, UserLogin
-from app.services import password_reset_service, system_email_service
+from app.services import oauth_state, password_reset_service, system_email_service
 from app.services.auth_registry import auth_provider_registry
 from app.services.email_verification_service import email_verification_service
 from app.services.sso_service import sso_service
@@ -27,6 +28,7 @@ from app.services.sso_service import sso_service
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
 async def test_callback_failure_rolls_back_owned_scope(monkeypatch, failure):
+    install_state_redis(monkeypatch)
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
     monkeypatch.setattr(auth.identity_provider_dao, "get_preferred", AsyncMock(return_value=None))
@@ -49,7 +51,7 @@ async def test_callback_failure_rolls_back_owned_scope(monkeypatch, failure):
         find_or_create_user=persist,
     )
     monkeypatch.setattr(auth_provider_registry, "get_provider", AsyncMock(return_value=provider))
-    data = OAuthCallbackRequest(code="code", state="state", redirect_uri="")
+    data = OAuthCallbackRequest(code="code", state=await sign_in_state("google"), redirect_uri="")
     with pytest.raises(failure):
         await auth.oauth_callback("google", data)
     assert pool.raw.rollbacks == 1
@@ -100,6 +102,8 @@ async def test_reset_email_waits_for_owning_commit(monkeypatch, failure):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revocation", ["membership", "identity", "tenant_drift", "identity_drift", "password"])
 async def test_bind_rejects_revoked_actor_after_remote_exchange(monkeypatch, revocation):
+    install_state_redis(monkeypatch)
+    state = await oauth_state.issue("google", REDIRECT_URI, oauth_state.OAuthIntent.BIND)
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
     identity = IdentityRecord(id=uuid4())
@@ -127,7 +131,7 @@ async def test_bind_rejects_revoked_actor_after_remote_exchange(monkeypatch, rev
     link = AsyncMock()
     monkeypatch.setattr(sso_service, "link_identity", link)
     with pytest.raises(HTTPException) as error:
-        await auth.bind_identity("google", IdentityBindRequest(provider_type="google", code="code"), actor)
+        await auth.bind_identity("google", IdentityBindRequest(provider_type="google", code="code", state=state), actor)
     assert error.value.status_code == 403
     link.assert_not_awaited()
     assert pool.raw.rollbacks == 1
@@ -207,6 +211,8 @@ async def test_unverified_login_commits_email_before_403(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revocation", ["inactive", "config", "config_in_place", "replacement", "removed", "sso"])
 async def test_http_callback_rejects_changed_provider_before_writes(monkeypatch, revocation):
+    install_state_redis(monkeypatch)
+    state = await sign_in_state("google")
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
     previous = IdentityProviderRecord(id=uuid4(), provider_type="google", name="Google", config={"client_id": "before"})
@@ -241,9 +247,7 @@ async def test_http_callback_rejects_changed_provider_before_writes(monkeypatch,
     app = FastAPI()
     app.include_router(auth.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/auth/google/callback", json={"code": "code", "state": "state", "redirect_uri": ""}
-        )
+        response = await client.post("/auth/google/callback", json={"code": "code", "state": state})
     assert response.status_code == 403
     persist.assert_not_awaited()
     assert pool.active == 0
@@ -253,6 +257,8 @@ async def test_http_callback_rejects_changed_provider_before_writes(monkeypatch,
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_new", [True, False])
 async def test_http_callback_preserves_unverified_identity_login(monkeypatch, is_new):
+    install_state_redis(monkeypatch)
+    state = await sign_in_state("google")
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
     identity = IdentityRecord(id=uuid4(), email="member@example.com", email_verified=False)
@@ -282,9 +288,7 @@ async def test_http_callback_preserves_unverified_identity_login(monkeypatch, is
     app = FastAPI()
     app.include_router(auth.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/auth/google/callback", json={"code": "code", "state": "state", "redirect_uri": ""}
-        )
+        response = await client.post("/auth/google/callback", json={"code": "code", "state": state})
     assert response.status_code == 200
     assert response.json()["user"]["id"] == str(user.id)
     assert response.json()["access_token"]
