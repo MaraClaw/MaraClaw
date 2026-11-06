@@ -57,12 +57,17 @@ stopped on success, and rollback restores the original without starting it.
 
 Explicit [replacement](../app/services/agent_manager.py) remains a separate path;
 OpenClaw upgrades call `start_container(..., rehydrate=False)`. Replacement
-prepares workspace/model/auth/config inputs, the image reference and port candidates
-before destroying an owned guest. The new guest is recorded `creating`; its
-readiness owner (ordinary start or upgrade) publishes the final runtime state. Preparation or
-admission refusal does not first destroy that guest. Workspace/config/auth writes
-are **not transactional or rolled back** and may already affect the old guest;
-upgrades skip workspace rehydration.
+resolves models and rehearses config/native-file generation in a temporary tree
+before admission and ownership checks. Only after all owned old guests stop and
+are removed does it materialize storage and apply workspace/config/auth writes.
+Local storage files that are already their own materialization source are left
+untouched, including SQLite databases and their WAL/SHM files. The new guest is
+recorded `creating`; its readiness owner (ordinary start or upgrade) publishes
+the final runtime state. Preparation, admission and ownership refusal leave the
+old guest's files untouched. Writes after cutover are **not transactional or
+rolled back**; a failure then clears the removed runtime and reports
+`runtime_failed`. Remote hydration holds admission until creation finishes,
+including first creation with no old guest; upgrades skip workspace rehydration.
 Preparation is not image-pull validation or a guarantee of Docker creation.
 Replacement is not atomic; failure after removal can leave no guest.
 
@@ -194,8 +199,7 @@ authentication; native turns connect to loopback from inside the owned guest. Th
 `openclaw.json` declares `gateway.controlUi.allowedOrigins` as exactly
 `http://localhost:18789` and `http://127.0.0.1:18789` (no wildcard), so OpenClaw
 no longer seeds them at startup for the non-loopback bind. The engine rewrites
-`gateway` wholesale on each config write (only `mcp`, `skills` and `plugins`
-entries are preserved), so extra origins added by hand to a guest's
+`gateway` wholesale on each config write, so extra origins added by hand to a guest's
 `openclaw.json` are not retained. OpenClaw's generic non-loopback warning still
 appears because it checks the in-container bind address, not authentication,
 origins or Docker's host binding; it is expected. Existing guests retain
@@ -204,6 +208,11 @@ the origins when the engine next rewrites it, such as on the next gated work
 turn or replacement/upgrade; the origins hot-reload without a gateway restart.
 The seeding notice is absent on the next gateway startup with that config.
 This change does not proactively migrate or restart existing guests.
+
+Config writes retain guest-owned fields, including agent identity and model policy,
+alongside MCP/skill/plugin entries and custom skill roots. Platform model selections,
+aliases, provider credentials, embedding search, gateway and tool settings remain
+authoritative; retired managed values are removed rather than merged back in.
 
 [Port allocation](../app/services/guest_ports.py) prefers the persisted port when
 it is in the inclusive `18789..28788` range, then uses distinct random candidates.
