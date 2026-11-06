@@ -43,6 +43,14 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(GatewayReportDeliveryRecord.from_row)
 
+    async def has_im_origin(self, message_id: UUID) -> bool:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT id FROM {self.table} WHERE message_id = %(id)s AND destination_kind = 'im' LIMIT 1",
+                {"id": message_id},
+            )
+        return row is not None
+
     async def create_intent(
         self,
         *,

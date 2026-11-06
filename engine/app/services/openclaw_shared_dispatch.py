@@ -36,6 +36,7 @@ from app.services.openclaw_model_selection import (
 )
 from app.services.openclaw_shared_scope import LaneAccess, authorize_lane, stale_reason
 from app.services.openclaw_update_exclusion import guest_write_section
+from app.services.openclaw_update_gate import assert_work_allowed
 from app.services.shared_chat import shared_session_id
 
 _MAX_PASSES = 16
@@ -96,6 +97,7 @@ async def _claim_in_transaction(request: SharedDispatchRequest) -> SharedClaimRe
     if peek.batch is not None and peek.batch.state == "pending" and not peek.due:
         return _blocked("not_due")
     access = await authorize_lane(agent_id)
+    await assert_work_allowed(agent_id)
     if not await gateway_message_dao.lock_shared_lane(agent_id, lane):
         return _blocked("lane_missing")
     for _ in range(_MAX_PASSES):

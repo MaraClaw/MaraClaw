@@ -11,6 +11,7 @@ from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.openclaw_guest_config import GuestConfigWriteError, apply_guest_model
 from app.services.openclaw_model_selection import resolve_stored_model
 from app.services.openclaw_update_exclusion import guest_write_section
+from app.services.openclaw_update_gate import assert_work_allowed
 
 
 class NativeClaimTransactionError(RuntimeError):
@@ -22,9 +23,11 @@ async def claim_ordinary_turn(agent: AgentRecord, message_id: UUID) -> GatewayMe
     if get_connection() is not None:
         raise NativeClaimTransactionError
     async with guest_write_section(agent.id), connection_ctx() as db:
-        await lock_tenants(db, (agent.tenant_id,))
-        await lock_user(db, agent.creator_id, agent.tenant_id)
+        # Tenant and owner are shared so concurrent claims for sibling agents proceed; ACL mutators still exclude.
+        await lock_tenants(db, (agent.tenant_id,), shared=True)
+        await lock_user(db, agent.creator_id, agent.tenant_id, shared=True)
         await lock_agent(db, agent.id, agent.tenant_id)
+        await assert_work_allowed(agent.id)
         fresh = await load_agent_for_new_work(agent.id)
         if (fresh.creator_id, fresh.tenant_id) != (agent.creator_id, agent.tenant_id):
             return None

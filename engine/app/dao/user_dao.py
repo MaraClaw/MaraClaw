@@ -256,7 +256,7 @@ class UserDAO(BaseDAO[UserRecord]):
 
     @override
     async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:
-        if not {"tenant_id", "role", "is_active"}.intersection(obj_in):
+        if not {"tenant_id", "role", "is_active", "identity_id"}.intersection(obj_in):
             updated = await super().update(db_obj=db_obj, obj_in=obj_in)
             await bump_user_session(updated.id)
             return updated

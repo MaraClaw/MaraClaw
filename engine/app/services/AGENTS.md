@@ -66,6 +66,7 @@ Operator policy and limitations: [guest containers](../../docs/guest-containers.
 - Slack and Teams are webhook/API integrations, not lifespan daemon managers.
 - Personal WhatsApp (QR) is not a manager singleton: the `connector` role runs `channels/whatsapp_personal_supervisor.py` (Node bridge in `connectors/whatsapp`). The required worker loop `openclaw_dispatch_reconciler.py` recovers pending native lane heads, including due Personal bursts, in keyset pages of 50 with a one-second scan interval; it never replays delivered work. Contract: `channels/AGENTS.md` and `../../docs/shared-openclaw-runtime.md`.
 - Auth providers, SSO, Google OAuth and IM channels remain supported independently of retired provider directory sync. Do not remove login, identity binding or channel behavior when changing shared organization members.
+- Native dispatch schedules one owned task per conversation lane, bounded by `OPENCLAW_AGENT_MAX_PARALLEL_TURNS`; Shared stays FIFO. `openclaw_gateway_stream.py` owns bounded best-effort web deltas, `openclaw_gateway_delivery.py` owns terminal persistence/publication, `response_identity.py` owns the identity prompt and configured-model-id redaction applied at both, and `gateway_report_wake.py` accelerates the durable relay after commit. Wire correlation is `turn_id`, distinct from the assistant `message_id`. See `../../docs/shared-openclaw-runtime.md` and `../../docs/gateway-report-delivery.md` before changing these boundaries.
 
 ## Bundled Skill Files
 

@@ -4426,6 +4426,9 @@
             "$ref": "#/components/schemas/TriggerNotificationEvent"
           },
           {
+            "$ref": "#/components/schemas/ChunkEvent"
+          },
+          {
             "$ref": "#/components/schemas/TextProgressEvent"
           },
           {
@@ -4495,6 +4498,72 @@
           "email"
         ],
         "title": "CheckEmailRequest",
+        "type": "object"
+      },
+      "ChunkEvent": {
+        "additionalProperties": true,
+        "description": "Streamed reply text. ``turn_id`` is the gateway message id the matching ``done`` repeats.\n\n``seq`` increases within one turn; ``replace`` means ``content`` is the whole live text so far.",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          },
+          "replace": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replace"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Seq"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Id"
+          },
+          "type": {
+            "const": "chunk",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ChunkEvent",
         "type": "object"
       },
       "ClawhubImportBody": {
@@ -6103,6 +6172,19 @@
             ],
             "default": null,
             "title": "Session Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Id"
           },
           "type": {
             "const": "done",
@@ -14743,7 +14825,6 @@
           },
           "type": {
             "enum": [
-              "chunk",
               "thinking",
               "status",
               "info"
@@ -41184,6 +41265,7 @@
       "ChatServerEvent",
       "ChatTicketRequest",
       "ChatTicketResponse",
+      "ChunkEvent",
       "ClickRequest",
       "CompanyAccessLevel",
       "CompanyReportOut",

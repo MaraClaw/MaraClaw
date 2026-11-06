@@ -15,6 +15,7 @@ from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_gateway_rpc, openclaw_routing, openclaw_turns
 from app.services.openclaw_gateway_rpc import UncertainOutcome
 from app.services.openclaw_shared_dispatch import claim_ready_shared
+from app.services.turn_timing import TurnTimeline
 from test_chat_submission_postgres import ReceiptDatabase
 
 receipt_database = shared_fixtures.receipt_database
@@ -29,7 +30,9 @@ async def test_shared_wake_dispatches_fifo_head_and_retains_uncertain_claim(
     messages = await shared_fixtures.seed_shared(db)
     dispatched: list[GatewayMessageRecord] = []
 
-    async def uncertain(_agent: AgentRecord, message: GatewayMessageRecord) -> UncertainOutcome:
+    async def uncertain(
+        _agent: AgentRecord, message: GatewayMessageRecord, *, timing: TurnTimeline | None = None
+    ) -> UncertainOutcome:
         assert get_connection() is None
         dispatched.append(message)
         return UncertainOutcome(str(message.id), "unknown", None, "connection_lost")

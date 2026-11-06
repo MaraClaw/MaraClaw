@@ -22,6 +22,7 @@ import { authSession } from '@/lib/auth-session'
 import { getSession, listSessionsPage, SESSION_PAGE_SIZE, type SessionListScope } from '@/lib/chat-sessions-api'
 import { chatSessionKey, chatSessionsKey, distinctSessions } from '@/lib/chat-sessions-query'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
+import { applyLiveChunk, clearLiveStream, createLiveStream } from '@/lib/chat/live-stream'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
@@ -87,7 +88,7 @@ export function AgentChatPage() {
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
   const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
-  const liveRef = useRef('')
+  const liveRef = useRef(createLiveStream())
   const threadRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const linesRef = useRef<Line[]>([])
@@ -160,7 +161,7 @@ export function AgentChatPage() {
       updateLines([])
       historyCountRef.current = 0
       rejectedTurnRef.current = false
-      liveRef.current = ''
+      liveRef.current = createLiveStream()
       setLive('')
       setThinking('')
       setInfo(null)
@@ -210,7 +211,7 @@ export function AgentChatPage() {
     updateLines(next)
     if (switched || !writable) {
       rejectedTurnRef.current = false
-      liveRef.current = ''
+      liveRef.current = switched ? createLiveStream() : clearLiveStream(liveRef.current)
       setLive('')
       setThinking('')
       setInfo(null)
@@ -218,7 +219,7 @@ export function AgentChatPage() {
       setSlow(false)
       return
     }
-    if (!next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
+    if (liveRef.current.turnId === null && !next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
       setThinking('')
@@ -306,8 +307,10 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.CHUNK: {
-          liveRef.current += textContent
-          setLive(liveRef.current)
+          const next = applyLiveChunk(liveRef.current, event)
+          if (next === liveRef.current) return
+          liveRef.current = next
+          setLive(next.text)
           setBusy(true)
           return
         }
@@ -361,7 +364,7 @@ export function AgentChatPage() {
           }
           updateLines(recovery.lines)
           rejectedTurnRef.current = true
-          liveRef.current = ''
+          liveRef.current = clearLiveStream(liveRef.current)
           setLive('')
           setThinking('')
           setInfo(null)
@@ -377,7 +380,8 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.DONE: {
-          const content = textContent || liveRef.current
+          const unrelated = event.turn_id != null && liveRef.current.turnId !== null && event.turn_id !== liveRef.current.turnId
+          const content = textContent || (unrelated ? '' : liveRef.current.text)
           const role = event.role ?? 'assistant'
           if (content || event.attachments?.length) {
             updateLines((prev) => {
@@ -390,10 +394,12 @@ export function AgentChatPage() {
               })
             })
           }
-          liveRef.current = ''
-          setLive('')
-          setThinking('')
-          setBusy(false)
+          liveRef.current = clearLiveStream(liveRef.current, event.turn_id)
+          setLive(liveRef.current.text)
+          if (!unrelated) {
+            setThinking('')
+            setBusy(false)
+          }
           void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
           return
         }

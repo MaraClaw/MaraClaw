@@ -143,6 +143,7 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
                 "type": "done",
                 "role": "assistant",
                 "content": "Guest answer",
+                "turn_id": str(msg.id),
                 "message_id": str(inserted_message.id),
                 "entry_id": str(inserted_message.id),
             },

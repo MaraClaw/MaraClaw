@@ -17,12 +17,15 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
 from app.api import gateway
+from app.config import get_settings
 from app.core.logging import configure_logging
 from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.llm_dao import llm_model_dao
 from app.db import session as session_module
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.llm import LLMModelRecord
 from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.org import OrgMemberRecord
 from app.schemas.schemas import GatewayReportRequest, GatewaySendMessageRequest
@@ -467,6 +470,7 @@ async def test_report_first_result_wins_and_all_side_effects_run_once(
                     "type": "done",
                     "role": "assistant",
                     "content": "first",
+                    "turn_id": str(env.row.id),
                     "message_id": str(env.inserted_id),
                     "entry_id": str(env.inserted_id),
                 },
@@ -474,6 +478,66 @@ async def test_report_first_result_wins_and_all_side_effects_run_once(
             {"user_id": str(env.session.user_id)},
         )
     ]
+
+
+_CONFIGURED_REF = "openrouter/nvidia/nemotron-3.5-super-vl:free"
+
+
+async def test_report_conceals_configured_model_ids_in_every_durable_and_live_destination(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    env.row.guest_model_ref = _CONFIGURED_REF
+
+    await gateway.report_result(
+        GatewayReportRequest(message_id=env.row.id, result=f"I am running on {_CONFIGURED_REF}."), "key"
+    )
+
+    expected = f"I am running on {get_settings().APP_NAME}."
+    assert delivery_store.rows[env.row.id].result == expected  # the IM and agent relays read this stored result
+    assert delivery_store.chat[0]["content"] == expected
+    assert env.calls["ws"][0][0][2]["content"] == expected
+    _assert_report_intents(delivery_store, env)
+
+
+async def test_report_also_conceals_every_other_assigned_model(
+    monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    fallback = LLMModelRecord(
+        id=uuid.uuid4(),
+        provider="openai",
+        model="gpt-5.1-codex-max",
+        api_key_encrypted="",
+        label="Backup",
+        tenant_id=env.tenant_id,
+    )
+    env.agent.fallback_model_id = fallback.id
+    env.row.guest_model_ref = _CONFIGURED_REF
+
+    async def get_many(ids: list[uuid.UUID]) -> list[LLMModelRecord]:
+        return [fallback] if fallback.id in ids else []
+
+    monkeypatch.setattr(llm_model_dao, "get_many", get_many)
+
+    won = await delivery.record_report(env.agent, env.row.id, "Backup: gpt-5.1-codex-max (openai/gpt-5.1-codex-max).")
+
+    brand = get_settings().APP_NAME
+    assert won is not None
+    assert won.message.result == f"Backup: {brand} ({brand})."
+
+
+async def test_report_leaves_ordinary_model_discussion_unchanged(
+    delivery_store: _DeliveryStore, report_env: SimpleNamespace
+) -> None:
+    env = report_env
+    env.row.guest_model_ref = _CONFIGURED_REF
+    text = "OpenRouter and NVIDIA publish many models; GPT-4o and Claude are common examples."
+
+    won = await delivery.record_report(env.agent, env.row.id, text)
+
+    assert won is not None
+    assert won.message.result == delivery_store.rows[env.row.id].result == delivery_store.chat[0]["content"] == text
 
 
 async def test_late_report_for_uncertain_delivery_wins_over_duplicate(
@@ -672,7 +736,7 @@ async def test_empty_report_keeps_delivery_intents_without_empty_assistant_chat(
     assert not delivery_store.chat
     assert not env.calls["insert"]
     assert len(env.calls["ws"]) == 1
-    assert env.calls["ws"][0][0][2] == {"type": "done", "role": "assistant", "content": ""}
+    assert env.calls["ws"][0][0][2] == {"type": "done", "role": "assistant", "content": "", "turn_id": str(env.row.id)}
     _assert_report_intents(delivery_store, env)
 
 
@@ -687,7 +751,11 @@ async def test_publish_report_only_sends_authoritative_ws_without_creating_or_de
 
     assert env.calls["ws"] == [
         (
-            (str(env.agent.id), str(env.session.id), {"type": "done", "role": "assistant", "content": "authoritative"}),
+            (
+                str(env.agent.id),
+                str(env.session.id),
+                {"type": "done", "role": "assistant", "content": "authoritative", "turn_id": str(env.row.id)},
+            ),
             {"user_id": str(env.session.user_id)},
         )
     ]

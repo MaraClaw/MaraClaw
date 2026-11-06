@@ -121,6 +121,7 @@ class DoneEvent(_ChatEvent[Literal[ChatEventType.DONE]]):
     message_id: UUID | None = None
     entry_id: UUID | None = None
     client_submission_id: UUID | None = None
+    turn_id: UUID | None = None
     attachments: list[ChatAttachmentReference] | None = None
 
 
@@ -149,10 +150,19 @@ class _ProgressEvent[EventTag: str](_ChatEvent[EventTag]):
         return _JSON_OBJECT_ADAPTER.validate_python(value)
 
 
-class TextProgressEvent(
-    _ProgressEvent[Literal[ChatEventType.CHUNK, ChatEventType.THINKING, ChatEventType.STATUS, ChatEventType.INFO]]
-):
+class TextProgressEvent(_ProgressEvent[Literal[ChatEventType.THINKING, ChatEventType.STATUS, ChatEventType.INFO]]):
     pass
+
+
+class ChunkEvent(_ProgressEvent[Literal[ChatEventType.CHUNK]]):
+    """Streamed reply text. ``turn_id`` is the gateway message id the matching ``done`` repeats.
+
+    ``seq`` increases within one turn; ``replace`` means ``content`` is the whole live text so far.
+    """
+
+    turn_id: UUID | None = None
+    seq: int | None = Field(default=None, ge=0)
+    replace: bool | None = None
 
 
 class LivePreview(_WireModel):
@@ -186,7 +196,7 @@ def _event_tag(value: object) -> str | None:
         tag = value.type
     else:
         return None
-    if tag in (ChatEventType.CHUNK, ChatEventType.THINKING, ChatEventType.STATUS, ChatEventType.INFO):
+    if tag in (ChatEventType.THINKING, ChatEventType.STATUS, ChatEventType.INFO):
         return "text_progress"
     return tag if isinstance(tag, str) else None
 
@@ -202,6 +212,7 @@ type ChatServerEvent = Annotated[
     | Annotated[DoneEvent, Tag(ChatEventType.DONE)]
     | Annotated[OnboardedEvent, Tag(ChatEventType.ONBOARDED)]
     | Annotated[TriggerNotificationEvent, Tag(ChatEventType.TRIGGER_NOTIFICATION)]
+    | Annotated[ChunkEvent, Tag(ChatEventType.CHUNK)]
     | Annotated[TextProgressEvent, Tag("text_progress")]
     | Annotated[ToolCallEvent, Tag(ChatEventType.TOOL_CALL)]
     | Annotated[AgentBayLiveEvent, Tag(ChatEventType.AGENTBAY_LIVE)]

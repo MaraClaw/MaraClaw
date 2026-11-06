@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.config import get_settings
 from app.core.logging import logger
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.session import connection_ctx, get_connection
@@ -39,6 +40,7 @@ from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
+from app.services.turn_timing import TurnOutcomeKind, TurnTimeline
 
 
 async def prepare_openclaw_message(
@@ -139,18 +141,11 @@ async def _claim_wake(agent: AgentRecord, message_id: UUID) -> GatewayMessageRec
 
 
 async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | None = None) -> None:
-    try:
-        await assert_work_allowed(agent.id)
-    except OpenClawUpdateGateError as gate:
-        logger.info("[OpenClaw] inbox wake left pending for {}: {}", agent.id, gate.code)
-        return
-    try:
-        agent = await load_agent_for_new_work(agent.id)
-    except AgentExpired, HTTPException:
-        return
     if message_id is None:
         return
     claimed: GatewayMessageRecord | None = None
+    timeline: TurnTimeline | None = None
+    outcome_kind: TurnOutcomeKind = "failed"
     try:
         from app.services.openclaw_gateway_delivery import publish_report, settle_native_report
         from app.services.openclaw_gateway_rpc import (
@@ -160,15 +155,27 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
             execute_gateway_turn,
         )
 
-        claimed = await _claim_wake(agent, message_id)
+        try:
+            claimed = await _claim_wake(agent, message_id)
+        except OpenClawUpdateGateError as gate:
+            # The claim checks the gate in its transaction, leaving refused work pending.
+            logger.info("[OpenClaw] inbox wake left pending for {}: {}", agent.id, gate.code)
+            return
+        except AgentExpired, HTTPException:
+            return
         if claimed is None:
             return
+        timeline = TurnTimeline.claimed(claimed)
         try:
-            outcome = await execute_gateway_turn(agent, claimed)
+            outcome = await execute_gateway_turn(agent, claimed, timing=timeline)
         except WorkspaceLockTimeoutError, GuestConfigWriteError, OpenClawUpdateGateError:
             # These adapter boundaries refuse before sending any RPC request.
+            outcome_kind = "released"
             _ = await drain_on_cancel(gateway_message_dao.release_delivery(claimed))
             return
+        timeline.mark("rpc_returned")
+        timeline.adapter(outcome.timing)
+        outcome_kind = outcome.kind
         match outcome:
             case NotAdmittedOutcome():
                 _ = await drain_on_cancel(gateway_message_dao.release_delivery(claimed))
@@ -183,23 +190,80 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
                     case unreachable:
                         assert_never(unreachable)
                 report = await settle_native_report(agent, claimed.id, result)
+                timeline.mark("settled")
                 if report is not None:
                     await publish_report(agent, report)
+                    timeline.mark("published")
             case UncertainOutcome():
                 logger.warning("[OpenClaw] admission uncertain for message {}", claimed.id)
             case unreachable:
                 assert_never(unreachable)
     except asyncio.CancelledError:
+        outcome_kind = "cancelled"
         raise
     except Exception:
         # Admission is unknown after an unexpected boundary failure. Retain every lane's claim.
+        outcome_kind = "failed"
         logger.warning("[OpenClaw] native dispatch failed agent={} code=dispatch_failed", agent.id)
+    finally:
+        if timeline is not None:
+            timeline.emit(outcome_kind)
 
 
 _wake_tasks: set[asyncio.Task[None]] = set()
 _wake_admission = TaskAdmission("Inbox wake", _wake_tasks)
 _wake_running: set[UUID] = set()
 _wake_again: set[UUID] = set()
+_lane_running: set[tuple[UUID, str]] = set()
+_lane_again: set[tuple[UUID, str]] = set()
+_wake_semaphores: dict[UUID, asyncio.Semaphore] = {}
+
+
+def _forget_idle_semaphore(agent_id: UUID) -> None:
+    if agent_id not in _wake_running and not any(key[0] == agent_id for key in _lane_running):
+        _wake_semaphores.pop(agent_id, None)
+
+
+def _start_lane(agent: AgentRecord, pending: GatewayMessageRecord) -> None:
+    key = (agent.id, pending.conversation_id or str(pending.id))
+    if key in _lane_running:
+        _lane_again.add(key)
+        return
+    _lane_running.add(key)
+    semaphore = _wake_semaphores.setdefault(
+        agent.id, asyncio.Semaphore(get_settings().OPENCLAW_AGENT_MAX_PARALLEL_TURNS)
+    )
+
+    async def run_lane() -> None:
+        row = pending
+        try:
+            while True:
+                async with semaphore:
+                    if not _wake_admission.accepting:
+                        break
+                    await _run_inbox_wake(agent, row.content, row.id)
+                if key not in _lane_again:
+                    break
+                # Consume before re-listing so a wake during that read survives the next turn.
+                while True:
+                    _lane_again.discard(key)
+                    rows = await gateway_message_dao.list_pending(agent.id)
+                    head = next((item for item in rows if (item.conversation_id or str(item.id)) == key[1]), None)
+                    if head is not None or key not in _lane_again:
+                        break
+                if head is None:
+                    break
+                row = head
+        except Exception:
+            logger.warning("[OpenClaw] native lane failed agent={} code=drain_failed", agent.id)
+        finally:
+            _lane_running.discard(key)
+            _lane_again.discard(key)
+            _forget_idle_semaphore(agent.id)
+
+    task = asyncio.create_task(run_lane())
+    _wake_tasks.add(task)
+    task.add_done_callback(_wake_tasks.discard)
 
 
 def open_wake_admission() -> None:
@@ -258,7 +322,7 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
                     if lane in attempted:
                         continue
                     attempted.add(lane)
-                    await _run_inbox_wake(agent, pending.content, pending.id)
+                    _start_lane(agent, pending)
                 if agent.id not in _wake_again or not _wake_admission.accepting:
                     break
         except Exception:
@@ -266,6 +330,7 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
         finally:
             _wake_running.discard(agent.id)
             _wake_again.discard(agent.id)
+            _forget_idle_semaphore(agent.id)
 
     task = loop.create_task(_run())
     _wake_tasks.add(task)

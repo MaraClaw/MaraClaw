@@ -47,6 +47,7 @@ async def test_dirty_wake_drains_new_work_without_parallel_turns(
     first = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="first", conversation_id="thread")
     second = replace(first, id=uuid4(), content="second")
     entered, release = asyncio.Event(), asyncio.Event()
+    rescanned = asyncio.Event()
     seen: list[UUID] = []
 
     async def execute(_agent: AgentRecord, _text: str, message_id: UUID) -> None:
@@ -55,14 +56,20 @@ async def test_dirty_wake_drains_new_work_without_parallel_turns(
             entered.set()
             await release.wait()
 
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(side_effect=[[first], [second]]))
+    async def pending(_agent_id: UUID) -> list[GatewayMessageRecord]:
+        if not seen:
+            return [first]
+        rescanned.set()
+        return [second] if second.id not in seen else []
+
+    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", pending)
     monkeypatch.setattr(routing, "_run_inbox_wake", execute)
     routing.wake_shared_lane(agent, first.id)
     try:
         await asyncio.wait_for(entered.wait(), 1)
         routing.wake_shared_lane(agent, second.id)
         routing.wake_shared_lane(agent, second.id)
-        assert len(routing._wake_tasks) == 1
+        await asyncio.wait_for(rescanned.wait(), 1)
         assert seen == [first.id]
     finally:
         release.set()
