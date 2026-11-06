@@ -19,6 +19,7 @@ This package handles cross-process realtime routing. Local WebSocket connection 
 
 - `chat_authorization.py` `authorize_chat_delivery` runs for every local send. Ordinary sessions pass; a delivery targeting the agent's shared session needs the socket's `ChatTicketBinding` for that exact agent and session, then `chat_tickets.authorize` (fresh principal and `check_agent_access(..., fresh=True)`) and `authorized_session` reauthorize it. Any failure silently skips that socket.
 - The receiving side runs the same check: `api/websocket.py` `deliver_pubsub_message` calls `authorize_chat_delivery` for pub/sub deliveries. Keep both call sites; do not move authorization to the publisher.
+- `route_message(send_timeout=)` bounds only each `ws.send_json`; a timed-out socket is skipped like any failed send. Never put a deadline around `send_to_session` or `route_message` themselves: cancelling `authorize_chat_delivery` discards the positive decision it is about to cache, so every later chunk re-authorizes and is cancelled again, and cancelling routing skips remote instances.
 
 ## Editing Rules
 
@@ -26,4 +27,4 @@ This package handles cross-process realtime routing. Local WebSocket connection 
 - Do not create ad hoc Redis clients for realtime paths. Use the router and `get_redis()`, and keep startup and shutdown in `app.runtime.lifecycle`.
 - Preserve JSON event shapes used by websocket clients and trigger notifications.
 - Treat Redis failures as cross-process delivery failures; do not let them corrupt local connection state.
-- Tests: `tests/test_realtime_contracts.py`, `tests/test_realtime_readiness.py`, `tests/test_shared_chat_realtime.py`.
+- Tests: `tests/test_realtime_contracts.py`, `tests/test_realtime_readiness.py`, `tests/test_shared_chat_realtime.py`, `tests/test_chunk_live_delivery.py` (slow-but-healthy authorization/Redis, stalled socket, bounded stream drain).

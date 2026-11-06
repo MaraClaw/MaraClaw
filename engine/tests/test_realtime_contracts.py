@@ -129,9 +129,15 @@ async def test_presence_preserves_partial_hashes_empty_strings_and_stale_cleanup
         "realtime:ws:conn:stale": {},
     }
     remove = AsyncMock()
+    read = Mock()
+    pipe = MagicMock()
+    pipe.hgetall = read
+    pipe.__aenter__ = AsyncMock(return_value=pipe)
+    pipe.__aexit__ = AsyncMock(return_value=False)
+    pipe.execute = AsyncMock(side_effect=lambda: [hashes[queued.args[0]] for queued in read.call_args_list])
     store = SimpleNamespace(
         smembers=AsyncMock(return_value={b"partial", "session", "stale"}),
-        hgetall=AsyncMock(side_effect=hashes.__getitem__),
+        pipeline=Mock(return_value=pipe),
         srem=remove,
     )
     monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=store))
@@ -144,6 +150,8 @@ async def test_presence_preserves_partial_hashes_empty_strings_and_stale_cleanup
         (("session_id", " session "),),
     }
     remove.assert_awaited_once_with("realtime:ws:agent:agent", "stale")
+    store.pipeline.assert_called_once()
+    assert read.call_count == 3
 
 
 @pytest.mark.parametrize(("session_id", "user_id"), [(None, None), ("", ""), ("session", "user")])
