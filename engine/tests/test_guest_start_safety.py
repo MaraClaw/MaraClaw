@@ -103,8 +103,13 @@ def env(tmp_path, monkeypatch):
 
 
 async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
-    # Given an existing guest and a failing final preparation step.
+    # Given an existing guest with on-disk state and a failing final preparation step.
     manager, docker, agent = env
+    directory = manager._agent_dir(agent.id)
+    config = directory / "openclaw.json"
+    old_config = '{"plugins": {"entries": {"custom": {"enabled": true}}}}'
+    config.write_text(old_config, encoding="utf-8")
+    old_listing = sorted(path.name for path in directory.iterdir())
 
     def fail(_directory):
         raise OSError("disk full")
@@ -113,9 +118,11 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     # When preparation fails (the HTTP boundary supplies the typed response).
     with pytest.raises(GuestStartPreflightError):
         await manager.replace_container(agent)
-    # Then no runtime reference or old guest was destroyed.
+    # Then no runtime reference or old guest was destroyed, and the guest's files are exactly as it left them.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == []
+    assert config.read_text(encoding="utf-8") == old_config
+    assert sorted(path.name for path in directory.iterdir()) == old_listing
 
 
 async def test_token_persistence_failure_precedes_guest_mutation(env, monkeypatch):
