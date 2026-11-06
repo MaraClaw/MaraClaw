@@ -351,27 +351,26 @@ class AnthropicClient(LLMClient):
                             if signature is not None:
                                 full_signature = signature
 
-                        elif delta_type == "input_json_delta":
-                            if idx in tool_call_index_map:
-                                tc_idx = tool_call_index_map[idx]
-                                tool_call = tool_calls_data[tc_idx]
-                                function = tool_call.get("function") or {}
-                                tool_name = function.get("name") or ""
-                                arguments = function.get("arguments")
-                                current_arguments = arguments if isinstance(arguments, str) else ""
-                                partial_json = delta.get("partial_json", "")
-                                updated_arguments = current_arguments + (
-                                    partial_json if isinstance(partial_json, str) else ""
-                                )
-                                tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
-                                if on_tool_delta:
-                                    delta_callback_data: ToolCallbackData = {
-                                        "id": tool_call.get("id") or f"draft-{idx}",
-                                        "index": idx,
-                                        "name": tool_name,
-                                        "arguments": updated_arguments,
-                                    }
-                                    await on_tool_delta(delta_callback_data)
+                        elif delta_type == "input_json_delta" and idx in tool_call_index_map:
+                            tc_idx = tool_call_index_map[idx]
+                            tool_call = tool_calls_data[tc_idx]
+                            function = tool_call.get("function") or {}
+                            tool_name = function.get("name") or ""
+                            arguments = function.get("arguments")
+                            current_arguments = arguments if isinstance(arguments, str) else ""
+                            partial_json = delta.get("partial_json", "")
+                            updated_arguments = current_arguments + (
+                                partial_json if isinstance(partial_json, str) else ""
+                            )
+                            tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
+                            if on_tool_delta:
+                                delta_callback_data: ToolCallbackData = {
+                                    "id": tool_call.get("id") or f"draft-{idx}",
+                                    "index": idx,
+                                    "name": tool_name,
+                                    "arguments": updated_arguments,
+                                }
+                                await on_tool_delta(delta_callback_data)
 
                     elif current_event == "message_delta":
                         delta = json_object_from(data.get("delta"))

@@ -7,10 +7,11 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import assert_never
+from typing import assert_never, cast
 
 from fastapi import WebSocket
 from redis.asyncio import Redis
+from redis.asyncio.client import Pipeline
 
 from app.config import get_settings
 from app.core.events import get_redis
@@ -29,6 +30,7 @@ from app.services.realtime_runtime.subscription import AcknowledgedPubSub
 settings = get_settings()
 
 PRESENCE_TTL_SECONDS = 180
+PRESENCE_REFRESH_SECONDS = 60
 PUBSUB_PREFIX = "realtime:ws"
 
 
@@ -77,15 +79,42 @@ class RealtimeRouter:
             "instance_id": self.instance_id,
         }
         async with redis_client.pipeline(transaction=True) as pipe:
-            _ = pipe.sadd(self._agent_index_key(agent_id), connection_id)
-            connection_key = self._connection_key(connection_id)
-            for field, value in payload.items():
-                _ = pipe.hset(connection_key, field, value)
-            _ = pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
-            _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
+            self._queue_presence(pipe, agent_id, connection_id, payload)
             _ = await pipe.execute()
         websocket.state.realtime_connection_id = connection_id
+        websocket.state.realtime_presence = payload
         return connection_id
+
+    def _queue_presence(self, pipe: Pipeline, agent_id: str, connection_id: str, payload: RealtimePresence) -> None:
+        connection_key = self._connection_key(connection_id)
+        _ = pipe.sadd(self._agent_index_key(agent_id), connection_id)
+        for field, value in payload.items():
+            _ = pipe.hset(connection_key, field, value)
+        _ = pipe.expire(connection_key, PRESENCE_TTL_SECONDS)
+        _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
+
+    async def refresh_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
+        """Re-apply the presence TTL to a registered connection; no-op when it was never registered.
+
+        If either key already expired (a stalled refresh), the presence is rewritten under the
+        same connection id; ``SADD`` keeps the agent index free of duplicate members.
+        """
+        connection_id = getattr(websocket.state, "realtime_connection_id", None)
+        if not isinstance(connection_id, str) or not connection_id:
+            return
+        redis_client: Redis = await get_redis()
+        async with redis_client.pipeline(transaction=True) as pipe:
+            _ = pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
+            _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
+            refreshed = list[object](await pipe.execute())
+        if all(refreshed):
+            return
+        payload = getattr(websocket.state, "realtime_presence", None)
+        if not isinstance(payload, dict):
+            return
+        async with redis_client.pipeline(transaction=True) as pipe:
+            self._queue_presence(pipe, agent_id, connection_id, cast("RealtimePresence", payload))
+            _ = await pipe.execute()
 
     async def unregister_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
         connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
@@ -120,7 +149,14 @@ class RealtimeRouter:
         local_connections: list[tuple[WebSocket, str | None, str | None]],
         session_id: str | None = None,
         user_id: str | None = None,
+        send_timeout: float | None = None,
     ) -> None:
+        """Deliver locally, then route to remote instances.
+
+        ``send_timeout`` bounds only ``ws.send_json``, the one wait a client controls. Authorization and Redis
+        presence are never cancelled by it: aborting authorization discards the positive decision it would cache,
+        and aborting routing skips remote instances. A stalled socket is skipped like any other failed send.
+        """
         local_sent = 0
         for ws, local_session_id, local_user_id in list(local_connections):
             if session_id is not None and local_session_id != session_id:
@@ -130,10 +166,11 @@ class RealtimeRouter:
             try:
                 if not await authorize_chat_delivery(ws, agent_id, local_session_id):
                     continue
-                await ws.send_json(message)
+                async with asyncio.timeout(send_timeout):
+                    await ws.send_json(message)
                 local_sent += 1
             except Exception as exc:
-                logger.warning(f"[Realtime] Failed to send local websocket message: {exc}")
+                logger.warning(f"[Realtime] Failed to send local websocket message: {exc!r}")
 
         remote_targets: dict[str, int] = {}
         for record in await self._list_presence(agent_id):
@@ -247,11 +284,14 @@ class RealtimeRouter:
         connection_ids = await redis_client.smembers(self._agent_index_key(agent_id))
         if not connection_ids:
             return []
+        connection_id_texts = [_redis_text(connection_id) for connection_id in connection_ids]
+        async with redis_client.pipeline(transaction=False) as pipe:
+            for connection_id_text in connection_id_texts:
+                _ = pipe.hgetall(self._connection_key(connection_id_text))
+            presence_rows = cast("list[dict[str | bytes, str | bytes]]", await pipe.execute())
         records: list[RealtimePresence] = []
         stale_ids: list[str] = []
-        for connection_id in connection_ids:
-            connection_id_text = _redis_text(connection_id)
-            presence_raw: object = await redis_client.hgetall(self._connection_key(connection_id_text))
+        for connection_id_text, presence_raw in zip(connection_id_texts, presence_rows, strict=True):
             if not presence_raw:
                 stale_ids.append(connection_id_text)
                 continue

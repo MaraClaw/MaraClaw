@@ -3,7 +3,7 @@
 import re
 import uuid
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,6 +12,7 @@ from app.api.auth import get_current_user
 from app.core.json_types import str_list_from_row
 from app.core.logging import logger
 from app.core.notification_kinds import NotificationKind
+from app.core.permissions import check_agent_access
 from app.dao.agent_dao import agent_dao
 from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.user_dao import user_dao
@@ -26,17 +27,17 @@ router = APIRouter(prefix="/api/plaza", tags=["plaza"])
 
 class PostCreate(BaseModel):
     content: str = Field(..., max_length=500)
-    author_id: uuid.UUID
-    author_type: str = "human"  # "agent" or "human"
-    author_name: str
+    author_id: uuid.UUID | None = None
+    author_type: Literal["human", "agent"] = "human"
+    author_name: str | None = None
     tenant_id: uuid.UUID | None = None
 
 
 class CommentCreate(BaseModel):
     content: str = Field(..., max_length=300)
-    author_id: uuid.UUID
-    author_type: str = "human"
-    author_name: str
+    author_id: uuid.UUID | None = None
+    author_type: Literal["human", "agent"] = "human"
+    author_name: str | None = None
 
 
 class PostOut(BaseModel):
@@ -133,18 +134,30 @@ def _effective_tenant_id(current_user: UserRecord, tenant_id: str | None = None)
     return effective
 
 
-async def _assert_company_agent_author(
-    author_id: uuid.UUID,
-    *,
-    effective_tenant_id: str | uuid.UUID | None,
-    action: str,
-) -> None:
-    agent = await agent_dao.get(author_id)
-    tenant_mismatch = False
-    if effective_tenant_id is not None and effective_tenant_id and agent:
-        tenant_mismatch = str(agent.tenant_id) != str(effective_tenant_id)
-    if not agent or tenant_mismatch or agent.is_system or (agent.access_mode or "company") != "company":
-        raise HTTPException(403, f"Only company-wide agents can {action} Plaza")
+async def _resolve_author(
+    current_user: UserRecord, author_id: uuid.UUID | None, author_type: Literal["human", "agent"]
+) -> tuple[uuid.UUID, str]:
+    """Resolve human identity from the session and authorize REST agent authorship."""
+    match author_type:
+        case "human":
+            return current_user.id, current_user.display_name or current_user.email or "Member"
+        case "agent":
+            if author_id is None:
+                raise HTTPException(422, "Agent author_id is required")
+            agent = await agent_dao.get(author_id)
+            if (
+                not agent
+                or (current_user.tenant_id is not None and agent.tenant_id != current_user.tenant_id)
+                or agent.is_system
+                or (agent.access_mode or "company") != "company"
+            ):
+                raise HTTPException(403, "Only company-wide agents can act on Plaza")
+            authorized_agent, access = await check_agent_access(current_user, author_id)
+            if access != "manage":
+                raise HTTPException(403, "Manage access is required for agent authorship")
+            return authorized_agent.id, authorized_agent.name
+        case unreachable:
+            assert_never(unreachable)
 
 
 # ── Routes ──────────────────────────────────────────
@@ -201,13 +214,12 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
     if len(body.content.strip()) == 0:
         raise HTTPException(400, "Content cannot be empty")
     effective_tenant_id = current_user.tenant_id
-    if body.author_type == "agent":
-        await _assert_company_agent_author(body.author_id, effective_tenant_id=effective_tenant_id, action="post to")
+    author_id, author_name = await _resolve_author(current_user, body.author_id, body.author_type)
     post = await plaza_post_dao.create_post(
         {
-            "author_id": body.author_id,
+            "author_id": author_id,
             "author_type": body.author_type,
-            "author_name": body.author_name,
+            "author_name": author_name,
             "content": body.content[:500],
             "tenant_id": effective_tenant_id,
             "likes_count": 0,
@@ -215,7 +227,7 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
         }
     )
     try:
-        await _notify_mentions(body.content, body.author_id, body.author_name, post.id, effective_tenant_id)
+        await _notify_mentions(body.content, author_id, author_name, post.id, effective_tenant_id)
     except Exception as error:
         logger.warning(f"[Plaza] Failed to notify post mentions: {error}")
     return PostOut.model_validate(post)
@@ -280,8 +292,7 @@ async def create_comment(
     if len(body.content.strip()) == 0:
         raise HTTPException(400, "Content cannot be empty")
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    if body.author_type == "agent":
-        await _assert_company_agent_author(body.author_id, effective_tenant_id=effective_tenant_id, action="comment on")
+    author_id, author_name = await _resolve_author(current_user, body.author_id, body.author_type)
 
     post = await plaza_post_dao.get_post(post_id)
     if not post:
@@ -296,15 +307,15 @@ async def create_comment(
     comment = await plaza_comment_dao.create_comment(
         {
             "post_id": post_id,
-            "author_id": body.author_id,
+            "author_id": author_id,
             "author_type": body.author_type,
-            "author_name": body.author_name,
+            "author_name": author_name,
             "content": body.content[:300],
         }
     )
     _ = await plaza_post_dao.increment_comments_count(post_id)
 
-    if post.author_id != body.author_id:
+    if post.author_id != author_id:
         try:
             from app.services.notification_service import send_notification
 
@@ -312,32 +323,32 @@ async def create_comment(
                 _ = await send_notification(
                     agent_id=post.author_id,
                     notification_kind=NotificationKind.PLAZA_REPLY,
-                    title=f"{body.author_name} commented on your post",
+                    title=f"{author_name} commented on your post",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",
                     ref_id=post_id,
-                    sender_name=body.author_name,
+                    sender_name=author_name,
                 )
                 post_agent = await agent_dao.get(post.author_id)
                 if post_agent and post_agent.creator_id:
                     _ = await send_notification(
                         user_id=post_agent.creator_id,
                         notification_kind=NotificationKind.PLAZA_COMMENT,
-                        title=f"{body.author_name} commented on {post_agent.name}'s post",
+                        title=f"{author_name} commented on {post_agent.name}'s post",
                         body=body.content[:100],
                         link=f"/plaza?post={post_id}",
                         ref_id=post_id,
-                        sender_name=body.author_name,
+                        sender_name=author_name,
                     )
             elif post.author_type == "human":
                 _ = await send_notification(
                     user_id=post.author_id,
                     notification_kind=NotificationKind.PLAZA_REPLY,
-                    title=f"{body.author_name} commented on your post",
+                    title=f"{author_name} commented on your post",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",
                     ref_id=post_id,
-                    sender_name=body.author_name,
+                    sender_name=author_name,
                 )
         except Exception as error:
             logger.warning(f"[Plaza] Failed to notify post author: {error}")
@@ -346,7 +357,7 @@ async def create_comment(
         from app.services.notification_service import send_notification
 
         other_authors = await plaza_comment_dao.list_distinct_comment_authors(post_id)
-        notified = {post.author_id, body.author_id}
+        notified = {post.author_id, author_id}
         for cid, ctype in other_authors:
             if cid in notified:
                 continue
@@ -355,17 +366,17 @@ async def create_comment(
                 _ = await send_notification(
                     agent_id=cid,
                     notification_kind=NotificationKind.PLAZA_REPLY,
-                    title=f"{body.author_name} also commented on a post you commented on",
+                    title=f"{author_name} also commented on a post you commented on",
                     body=body.content[:150],
                     link=f"/plaza?post={post_id}",
                     ref_id=post_id,
-                    sender_name=body.author_name,
+                    sender_name=author_name,
                 )
     except Exception as error:
         logger.warning(f"[Plaza] Failed to notify prior commenters: {error}")
 
     try:
-        await _notify_mentions(body.content, body.author_id, body.author_name, post_id, post.tenant_id)
+        await _notify_mentions(body.content, author_id, author_name, post_id, post.tenant_id)
     except Exception as error:
         logger.warning(f"[Plaza] Failed to notify comment mentions: {error}")
 
@@ -375,11 +386,12 @@ async def create_comment(
 @router.post("/posts/{post_id}/like", response_model=None)
 async def like_post(
     post_id: uuid.UUID,
-    author_id: uuid.UUID,
-    author_type: str = "human",
+    author_id: uuid.UUID | None = None,
+    author_type: Literal["human", "agent"] = "human",
     current_user: UserRecord = Depends(get_current_user),
 ) -> PlazaLikeResponse:
     """Like a post (toggle). Requires authentication; enforces tenant isolation."""
+    resolved_author_id, _ = await _resolve_author(current_user, author_id, author_type)
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     post = await plaza_post_dao.get_post(post_id)
     if not post:
@@ -390,11 +402,7 @@ async def like_post(
         and str(post.tenant_id) != effective_tenant_id
     ):
         raise HTTPException(403, "No access to this post")
-    existing = await plaza_like_dao.get_by_post_and_author(post_id, author_id)
-    if existing:
-        _ = await plaza_like_dao.delete_by_post_and_author(post_id, author_id)
-        _ = await plaza_post_dao.adjust_likes_count(post_id, -1)
-        return {"liked": False}
-    _ = await plaza_like_dao.create(obj_in={"post_id": post_id, "author_id": author_id, "author_type": author_type})
-    _ = await plaza_post_dao.adjust_likes_count(post_id, 1)
-    return {"liked": True}
+    liked = await plaza_like_dao.toggle(post_id, resolved_author_id, author_type)
+    if liked is None:
+        raise HTTPException(404, "Post not found")
+    return {"liked": liked}

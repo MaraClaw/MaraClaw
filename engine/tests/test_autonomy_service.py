@@ -85,3 +85,35 @@ async def test_execute_approved_action_dispatches_serialized_mapping_arguments(
     assert result == "executor sentinel"
     assert received_arguments == [expected_arguments]
     assert received_arguments[0] is expected_arguments
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [{"path": "report.md", "content": "row\n" * 400}, {}], ids=["long", "empty"])
+async def test_execute_approved_action_replays_stored_arguments_over_the_summary(
+    monkeypatch: pytest.MonkeyPatch, stored: ToolParameters
+) -> None:
+    # Given a held call whose bounded summary is cut mid-literal, with the complete arguments stored privately.
+    agent_id = uuid.uuid4()
+    received_arguments: list[ToolParameters] = []
+
+    async def direct_executor(
+        _tool_name: str,
+        observed_arguments: ToolParameters,
+        _agent_id: uuid.UUID,
+    ) -> str:
+        received_arguments.append(observed_arguments)
+        return "executor sentinel"
+
+    monkeypatch.setattr("app.services.agent_tool_exec.dispatcher._execute_tool_direct", direct_executor)
+
+    # When the approved action is replayed.
+    result = await AutonomyService()._execute_approved_action(
+        agent_id,
+        "write_workspace_files",
+        {"tool": "write_file", "args": "{'path': 'repo"},
+        stored,
+    )
+
+    # Then the executor receives exactly the stored arguments, even when they are empty.
+    assert result == "executor sentinel"
+    assert received_arguments == [stored]

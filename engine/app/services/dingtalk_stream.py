@@ -19,8 +19,10 @@ from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.runtime.tasks import EventTasks
+from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
+from app.services.document_parser import MAX_INPUT_BYTES
 from app.services.storage import store_agent_upload
 
 
@@ -122,41 +124,54 @@ def _parse_dingtalk_message(payload: object) -> _DingTalkMessage:
 
 
 async def _get_media_download_url(access_token: str, download_code: str, robot_code: str) -> str | None:
-    """Get media file download URL from DingTalk API."""
+    """Get media file download URL from DingTalk API.
+
+    Timeouts, transport errors and 5xx propagate so DingTalk redelivers the message; any other failure is ``None``.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            "https://api.dingtalk.com/v1.0/robot/messageFiles/download",
+            headers={"x-acs-dingtalk-access-token": access_token},
+            json={"downloadCode": download_code, "robotCode": robot_code},
+        )
+    if resp.is_server_error:
+        _ = resp.raise_for_status()
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "https://api.dingtalk.com/v1.0/robot/messageFiles/download",
-                headers={"x-acs-dingtalk-access-token": access_token},
-                json={"downloadCode": download_code, "robotCode": robot_code},
-            )
-            data = json_object_from_response(resp)
-            url = json_as_str(data.get("downloadUrl"))
-            if url not in (None, ""):
-                return url
-            logger.error(f"[DingTalk] Failed to get download URL: {data}")
-            return None
-    except Exception as e:
+        data = json_object_from_response(resp)
+    except ValueError as e:
         logger.error(f"[DingTalk] Error getting download URL: {e}")
         return None
+    url = json_as_str(data.get("downloadUrl"))
+    if url not in (None, ""):
+        return url
+    logger.error(f"[DingTalk] Failed to get download URL: {data}")
+    return None
 
 
-async def _download_file(url: str) -> bytes | None:
-    """Download a file from a URL and return its bytes."""
+async def _download_file(url: str, max_bytes: int) -> bytes | None:
+    """Stream a file from a URL and return its bytes.
+
+    Raises ``MediaTooLargeError`` once the body passes ``max_bytes``. Timeouts, transport errors and 5xx propagate so
+    DingTalk redelivers the message; a 4xx (expired or forbidden URL) is reported as ``None``.
+    """
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            resp = await client.get(url)
-            _ = resp.raise_for_status()
-            return resp.content
-    except Exception as e:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client, client.stream("GET", url) as resp:
+            return await read_capped(resp, max_bytes)
+    except httpx.HTTPStatusError as e:
+        if e.response.is_server_error:
+            raise
         logger.error(f"[DingTalk] Error downloading file: {e}")
         return None
 
 
-async def download_dingtalk_media(app_key: str, app_secret: str, download_code: str) -> bytes | None:
+async def download_dingtalk_media(
+    app_key: str, app_secret: str, download_code: str, *, max_bytes: int = MAX_INPUT_BYTES
+) -> bytes | None:
     """Download a media file from DingTalk using downloadCode.
 
     Steps: get access_token -> get download URL -> download file bytes.
+    Returns None on a permanent failure; raises ``MediaTooLargeError`` when the file passes ``max_bytes`` and lets
+    timeouts and 5xx from the URL and download steps propagate.
     """
     access_token = await dingtalk_token_manager.get_token(app_key, app_secret)
     if access_token in (None, ""):
@@ -166,7 +181,7 @@ async def download_dingtalk_media(app_key: str, app_secret: str, download_code: 
     if download_url in (None, ""):
         return None
 
-    return await _download_file(download_url)
+    return await _download_file(download_url, max_bytes)
 
 
 async def _process_media_message(
@@ -188,6 +203,18 @@ async def _process_media_message(
 
     image_base64_list: list[str] = []
     saved_file_paths: list[str] = []
+    budget = MediaBudget()
+
+    async def fetch(download_code: str, filename: str) -> bytes | None:
+        try:
+            data = await download_dingtalk_media(
+                app_key, app_secret, download_code, max_bytes=budget.limit_for(filename)
+            )
+        except MediaTooLargeError as error:
+            budget.spend(error.read)
+            raise
+        budget.spend(len(data or b""))
+        return data
 
     if msgtype == "text":
         text_content = msg_data.get("text", {}).get("content", "").strip()
@@ -201,11 +228,14 @@ async def _process_media_message(
             logger.warning("[DingTalk] Picture message without downloadCode")
             return "[User sent an image, but it could not be downloaded]", None, None
 
-        file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
+        filename = f"dingtalk_img_{uuid.uuid4().hex[:8]}.jpg"
+        try:
+            file_bytes = await fetch(download_code, filename)
+        except MediaTooLargeError as error:
+            return too_large_note(filename, error.limit), None, None
         if file_bytes in (None, b""):
             return "[User sent an image, but download failed]", None, None
 
-        filename = f"dingtalk_img_{uuid.uuid4().hex[:8]}.jpg"
         _, workspace_path, _ = await store_agent_upload(
             agent_id,
             filename,
@@ -231,9 +261,13 @@ async def _process_media_message(
                 if "text" in item:
                     text_parts.append(item["text"])
                 elif "downloadCode" in item:
-                    file_bytes = await download_dingtalk_media(app_key, app_secret, item["downloadCode"])
+                    filename = f"dingtalk_richimg_{uuid.uuid4().hex[:8]}.jpg"
+                    try:
+                        file_bytes = await fetch(item["downloadCode"], filename)
+                    except MediaTooLargeError as error:
+                        text_parts.append(too_large_note(filename, error.limit))
+                        continue
                     if file_bytes not in (None, b""):
-                        filename = f"dingtalk_richimg_{uuid.uuid4().hex[:8]}.jpg"
                         _, workspace_path, _ = await store_agent_upload(
                             agent_id,
                             filename,
@@ -267,10 +301,13 @@ async def _process_media_message(
 
         download_code = content.get("downloadCode", "")
         if download_code:
-            file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
+            filename = f"dingtalk_audio_{uuid.uuid4().hex[:8]}.amr"
+            try:
+                file_bytes = await fetch(download_code, filename)
+            except MediaTooLargeError as error:
+                return too_large_note(filename, error.limit), None, None
             if file_bytes not in (None, b""):
                 duration = content.get("duration", "unknown")
-                filename = f"dingtalk_audio_{uuid.uuid4().hex[:8]}.amr"
                 _, workspace_path, _ = await store_agent_upload(agent_id, filename, file_bytes)
                 logger.info(f"[DingTalk] Saved audio to {workspace_path} ({len(file_bytes)} bytes)")
                 return (
@@ -284,10 +321,13 @@ async def _process_media_message(
         content = msg_data.get("content", {})
         download_code = content.get("downloadCode", "")
         if download_code:
-            file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
+            filename = f"dingtalk_video_{uuid.uuid4().hex[:8]}.mp4"
+            try:
+                file_bytes = await fetch(download_code, filename)
+            except MediaTooLargeError as error:
+                return too_large_note(filename, error.limit), None, None
             if file_bytes not in (None, b""):
                 duration = content.get("duration", "unknown")
-                filename = f"dingtalk_video_{uuid.uuid4().hex[:8]}.mp4"
                 _, workspace_path, _ = await store_agent_upload(agent_id, filename, file_bytes)
                 logger.info(f"[DingTalk] Saved video to {workspace_path} ({len(file_bytes)} bytes)")
                 return (
@@ -302,9 +342,12 @@ async def _process_media_message(
         download_code = content.get("downloadCode", "")
         original_filename = content.get("fileName", "unknown_file")
         if download_code:
-            file_bytes = await download_dingtalk_media(app_key, app_secret, download_code)
+            safe_name = f"dingtalk_{uuid.uuid4().hex[:8]}_{original_filename}"
+            try:
+                file_bytes = await fetch(download_code, safe_name)
+            except MediaTooLargeError as error:
+                return too_large_note(original_filename, error.limit), None, None
             if file_bytes not in (None, b""):
-                safe_name = f"dingtalk_{uuid.uuid4().hex[:8]}_{original_filename}"
                 _, workspace_path, _ = await store_agent_upload(agent_id, safe_name, file_bytes)
                 logger.info(
                     f"[DingTalk] Saved file '{original_filename}' to {workspace_path} ({len(file_bytes)} bytes)"

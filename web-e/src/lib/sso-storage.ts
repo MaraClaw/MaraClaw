@@ -5,6 +5,8 @@ export const SSO_PROVIDER_KEY = 'maraclaw-sso-provider'
 export const SSO_INTENT_KEY = 'maraclaw-sso-intent'
 export const SSO_CONTINUATION_KEY = 'maraclaw-sso-continuation'
 
+export type SsoIntent = 'sign_in' | 'bind'
+
 type SsoTransaction = {
   readonly state: string | null
   readonly provider: string | null
@@ -18,14 +20,23 @@ const invitationPath = z.string().max(2048).refine((path) => {
 const routerContinuation = z.object({ from: z.object({ pathname: invitationPath }) })
 const storedContinuation = z.object({ state: z.string().min(1), provider: z.string().min(1), path: invitationPath }).readonly()
 
-export function storeSsoTransaction(transaction: { readonly state: string; readonly provider: string }, routerState: unknown): void {
-  sessionStorage.setItem(SSO_STATE_KEY, transaction.state)
-  sessionStorage.setItem(SSO_PROVIDER_KEY, transaction.provider)
-  sessionStorage.removeItem(SSO_INTENT_KEY)
+/** Keeps the state the server issued at authorize; bind is the only intent that is stored (absent means sign-in). */
+export function storeSsoTransaction(
+  transaction: { readonly state: string; readonly provider: string; readonly intent: SsoIntent },
+  routerState: unknown,
+): void {
+  const { state, provider, intent } = transaction
+  sessionStorage.setItem(SSO_STATE_KEY, state)
+  sessionStorage.setItem(SSO_PROVIDER_KEY, provider)
   sessionStorage.removeItem(SSO_CONTINUATION_KEY)
+  if (intent === 'bind') {
+    sessionStorage.setItem(SSO_INTENT_KEY, intent)
+    return
+  }
+  sessionStorage.removeItem(SSO_INTENT_KEY)
   const parsed = routerContinuation.safeParse(routerState)
   if (parsed.success) {
-    sessionStorage.setItem(SSO_CONTINUATION_KEY, JSON.stringify({ ...transaction, path: parsed.data.from.pathname }))
+    sessionStorage.setItem(SSO_CONTINUATION_KEY, JSON.stringify({ state, provider, path: parsed.data.from.pathname }))
   }
 }
 

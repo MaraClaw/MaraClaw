@@ -598,12 +598,8 @@ async def test_plaza_transport_keeps_wrappers_and_existing_post_encoding(
     monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
     monkeypatch.setattr(plaza.plaza_post_dao, "delete", AsyncMock())
     monkeypatch.setattr(plaza.plaza_post_dao, "list_feed", AsyncMock(return_value=[post]))
-    monkeypatch.setattr(plaza.plaza_post_dao, "adjust_likes_count", AsyncMock())
-    monkeypatch.setattr(
-        plaza.plaza_like_dao, "get_by_post_and_author", AsyncMock(return_value=post if operation == "unlike" else None)
-    )
-    monkeypatch.setattr(plaza.plaza_like_dao, "delete_by_post_and_author", AsyncMock())
-    monkeypatch.setattr(plaza.plaza_like_dao, "create", AsyncMock())
+    toggle = AsyncMock(return_value=operation == "like")
+    monkeypatch.setattr(plaza.plaza_like_dao, "toggle", toggle)
 
     if operation == "stats":
         response = await client.get("/api/plaza/stats")
@@ -612,7 +608,7 @@ async def test_plaza_transport_keeps_wrappers_and_existing_post_encoding(
     elif operation == "feed":
         response = await client.get("/api/plaza/posts")
     else:
-        response = await client.post(f"/api/plaza/posts/{post.id}/like", params={"author_id": str(actor.id)})
+        response = await client.post(f"/api/plaza/posts/{post.id}/like", params={"author_id": str(uuid.uuid4())})
 
     assert response.status_code == 200
     if operation == "stats":
@@ -624,6 +620,7 @@ async def test_plaza_transport_keeps_wrappers_and_existing_post_encoding(
         assert response.json()[0]["created_at"] == "2030-01-02T00:00:00Z"
     else:
         assert response.json() == {"liked": operation == "like"}
+        toggle.assert_awaited_once_with(post.id, actor.id, "human")
 
 
 @pytest.mark.parametrize("operation", ["write", "restore", "lock", "unlock", "revisions", "delete", "conflict"])

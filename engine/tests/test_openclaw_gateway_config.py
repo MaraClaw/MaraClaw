@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from app.services.openclaw_gateway_config import ensure_gateway_token, prepare_native_gateway_files
+from app.services.openclaw_gateway_config import (
+    _ADAPTER,
+    ensure_gateway_token,
+    forget_native_retirement,
+    prepare_native_gateway_files,
+)
 
 LEGACY_BOOTSTRAP = b"""# Bootstrap
 
@@ -95,3 +100,31 @@ def test_token_creation_refuses_symlink(tmp_path: Path) -> None:
         ensure_gateway_token(tmp_path)
 
     assert target.read_text(encoding="utf-8") == "keep"
+
+
+def test_unchanged_adapter_is_not_rewritten_and_a_changed_one_is(tmp_path: Path) -> None:
+    adapter = tmp_path / ".maraclaw-rpc.mjs"
+
+    prepare_native_gateway_files(tmp_path)
+    staged = adapter.stat()
+    prepare_native_gateway_files(tmp_path)
+
+    assert adapter.stat().st_ino == staged.st_ino
+    adapter.write_text("tampered", encoding="utf-8")
+    prepare_native_gateway_files(tmp_path)
+    assert adapter.read_bytes() == _ADAPTER.read_bytes()
+
+
+def test_legacy_retirement_runs_once_per_directory_until_forgotten(tmp_path: Path) -> None:
+    prepare_native_gateway_files(tmp_path)
+    legacy = tmp_path / ".maraclaw-poll.mjs"
+    legacy.write_text("late legacy script", encoding="utf-8")
+
+    prepare_native_gateway_files(tmp_path)
+    assert legacy.exists()
+
+    forget_native_retirement(tmp_path)
+    prepare_native_gateway_files(tmp_path)
+    assert not legacy.exists()
+    (retired,) = tmp_path.glob(".maraclaw-retired-*-maraclaw-poll.mjs")
+    assert retired.read_text(encoding="utf-8") == "late legacy script"

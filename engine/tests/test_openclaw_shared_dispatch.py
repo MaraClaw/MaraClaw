@@ -58,10 +58,12 @@ def lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         else:
             order.append("commit")
 
-    async def tenants(_db: DbConnection, _ids: object) -> None:
+    async def tenants(_db: DbConnection, _ids: object, *, shared: bool = False) -> None:
+        assert shared
         order.append("tenant")
 
-    async def owner(_db: DbConnection, _owner: UUID, _tenant: UUID | None) -> None:
+    async def owner(_db: DbConnection, _owner: UUID, _tenant: UUID | None, *, shared: bool = False) -> None:
+        assert shared
         order.append("owner")
 
     async def agent_lock(_db: DbConnection, _agent: UUID, _tenant: UUID | None) -> None:
@@ -79,6 +81,7 @@ def lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         monkeypatch.setattr(module, "lock_agent", agent_lock)
     monkeypatch.setattr(claims, "guest_write_section", guest)
     monkeypatch.setattr(claims, "get_connection", lambda: None)
+    monkeypatch.setattr(claims, "assert_work_allowed", AsyncMock())
     return order
 
 

@@ -173,7 +173,7 @@ def test_write_guest_config_adds_control_ui_origins_to_legacy_config_without_rot
     assert (gateway["bind"], gateway["port"]) == ("lan", 18789)
 
 
-def test_write_guest_config_stages_native_adapter_before_fingerprint_fast_return(monkeypatch, tmp_path):
+def test_write_guest_config_leaves_native_transport_files_to_the_turn_path(monkeypatch, tmp_path):
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
@@ -181,22 +181,16 @@ def test_write_guest_config_stages_native_adapter_before_fingerprint_fast_return
     agent = AgentRecord(id=uuid.uuid4(), name="Cached Agent", creator_id=uuid.uuid4())
     agent_dir = tmp_path / str(agent.id)
     agent_dir.mkdir()
-    config_path = manager.write_guest_config(agent, primary=None)
-    assert config_path is not None
-    adapter = agent_dir / ".maraclaw-rpc.mjs"
-    adapter.unlink()
     legacy = agent_dir / ".maraclaw-poll.mjs"
     legacy.write_text("modified legacy script", encoding="utf-8")
-    before = config_path.read_bytes()
 
-    result = manager.write_guest_config(agent, primary=None)
+    for _ in range(2):
+        config_path = manager.write_guest_config(agent, primary=None)
+        assert config_path is not None
 
-    assert result == config_path
-    assert config_path.read_bytes() == before
-    assert adapter.is_file()
-    assert not legacy.exists()
-    (retired,) = agent_dir.glob(".maraclaw-retired-*-maraclaw-poll.mjs")
-    assert retired.read_text(encoding="utf-8") == "modified legacy script"
+    # `execute_gateway_turn` stages the adapter and retires legacy assets; the config write does neither.
+    assert not (agent_dir / ".maraclaw-rpc.mjs").exists()
+    assert legacy.read_text(encoding="utf-8") == "modified legacy script"
 
 
 def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
@@ -232,9 +226,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         label="Grok fallback",
     )
 
-    config: dict[str, Any] = manager._generate_openclaw_config(
-        agent, primary, secondary=secondary, fallback=fallback, selected=primary
-    )
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, secondary=secondary, fallback=fallback)
 
     assert "agent" not in config
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.8"
@@ -270,7 +262,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
         label="Grok 4.6",
     )
 
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, selected=primary)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary)
 
     assert "XAI_API_KEY" not in config["env"]["vars"]
     assert "auth" not in config
@@ -382,7 +374,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
         label="GPT API",
     )
 
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, fallback=fallback, selected=primary)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, fallback=fallback)
 
     assert config["agents"]["defaults"]["model"]["primary"] == "openai/gpt-5.4"
     assert config["env"]["vars"]["OPENAI_API_KEY"] == "sk-openai-key"

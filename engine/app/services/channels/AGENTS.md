@@ -30,6 +30,7 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 | `llm_bridge.py` | `_load_agent_and_model` plus engine LLM helpers for trigger/heartbeat only |
 | `dedup.py` | Process-local plus fail-open Redis hints (`*_shared` adds SET NX). **Not authoritative**: never decides acceptance, replay or conflict |
 | `redact.py` | Redact secrets for `ChannelConfigOut` API responses |
+| `media_limits.py` | Inbound attachment caps for Slack, Feishu and DingTalk downloads: web chat's 10 MiB image / 50 MiB file cap by extension, a 50 MiB per-event `MediaBudget`, and `read_capped` (counts decoded bytes, stops one chunk past the limit; `Content-Length` is only an early reject). Oversize raises `MediaTooLargeError`: skip the file with a transcript note and still accept the event. Timeouts, 5xx and `StorageQuotaError` keep propagating |
 
 ## Native event acceptance
 

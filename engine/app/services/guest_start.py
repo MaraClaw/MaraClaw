@@ -15,7 +15,7 @@ from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services.agent_start_store import start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, guest_admission
-from app.services.guest_identity import inspect_guest_container, owned_guest_containers
+from app.services.guest_identity import guest_resolutions, inspect_guest_container, owned_guest_containers
 from app.services.guest_readiness import guest_ready
 
 if TYPE_CHECKING:
@@ -78,6 +78,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                 if operation is not None and not await start_store.observe(operation, agent):
                     raise GuestStartPreflightError("Guest start was superseded")
                 if resume:
+                    guest_resolutions.drop(agent.id)
                     await to_thread.run_sync(client.container.start, guest.id)
         else:
             reference = await manager.replace_container(agent, create_only=True, operation_id=start_operation_id.get())
@@ -87,6 +88,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
         if reference is None:
             raise GuestStartPreflightError("Guest reference is missing")
         if not await guest_ready(client, reference):
+            guest_resolutions.drop(agent.id)
             if created:
                 # A failed new writer is quiesced; its durable operation retains discovery ownership.
                 await to_thread.run_sync(client.container.stop, reference)

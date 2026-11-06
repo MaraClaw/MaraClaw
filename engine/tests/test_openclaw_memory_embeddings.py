@@ -51,7 +51,7 @@ class Guest:
         return json.loads(self.config_path.read_text(encoding="utf-8"))["memory"]["search"]
 
     def fingerprint(self) -> str:
-        return self.manager._guest_config_fingerprint(primary=None, secondary=None, fallback=None, selected=None)
+        return self.manager._guest_config_fingerprint(primary=None, secondary=None, fallback=None)
 
 
 @pytest.fixture
@@ -235,7 +235,7 @@ def test_embedding_credentials_stay_separate_from_chat_provider_credentials(gues
     guest.configure(VALID)
 
     # When
-    config: dict[str, Any] = guest.manager._generate_openclaw_config(guest.agent, primary, selected=primary)
+    config: dict[str, Any] = guest.manager._generate_openclaw_config(guest.agent, primary)
 
     # Then
     assert config["env"]["vars"]["OPENAI_API_KEY"] == "chat-secret-key"

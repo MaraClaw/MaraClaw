@@ -23,6 +23,7 @@ from app.runtime.incident_alerts import IncidentAlerts
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
 from app.runtime.tasks import OwnedTasks
+from app.services.channels.outbound_http import shutdown_outbound_client
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
 from app.services.llm.client_cache import shutdown_llm_clients
 from app.services.openclaw_routing import close_wake_admission, drain_wake_tasks, open_wake_admission
@@ -183,6 +184,7 @@ class Runtime:
             await self._cleanup("database", close_pool)
             await self._cleanup("redis", close_redis)
             await self._cleanup("LLM clients", shutdown_llm_clients)
+            await self._cleanup("outbound HTTP client", shutdown_outbound_client)
         if self.logging_attempted:
             try:
                 shutdown_logging()

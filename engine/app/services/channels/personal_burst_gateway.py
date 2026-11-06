@@ -11,6 +11,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.personal_burst_notice import BUSY_NOTICE_ROUTING_REASON
 from app.services.channels.personal_burst_original import PersonalOriginal
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
+from app.services.gateway_report_wake import wake_gateway_report_relay
 
 # Reserved marker: a batched anchor can never be mistaken for a legacy, immediately ready row.
 BURST_ROUTING_REASON: Final = "whatsapp_burst"
@@ -65,4 +66,5 @@ async def create_notice_source(original: PersonalOriginal, result: str) -> Gatew
         }
     )
     await _pin_reply_intent(gateway, original)
+    wake_gateway_report_relay()
     return gateway

@@ -463,6 +463,43 @@ async def test_execute_tool_autonomy_denial_preserves_l2_message(monkeypatch):
     check_and_enforce.assert_awaited_once()
 
 
+async def test_execute_tool_l3_hold_stores_complete_arguments_beside_the_bounded_summary(monkeypatch):
+    # Given an L3 write whose content is far longer than the 200-character approval summary.
+    from app.records.agent import AgentRecord
+    from app.records.audit import ApprovalRequestRecord
+    from app.services import autonomy_service as autonomy_module
+
+    agent = AgentRecord(
+        id=uuid.uuid4(),
+        name="Agent",
+        creator_id=uuid.uuid4(),
+        autonomy_policy={"write_workspace_files": "L3"},
+    )
+    arguments: ToolParameters = {"path": "workspace/report.md", "content": "row\n" * 1250}
+    create_pending = AsyncMock(return_value=ApprovalRequestRecord(id=uuid.uuid4(), agent_id=agent.id, action_type="x"))
+    agent_dao_mod = importlib.import_module("app.dao.agent_dao")
+
+    async def tenant_lookup(_agent_id: uuid.UUID) -> str:
+        return "tenant-l3"
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_dao_mod.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(autonomy_module.approval_request_dao, "create_pending", create_pending)
+    monkeypatch.setattr(autonomy_module.autonomy_service, "_request_approval", AsyncMock())
+    monkeypatch.setattr(autonomy_module, "write_audit_log", AsyncMock())
+
+    # When the dispatcher holds the call for approval.
+    result = await agent_tools.execute_tool("write_file", dict(arguments), agent_id=agent.id, user_id=uuid.uuid4())
+
+    # Then the store keeps the complete object privately while the shareable details stay bounded.
+    (call,) = create_pending.await_args_list
+    stored = call.kwargs
+    assert result.startswith("⏳ This action requires approval")
+    assert stored["execution_args"] == arguments
+    assert stored["details"]["args"] == str(arguments)[:200]
+    assert stored["details"]["tool"] == "write_file"
+
+
 async def test_execute_tool_agentbay_lock_injects_session_id_before_block(monkeypatch):
     from app.services import take_control_state
     from take_control_fakes import SharedRedis

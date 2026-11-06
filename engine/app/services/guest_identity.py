@@ -1,5 +1,7 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import override
+from time import monotonic
+from typing import final, override
 from uuid import UUID
 
 from pywhales import Container, DockerClient
@@ -84,7 +86,37 @@ def resolve_guest(client: DockerClient, agent: AgentRecord) -> GuestIdentity | N
     return guests[0] if guests else None
 
 
+@final
+class GuestResolutionCache:
+    """Short-lived memo of the label-proven guest per agent, valid only for the recorded container id it saw."""
+
+    def __init__(self, ttl_seconds: float = 30.0, clock: Callable[[], float] = monotonic) -> None:
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._entries: dict[UUID, tuple[str | None, GuestIdentity, float]] = {}
+
+    def get(self, agent: AgentRecord) -> GuestIdentity | None:
+        entry = self._entries.get(agent.id)
+        if entry is None:
+            return None
+        recorded, guest, expires = entry
+        if recorded != agent.container_id or self._clock() >= expires:
+            del self._entries[agent.id]
+            return None
+        return guest
+
+    def put(self, agent: AgentRecord, guest: GuestIdentity) -> None:
+        self._entries[agent.id] = (agent.container_id, guest, self._clock() + self._ttl)
+
+    def drop(self, agent_id: UUID) -> None:
+        _ = self._entries.pop(agent_id, None)
+
+
+guest_resolutions = GuestResolutionCache()
+
+
 def stop_guest_containers(client: DockerClient, agent: AgentRecord, *, remove: bool = False) -> bool:
+    guest_resolutions.drop(agent.id)
     guests = owned_guest_containers(client, agent)
     for guest in guests:
         client.container.stop(guest.id, time=10)

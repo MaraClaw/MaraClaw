@@ -3,10 +3,12 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.member_auth_fixtures import member_auth_setup, oauth_setup
+from tests.oauth_state_fakes import REDIRECT_URI
 
 from app.api import auth
 from app.core import security
 from app.core.domain.users import UserRole
+from app.services import oauth_state
 from app.services.sso_service import sso_service
 
 
@@ -61,17 +63,12 @@ async def test_member_profile_projects_records_for_eligible_account(monkeypatch,
     )
     method = "GET" if operation == "get" else "PATCH" if operation == "patch" else "POST"
     path = "/api/member/auth/me" if operation in {"get", "patch"} else f"/api/member/auth/feishu/{operation}"
+    body = {"provider_type": "feishu", "code": "code"}
+    if operation == "bind":
+        body["state"] = await oauth_state.issue("feishu", REDIRECT_URI, oauth_state.OAuthIntent.BIND)
     # When a record-returning member route succeeds.
     async with AsyncClient(transport=ASGITransport(app=setup.app), base_url="http://test") as client:
-        response = await client.request(
-            method,
-            path,
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "provider_type": "feishu",
-                "code": "code",
-            },
-        )
+        response = await client.request(method, path, headers={"Authorization": f"Bearer {token}"}, json=body)
     # Then the record is projected through the member DTO.
     assert response.status_code == 200
     assert response.json()["id"] == str(setup.users[0].id)

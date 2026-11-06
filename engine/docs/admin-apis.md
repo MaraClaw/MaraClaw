@@ -57,6 +57,15 @@ verification, registration, SSO, password-change and session-generation behavior
 | `GET`, `PATCH` | `/api/member/auth/me` | `MemberAuthUser` |
 | `POST` | `/api/member/auth/{provider}/bind`, `/unbind` | `MemberAuthUser` |
 
+SSO state is server-issued and single-use. Anonymous `GET /api/auth/{provider}/authorize?redirect_uri=&intent=sign_in|bind`
+(`redirect_uri` 1..2048) returns `{authorization_url, state}` and stores `{provider, redirect_uri, intent}` in Redis for 600 seconds;
+a client-supplied `state` is ignored. The code step of `/callback` (`{code, state}`) and `/bind` (`{provider_type, code, state}`)
+each consume it atomically (`GETDEL`), require the same provider and the matching intent, and exchange the code with the stored
+redirect URI. Missing, replayed, expired, forged, cross-intent or cross-provider state is **400**; Redis unavailability is **503**
+and never falls back. The tenant-selection step (`{pending_token, tenant_id}`, no `state`) redeems its pending token atomically and
+only for the provider and audience that cached it (**400** otherwise). Browsers keep the state in `sessionStorage` and refuse a
+callback whose stored state is missing or differs from the URL's.
+
 `org_admin`, `agent_admin`, and `member` are eligible. A platform-admin membership
 or `identity.is_platform_admin` rejects member sign-in with **403**:
 `{"detail":{"code":"member_audience_rejected","message":"Platform operators sign in on the admin console."}}`.

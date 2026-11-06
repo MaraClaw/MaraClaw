@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import WebSocket
 from starlette.types import Message
+from tests.realtime_pipeline_fixtures import HashPipeline
 
 from app.api import websocket
 from app.records.chat import ChatSessionRecord
@@ -42,6 +43,10 @@ class MemoryPresence:
 
     async def hgetall(self, key: str) -> dict[str, str]:
         return self.hashes.get(key, {})
+
+    def pipeline(self, transaction: bool = True) -> HashPipeline:
+        _ = transaction
+        return HashPipeline(self.hgetall)
 
     async def publish(self, channel: str, payload: str) -> int:
         self.published.append((channel, payload))

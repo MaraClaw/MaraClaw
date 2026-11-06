@@ -21,6 +21,7 @@ from app.services.document_parser.runtime import (
     extract_xlsx_sheets_isolated_async,
 )
 from app.services.document_parser.service import (
+    IMAGE_EXTENSIONS,
     IMAGE_UPLOAD_MAX_BYTES,
     MAX_INPUT_BYTES,
     MAX_OUTPUT_CHARS,
@@ -44,6 +45,7 @@ from app.services.document_parser.service import (
 )
 
 __all__ = [
+    "IMAGE_EXTENSIONS",
     "IMAGE_UPLOAD_MAX_BYTES",
     "MAX_CONCURRENCY",
     "MAX_INPUT_BYTES",

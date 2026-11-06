@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { authorizeProvider, changePasswordRequest, fetchMyTenants, listAuthProviders, switchTenant, unbindProvider, updateCurrentUser } from '@/lib/auth-api'
-import { SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
+import { storeSsoTransaction } from '@/lib/sso-storage'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import type { AuthProvider } from '@/lib/types/auth'
 import { SettingsTimezoneCard } from './settings-timezone-card'
@@ -193,13 +193,10 @@ export function SettingsPage() {
                     onClick={() => {
                       const expectedOwner = mountedOwner
                       if (!isCurrent(expectedOwner)) return
-                      const state = crypto.randomUUID()
                       const redirectUri = `${window.location.origin}/sso/callback`
-                      void authorizeProvider(provider.provider_type, redirectUri, { state, owner: expectedOwner }).then((result) => {
+                      void authorizeProvider(provider.provider_type, redirectUri, 'bind', expectedOwner).then((result) => {
                         if (!isCurrent(expectedOwner)) return
-                        sessionStorage.setItem(SSO_STATE_KEY, state)
-                        sessionStorage.setItem(SSO_PROVIDER_KEY, provider.provider_type)
-                        sessionStorage.setItem(SSO_INTENT_KEY, 'bind')
+                        storeSsoTransaction({ state: result.state, provider: provider.provider_type, intent: 'bind' }, null)
                         window.location.assign(result.authorization_url)
                       }).catch(() => {
                         if (isCurrent(expectedOwner)) toast.error('Unable to link this provider.')

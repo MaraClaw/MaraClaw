@@ -160,3 +160,53 @@ def test_admission_row_reads_the_current_shape_and_refuses_the_old_wire_format()
     assert current.plan == plan_for(OrganizationPlanId.MAX)
     with pytest.raises(ValidationError):
         _ = OrganizationAdmissionRecord.from_row({**row, "plan": _old_wire_format()})
+    old_without_storage = {
+        key: value
+        for key, value in _old_wire_format().items()
+        if key not in {"storage_limit_bytes", "max_file_size_bytes"}
+    }
+    with pytest.raises(ValidationError):
+        _ = OrganizationAdmissionRecord.from_row({**row, "plan": old_without_storage})
+
+
+@pytest.mark.parametrize("tier", list(OrganizationPlanId))
+@pytest.mark.parametrize(
+    "missing", [("storage_limit_bytes", "max_file_size_bytes"), ("storage_limit_bytes",), ("max_file_size_bytes",), ()]
+)
+def test_admission_row_decodes_stored_storage_quotas(tier: OrganizationPlanId, missing: tuple[str, ...]):
+    raw = plan_for(tier).model_dump(mode="json")
+    raw["monthly_price_usd"] = 1234
+    snapshot = {key: value for key, value in raw.items() if key not in missing}
+    row = {
+        "id": uuid4(),
+        "email": "buyer@example.com",
+        "tier": tier.value,
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "status": "approved",
+        "plan": snapshot,
+    }
+
+    stored = OrganizationAdmissionRecord.from_row(row)
+
+    assert stored.plan.model_dump(mode="json") == raw
+    assert stored.plan.storage_limit_bytes is OrganizationStorageLimitBytes[tier.name]
+    assert stored.plan.max_file_size_bytes is OrganizationFileLimitBytes[tier.name]
+
+
+@pytest.mark.parametrize("field", ["storage_limit_bytes", "max_file_size_bytes"])
+@pytest.mark.parametrize("value", [None, 0, 12345])
+def test_admission_row_rejects_explicit_invalid_storage_quotas(field: str, value: int | None):
+    raw = _current()
+    raw[field] = value
+    other = "max_file_size_bytes" if field == "storage_limit_bytes" else "storage_limit_bytes"
+    del raw[other]
+    row = {
+        "id": uuid4(),
+        "email": "buyer@example.com",
+        "tier": "max",
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "status": "approved",
+        "plan": raw,
+    }
+    with pytest.raises(ValidationError):
+        _ = OrganizationAdmissionRecord.from_row(row)

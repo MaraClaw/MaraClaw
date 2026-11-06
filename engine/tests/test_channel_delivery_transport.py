@@ -14,14 +14,22 @@ from app.records.outbound_plan import OutboundChunk, OutboundProvider, OutboundT
 from app.services import gateway_report_relay as relay
 from app.services.channels import google_chat, outbound_transport
 from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPayloadRejectedError, retry_at
+from app.services.channels.outbound_http import reset_outbound_client
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
+from im_token_cache_fakes import install_token_cache
 
 
 def transport(monkeypatch, handler):
+    reset_outbound_client()
     client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handler), **kwargs))
+
+
+@pytest.fixture
+def token_cache(monkeypatch) -> dict[tuple[str, str, str], str]:
+    return install_token_cache(monkeypatch)
 
 
 def configured(provider: OutboundProvider) -> ConfiguredOutbound:
@@ -46,7 +54,9 @@ def configured(provider: OutboundProvider) -> ConfiguredOutbound:
 
 
 @pytest.mark.parametrize("provider", ["discord", "google_chat", "feishu", "slack", "whatsapp"])
-async def test_transport_sends_exact_chunk_with_only_supported_stable_keys(monkeypatch, provider: OutboundProvider):
+async def test_transport_sends_exact_chunk_with_only_supported_stable_keys(
+    monkeypatch, token_cache, provider: OutboundProvider
+):
     requests: list[httpx.Request] = []
 
     def respond(request):

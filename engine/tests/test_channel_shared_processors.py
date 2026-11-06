@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -13,10 +15,16 @@ from app.dao import agent_dao, channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
-from app.services import discord_gateway, openclaw_routing, wechat_message_processor, wecom_stream
+from app.services import dingtalk_stream, discord_gateway, openclaw_routing, wechat_message_processor, wecom_stream
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding, submissions
 from app.services.channels.google_chat import parse_google_chat_event
+from app.services.channels.media_limits import READ_CHUNK_BYTES, MediaBudget, too_large_note
+from app.services.dingtalk_stream import DingTalkStreamManager
+from app.services.dingtalk_token import DingTalkTokenManager
+from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
+from app.services.storage_runtime.quota_errors import StorageQuotaError
+from channel_media_fixtures import CountingStream, serve
 from test_channel_shared_binding import context
 
 __all__ = ["context"]
@@ -191,3 +199,201 @@ async def test_rejected_processor_never_reads_or_writes_shared_context(pipeline,
     history.assert_not_awaited()
     persist.assert_not_awaited()
     enqueue.assert_not_awaited()
+
+
+@pytest.fixture
+def dingtalk_media_download(pipeline, monkeypatch):
+    config = pipeline[4]
+    config.channel_type = "dingtalk"
+    store = AsyncMock(return_value=("key", "workspace/uploads/capture.png", "path"))
+    stream = CountingStream(total=3 * IMAGE_UPLOAD_MAX_BYTES)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(200, json={"downloadUrl": "https://files.invalid/capture.png"})
+        return httpx.Response(200, stream=stream)
+
+    serve(monkeypatch, handler)
+    monkeypatch.setattr(dingtalk_stream.dingtalk_token_manager, "get_token", AsyncMock(return_value="token"))
+    monkeypatch.setattr(dingtalk_stream, "store_agent_upload", store)
+    return store, stream, requests
+
+
+FILE_MESSAGE: dingtalk_stream._DingTalkMessage = {
+    "msgtype": "file",
+    "content": {"downloadCode": "code", "fileName": "capture.png"},
+}
+
+
+async def deliver_dingtalk_file(agent_id, msg_data: dingtalk_stream._DingTalkMessage = FILE_MESSAGE):
+    await DingTalkStreamManager._handle_media_and_dispatch(
+        msg_data=msg_data,
+        app_key="app-key",
+        app_secret="app-secret",
+        agent_id=agent_id,
+        sender_staff_id="staff-id",
+        conversation_id="chat-id",
+        conversation_type="1",
+        session_webhook="https://provider.invalid/reply",
+        message_id="native-id",
+    )
+
+
+async def test_oversize_dingtalk_file_is_skipped_with_a_note_and_the_event_is_accepted(
+    pipeline, dingtalk_media_download
+):
+    # Given: a DingTalk file named like an image whose body is far past the 10 MiB image cap, served without length
+    agent, *_, persist, enqueue = pipeline
+    store, stream, _ = dingtalk_media_download
+    # When
+    await deliver_dingtalk_file(agent.id)
+    # Then: the read stopped at the cap, nothing was stored, and the transcript carries the note
+    note = too_large_note("capture.png", IMAGE_UPLOAD_MAX_BYTES)
+    assert IMAGE_UPLOAD_MAX_BYTES < stream.consumed <= IMAGE_UPLOAD_MAX_BYTES + READ_CHUNK_BYTES
+    store.assert_not_awaited()
+    assert persist.await_args.kwargs["content"] == note
+    assert enqueue.await_args.args[0].content == note
+
+
+async def test_redelivered_oversize_dingtalk_event_replays_without_a_second_download(pipeline, dingtalk_media_download):
+    # Given: an oversize event that was accepted once
+    agent, *_, persist, _ = pipeline
+    store, _, requests = dingtalk_media_download
+    await deliver_dingtalk_file(agent.id)
+    downloads = len(requests)
+    receipts = submissions.channel_event_receipt_dao
+    assert isinstance(receipts.find, AsyncMock)
+    assert isinstance(receipts.reserve, AsyncMock)
+    receipts.find.return_value = receipts.reserve.await_args_list[0].args[0]
+    # When: the provider delivers the same event again
+    await deliver_dingtalk_file(agent.id)
+    # Then: the receipt answers it, with no new request, storage write or transcript row
+    assert len(requests) == downloads
+    receipts.reserve.assert_awaited_once()
+    persist.assert_awaited_once()
+    store.assert_not_awaited()
+
+
+async def test_unauthorized_dingtalk_event_is_refused_before_any_download(
+    pipeline, dingtalk_media_download, monkeypatch
+):
+    # Given: a sender who no longer has access to the agent
+    agent, *_, persist, _ = pipeline
+    store, _, requests = dingtalk_media_download
+    monkeypatch.setattr(binding, "check_agent_access", AsyncMock(side_effect=HTTPException(403)))
+    # When / Then: authorization fails before the provider is contacted
+    with pytest.raises(HTTPException):
+        await deliver_dingtalk_file(agent.id)
+    assert requests == []
+    store.assert_not_awaited()
+    persist.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "failure", ["token_503", "token_timeout", "lookup_503", "download_503", "read_timeout", "storage_quota"]
+)
+async def test_dingtalk_transient_failures_propagate_without_accepting(
+    pipeline, dingtalk_media_download, monkeypatch, failure
+):
+    # Given: a failure at the download-URL lookup, at the file download, or in storage
+    agent, *_, persist, _ = pipeline
+    store, _, _ = dingtalk_media_download
+    if failure.startswith("token_"):
+        monkeypatch.setattr(dingtalk_stream, "dingtalk_token_manager", DingTalkTokenManager())
+        monkeypatch.setattr("app.services.im_token_cache.get_cached_im_token", AsyncMock(return_value=None))
+
+    def handler(request):
+        if request.url.path == "/v1.0/oauth2/accessToken":
+            if failure == "token_timeout":
+                raise httpx.ReadTimeout("slow token provider", request=request)
+            return httpx.Response(503)
+        if request.method == "POST":
+            if failure == "lookup_503":
+                return httpx.Response(503)
+            return httpx.Response(200, json={"downloadUrl": "https://files.invalid/capture.png"})
+        if failure == "read_timeout":
+            raise httpx.ReadTimeout("slow provider", request=request)
+        return httpx.Response(503 if failure == "download_503" else 200, content=b"file-bytes")
+
+    serve(monkeypatch, handler)
+    store.side_effect = StorageQuotaError("agent storage is full")
+    expected = {
+        "token_timeout": httpx.ReadTimeout,
+        "read_timeout": httpx.ReadTimeout,
+        "storage_quota": StorageQuotaError,
+    }.get(failure, httpx.HTTPStatusError)
+    # When / Then: the stream acks with a system exception so DingTalk redelivers, and no receipt is reserved
+    with pytest.raises(expected):
+        await deliver_dingtalk_file(agent.id)
+    assert isinstance(submissions.channel_event_receipt_dao.reserve, AsyncMock)
+    submissions.channel_event_receipt_dao.reserve.assert_not_awaited()
+    persist.assert_not_awaited()
+
+
+async def test_dingtalk_file_with_an_expired_download_url_is_still_accepted_without_the_file(
+    pipeline, dingtalk_media_download, monkeypatch
+):
+    # Given: DingTalk refuses the download with 403
+    agent, *_, persist, _ = pipeline
+    store, _, _ = dingtalk_media_download
+    serve(
+        monkeypatch,
+        lambda request: (
+            httpx.Response(200, json={"downloadUrl": "https://files.invalid/capture.png"})
+            if request.method == "POST"
+            else httpx.Response(403)
+        ),
+    )
+    # When
+    await deliver_dingtalk_file(agent.id)
+    # Then: the event is accepted and nothing was stored
+    persist.assert_awaited_once()
+    store.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", [200, 403])
+async def test_dingtalk_media_token_refusal_keeps_the_non_transient_fallback(
+    pipeline, dingtalk_media_download, monkeypatch, status
+):
+    agent, *_, persist, _ = pipeline
+    store, _, _ = dingtalk_media_download
+    monkeypatch.setattr(dingtalk_stream, "dingtalk_token_manager", DingTalkTokenManager())
+    monkeypatch.setattr("app.services.im_token_cache.get_cached_im_token", AsyncMock(return_value=None))
+    serve(monkeypatch, lambda _: httpx.Response(status, text="invalid token response"))
+    await deliver_dingtalk_file(agent.id)
+    persist.assert_awaited_once()
+    store.assert_not_awaited()
+
+
+async def test_aborted_oversize_dingtalk_read_spends_the_event_so_the_next_image_is_never_requested(
+    pipeline, dingtalk_media_download, monkeypatch
+):
+    # Given: an event allowance of three read chunks, and a rich text message with two images
+    agent, *_, persist, _ = pipeline
+    store, _, _ = dingtalk_media_download
+    monkeypatch.setattr(dingtalk_stream, "MediaBudget", lambda: MediaBudget(remaining=3 * READ_CHUNK_BYTES))
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            code = json.loads(request.content)["downloadCode"]
+            return httpx.Response(200, json={"downloadUrl": f"https://files.invalid/{code}"})
+        return httpx.Response(200, stream=CountingStream(total=10 * READ_CHUNK_BYTES))
+
+    serve(monkeypatch, handler)
+    message: dingtalk_stream._DingTalkMessage = {
+        "msgtype": "richText",
+        "content": {"richText": [{"downloadCode": "code-a"}, {"downloadCode": "code-b"}]},
+    }
+    # When
+    await deliver_dingtalk_file(agent.id, message)
+    # Then: the second image cost no lookup and no download, and both are noted as skipped
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("POST", "/v1.0/robot/messageFiles/download"),
+        ("GET", "/code-a"),
+    ]
+    store.assert_not_awaited()
+    assert persist.await_args.kwargs["content"].count("[file skipped:") == 2

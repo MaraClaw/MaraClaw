@@ -9,12 +9,24 @@ from typing import Any
 from uuid import UUID
 
 from app.core.domain.approvals import ApprovalStatus
-from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.json_types import (
+    datetime_from_row,
+    is_str_dict,
+    mapping_from_row,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
 class ApprovalRequestRecord:
-    """L3 autonomy approval request row."""
+    """L3 autonomy approval request row.
+
+    ``details`` is the bounded, shareable summary. ``execution_args`` is the complete tool-argument object kept for
+    replay: it is private (never serialized or logged) and only the claiming ``resolve`` loads it; ``None`` marks rows
+    created before the column existed and rows loaded by list/get queries.
+    """
 
     id: UUID
     agent_id: UUID
@@ -24,10 +36,12 @@ class ApprovalRequestRecord:
     created_at: datetime | None = None
     resolved_at: datetime | None = None
     resolved_by: UUID | None = None
+    execution_args: dict[str, Any] | None = field(default=None, repr=False)
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ApprovalRequestRecord:
         details = mapping_from_row(row.get("details") or {})
+        execution_args = row.get("execution_args")
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
@@ -37,6 +51,7 @@ class ApprovalRequestRecord:
             created_at=datetime_from_row(row.get("created_at")),
             resolved_at=datetime_from_row(row.get("resolved_at")),
             resolved_by=uuid_from_row_opt(row.get("resolved_by")),
+            execution_args=execution_args if is_str_dict(execution_args) else None,
         )
 
 

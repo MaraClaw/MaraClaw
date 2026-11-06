@@ -13,6 +13,7 @@ from app.services import openclaw_hot_cache, openclaw_routing as routing
 from app.services.agent_manager import agent_manager
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
+from app.services.quota_guard import AgentExpired
 
 
 @pytest.fixture
@@ -110,3 +111,24 @@ async def test_enqueue_returns_while_owned_turn_is_running(agent: AgentRecord, m
     finally:
         release.set()
         await routing.drain_wake_tasks(1)
+
+
+@pytest.mark.parametrize("refusal", [OpenClawUpdateInProgressError(), AgentExpired("Guest")])
+async def test_wake_leaves_row_pending_when_the_claim_refuses_after_the_gate_check(
+    agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, refusal: Exception
+) -> None:
+    claim = AsyncMock(side_effect=refusal)
+    execute = AsyncMock(side_effect=AssertionError("a refused claim must not execute"))
+    release = AsyncMock(side_effect=AssertionError("nothing was claimed, so nothing is released"))
+    monkeypatch.setattr(routing, "_claim_wake", claim)
+    monkeypatch.setattr("app.services.openclaw_gateway_rpc.execute_gateway_turn", execute)
+    monkeypatch.setattr(routing.gateway_message_dao, "release_delivery", release)
+
+    await routing._run_inbox_wake(agent, "", uuid4())
+
+    claim.assert_awaited_once()
+    load_agent = routing.load_agent_for_new_work
+    assert isinstance(load_agent, AsyncMock)
+    load_agent.assert_not_awaited()
+    execute.assert_not_awaited()
+    release.assert_not_awaited()

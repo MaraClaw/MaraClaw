@@ -178,6 +178,10 @@ jobs:
           tests/test_agent_deletion_requests_postgres.py
           tests/test_agent_deletion_cleanup_postgres.py
           tests/test_agent_deletion_cleanup_approval_postgres.py
+          tests/test_approval_replay_postgres.py
+          tests/test_plaza_likes_postgres.py
+          tests/test_bootstrap_postgres.py
+          tests/test_company_admission_sso.py
           tests/test_agent_ownership_transfers_postgres.py
           tests/test_guest_config_transaction_postgres.py
           tests/test_agent_start_postgres.py
@@ -191,6 +195,9 @@ jobs:
           tests/test_shared_gateway_postgres.py
           tests/test_shared_gateway_surface.py
           tests/test_openclaw_native_dispatch_postgres.py
+          tests/test_openclaw_scope_locks_postgres.py
+          tests/test_chat_submission_scope_locks_postgres.py
+          tests/test_openclaw_claim_gates_postgres.py
           tests/test_shared_burst_dispatch_postgres.py
           tests/test_shared_burst_scope_postgres.py
           tests/test_shared_model_config_postgres.py

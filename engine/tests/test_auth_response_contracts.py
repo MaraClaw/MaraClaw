@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
+from tests.oauth_state_fakes import install_state_redis, sign_in_state
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -86,10 +87,11 @@ async def test_auth_response_union_preserves_payloads(
     )
     monkeypatch.setattr(auth_provider_registry, "get_provider", AsyncMock(return_value=provider))
     monkeypatch.setattr(auth, "_cache_oauth_pending", AsyncMock())
+    install_state_redis(monkeypatch)
     request = (
         {"login_identifier": " member@example.com ", "password": "password", "tenant_id": None, "unknown": True}
         if path == "/auth/login"
-        else {"code": "code", "state": "state", "redirect_uri": None, "unknown": True}
+        else {"code": "code", "state": await sign_in_state("google"), "redirect_uri": None, "unknown": True}
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

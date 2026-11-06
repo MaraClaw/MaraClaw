@@ -22,7 +22,12 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.schemas.chat_wire import ChatEventType
 from app.services.channels.types import normalize_channel_type
+from app.services.gateway_report_wake import wake_gateway_report_relay
+from app.services.openclaw_gateway_stream import GatewayDelta
+from app.services.response_identity import response_guard
 from app.services.shared_chat import shared_session_id
+
+CHUNK_SEND_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +44,9 @@ async def settle_native_report(agent: AgentRecord, message_id: UUID, result: str
     """Take scope locks before the Shared session lock and reject a stale execution owner."""
     try:
         async with connection_ctx() as db:
-            await lock_tenants(db, (agent.tenant_id,))
-            await lock_user(db, agent.creator_id, agent.tenant_id)
+            # Shared tenant/owner (see claim_ordinary_turn); the agent row stays exclusive.
+            await lock_tenants(db, (agent.tenant_id,), shared=True)
+            await lock_user(db, agent.creator_id, agent.tenant_id, shared=True)
             await lock_agent(db, agent.id, agent.tenant_id)
             memo_drop("agent", agent.id)
             current = await agent_dao.get(agent.id)
@@ -72,7 +78,9 @@ async def record_report(
             if candidate is None or candidate.status != "delivered":
                 return None
             _ = await personal_burst_dispatch_dao.mark_completed(message_id)
-        won = await gateway_message_dao.complete(message_id, agent.id, result=result, now=at)
+        # Every durable and live destination reads this stored result, so concealment happens once, here.
+        guard = await response_guard(agent, candidate.guest_model_ref if candidate is not None else None)
+        won = await gateway_message_dao.complete(message_id, agent.id, result=guard.redact(result), now=at)
         if won is None:
             return None
         answer = won.result or ""
@@ -107,6 +115,7 @@ async def record_report(
                         destination_id=session.id,
                         tenant_id=agent.tenant_id,
                     )
+                    wake_gateway_report_relay()
         if won.sender_agent_id is not None:
             sender = await agent_dao.get(won.sender_agent_id)
             if sender is not None and sender.tenant_id == agent.tenant_id:
@@ -116,6 +125,7 @@ async def record_report(
                     destination_id=sender.id,
                     tenant_id=agent.tenant_id,
                 )
+                wake_gateway_report_relay()
         from app.services.openclaw_routing import wake_shared_lane
 
         wake_shared_lane(agent, won.id)
@@ -133,6 +143,7 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
                 "type": ChatEventType.DONE,
                 "role": "assistant",
                 "content": message.result or "",
+                "turn_id": str(message.id),
             }
             if report.assistant_message_id is not None:
                 event["message_id"] = str(report.assistant_message_id)
@@ -150,3 +161,34 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
             logger.info("[Gateway] pushed reply to session {} agent={}", message.conversation_id, agent.id)
         except Exception as error:
             logger.warning("[Gateway] Skipped done notification for disconnected user: {}", error)
+
+
+async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> None:
+    """Best-effort live delivery; socket failure never changes durable execution.
+
+    Only each socket send is deadlined. Authorization and routing run to completion: cancelling them discards the
+    positive authorization decision they are about to cache, so a deadline over the whole publication starves every
+    later chunk whenever those dependencies are merely slower than the deadline.
+    """
+    from app.api.websocket import manager
+
+    try:
+        await manager.send_to_session(
+            str(message.agent_id),
+            message.conversation_id or "",
+            {
+                "type": ChatEventType.CHUNK,
+                "content": delta.text,
+                "turn_id": str(message.id),
+                "seq": delta.seq,
+                "replace": delta.replace,
+            },
+            user_id=(
+                str(message.sender_user_id)
+                if message.sender_user_id and message.conversation_id != str(shared_session_id(message.agent_id))
+                else None
+            ),
+            send_timeout=CHUNK_SEND_TIMEOUT_SECONDS,
+        )
+    except Exception as error:
+        logger.warning("[Gateway] Skipped chunk notification message={} error={}", message.id, type(error).__name__)

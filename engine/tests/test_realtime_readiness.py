@@ -9,6 +9,7 @@ from redis.asyncio.connection import Connection
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
+from tests.realtime_pipeline_fixtures import HashPipeline
 
 from app.services.realtime_runtime import router
 
@@ -147,6 +148,10 @@ async def test_distinct_replicas_route_presence_to_remote_channel_only(monkeypat
         async def hgetall(self, key: str) -> dict[str, str]:
             identity = "replica-a" if key.endswith(":a") else "replica-b"
             return {"instance_id": identity, "session_id": "session", "user_id": "user"}
+
+        def pipeline(self, transaction: bool = True) -> HashPipeline:
+            _ = transaction
+            return HashPipeline(self.hgetall)
 
         async def publish(self, channel: str, payload: str) -> int:
             remote.append((channel, payload))

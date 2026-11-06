@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.core.json_types import JsonObject
+from app.services.llm.attribution import openrouter_attribution_headers
 
 
 class EmbeddingSettings(Protocol):
@@ -17,6 +18,7 @@ class EmbeddingSettings(Protocol):
     EMBEDDING_DIMS: str
     EMBEDDING_PROVIDER_URL: str
     EMBEDDING_API_KEY: str
+    APP_NAME: str
 
 
 class MemoryEmbeddingConfigError(ValueError):
@@ -29,6 +31,7 @@ class MemoryEmbeddingConfig:
     dimensions: int
     base_url: str
     api_key: str
+    app_name: str
 
 
 def memory_embedding_config(source: EmbeddingSettings) -> MemoryEmbeddingConfig | None:
@@ -41,19 +44,33 @@ def memory_embedding_config(source: EmbeddingSettings) -> MemoryEmbeddingConfig 
         return None
     if not (dimensions.isascii() and dimensions.isdecimal() and int(dimensions) > 0):
         raise MemoryEmbeddingConfigError("EMBEDDING_DIMS must be a positive integer")
-    return MemoryEmbeddingConfig(model=model, dimensions=int(dimensions), base_url=base_url, api_key=api_key)
+    return MemoryEmbeddingConfig(
+        model=model,
+        dimensions=int(dimensions),
+        base_url=base_url,
+        api_key=api_key,
+        app_name=source.APP_NAME.strip(),
+    )
 
 
 def memory_search_block(config: MemoryEmbeddingConfig | None) -> JsonObject:
-    """Build ``memory.search``; without a custom config the provider stays unset (OpenClaw default)."""
+    """Build ``memory.search``; without a custom config the provider stays unset (OpenClaw default).
+
+    ``remote.headers`` is the only guest config key that sets provider-request headers. OpenClaw attributes this
+    ``openai-compatible`` path to nobody, so an OpenRouter endpoint is titled with ``APP_NAME`` here.
+    """
     if config is None:
         return {"enabled": True}
+    remote: JsonObject = {"baseUrl": config.base_url, "apiKey": config.api_key}
+    headers = openrouter_attribution_headers(config.base_url, config.app_name)
+    if headers:
+        remote["headers"] = dict(headers)
     return {
         "enabled": True,
         "provider": "openai-compatible",
         "model": config.model,
         "outputDimensionality": config.dimensions,
-        "remote": {"baseUrl": config.base_url, "apiKey": config.api_key},
+        "remote": remote,
     }
 
 
@@ -61,5 +78,6 @@ def memory_embedding_fingerprint(config: MemoryEmbeddingConfig | None) -> str:
     """Hash every field so changes and key rotation are detected without exposing values."""
     if config is None:
         return "embed:"
-    payload = json.dumps([config.model, config.dimensions, config.base_url, config.api_key])
+    headers = openrouter_attribution_headers(config.base_url, config.app_name)
+    payload = json.dumps([config.model, config.dimensions, config.base_url, config.api_key, *headers.items()])
     return f"embed:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"

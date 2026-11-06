@@ -23,7 +23,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
-from app.db.session import optional_connection_ctx
+from app.db.session import flush_request_transaction, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.audit import ApprovalRequestRecord
 from app.records.user import UserRecord
@@ -39,10 +39,12 @@ class AutonomyService:
         agent: AgentRecord | None = None,
         action_type: str = "",
         details: JsonObject | None = None,
+        execution_args: JsonObject | None = None,
     ) -> JsonObject:
         """Check if an action is allowed under the agent's autonomy policy.
 
-        Persistence goes through DAOs / connection_ctx.
+        Persistence goes through DAOs / connection_ctx. ``details`` is the bounded summary shown on every approval
+        surface; an L3 hold also stores the complete ``execution_args`` privately for exact replay after approval.
 
         Returns:
             {
@@ -86,6 +88,7 @@ class AutonomyService:
                 agent_id=agent.id,
                 action_type=action_type,
                 details=details,
+                execution_args=execution_args,
             )
 
             logger.info(f"L3: Approval required for {action_type} by agent {agent.name}")
@@ -119,22 +122,24 @@ class AutonomyService:
                 assert_never(unreachable)
 
         async with optional_connection_ctx():
-            approval = await approval_request_dao.get(approval_id)
-            if not approval:
+            pending = await approval_request_dao.get(approval_id)
+            if not pending:
                 raise ValueError("Approval not found")
 
-            if approval.status != "pending":
+            if pending.status != "pending":
                 raise ValueError("Approval already resolved")
 
-            agent = await agent_dao.get(approval.agent_id)
+            agent = await agent_dao.get(pending.agent_id)
             if agent and agent.creator_id != user.id and user.role != "platform_admin":
                 raise ValueError("Only the agent creator or platform admin can resolve approvals")
 
             approval = await approval_request_dao.resolve(
-                approval,
+                pending,
                 status=status,
                 resolved_by=user.id,
             )
+            if approval is None:
+                raise ValueError("Approval already resolved")
 
             _ = await audit_log_dao.create(
                 obj_in={
@@ -145,12 +150,28 @@ class AutonomyService:
                 }
             )
 
+        # A caller-bound request transaction is not committed when the scope above exits: commit the winning
+        # decision now so a later failure cannot roll it back to pending and let the action run twice.
+        await flush_request_transaction()
+
         execution_result = None
         if approval.status == "approved" and approval.details:
             execution_result = await self._execute_approved_action(
-                approval.agent_id, approval.action_type, approval.details
+                approval.agent_id, approval.action_type, approval.details, approval.execution_args
             )
             logger.info(f"Post-approval execution for {approval.action_type}: {execution_result}")
+            if execution_result is not None:
+                await write_audit_log(
+                    action="approval_executed",
+                    details={
+                        "approval_id": str(approval.id),
+                        "action_type": approval.action_type,
+                        "result": execution_result[:300],
+                    },
+                    agent_id=approval.agent_id,
+                    user_id=user.id,
+                )
+                await flush_request_transaction()
 
         if agent:
             from app.services.notification_service import send_notification
@@ -186,15 +207,22 @@ class AutonomyService:
 
         return approval
 
-    async def _execute_approved_action(self, agent_id: uuid.UUID, action_type: str, details: JsonObject) -> str | None:
+    async def _execute_approved_action(
+        self,
+        agent_id: uuid.UUID,
+        action_type: str,
+        details: JsonObject,
+        execution_args: JsonObject | None = None,
+    ) -> str | None:
         """Execute the tool action that was approved.
 
-        Reads the tool name and arguments from the approval details,
-        then directly calls the tool executor (bypassing autonomy check).
+        Reads the tool name from the approval details and replays the complete stored ``execution_args``. Approvals
+        created before that column existed (``None``) fall back to parsing the bounded ``details["args"]`` summary.
+        Calls the tool executor directly (bypassing autonomy check).
         """
         _ = action_type
         tool_name = details.get("tool")
-        args_raw = details.get("args", "{}")
+        args_raw = execution_args if execution_args is not None else details.get("args", "{}")
         if not isinstance(tool_name, str) or not tool_name:
             return None
 

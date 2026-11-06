@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.dao.organization_admission_dao import organization_admission_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
+from app.services.organization_plans import plan_for
 
 MARACLAW_SLUG = "maraclaw"
 KABERS_SLUG = "kabers"
@@ -58,6 +63,7 @@ async def _ensure_kabers() -> TenantRecord:
                 "is_active": True,
             }
         )
+        await _approve_kabers_pro(existing)
         logger.info("[startup] Created KABERs organization")
 
     flagged = await tenant_dao.get_default_end_user_org()
@@ -81,6 +87,28 @@ async def _ensure_kabers() -> TenantRecord:
     if resolved is None or not resolved.is_active:
         raise SystemOrgSeedError("No active default end-user organization")
     return resolved if flagged is None or flagged.id == existing.id else existing
+
+
+async def _approve_kabers_pro(tenant: TenantRecord) -> None:
+    """Record the approved Pro admission that makes a freshly created KABERs a Pro organization.
+
+    Tiers resolve only from approved admissions linked to the tenant, so this row is the tier. The reviewer and
+    provisioned admin are unset: the bootstrap admin is created later in the same transaction.
+    """
+    now = datetime.now(UTC)
+    await organization_admission_dao.create(
+        obj_in={
+            "email": _default_admin_credentials()[0],
+            "tier": OrganizationPlanId.PRO.value,
+            "plan": plan_for(OrganizationPlanId.PRO).model_dump(mode="json"),
+            "status": "approved",
+            "organization_name": tenant.name,
+            "reviewed_at": now,
+            "review_note": "Approved automatically by system organization bootstrap.",
+            "provisioned_at": now,
+            "provisioned_tenant_id": tenant.id,
+        }
+    )
 
 
 async def _ensure_maraclaw() -> TenantRecord:

@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
+from tests.oauth_state_fakes import install_state_redis
 
 from app.api import auth as auth_api
 from app.core import security
@@ -21,7 +22,7 @@ from app.core.security import create_access_token, hash_password
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import UserLogin
-from app.services import chat_tickets, password_reset_service
+from app.services import chat_tickets, oauth_state, password_reset_service
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
 
@@ -427,8 +428,12 @@ async def test_get_me_returns_user():
 
 
 @pytest.mark.asyncio
-async def test_oauth_callback_passes_redirect_uri():
-    """OAuth callback should forward redirect_uri for providers like Google."""
+async def test_oauth_callback_exchanges_with_the_redirect_uri_stored_at_authorize(monkeypatch: pytest.MonkeyPatch):
+    """The code exchange uses the redirect URI the server stored with the state, not the request body's."""
+    install_state_redis(monkeypatch)
+    state = await oauth_state.issue(
+        "google", "https://example.com/oauth/callback/google", oauth_state.OAuthIntent.SIGN_IN
+    )
     identity = _make_identity()
     user = _make_user(identity.id)
     provider = AsyncMock()
@@ -440,8 +445,8 @@ async def test_oauth_callback_passes_redirect_uri():
     provider.find_or_create_user = AsyncMock(return_value=(user, False))
     data: Any = SimpleNamespace(
         code="oauth-code",
-        state="oauth-state",
-        redirect_uri="https://example.com/oauth/callback/google",
+        state=state,
+        redirect_uri="https://evil.example/ignored",
         pending_token=None,
         tenant_id=None,
     )

@@ -36,6 +36,13 @@ from app.schemas.schemas import ChannelConfigOut
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import inbound as channel_inbound
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    read_capped,
+    too_large_note,
+    too_large_reply,
+)
 from app.services.storage import store_agent_upload
 
 router = APIRouter(tags=["slack"])
@@ -321,6 +328,8 @@ async def slack_event_webhook(
     from app.api.feishu import _FILE_ACK_MESSAGES
 
     _file_user_messages: list[str] = []
+    _too_large: list[tuple[str, int]] = []
+    _media_budget = MediaBudget()
     _bot_token = config.app_secret or ""
     for _sf in slack_files:
         _fname = (
@@ -332,31 +341,51 @@ async def slack_event_webhook(
         if not _url:
             continue
         try:
-            async with _httpx.AsyncClient(timeout=30, follow_redirects=True) as _hc:
-                _r = await _hc.get(_url, headers={"Authorization": f"Bearer {_bot_token}"})
-                _ = _r.raise_for_status()
+            _limit = _media_budget.limit_for(_fname)
+            async with (
+                _httpx.AsyncClient(timeout=30, follow_redirects=True) as _hc,
+                _hc.stream("GET", _url, headers={"Authorization": f"Bearer {_bot_token}"}) as _r,
+            ):
+                _data = await read_capped(_r, _limit)
                 _ct = http_header(_r.headers, "content-type")
-                if "text/html" in _ct or _r.content[:15].lower().startswith(b"<!doctype html"):
-                    raise ValueError(
-                        f"Got HTML response (SSO redirect) - Slack App needs 'files:read' scope. Content-Type: {_ct}"
-                    )
-                _, _workspace_path, _ = await store_agent_upload(
-                    agent_id,
-                    _fname,
-                    _r.content,
-                    content_type=_ct or None,
-                )
-            _file_user_messages.append(_workspace_path)
-            logger.info(f"[Slack] Saved file {_fname} ({len(_r.content)} bytes)")
-        except Exception as _e:
+        except MediaTooLargeError as _e_large:
+            _media_budget.spend(_e_large.read)
+            _too_large.append((_fname, _e_large.limit))
+            logger.warning(f"[Slack] Skipped oversize file {_fname}: {_e_large}")
+            continue
+        except _httpx.HTTPStatusError as _e:
+            if _e.response.is_server_error:
+                raise
             logger.error(f"[Slack] Failed to download file {_fname}: {_e}")
+            continue
+        _media_budget.spend(len(_data))
+        if "text/html" in _ct or _data[:15].lower().startswith(b"<!doctype html"):
+            logger.error(
+                f"[Slack] Failed to download file {_fname}: Got HTML response (SSO redirect) - "
+                f"Slack App needs 'files:read' scope. Content-Type: {_ct}"
+            )
+            continue
+        _, _workspace_path, _ = await store_agent_upload(
+            agent_id,
+            _fname,
+            _data,
+            content_type=_ct or None,
+        )
+        _file_user_messages.append(_workspace_path)
+        logger.info(f"[Slack] Saved file {_fname} ({len(_data)} bytes)")
+    _attachment_markers = [f"[file:{p.split('/')[-1]}]" for p in _file_user_messages]
+    _attachment_markers += [too_large_note(_n, _l) for _n, _l in _too_large]
+    _size_replies = [too_large_reply(_n, _l) for _n, _l in _too_large]
 
     if not user_text and not _file_user_messages and slack_files:
-        _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in slack_files)
-        _ack = (
-            f"I received the file(s) {_file_names}, but I cannot download their content yet. "
-            "Please verify that the Slack app has the files:read permission."
-        )
+        _ack_parts = list(_size_replies)
+        if len(_too_large) < len(slack_files):
+            _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in slack_files)
+            _ack_parts.append(
+                f"I received the file(s) {_file_names}, but I cannot download their content yet. "
+                "Please verify that the Slack app has the files:read permission."
+            )
+        _ack = " ".join(_ack_parts)
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,
@@ -370,16 +399,15 @@ async def slack_event_webhook(
         return {"ok": True}
 
     if _file_user_messages and not user_text:
-        _file_content = " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
         await channel_inbound.persist_user_message(
             agent_id=agent_id,
             user_id=platform_user_id,
             session=sess,
-            content=_file_content,
+            content=" ".join(_attachment_markers),
         )
         _random_source = _random.SystemRandom()
         await _asyncio.sleep(_random_source.uniform(1.0, 2.0))
-        _ack = _random_source.choice(_FILE_ACK_MESSAGES)
+        _ack = " ".join([_random_source.choice(_FILE_ACK_MESSAGES), *_size_replies])
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,
@@ -392,8 +420,8 @@ async def slack_event_webhook(
             await _send_slack_messages(_bot_token, channel_id, _ack)
         return {"ok": True}
 
-    if _file_user_messages and user_text:
-        user_text += "\n" + " ".join(f"[file:{p.split('/')[-1]}]" for p in _file_user_messages)
+    if _attachment_markers and user_text:
+        user_text += "\n" + " ".join(_attachment_markers)
 
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     _cfg_app_secret = config.app_secret or ""

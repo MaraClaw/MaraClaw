@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
+from tests.oauth_state_fakes import install_state_redis
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -14,6 +15,7 @@ from app.main import app as engine_app
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services.auth_audience import AuthAudience
 from app.services.auth_provider import ExternalUserInfo, FeishuAuthProvider
 from app.services.auth_registry import auth_provider_registry
 from app.services.registration_service import registration_service
@@ -90,8 +92,10 @@ def oauth_setup(monkeypatch: pytest.MonkeyPatch, setup: MemberAuthSetup) -> tupl
     monkeypatch.setattr("app.services.sso_company_admission.stage_sso_admission", stage)
     monkeypatch.setattr(sso_service, "link_identity", link)
     monkeypatch.setattr(registration_service, "ensure_web_org_member", AsyncMock())
+    install_state_redis(monkeypatch)
     pending = auth.OAuthPendingCache(
         provider_type="feishu",
+        audience=AuthAudience.MEMBER,
         user_info=auth.OAuthPendingUserInfo(provider_type="feishu", provider_user_id="remote-user", raw_data={}),
         token_data={"access_token": "remote"},
         allowed_tenant_ids=[tenant.id for tenant in setup.tenants],

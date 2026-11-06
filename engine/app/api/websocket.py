@@ -1,5 +1,6 @@
 """WebSocket chat endpoint for real-time agent conversations."""
 
+import asyncio
 import time
 import uuid
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from app.services.quota_guard import (
 )
 from app.services.realtime import realtime_router
 from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, is_shared_target
+from app.services.realtime_runtime.router import PRESENCE_REFRESH_SECONDS
 from app.services.shared_chat import is_shared_session, require_writable_session
 
 router = APIRouter(tags=["websocket"])
@@ -51,6 +53,8 @@ router = APIRouter(tags=["websocket"])
 
 type WebSocketConnection = tuple[WebSocket, str | None, str | None]
 type RealtimeMessage = dict[str, object]
+
+_presence_sleep = asyncio.sleep
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
@@ -98,6 +102,13 @@ class ConnectionManager:
             report_exception(error, source="websocket", operation="disconnect")
             logger.warning("[WS] Failed to unregister connection for agent {}: {}", agent_id, error)
 
+    async def refresh_presence(self, agent_id: str, websocket: WebSocket) -> None:
+        try:
+            await realtime_router.refresh_connection(agent_id=agent_id, websocket=websocket)
+        except RedisError as error:
+            report_exception(error, source="websocket", operation="presence-refresh")
+            logger.warning("[WS] Failed to refresh presence for agent {}: {}", agent_id, error)
+
     def _local_connections(self, agent_id: str) -> list[WebSocketConnection]:
         return self.active_connections.get(agent_id, [])
 
@@ -137,8 +148,12 @@ class ConnectionManager:
         session_id: str,
         message: RealtimeMessage,
         user_id: str | None = None,
+        send_timeout: float | None = None,
     ) -> None:
-        """Send only to this session, optionally restricting private-session recipients by user."""
+        """Send only to this session, optionally restricting private-session recipients by user.
+
+        ``send_timeout`` bounds each local socket send, nothing else (see ``RealtimeRouter.route_message``).
+        """
         wanted = session_id.strip().lower()
         await realtime_router.route_message(
             agent_id=agent_id,
@@ -146,6 +161,7 @@ class ConnectionManager:
             local_connections=self._local_connections(agent_id),
             session_id=wanted,
             user_id=None if is_shared_target(agent_id, wanted) else user_id,
+            send_timeout=send_timeout,
         )
 
     async def send_to_user(self, agent_id: str, user_id: str, message: RealtimeMessage):
@@ -233,6 +249,7 @@ class WebSocketChatHandler:
         self.binding: chat_tickets.ChatTicketBinding
         self.session_id_param: str | None = session_id
         self.lang: str = lang
+        self._presence_task: asyncio.Task[None] | None = None
 
         # State fields initialized during setup
         self.agent_name: str = ""
@@ -281,7 +298,27 @@ class WebSocketChatHandler:
             pass
         finally:
             with anyio.CancelScope(shield=True):
+                await self._stop_presence_refresh()
                 await manager.disconnect(str(self.agent_id), self.websocket)
+
+    async def _refresh_presence(self) -> None:
+        """Keep Redis presence alive; the TTL would otherwise end cross-instance delivery."""
+        while True:
+            await _presence_sleep(PRESENCE_REFRESH_SECONDS)
+            await manager.refresh_presence(str(self.agent_id), self.websocket)
+
+    async def _stop_presence_refresh(self) -> None:
+        task, self._presence_task = self._presence_task, None
+        if task is None:
+            return
+        _ = task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:
+            report_exception(error, source="websocket", operation="presence-refresh")
+            logger.warning("[WS] Presence refresh task failed for agent {}: {}", self.agent_id, error)
 
     async def setup(self) -> bool:
         self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
@@ -295,6 +332,7 @@ class WebSocketChatHandler:
         self.user_display_name = (self.user.display_name or "").strip() or "there"
         await self._load_history()
         await manager.connect(str(self.agent_id), self.websocket, self.conv_id, str(self.user.id))
+        self._presence_task = asyncio.create_task(self._refresh_presence(), name="ws-presence-refresh")
         await _send_chat_event(self.websocket, {"type": ChatEventType.CONNECTED, "session_id": self.conv_id})
         self.conversation = self._build_conversation_context()
         return True

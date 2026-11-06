@@ -23,8 +23,8 @@ const rejection = { detail: { code: 'member_audience_rejected', message: 'Member
 for (const boundary of [
   { path: '/api/member/auth/me', method: 'GET', payload: user, invoke: () => fetchCurrentUser('member-token') },
   { path: '/api/member/auth/verify-email', method: 'POST', payload: session, invoke: () => verifyEmailRequest('123456') },
-  { path: '/api/member/auth/example/callback', method: 'POST', payload: session, invoke: () => oauthCallback('example', { code: 'code' }) },
-  { path: '/api/member/auth/example/bind', method: 'POST', payload: user, invoke: () => bindProvider('example', 'code') },
+  { path: '/api/member/auth/example/callback', method: 'POST', payload: session, invoke: () => oauthCallback('example', { code: 'code', state: 'state' }) },
+  { path: '/api/member/auth/example/bind', method: 'POST', payload: user, invoke: () => bindProvider('example', 'code', 'state') },
   { path: '/api/member/auth/example/unbind', method: 'POST', payload: user, invoke: () => unbindProvider('example') },
 ]) {
   test(`${boundary.method} ${boundary.path} parses its member response`, async (t) => {

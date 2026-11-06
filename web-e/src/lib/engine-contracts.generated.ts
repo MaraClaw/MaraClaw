@@ -335,7 +335,7 @@ export type ArchivedSessionErrorEvent = z.infer<typeof ArchivedSessionErrorEvent
 export const ChatAttachmentReferenceSchema = z.strictObject({ ["name"]: z.string().refine(value => [...value].length >= 1), ["path"]: z.string().refine(value => [...value].length >= 1) });
 export type ChatAttachmentReference = z.infer<typeof ChatAttachmentReferenceSchema>;
 
-export const DoneEventSchema = z.strictObject({ ["attachments"]: z.union([z.array(ChatAttachmentReferenceSchema), z.null()]).optional(), ["client_submission_id"]: z.union([z.guid(), z.null()]).optional(), ["content"]: z.union([z.string(), z.null()]).optional(), ["entry_id"]: z.union([z.guid(), z.null()]).optional(), ["message_id"]: z.union([z.guid(), z.null()]).optional(), ["role"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.union([z.guid(), z.null()]).optional(), ["type"]: z.intersection(z.literal("done"), z.string()) });
+export const DoneEventSchema = z.strictObject({ ["attachments"]: z.union([z.array(ChatAttachmentReferenceSchema), z.null()]).optional(), ["client_submission_id"]: z.union([z.guid(), z.null()]).optional(), ["content"]: z.union([z.string(), z.null()]).optional(), ["entry_id"]: z.union([z.guid(), z.null()]).optional(), ["message_id"]: z.union([z.guid(), z.null()]).optional(), ["role"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.union([z.guid(), z.null()]).optional(), ["turn_id"]: z.union([z.guid(), z.null()]).optional(), ["type"]: z.intersection(z.literal("done"), z.string()) });
 export type DoneEvent = z.infer<typeof DoneEventSchema>;
 
 export const OnboardedEventSchema = z.strictObject({ ["agent_id"]: z.guid(), ["type"]: z.intersection(z.literal("onboarded"), z.string()) });
@@ -344,7 +344,10 @@ export type OnboardedEvent = z.infer<typeof OnboardedEventSchema>;
 export const TriggerNotificationEventSchema = z.strictObject({ ["content"]: z.string(), ["session_id"]: z.guid(), ["triggers"]: z.array(z.string()), ["type"]: z.intersection(z.literal("trigger_notification"), z.string()) });
 export type TriggerNotificationEvent = z.infer<typeof TriggerNotificationEventSchema>;
 
-export const TextProgressEventSchema = z.looseObject({ ["content"]: z.union([z.string(), z.null()]).optional(), ["type"]: z.intersection(z.union([z.literal("chunk"), z.literal("thinking"), z.literal("status"), z.literal("info")]), z.string()) });
+export const ChunkEventSchema = z.looseObject({ ["content"]: z.union([z.string(), z.null()]).optional(), ["replace"]: z.union([z.boolean(), z.null()]).optional(), ["seq"]: z.union([z.number().min(0).refine(Number.isInteger), z.null()]).optional(), ["turn_id"]: z.union([z.guid(), z.null()]).optional(), ["type"]: z.intersection(z.literal("chunk"), z.string()) });
+export type ChunkEvent = z.infer<typeof ChunkEventSchema>;
+
+export const TextProgressEventSchema = z.looseObject({ ["content"]: z.union([z.string(), z.null()]).optional(), ["type"]: z.intersection(z.union([z.literal("thinking"), z.literal("status"), z.literal("info")]), z.string()) });
 export type TextProgressEvent = z.infer<typeof TextProgressEventSchema>;
 
 export const ToolCallValueSchema = z.json();
@@ -362,7 +365,7 @@ export type AgentBayLiveEvent = z.infer<typeof AgentBayLiveEventSchema>;
 export const WorkspaceDraftEventSchema = z.looseObject({ ["content"]: z.union([z.string(), z.null()]).optional(), ["name"]: z.union([z.string(), z.null()]).optional(), ["type"]: z.intersection(z.literal("workspace_draft"), z.string()) });
 export type WorkspaceDraftEvent = z.infer<typeof WorkspaceDraftEventSchema>;
 
-export const ChatServerEventSchema = z.union([ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema]).refine(value => [ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema].filter(schema => schema.safeParse(value).success).length === 1);
+export const ChatServerEventSchema = z.union([ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema]).refine(value => [ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema].filter(schema => schema.safeParse(value).success).length === 1);
 export type ChatServerEvent = z.infer<typeof ChatServerEventSchema>;
 
 export const ChatTicketRequestSchema = z.looseObject({ ["agent_id"]: z.guid(), ["session_id"]: z.union([z.guid(), z.null()]).optional() });
@@ -537,7 +540,7 @@ export type HTTPValidationError = z.infer<typeof HTTPValidationErrorSchema>;
 export const HandoverRequestSchema = z.looseObject({ ["new_creator_id"]: z.guid() });
 export type HandoverRequest = z.infer<typeof HandoverRequestSchema>;
 
-export const IdentityBindRequestSchema = z.looseObject({ ["code"]: z.string(), ["provider_type"]: z.string() });
+export const IdentityBindRequestSchema = z.looseObject({ ["code"]: z.string(), ["provider_type"]: z.string(), ["state"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 128) });
 export type IdentityBindRequest = z.infer<typeof IdentityBindRequestSchema>;
 
 export const IdentityUnbindRequestSchema = z.looseObject({ ["provider_type"]: z.string() });
@@ -631,11 +634,15 @@ export type NotificationReadResponse = z.infer<typeof NotificationReadResponseSc
 export const NotificationUnreadCountResponseSchema = z.looseObject({ ["unread_count"]: z.number().refine(Number.isInteger) });
 export type NotificationUnreadCountResponse = z.infer<typeof NotificationUnreadCountResponseSchema>;
 
-export const OAuthAuthorizeResponseSchema = z.looseObject({ ["authorization_url"]: z.string() });
+export const OAuthAuthorizeResponseSchema = z.looseObject({ ["authorization_url"]: z.string(), ["state"]: z.string() });
 export type OAuthAuthorizeResponse = z.infer<typeof OAuthAuthorizeResponseSchema>;
 
-export const OAuthCallbackRequestSchema = z.looseObject({ ["code"]: z.union([z.string(), z.null()]).optional(), ["pending_token"]: z.union([z.string(), z.null()]).optional(), ["redirect_uri"]: z.union([z.string(), z.null()]).optional(), ["state"]: z.string(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
+export const OAuthCallbackRequestSchema = z.looseObject({ ["code"]: z.union([z.string(), z.null()]).optional(), ["pending_token"]: z.union([z.string(), z.null()]).optional(), ["redirect_uri"]: z.union([z.string().refine(value => [...value].length <= 2048), z.null()]).optional(), ["state"]: z.union([z.string().refine(value => [...value].length <= 128), z.null()]).optional(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
 export type OAuthCallbackRequest = z.infer<typeof OAuthCallbackRequestSchema>;
+
+export const OAuthIntentValues = ["sign_in","bind"] as const;
+export const OAuthIntentSchema = z.intersection(z.union([z.literal("sign_in"), z.literal("bind")]), z.string());
+export type OAuthIntent = z.infer<typeof OAuthIntentSchema>;
 
 export const PeriodFrequencyValues = ["monthly","quarterly","custom"] as const;
 export const PeriodFrequencySchema = z.intersection(z.union([z.literal("monthly"), z.literal("quarterly"), z.literal("custom")]), z.string());

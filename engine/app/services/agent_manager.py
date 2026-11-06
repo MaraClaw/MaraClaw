@@ -5,8 +5,10 @@ import json
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -39,6 +41,7 @@ from app.services.guest_admission import GuestStartPreflightError, guest_admissi
 from app.services.guest_identity import (
     GuestOwnershipError,
     guest_container_name,
+    guest_resolutions,
     owned_guest_containers,
     stop_guest_containers,
 )
@@ -48,6 +51,7 @@ from app.services.linkup_runtime import LINKUP_SEARCH_SKILL_FOLDER, linkup_defau
 from app.services.llm import get_model_api_key
 from app.services.openclaw_gateway_config import (
     ensure_gateway_token,
+    forget_native_retirement,
     gateway_config_block,
     guest_engine_base_url,
     prepare_native_gateway_files,
@@ -57,7 +61,7 @@ from app.services.openclaw_memory_embeddings import (
     memory_embedding_fingerprint,
     memory_search_block,
 )
-from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage import LocalStorageBackend, get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend
 
 __all__ = [
@@ -205,6 +209,29 @@ def openai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
     return payload
 
 
+@dataclass(frozen=True, slots=True)
+class _GuestModels:
+    primary: LLMModelRecord | None
+    secondary: LLMModelRecord | None
+    fallback: LLMModelRecord | None
+
+
+def _is_storage_source(storage: StorageBackend, storage_key: str, local_path: Path) -> bool:
+    """True when ``local_path`` is the very file local storage serves for ``storage_key``."""
+    return (
+        isinstance(storage, LocalStorageBackend)
+        and local_path.exists()
+        and (storage.root / storage_key).samefile(local_path)
+    )
+
+
+def _clear_runtime(*records: AgentRecord) -> None:
+    for record in records:
+        record.status = AgentStatus.ERROR
+        record.container_id = None
+        record.container_port = None
+
+
 class ContainerStatus(TypedDict):
     running: bool | None
     status: str | None
@@ -259,6 +286,9 @@ class AgentManager:
                 await self._materialize_entry(storage, child.key, local_root)
             return
         local_path.parent.mkdir(parents=True, exist_ok=True)
+        if _is_storage_source(storage, storage_key, local_path):
+            # Copying a file onto itself truncates it, which corrupts SQLite WAL/SHM files a guest holds open.
+            return
         _ = local_path.write_bytes(await storage.read_bytes(storage_key))
 
     def _ensure_openclaw_workspace_layout(self, agent_dir: Path) -> None:
@@ -409,10 +439,9 @@ class AgentManager:
         primary: LLMModelRecord | None,
         secondary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
-        selected: LLMModelRecord | None,
     ) -> str:
         parts: list[str] = ["native-gateway-rpc-v1"]
-        for row in (selected, primary, secondary, fallback):
+        for row in (primary, secondary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
             kind = getattr(row, "auth_kind", "") if row is not None else ""
@@ -422,6 +451,15 @@ class AgentManager:
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
         parts.append(memory_embedding_fingerprint(memory_embedding_config(settings)))
+        parts.extend(
+            str(value)
+            for value in (
+                settings.OPENCLAW_THINKING_DEFAULT,
+                settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION,
+                settings.OPENCLAW_BOOTSTRAP_MAX_CHARS,
+                settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS,
+            )
+        )
         return "|".join(parts)
 
     def write_guest_config(
@@ -433,36 +471,37 @@ class AgentManager:
         fallback: LLMModelRecord | None = None,
         selected: LLMModelRecord | None = None,
     ) -> Path | None:
-        """Rewrite the bind-mounted ``openclaw.json`` for a running (or staged) guest."""
+        """Rewrite the bind-mounted ``openclaw.json`` for a running (or staged) guest.
+
+        The file depends only on the assigned slots. ``selected`` is the model the caller's turn will run; it is
+        only reported, because the turn's model travels in the Gateway RPC ``provider``/``model`` parameters.
+        """
         agent_dir = self._agent_dir(agent.id)
         if not agent_dir.exists():
             logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
             return None
-        prepare_native_gateway_files(agent_dir)
-        fingerprint = self._guest_config_fingerprint(
-            primary=primary,
-            secondary=secondary,
-            fallback=fallback,
-            selected=selected,
-        )
+        fingerprint = self._guest_config_fingerprint(primary=primary, secondary=secondary, fallback=fallback)
         path = agent_dir / "openclaw.json"
         if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
-            logger.info("[OpenClaw] keeping existing guest config for {}; tracked config inputs unchanged", agent.id)
+            logger.info(
+                "[OpenClaw] keeping existing guest config for {}; turn model {} travels in the RPC",
+                agent.id,
+                guest_model_ref(selected),
+            )
             return path
         config = self._generate_openclaw_config(
             agent,
             primary,
             secondary=secondary,
             fallback=fallback,
-            selected=selected,
         )
         wrote = self._atomic_write_json(path, preserve_guest_resources(path, config))
         if not wrote:
             _guest_config_fingerprints[str(agent.id)] = fingerprint
-            self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
+            self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
             logger.info("[OpenClaw] skip guest config write; file already current for {}", agent.id)
             return path
-        self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
+        self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
         _guest_config_fingerprints[str(agent.id)] = fingerprint
         return path
 
@@ -473,15 +512,31 @@ class AgentManager:
         *,
         secondary: LLMModelRecord | None = None,
         fallback: LLMModelRecord | None = None,
-        selected: LLMModelRecord | None = None,
+        gateway_token: str | None = None,
     ) -> JsonObject:
-        """Generate openclaw.json config for the agent container."""
-        chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
+        """Generate openclaw.json config for the agent container.
+
+        The default model is the primary slot; assigned models appear in the catalog and the explicit override policy.
+        """
+        chosen_ref = (
+            guest_model_ref(model) or guest_model_ref(secondary) or guest_model_ref(fallback) or "openai/gpt-6.1-sol"
+        )
         defaults: JsonObject = {
             "workspace": "${OPENCLAW_STATE_DIR}/workspace",
             "model": self._defaults_model_block(chosen_ref, fallback),
         }
         aliases = self._model_aliases(model, secondary, fallback)
+        defaults["modelPolicy"] = {"allow": list(aliases) or [chosen_ref]}
+        if settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION is not None:
+            for ref, entry in aliases.items():
+                if ref.startswith(("anthropic/", "anthropic-vertex/")) and isinstance(entry, dict):
+                    entry["params"] = {"cacheRetention": settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION}
+        if settings.OPENCLAW_THINKING_DEFAULT is not None:
+            defaults["thinkingDefault"] = settings.OPENCLAW_THINKING_DEFAULT
+        if settings.OPENCLAW_BOOTSTRAP_MAX_CHARS is not None:
+            defaults["bootstrapMaxChars"] = settings.OPENCLAW_BOOTSTRAP_MAX_CHARS
+        if settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS is not None:
+            defaults["bootstrapTotalMaxChars"] = settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS
         if aliases:
             defaults["models"] = aliases
         config: JsonObject = {
@@ -489,8 +544,9 @@ class AgentManager:
             "memory": {"search": memory_search_block(memory_embedding_config(settings))},
             "plugins": {"slots": {"memory": "memory-core"}},
         }
-        agent_dir = self._agent_dir(agent.id)
-        gateway_token = ensure_gateway_token(agent_dir) if agent_dir.exists() else secrets.token_urlsafe(24)
+        if gateway_token is None:
+            agent_dir = self._agent_dir(agent.id)
+            gateway_token = ensure_gateway_token(agent_dir) if agent_dir.exists() else secrets.token_urlsafe(24)
         config.update(gateway_config_block(gateway_token))
 
         env = self._collect_provider_env(model, secondary, fallback)
@@ -498,10 +554,10 @@ class AgentManager:
         config["env"] = {"vars": env}
         auth_profiles: JsonObject = {}
         auth_order: JsonObject = {}
-        if any(is_grok_subscription(row) for row in (selected, model, secondary, fallback)):
+        if any(is_grok_subscription(row) for row in (model, secondary, fallback)):
             auth_profiles[XAI_OAUTH_PROFILE_ID] = {"provider": "xai", "mode": "oauth"}
             auth_order["xai"] = [XAI_OAUTH_PROFILE_ID]
-        if any(is_chatgpt_subscription(row) for row in (selected, model, secondary, fallback)):
+        if any(is_chatgpt_subscription(row) for row in (model, secondary, fallback)):
             auth_profiles[OPENAI_OAUTH_PROFILE_ID] = {"provider": "openai", "mode": "oauth"}
             auth_order["openai"] = [OPENAI_OAUTH_PROFILE_ID]
         if auth_profiles:
@@ -582,13 +638,6 @@ class AgentManager:
         await self._prepare_linkup_proxy_token(agent.id)
         original = agent
         try:
-            if rehydrate:
-                agent_dir = await self._materialize_agent_dir(agent.id)
-                if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
-                    _ = await restore_gogcli_state(agent.id, agent_dir)
-            else:
-                agent_dir = self._agent_dir(agent.id)
-            gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
 
             def _uuid_or_none(value: object) -> uuid.UUID | None:
                 return value if isinstance(value, uuid.UUID) else None
@@ -613,51 +662,15 @@ class AgentManager:
             if fallback is not None:
                 fallback = await ensure_fresh_access_token(fallback)
 
-            config = self._generate_openclaw_config(
-                agent,
-                primary,
-                secondary=secondary,
-                fallback=fallback,
-                selected=primary,
-            )
-            config_dir = agent_dir / ".openclaw"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            self._atomic_write_json(
-                agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
-            )
-            self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
-            _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
-                primary=primary,
-                secondary=secondary,
-                fallback=fallback,
-                selected=primary,
-            )
-            self._ensure_openclaw_workspace_layout(agent_dir)
-            gateway_token = ensure_gateway_token(agent_dir)
-            prepare_native_gateway_files(agent_dir)
-            container_envs: dict[str, str] = {
-                "OPENCLAW_GATEWAY_TOKEN": gateway_token,
-                "HOME": "/home/node",
-                "OPENCLAW_HOME": "/home/node",
-                "OPENCLAW_STATE_DIR": "/home/node/custom-state",
-                "OPENCLAW_CONFIG_PATH": "/home/node/custom-state/openclaw.json",
-                "MARACLAW_API_BASE": guest_engine_base_url(),
-                **gogcli_envs,
-            }
-            skill_entries = json_object_from(json_object_from(config["skills"])["entries"])
-            linkup_skill = json_object_from(skill_entries[LINKUP_SEARCH_SKILL_FOLDER])
-            linkup_env = json_object_from(linkup_skill["env"])
-            container_envs.update({key: value for key, value in linkup_env.items() if isinstance(value, str)})
-            gateway_key = _read_gateway_key_file(agent_dir)
-            if gateway_key not in (None, ""):
-                container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
+            models = _GuestModels(primary, secondary, fallback)
+            self._rehearse_guest_state(agent, models)
             client = self.docker_client
             guest_image = image or getattr(agent, "openclaw_image_id", None) or settings.MARACLAW_OPENCLAW_IMAGE
             ports = guest_port_candidates(getattr(original, "container_port", None))
         except (OSError, ValueError, HTTPError, HTTPException) as exc:
             raise GuestStartPreflightError("Guest start preparation failed") from exc
 
-        async with guest_admission(client, agent, agent_dir.parent):
+        async with guest_admission(client, agent, self._agent_dir(agent.id).parent):
             try:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
             except (ClientNotFoundError, DockerException) as exc:
@@ -665,33 +678,50 @@ class AgentManager:
             if create_only and guests:
                 raise GuestStartPreflightError("Guest appeared during creation preparation")
 
-            def run_container(container_port: int) -> Container:
-                return client.run(
-                    guest_image,
-                    ["openclaw", "gateway"],
-                    detach=True,
-                    name=guest_container_name(agent.id),
-                    networks=[settings.DOCKER_NETWORK],
-                    publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
-                    volumes=[(str(agent_dir), "/home/node/custom-state", "rw"), *gogcli_volumes],
-                    envs=container_envs,
-                    restart="unless-stopped",
-                    memory=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
-                    memory_swap=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
-                    cpus=settings.OPENCLAW_GUEST_CPUS,
-                    pids_limit=settings.OPENCLAW_GUEST_PIDS_LIMIT,
-                    labels={
-                        "maraclaw.agent_id": str(agent.id),
-                        "maraclaw.agent_name": agent.name,
-                        **({"maraclaw.start_operation": str(operation_id)} if operation_id else {}),
-                    },
-                )
-
             try:
                 for guest in guests:
                     await to_thread.run_sync(partial(client.container.stop, guest.id, time=10))
                     _ = await to_thread.run_sync(type(client.container).remove, client.container, [guest.id])
+                guest_resolutions.drop(agent.id)
                 agent.container_id = None
+                try:
+                    agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
+                        agent, models, rehydrate=rehydrate
+                    )
+                except (OSError, ValueError, HTTPError, HTTPException) as exc:
+                    if not guests:
+                        raise GuestStartPreflightError("Guest start preparation failed") from exc
+                    _clear_runtime(original, agent)
+                    raise GuestStartPreflightError(
+                        "Guest state could not be applied after the previous guest stopped", code="runtime_failed"
+                    ) from exc
+                except BaseException:
+                    if guests:
+                        _clear_runtime(original, agent)
+                    raise
+
+                def run_container(container_port: int) -> Container:
+                    return client.run(
+                        guest_image,
+                        ["openclaw", "gateway"],
+                        detach=True,
+                        name=guest_container_name(agent.id),
+                        networks=[settings.DOCKER_NETWORK],
+                        publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
+                        volumes=[(str(agent_dir), "/home/node/custom-state", "rw"), *gogcli_volumes],
+                        envs=container_envs,
+                        restart="unless-stopped",
+                        memory=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
+                        memory_swap=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
+                        cpus=settings.OPENCLAW_GUEST_CPUS,
+                        pids_limit=settings.OPENCLAW_GUEST_PIDS_LIMIT,
+                        labels={
+                            "maraclaw.agent_id": str(agent.id),
+                            "maraclaw.agent_name": agent.name,
+                            **({"maraclaw.start_operation": str(operation_id)} if operation_id else {}),
+                        },
+                    )
+
                 for container_port in ports:
                     try:
                         container = await to_thread.run_sync(run_container, container_port)
@@ -700,6 +730,7 @@ class AgentManager:
                         if is_port_bind_conflict(exc) and container_port != ports[-1]:
                             continue
                         raise
+                    guest_resolutions.drop(agent.id)
                     now = datetime.now(UTC)
                     for target in (original, agent):
                         target.container_id = container.id
@@ -710,12 +741,76 @@ class AgentManager:
                     return container.id
             except (ClientNotFoundError, DockerException, GuestOwnershipError) as exc:
                 logger.error("Guest start failed for agent {}: {}", agent.id, type(exc).__name__)
-                for target in (original, agent):
-                    target.status = AgentStatus.ERROR
-                    target.container_id = None
-                    target.container_port = None
+                _clear_runtime(original, agent)
                 return None
         return None
+
+    def _rehearse_guest_state(self, agent: AgentRecord, models: _GuestModels) -> None:
+        """Run the failure-prone state steps in a scratch tree so preparation errors never reach the live one."""
+        live_config = self._agent_dir(agent.id) / "openclaw.json"
+        with tempfile.TemporaryDirectory(prefix="maraclaw-guest-stage-") as scratch:
+            stage = Path(scratch)
+            if live_config.is_file():
+                _ = shutil.copyfile(live_config, stage / "openclaw.json")
+            config = self._generate_openclaw_config(
+                agent,
+                models.primary,
+                secondary=models.secondary,
+                fallback=models.fallback,
+                gateway_token=ensure_gateway_token(stage),
+            )
+            self._atomic_write_json(stage / "openclaw.json", preserve_guest_resources(stage / "openclaw.json", config))
+            _ = prepare_native_gateway_files(stage)
+
+    async def _apply_guest_state(
+        self, agent: AgentRecord, models: _GuestModels, *, rehydrate: bool
+    ) -> tuple[Path, dict[str, str], list[tuple[str, str, str]]]:
+        """Write the guest's mounted state; every old owned writer must already be stopped."""
+        if rehydrate:
+            agent_dir = await self._materialize_agent_dir(agent.id)
+            if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
+                _ = await restore_gogcli_state(agent.id, agent_dir)
+        else:
+            agent_dir = self._agent_dir(agent.id)
+        gogcli_envs, gogcli_volumes = gogcli_docker_extras(agent, agent_dir)
+        config = self._generate_openclaw_config(
+            agent,
+            models.primary,
+            secondary=models.secondary,
+            fallback=models.fallback,
+        )
+        config_dir = agent_dir / ".openclaw"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self._atomic_write_json(
+            agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
+        )
+        self._sync_guest_oauth(agent_dir, models.primary, models.secondary, models.fallback)
+        _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
+            primary=models.primary,
+            secondary=models.secondary,
+            fallback=models.fallback,
+        )
+        self._ensure_openclaw_workspace_layout(agent_dir)
+        gateway_token = ensure_gateway_token(agent_dir)
+        forget_native_retirement(agent_dir)
+        prepare_native_gateway_files(agent_dir)
+        container_envs: dict[str, str] = {
+            "OPENCLAW_GATEWAY_TOKEN": gateway_token,
+            "HOME": "/home/node",
+            "OPENCLAW_HOME": "/home/node",
+            "OPENCLAW_STATE_DIR": "/home/node/custom-state",
+            "OPENCLAW_CONFIG_PATH": "/home/node/custom-state/openclaw.json",
+            "MARACLAW_API_BASE": guest_engine_base_url(),
+            **gogcli_envs,
+        }
+        skill_entries = json_object_from(json_object_from(config["skills"])["entries"])
+        linkup_skill = json_object_from(skill_entries[LINKUP_SEARCH_SKILL_FOLDER])
+        linkup_env = json_object_from(linkup_skill["env"])
+        container_envs.update({key: value for key, value in linkup_env.items() if isinstance(value, str)})
+        gateway_key = _read_gateway_key_file(agent_dir)
+        if gateway_key not in (None, ""):
+            container_envs["MARACLAW_GATEWAY_API_KEY"] = gateway_key
+        return agent_dir, container_envs, gogcli_volumes
 
     def _replace_existing_guest_container(self, agent: AgentRecord) -> None:
         """Stop and remove only label-proven guests before applying a new entrypoint."""

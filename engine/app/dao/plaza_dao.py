@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, ClassVar, final
+from typing import Any, ClassVar, Literal, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row
@@ -162,15 +162,6 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             )
             return PlazaPostRecord.from_row(row) if row is not None else None
 
-    async def adjust_likes_count(self, post_id: UUID, delta: int) -> PlazaPostRecord | None:
-        async with self.session() as db:
-            row = await db.fetchone(
-                "UPDATE plaza_posts SET likes_count = GREATEST(COALESCE(likes_count, 0) + %(delta)s, 0) "
-                f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
-                {"post_id": post_id, "delta": delta},
-            )
-            return PlazaPostRecord.from_row(row) if row is not None else None
-
 
 @final
 class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
@@ -220,6 +211,26 @@ class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
     table: ClassVar[str] = "plaza_likes"
     columns: ClassVar[tuple[str, ...]] = _LIKE_COLUMNS
     record_factory = staticmethod(PlazaLikeRecord.from_row)
+
+    async def toggle(self, post_id: UUID, author_id: UUID, author_type: Literal["human", "agent"]) -> bool | None:
+        """Serialize on the post and repair its count in the same bound transaction."""
+        async with self.session() as db:
+            post = await db.fetchone(
+                "SELECT id FROM plaza_posts WHERE id = %(post_id)s FOR UPDATE", {"post_id": post_id}
+            )
+            if post is None:
+                return None
+            existing = await self.get_by_post_and_author(post_id, author_id)
+            if existing is not None:
+                _ = await self.delete_by_post_and_author(post_id, author_id)
+            else:
+                _ = await self.create(obj_in={"post_id": post_id, "author_id": author_id, "author_type": author_type})
+            _ = await db.execute(
+                "UPDATE plaza_posts SET likes_count = (SELECT COUNT(*) FROM plaza_likes WHERE post_id = %(post_id)s) "
+                "WHERE id = %(post_id)s",
+                {"post_id": post_id},
+            )
+            return existing is None
 
     async def get_by_post_and_author(self, post_id: UUID, author_id: UUID) -> PlazaLikeRecord | None:
         async with self.session() as db:

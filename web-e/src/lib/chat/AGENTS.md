@@ -6,6 +6,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
 
 - `attachment-submission.ts`: `createAttachmentSubmission`, immutable upload-to-submission conversion.
 - `history.ts`: `ChatHistory`, `joinHistoryRanges`, `refreshHistory`, `prependHistory`; chronological merge of cursor-paged history by entry identity.
+- `live-stream.ts`: live reply correlation by gateway `turn_id`, monotonic `seq`, replacement snapshots and the last 64 completed turns. `done.message_id` remains the assistant entry identifier; a foreign completion must not clear another active stream.
 - `message.ts`: `ChatAttachment`, `ChatMessage`, `getChatMessageText`; message shape and attachment-aware display text.
 - `protocol.ts`: outbound types, `inboundSchema`, inbound/receipt types and `isTurnAccepted`/`isTurnRejected` guards.
 - `sessions.ts`: `isWritableSession`, `controlSessionId`; chat/control session eligibility and fallback selection.

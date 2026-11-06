@@ -86,6 +86,7 @@ MAX_INPUT_BYTES: Final = 50 * 1024 * 1024
 MAX_OUTPUT_CHARS: Final = 2_000_000
 PREVIEW_MAX_CHARS: Final = 8_000
 IMAGE_UPLOAD_MAX_BYTES: Final = 10 * 1024 * 1024
+IMAGE_EXTENSIONS: Final[set[str]] = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 _INSTALL_HINT = "Install: pip install firecrawl-anydoc"
 _XLSX_PREVIEW_EXTENSIONS: Final[set[str]] = {".xlsx", ".xls", ".xlsm", ".xlsb"}
 _DOCX_PREVIEW_EXTENSIONS: Final[set[str]] = {".docx", ".doc", ".docm", ".odt", ".rtf", ".epub"}

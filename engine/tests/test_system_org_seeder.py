@@ -11,7 +11,9 @@ import pytest
 from tests.transaction_pool_fakes import CountingPool
 
 from app.db import session
+from app.records.organization_plan import OrganizationPlanId
 from app.services import system_org_seeder as seeder
+from app.services.organization_plans import plan_for
 from app.services.tenant_provisioning import AdminEmailTakenError, GenesisOrgAdminExistsError
 
 ATTACH = "app.services.tenant_provisioning.attach_genesis_org_admin"
@@ -70,6 +72,12 @@ class _TenantStore:
         return next((row for row in self.rows.values() if row.is_default_end_user_org and row.is_active), None)
 
 
+def _admissions(monkeypatch) -> AsyncMock:
+    create = AsyncMock()
+    monkeypatch.setattr(seeder.organization_admission_dao, "create", create)
+    return create
+
+
 def _spy_writes(monkeypatch, store: _TenantStore):
     create, update = AsyncMock(side_effect=store.create), AsyncMock(side_effect=store.update)
     monkeypatch.setattr(seeder.tenant_dao, "create", create)
@@ -81,6 +89,8 @@ def _spy_writes(monkeypatch, store: _TenantStore):
 async def test_ensure_kabers_creates_when_missing(monkeypatch):
     store = _TenantStore().install(monkeypatch)
     create, _ = _spy_writes(monkeypatch, store)
+    monkeypatch.setattr(seeder, "get_settings", _valid_settings)
+    admissions = _admissions(monkeypatch)
 
     result = await seeder._ensure_kabers()
 
@@ -90,6 +100,31 @@ async def test_ensure_kabers_creates_when_missing(monkeypatch):
     assert create.await_args is not None
     assert create.await_args.kwargs["obj_in"]["slug"] == "kabers"
     assert create.await_args.kwargs["obj_in"]["name"] == "KABERs"
+    admissions.assert_awaited_once()
+    assert admissions.await_args is not None
+    fields = admissions.await_args.kwargs["obj_in"]
+    assert fields["provisioned_tenant_id"] == result.id
+    assert (fields["status"], fields["tier"], fields["plan"]) == (
+        "approved",
+        "pro",
+        plan_for(OrganizationPlanId.PRO).model_dump(mode="json"),
+    )
+    assert (fields["email"], fields["organization_name"]) == ("owner@example.com", "KABERs")
+    assert fields["reviewed_at"] is not None
+    assert fields["provisioned_at"] is not None
+    assert "bootstrap" in fields["review_note"]
+    assert {"reviewed_by", "provisioned_admin_user_id"}.isdisjoint(fields)
+
+
+@pytest.mark.asyncio
+async def test_ensure_kabers_leaves_existing_organization_without_a_new_admission(monkeypatch):
+    _TenantStore(_tenant(is_default_end_user_org=True)).install(monkeypatch)
+    monkeypatch.setattr(seeder, "get_settings", Mock(side_effect=AssertionError("environment must not be consulted")))
+    admissions = _admissions(monkeypatch)
+
+    await seeder._ensure_kabers()
+
+    admissions.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -221,6 +256,7 @@ async def test_ensure_system_orgs_commits_orgs_and_admin_in_one_transaction(monk
     monkeypatch.setattr(seeder.user_dao, "genesis_org_admin_for_tenant", AsyncMock(return_value=None))
     attach = AsyncMock(return_value=SimpleNamespace(org_admin=SimpleNamespace(id=uuid.uuid4())))
     monkeypatch.setattr(ATTACH, attach)
+    admissions = _admissions(monkeypatch)
 
     maraclaw, kabers = await seeder.ensure_system_orgs()
 
@@ -229,6 +265,9 @@ async def test_ensure_system_orgs_commits_orgs_and_admin_in_one_transaction(monk
     assert list(store.rows) == ["kabers", "maraclaw"]
     assert attach.await_args is not None
     assert attach.await_args.kwargs["tenant_id"] == kabers.id
+    admissions.assert_awaited_once()
+    assert admissions.await_args is not None
+    assert admissions.await_args.kwargs["obj_in"]["provisioned_tenant_id"] == kabers.id != maraclaw.id
     assert (pool.raw.commits, pool.raw.rollbacks, pool.checkouts) == (1, 0, 1)
 
 

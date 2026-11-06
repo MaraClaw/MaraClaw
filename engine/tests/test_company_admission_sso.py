@@ -6,6 +6,7 @@ import pytest
 from app.api import auth
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.user_dao import user_dao
+from app.services.auth_audience import AuthAudience
 from app.services.auth_provider import ExternalUserInfo, GoogleAuthProvider
 from app.services.auth_registry import auth_provider_registry
 from app.services.email_verification_service import email_verification_service
@@ -128,6 +129,7 @@ async def test_smtp_first_sso_returns_active_kabers_user(
     monkeypatch.setattr(auth_provider_registry, "get_provider", AsyncMock(return_value=GoogleAuthProvider(provider)))
     pending = auth.OAuthPendingCache(
         provider_type="google",
+        audience=AuthAudience.SHARED,
         token_data={},
         allowed_tenant_ids=[scenario.target_id],
         user_info=auth.OAuthPendingUserInfo(
@@ -141,7 +143,7 @@ async def test_smtp_first_sso_returns_active_kabers_user(
     monkeypatch.setattr(auth, "_get_oauth_pending", AsyncMock(return_value=pending))
     response = await scenario.client.post(
         "/api/auth/google/callback",
-        json={"pending_token": "opaque-cache-key", "tenant_id": str(scenario.target_id), "state": ""},
+        json={"pending_token": "opaque-cache-key", "tenant_id": str(scenario.target_id)},
     )
     assert response.status_code == 200, response.text
     assert response.json()["user"]["tenant_id"] == str(scenario.source_id)
@@ -171,6 +173,7 @@ async def test_smtp_sso_preserves_existing_account_disablement(
     monkeypatch.setattr(auth_provider_registry, "get_provider", AsyncMock(return_value=GoogleAuthProvider(provider)))
     pending = auth.OAuthPendingCache(
         provider_type="google",
+        audience=AuthAudience.SHARED,
         token_data={},
         allowed_tenant_ids=[scenario.target_id],
         user_info=auth.OAuthPendingUserInfo(
@@ -181,7 +184,7 @@ async def test_smtp_sso_preserves_existing_account_disablement(
 
     response = await scenario.client.post(
         "/api/auth/google/callback",
-        json={"pending_token": "opaque-cache-key", "tenant_id": str(scenario.target_id), "state": ""},
+        json={"pending_token": "opaque-cache-key", "tenant_id": str(scenario.target_id)},
     )
 
     assert response.status_code == 403, response.text

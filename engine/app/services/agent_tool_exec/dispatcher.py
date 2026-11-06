@@ -133,6 +133,7 @@ async def execute_tool(
                     agent,
                     action_type,
                     {"tool": tool_name, "args": str(arguments)[:200], "requested_by": str(user_id)},
+                    execution_args=arguments,
                 )
                 if not json_as_bool(result_check.get("allowed")):
                     level = json_as_str_or(result_check.get("level"), "L3")

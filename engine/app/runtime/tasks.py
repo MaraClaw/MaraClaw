@@ -117,9 +117,12 @@ class OwnedTasks:
         if not task.cancelled() and (error := task.exception()) is not None:
             report_exception(error, source="runtime", operation="owned-task")
             logger.error("[runtime] Background task {} failed: {}", task.get_name(), error)
-        elif not task.cancelled() and not self.closing:
-            if any(required is task and not finite for required, finite in self.required.values()):
-                report_exception(RequiredLoopExitedError(), source="runtime", operation="required-loop-exited")
+        elif (
+            not task.cancelled()
+            and not self.closing
+            and any(required is task and not finite for required, finite in self.required.values())
+        ):
+            report_exception(RequiredLoopExitedError(), source="runtime", operation="required-loop-exited")
 
     async def stop(self) -> None:
         self.closing = True

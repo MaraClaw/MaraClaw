@@ -21,6 +21,7 @@ from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.schemas.company_admission import RequestSummary
+from app.services.oauth_state import MAX_REDIRECT_URI_LENGTH, MAX_STATE_LENGTH
 from app.services.schedule_time import validate_timezone
 
 # ─── Auth ───────────────────────────────────────────────
@@ -191,12 +192,13 @@ class IdentityProviderOut(BaseModel):
 
 class OAuthAuthorizeResponse(BaseModel):
     authorization_url: str
+    state: str  # Server-issued, single-use; the client keeps it and sends it back with the code
 
 
 class OAuthCallbackRequest(BaseModel):
     code: str | None = None  # Step 1: initial OAuth code exchange
-    state: str
-    redirect_uri: str | None = None
+    state: str | None = Field(None, max_length=MAX_STATE_LENGTH)  # Required with a code; the pending step has none
+    redirect_uri: str | None = Field(None, max_length=MAX_REDIRECT_URI_LENGTH)  # Ignored: the stored URI is used
     # Step 2: tenant selection (no code needed)
     tenant_id: str | None = None
     pending_token: str | None = None
@@ -205,6 +207,7 @@ class OAuthCallbackRequest(BaseModel):
 class IdentityBindRequest(BaseModel):
     provider_type: str
     code: str  # OAuth code for binding
+    state: str = Field(min_length=1, max_length=MAX_STATE_LENGTH)
 
 
 class IdentityUnbindRequest(BaseModel):
