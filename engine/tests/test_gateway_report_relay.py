@@ -1,10 +1,13 @@
-from datetime import timedelta
+import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import anyio
 import pytest
 
-from app.services import gateway_report_relay as relay
+from app.services import gateway_report_relay as relay, turn_timing
+from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
 
 
@@ -194,3 +197,59 @@ async def test_cancellation_leaves_unacknowledged_lease_for_restart(store: Relay
 def test_retry_is_deterministic_and_bounded(attempt: int, seconds: int) -> None:
     # Given / When / Then
     assert relay.retry_delay(attempt) == timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def relay_lines(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str | int]]:
+    captured: list[dict[str, str | int]] = []
+    monkeypatch.setattr(
+        turn_timing, "logger", SimpleNamespace(info=lambda _t, payload: captured.append(json.loads(payload)))
+    )
+    return captured
+
+
+async def test_each_delivery_attempt_logs_one_relay_timing_line(
+    store: RelayStore, relay_lines: list[dict[str, str | int]]
+) -> None:
+    # Given a two-chunk IM report and an agent report, both completed three seconds ago.
+    store.message.completed_at = datetime.now(UTC) - timedelta(seconds=3)
+    store.message.result = "a" * 4001
+    im = store.intent("im")
+    agent = store.intent("agent")
+    # When the relay delivers the first chunk and the agent report, then the last chunk.
+    await relay.relay_batch(store.clock)
+    await relay.relay_batch(store.clock)
+    # Then every attempt has exactly one line keyed by message and delivery.
+    results = {(line["delivery_id"], line["attempt"]): line["result"] for line in relay_lines}
+    assert results == {
+        (str(im.id), 1): "chunk_sent",
+        (str(agent.id), 1): "acknowledged",
+        (str(im.id), 2): "acknowledged",
+    }
+    assert {line["message_id"] for line in relay_lines} == {str(store.message.id)}
+    sent = next(line for line in relay_lines if line["result"] == "chunk_sent")
+    assert sent["destination_kind"] == "im"
+    sent_marks = [mark for key in ("claimed", "sent", "done") if isinstance(mark := sent[key], int)]
+    assert len(sent_marks) == 3
+    assert min(sent_marks) >= 3000
+    assert sent_marks == sorted(sent_marks)
+    agent_line = next(line for line in relay_lines if line["destination_kind"] == "agent")
+    agent_marks = [mark for key in ("claimed", "done") if isinstance(mark := agent_line[key], int)]
+    assert len(agent_marks) == 2
+    assert min(agent_marks) >= 3000
+    assert agent_marks == sorted(agent_marks)
+    assert "sent" not in agent_line
+
+
+@pytest.mark.parametrize("failure", ["send", "reply_window", "ack"])
+async def test_relay_timing_names_retry_terminal_and_lost_results(
+    store: RelayStore, relay_lines: list[dict[str, str | int]], failure: str
+) -> None:
+    store.intent("agent" if failure == "ack" else "im")
+    store.fail_send = failure == "send"
+    store.fail_ack = failure == "ack"
+    if failure == "reply_window":
+        store.send_error = WhatsAppReplyWindowError("whatsapp_window_expired")
+    await relay.relay_batch(store.clock)
+    ((line),) = relay_lines
+    assert line["result"] == {"send": "retry", "reply_window": "terminal", "ack": "lost"}[failure]
