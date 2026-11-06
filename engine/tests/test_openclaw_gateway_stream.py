@@ -52,7 +52,7 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
         assert conversation_id == turn.message.conversation_id
         assert user_id == (None if shared else str(turn.agent.creator_id))
         events.append(event)
-        if len(events) == 2:
+        if event["type"] == "chunk" and event["content"] == "replacement":
             release.set()
 
     @contextmanager
@@ -94,11 +94,13 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
     turn.message.result = outcome.text
     await delivery.publish_report(turn.agent, delivery.RecordedReport(turn.message, assistant_id))
 
-    assert [event["type"] for event in events] == ["chunk", "chunk", "done"]
-    assert [(event["seq"], event["content"], event["replace"]) for event in events[:2]] == [
-        (0, "a", False),
-        (2, "replacement", True),
-    ]
+    assert [event["type"] for event in events[:-1]] == ["chunk"] * (len(events) - 1)
+    assert events[-1]["type"] == "done"
+    # The replacement may supersede the append before it was published; either way the latest snapshot arrives last.
+    assert [(event["seq"], event["content"], event["replace"]) for event in events[:-1]] in (
+        [(2, "replacement", True)],
+        [(0, "a", False), (2, "replacement", True)],
+    )
     assert all(event["turn_id"] == turn.message_id for event in events)
     assert events[-1]["message_id"] == str(assistant_id) != turn.message_id
     assert events[-1]["content"] == "answer"
@@ -325,4 +327,5 @@ async def test_dropped_delta_withholds_appends_until_a_snapshot_resynchronizes(m
     relay.finish()
     await asyncio.wait_for(relay.publish(), 5)
 
-    assert events == [(0, "safe ", False), (3, f"snapshot {BRAND} end ", True), (4, "!", False)]
+    # All four were queued before the first publication, so the snapshot supersedes the append and the "!" joins it.
+    assert events == [(4, f"snapshot {BRAND} end !", True)]

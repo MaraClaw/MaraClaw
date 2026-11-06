@@ -53,8 +53,47 @@ async def streams_to_web(message: GatewayMessageRecord) -> bool:
 
 
 @final
+class _Snapshot:
+    """The one unpublished update; accumulates redacted frames, so mutation is its whole purpose.
+
+    Holds the safe text since the last publication (restarted by a replacement) and the newest merged frame. Text
+    stays in a list and is joined once per publication; its size is bounded by the stream text the exec cap admits.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._latest: GatewayDelta | None = None
+        self._replace = False
+
+    @property
+    def waiting(self) -> bool:
+        return self._latest is not None
+
+    def merge(self, delta: GatewayDelta, safe: str) -> None:
+        if delta.replace:
+            self._parts.clear()
+            self._replace = True
+        self._parts.append(safe)
+        self._latest = delta
+
+    def take(self) -> GatewayDelta | None:
+        """The latest complete safe text with its newest ``seq``, or ``None`` when nothing is waiting."""
+        if self._latest is None:
+            return None
+        taken = self._latest.model_copy(update={"text": "".join(self._parts), "replace": self._replace})
+        self._parts.clear()
+        self._latest = None
+        self._replace = False
+        return taken
+
+
+@final
 class DeltaRelay:
-    """Own one turn's mutable queue and counters; reserve slots BEFORE scheduling loop callbacks."""
+    """Own one turn's mutable queue and counters; reserve slots BEFORE scheduling loop callbacks.
+
+    Ingestion (parse, redact, merge) never waits for delivery: one sender publishes the single pending snapshot, so a
+    slow path skips obsolete intermediate updates instead of queueing them.
+    """
 
     def __init__(self, message: GatewayMessageRecord, timing: TurnTimeline | None, guard: ResponseGuard | None = None):
         self.message = message
@@ -64,6 +103,9 @@ class DeltaRelay:
         self.queue: asyncio.Queue[str | None] = asyncio.Queue(QUEUE_SIZE + 1)
         self.slots = BoundedSemaphore(QUEUE_SIZE)
         self.dropped = 0
+        self.pending = _Snapshot()
+        self.wake = asyncio.Event()
+        self.closed = False
 
     def offer(self, line: str) -> None:
         if self.slots.acquire(blocking=False):
@@ -76,15 +118,19 @@ class DeltaRelay:
         self.queue.put_nowait(None)
 
     async def drain(self, consumer: asyncio.Task[None]) -> None:
-        """Flush queued deltas before settlement for at most DRAIN_SECONDS; the terminal result supersedes the rest.
+        """Flush the in-flight and latest pending update before settlement for at most DRAIN_SECONDS.
 
-        The caller owns ``consumer`` and cancels it afterwards, so an expired drain leaves no task behind.
+        The terminal result supersedes anything left. The caller owns ``consumer`` and cancels it afterwards, so an
+        expired drain leaves no task behind.
         """
         self.finish()
         done, _ = await asyncio.wait({consumer}, timeout=DRAIN_SECONDS)
         if not done:
             logger.warning(
-                "[Gateway] Skipped queued stream deltas message={} queued={}", self.message.id, self.queue.qsize()
+                "[Gateway] Skipped queued stream deltas message={} queued={} pending={}",
+                self.message.id,
+                self.queue.qsize(),
+                self.pending.waiting,
             )
 
     def execute(self, container_id: str, payload_name: str, cancel: Event) -> str:
@@ -116,8 +162,15 @@ class DeltaRelay:
         return pending.decode("utf-8", errors="replace") if pending.strip() else last
 
     async def publish(self) -> None:
-        from app.services.openclaw_gateway_delivery import publish_chunk
+        """Ingest queued deltas and publish them through one sender until completion is signalled."""
+        async with asyncio.TaskGroup() as group:
+            _ = group.create_task(self._send())
+            await self._ingest()
+        if self.dropped:
+            logger.warning("[Gateway] dropped stream deltas message={} count={}", self.message.id, self.dropped)
 
+    async def _ingest(self) -> None:
+        """Redact every admitted frame, then merge its safe output; never awaits delivery."""
         previous = -1
         while (line := await self.queue.get()) is not None:
             self.slots.release()
@@ -132,6 +185,19 @@ class DeltaRelay:
                 self.timing.mark("first_delta")
             safe = self.redactor.feed(delta.seq, delta.text, delta.replace)
             if safe is not None:
-                await publish_chunk(self.message, delta.model_copy(update={"text": safe}))
-        if self.dropped:
-            logger.warning("[Gateway] dropped stream deltas message={} count={}", self.message.id, self.dropped)
+                self.pending.merge(delta, safe)
+                self.wake.set()
+        self.closed = True
+        self.wake.set()
+
+    async def _send(self) -> None:
+        """The only in-flight publication; whatever arrived meanwhile goes out as one latest snapshot."""
+        from app.services.openclaw_gateway_delivery import publish_chunk
+
+        while True:
+            while (delta := self.pending.take()) is not None:
+                await publish_chunk(self.message, delta)
+            if self.closed:
+                return
+            self.wake.clear()  # no await since `take` saw nothing, so no merge can slip in before the wait
+            await self.wake.wait()

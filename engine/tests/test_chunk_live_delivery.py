@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+from contextlib import suppress
 from typing import override
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -22,6 +23,7 @@ from app.services import (
 )
 from app.services.realtime_runtime import router as realtime
 from app.services.shared_chat import shared_session_id
+from test_openclaw_gateway_coalescing import IngestProbe, delta_line
 from test_openclaw_gateway_rpc import _Turn, wire_terminal
 from test_websocket_session_query import MemoryPresence
 
@@ -58,6 +60,24 @@ class SlowPresence(MemoryPresence):
     @override
     async def smembers(self, key: str) -> set[str]:
         await asyncio.sleep(SLOW)
+        return await super().smembers(key)
+
+
+class GatedPresence(MemoryPresence):
+    """Holds the first presence read, the Redis round trip every routed chunk pays, until released."""
+
+    def __init__(self, agent_id: str, records: dict[str, dict[str, str]]) -> None:
+        super().__init__(agent_id, records)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.reads = 0
+
+    @override
+    async def smembers(self, key: str) -> set[str]:
+        self.reads += 1
+        if self.reads == 1:
+            self.entered.set()
+            await self.release.wait()
         return await super().smembers(key)
 
 
@@ -241,3 +261,41 @@ async def test_terminal_drain_is_bounded_when_chunk_delivery_never_answers(monke
     assert isinstance(outcome, rpc.TerminalOutcome)
     assert abandoned == [True]
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_slow_routing_delivers_the_first_and_the_latest_chunk_without_a_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    link = await pipe.connect()
+    store = GatedPresence(str(pipe.agent_id), {})
+    pipe.store = store
+    relay = streaming.DeltaRelay(pipe.message, None)
+    probe = IngestProbe(monkeypatch, relay)
+    consumer = asyncio.create_task(relay.publish())
+    try:
+        relay.offer(delta_line(pipe.message, 0, "t0"))
+        await asyncio.wait_for(store.entered.wait(), 5)
+        for seq in range(1, 41):
+            relay.offer(delta_line(pipe.message, seq, f"t{seq}"))
+        await probe.ingested(40)
+
+        store.release.set()
+        await asyncio.wait_for(relay.drain(consumer), 5)
+        await consumer
+    finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer
+
+    assert [json.loads(str(frame["text"])) for frame in link.frames if frame["type"] == "websocket.send"] == [
+        {"type": "chunk", "content": "t0", "turn_id": str(pipe.message.id), "seq": 0, "replace": False},
+        {
+            "type": "chunk",
+            "content": "".join(f"t{seq}" for seq in range(1, 41)),
+            "turn_id": str(pipe.message.id),
+            "seq": 40,
+            "replace": False,
+        },
+    ]
+    assert relay.dropped == 0
