@@ -175,13 +175,19 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
 
 
 GUEST_DEFAULTS: JsonObject = {"modelPolicy": {"mode": "strict", "allow": ["openai/*"]}, "thinkingDefault": "low"}
-GUEST_ENTRIES: JsonObject = {"main": {"identity": {"name": "Ada", "emoji": "A"}, "skills": ["custom"]}}
+GUEST_ENTRIES: JsonObject = {
+    "main": {"identity": {"name": "Ada", "emoji": "A"}, "skills": ["custom"], "modelPolicy": {"mode": "strict"}}
+}
 
 
 def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp_path: Path) -> None:
     # Given: guest-owned values sit beside stale values at every platform-generated path
     path = tmp_path / "openclaw.json"
-    stale_entry: JsonObject = {**json_object_from(GUEST_ENTRIES["main"]), "model": "retired/model"}
+    stale_entry: JsonObject = {
+        **json_object_from(GUEST_ENTRIES["main"]),
+        "model": "retired/model",
+        "modelPolicy": {"mode": "strict", "allow": ["retired/*"]},
+    }
     path.write_text(
         json.dumps(
             {
@@ -212,7 +218,11 @@ def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp
         ),
         encoding="utf-8",
     )
-    platform_defaults: JsonObject = {"workspace": "/workspace", "model": {"primary": "new/model"}}
+    platform_defaults: JsonObject = {
+        "workspace": "/workspace",
+        "model": {"primary": "new/model"},
+        "modelPolicy": {"allow": ["new/model"]},
+    }
     generated: JsonObject = {
         "agents": {"defaults": platform_defaults},
         "memory": {"search": {"enabled": True}},
@@ -227,7 +237,14 @@ def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp
 
     # Then
     assert result == {
-        "agents": {"defaults": {**GUEST_DEFAULTS, **platform_defaults}, "entries": GUEST_ENTRIES},
+        "agents": {
+            "defaults": {
+                **GUEST_DEFAULTS,
+                **platform_defaults,
+                "modelPolicy": {"mode": "strict", "allow": ["new/model"]},
+            },
+            "entries": GUEST_ENTRIES,
+        },
         "channels": {"slack": {"enabled": True}},
         "memory": {"citations": "off", "search": {"enabled": True}},
         "plugins": {"load": {"paths": ["/custom/plugin"]}, "slots": {"memory": "memory-core"}},
@@ -262,7 +279,8 @@ async def test_guest_agent_settings_survive_regeneration_beside_platform_model(g
     agents = json_object_from(stored["agents"])
     defaults = json_object_from(agents["defaults"])
     assert agents["entries"] == GUEST_ENTRIES
-    assert defaults["modelPolicy"] == GUEST_DEFAULTS["modelPolicy"]
+    assert defaults["thinkingDefault"] == GUEST_DEFAULTS["thinkingDefault"]
+    assert defaults["modelPolicy"] == {"mode": "strict", "allow": ["openai/gpt-6.1-sol"]}
     assert defaults["model"] == json_object_from(json_object_from(generated["agents"])["defaults"])["model"]
     assert stored["env"] == generated["env"]
 
@@ -293,11 +311,29 @@ def test_guest_agent_settings_survive_model_switch_and_retired_provider_is_remov
     agents = json_object_from(stored["agents"])
     defaults = json_object_from(agents["defaults"])
     assert agents["entries"] == GUEST_ENTRIES
-    assert defaults["modelPolicy"] == GUEST_DEFAULTS["modelPolicy"]
+    assert defaults["thinkingDefault"] == GUEST_DEFAULTS["thinkingDefault"]
+    assert defaults["modelPolicy"] == {"mode": "strict", "allow": ["anthropic/claude-new"]}
     assert defaults["model"] == {"primary": "anthropic/claude-new"}
     assert defaults["models"] == {"anthropic/claude-new": {"alias": "primary"}}
     assert json_object_from(json_object_from(stored["env"])["vars"]).get("ANTHROPIC_API_KEY") == "anthropic-secret"
     assert "OPENAI_API_KEY" not in json_object_from(json_object_from(stored["env"])["vars"])
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_assigned_openrouter_slots_are_exactly_authorized(guest: Guest, duplicate: bool) -> None:
+    names = ["nvidia/nemotron-3.5-lightning:free", "nvidia/nemotron-3.5-super-vl:free", "recursive/flint-v1.0:free"]
+    models = [
+        LLMModelRecord(id=uuid4(), provider="openrouter", model=name, label=name, api_key_encrypted="")
+        for name in names
+    ]
+    if duplicate:
+        models[2] = models[1]
+
+    config = guest.manager._generate_openclaw_config(guest.agent, models[0], secondary=models[1], fallback=models[2])
+
+    defaults = json_object_from(json_object_from(config["agents"])["defaults"])
+    expected = [f"openrouter/{name}" for name in (names[:2] if duplicate else names)]
+    assert json_object_from(defaults["modelPolicy"])["allow"] == expected
 
 
 @pytest.mark.parametrize("writer", ["refresh", "recreate"])

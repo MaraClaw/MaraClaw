@@ -214,6 +214,40 @@ alongside MCP/skill/plugin entries and custom skill roots. Platform model select
 aliases, provider credentials, embedding search, gateway and tool settings remain
 authoritative; retired managed values are removed rather than merged back in.
 
+### Optional latency experiments
+
+These settings default to `None` (unset), generating no experiment values on a
+fresh configuration. Changes are applied when the engine next writes the guest
+config; ordinary reuse alone does not rewrite it. Existing guest-owned
+`thinkingDefault` and bootstrap limits survive when the corresponding setting
+is unset. An explicit setting overrides the guest value. Unsetting it later
+preserves the last guest customization, including a value previously generated
+by the experiment. To reset to the OpenClaw default, unset the setting and remove
+that field from the guest's `agents.defaults`; no provenance is tracked. Model
+aliases and their params retain their existing platform ownership, so unsetting
+cache retention removes the generated cache param on the next config write.
+
+| Setting | Generated path and accepted values |
+|---|---|
+| `OPENCLAW_THINKING_DEFAULT` | `agents.defaults.thinkingDefault`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`; model support varies |
+| `OPENCLAW_ANTHROPIC_CACHE_RETENTION` | Assigned direct Anthropic and Anthropic Vertex `agents.defaults.models[ref].params.cacheRetention`: `long` (one-hour cache TTL; cache writes can cost more) |
+| `OPENCLAW_BOOTSTRAP_MAX_CHARS` | `agents.defaults.bootstrapMaxChars`: positive integer, per-file cap (OpenClaw default 20000) |
+| `OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS` | `agents.defaults.bootstrapTotalMaxChars`: positive integer, total cap (OpenClaw default 60000) |
+
+Smaller bootstrap limits can reduce context and latency but truncate agent instructions.
+Measure quality and latency before enabling these experiments. OpenClaw 2026.11.1's
+closed Gateway `agent` request schema does not accept `fastMode`, so no fast-mode
+setting is emitted for this transport. These fields were validated against the
+installed `arm64-openclaw:2026.11.1` schema in disposable containers with no
+network. Schema acceptance does not establish a latency improvement; live A/B
+measurements remain required before choosing deployment values.
+
+Personal WhatsApp collects bursts for `WHATSAPP_PERSONAL_BURST_QUIET_SECONDS`
+(default 2 seconds) after the last message, bounded by
+`WHATSAPP_PERSONAL_BURST_MAX_SECONDS` (default 5 seconds) from the first. Lower
+windows can reduce waiting latency but split bursts into more turns; higher windows
+combine more messages at the cost of delay. The quiet window cannot exceed the max.
+
 [Port allocation](../app/services/guest_ports.py) prefers the persisted port when
 it is in the inclusive `18789..28788` range, then uses distinct random candidates.
 There are at most **eight total creation attempts**, not eight retries after the

@@ -41,6 +41,7 @@ from app.services.guest_admission import GuestStartPreflightError, guest_admissi
 from app.services.guest_identity import (
     GuestOwnershipError,
     guest_container_name,
+    guest_resolutions,
     owned_guest_containers,
     stop_guest_containers,
 )
@@ -50,6 +51,7 @@ from app.services.linkup_runtime import LINKUP_SEARCH_SKILL_FOLDER, linkup_defau
 from app.services.llm import get_model_api_key
 from app.services.openclaw_gateway_config import (
     ensure_gateway_token,
+    forget_native_retirement,
     gateway_config_block,
     guest_engine_base_url,
     prepare_native_gateway_files,
@@ -437,10 +439,9 @@ class AgentManager:
         primary: LLMModelRecord | None,
         secondary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
-        selected: LLMModelRecord | None,
     ) -> str:
         parts: list[str] = ["native-gateway-rpc-v1"]
-        for row in (selected, primary, secondary, fallback):
+        for row in (primary, secondary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
             kind = getattr(row, "auth_kind", "") if row is not None else ""
@@ -450,6 +451,15 @@ class AgentManager:
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
         parts.append(memory_embedding_fingerprint(memory_embedding_config(settings)))
+        parts.extend(
+            str(value)
+            for value in (
+                settings.OPENCLAW_THINKING_DEFAULT,
+                settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION,
+                settings.OPENCLAW_BOOTSTRAP_MAX_CHARS,
+                settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS,
+            )
+        )
         return "|".join(parts)
 
     def write_guest_config(
@@ -461,36 +471,37 @@ class AgentManager:
         fallback: LLMModelRecord | None = None,
         selected: LLMModelRecord | None = None,
     ) -> Path | None:
-        """Rewrite the bind-mounted ``openclaw.json`` for a running (or staged) guest."""
+        """Rewrite the bind-mounted ``openclaw.json`` for a running (or staged) guest.
+
+        The file depends only on the assigned slots. ``selected`` is the model the caller's turn will run; it is
+        only reported, because the turn's model travels in the Gateway RPC ``provider``/``model`` parameters.
+        """
         agent_dir = self._agent_dir(agent.id)
         if not agent_dir.exists():
             logger.info("[OpenClaw] skip guest config write; dir missing for {}", agent.id)
             return None
-        prepare_native_gateway_files(agent_dir)
-        fingerprint = self._guest_config_fingerprint(
-            primary=primary,
-            secondary=secondary,
-            fallback=fallback,
-            selected=selected,
-        )
+        fingerprint = self._guest_config_fingerprint(primary=primary, secondary=secondary, fallback=fallback)
         path = agent_dir / "openclaw.json"
         if path.is_file() and _guest_config_fingerprints.get(str(agent.id)) == fingerprint:
-            logger.info("[OpenClaw] keeping existing guest config for {}; tracked config inputs unchanged", agent.id)
+            logger.info(
+                "[OpenClaw] keeping existing guest config for {}; turn model {} travels in the RPC",
+                agent.id,
+                guest_model_ref(selected),
+            )
             return path
         config = self._generate_openclaw_config(
             agent,
             primary,
             secondary=secondary,
             fallback=fallback,
-            selected=selected,
         )
         wrote = self._atomic_write_json(path, preserve_guest_resources(path, config))
         if not wrote:
             _guest_config_fingerprints[str(agent.id)] = fingerprint
-            self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
+            self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
             logger.info("[OpenClaw] skip guest config write; file already current for {}", agent.id)
             return path
-        self._sync_guest_oauth(agent_dir, selected, primary, secondary, fallback)
+        self._sync_guest_oauth(agent_dir, primary, secondary, fallback)
         _guest_config_fingerprints[str(agent.id)] = fingerprint
         return path
 
@@ -501,16 +512,31 @@ class AgentManager:
         *,
         secondary: LLMModelRecord | None = None,
         fallback: LLMModelRecord | None = None,
-        selected: LLMModelRecord | None = None,
         gateway_token: str | None = None,
     ) -> JsonObject:
-        """Generate openclaw.json config for the agent container."""
-        chosen_ref = guest_model_ref(selected or model) or "openai/gpt-6.1-sol"
+        """Generate openclaw.json config for the agent container.
+
+        The default model is the primary slot; assigned models appear in the catalog and the explicit override policy.
+        """
+        chosen_ref = (
+            guest_model_ref(model) or guest_model_ref(secondary) or guest_model_ref(fallback) or "openai/gpt-6.1-sol"
+        )
         defaults: JsonObject = {
             "workspace": "${OPENCLAW_STATE_DIR}/workspace",
             "model": self._defaults_model_block(chosen_ref, fallback),
         }
         aliases = self._model_aliases(model, secondary, fallback)
+        defaults["modelPolicy"] = {"allow": list(aliases) or [chosen_ref]}
+        if settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION is not None:
+            for ref, entry in aliases.items():
+                if ref.startswith(("anthropic/", "anthropic-vertex/")) and isinstance(entry, dict):
+                    entry["params"] = {"cacheRetention": settings.OPENCLAW_ANTHROPIC_CACHE_RETENTION}
+        if settings.OPENCLAW_THINKING_DEFAULT is not None:
+            defaults["thinkingDefault"] = settings.OPENCLAW_THINKING_DEFAULT
+        if settings.OPENCLAW_BOOTSTRAP_MAX_CHARS is not None:
+            defaults["bootstrapMaxChars"] = settings.OPENCLAW_BOOTSTRAP_MAX_CHARS
+        if settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS is not None:
+            defaults["bootstrapTotalMaxChars"] = settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS
         if aliases:
             defaults["models"] = aliases
         config: JsonObject = {
@@ -528,10 +554,10 @@ class AgentManager:
         config["env"] = {"vars": env}
         auth_profiles: JsonObject = {}
         auth_order: JsonObject = {}
-        if any(is_grok_subscription(row) for row in (selected, model, secondary, fallback)):
+        if any(is_grok_subscription(row) for row in (model, secondary, fallback)):
             auth_profiles[XAI_OAUTH_PROFILE_ID] = {"provider": "xai", "mode": "oauth"}
             auth_order["xai"] = [XAI_OAUTH_PROFILE_ID]
-        if any(is_chatgpt_subscription(row) for row in (selected, model, secondary, fallback)):
+        if any(is_chatgpt_subscription(row) for row in (model, secondary, fallback)):
             auth_profiles[OPENAI_OAUTH_PROFILE_ID] = {"provider": "openai", "mode": "oauth"}
             auth_order["openai"] = [OPENAI_OAUTH_PROFILE_ID]
         if auth_profiles:
@@ -656,6 +682,7 @@ class AgentManager:
                 for guest in guests:
                     await to_thread.run_sync(partial(client.container.stop, guest.id, time=10))
                     _ = await to_thread.run_sync(type(client.container).remove, client.container, [guest.id])
+                guest_resolutions.drop(agent.id)
                 agent.container_id = None
                 try:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
@@ -703,6 +730,7 @@ class AgentManager:
                         if is_port_bind_conflict(exc) and container_port != ports[-1]:
                             continue
                         raise
+                    guest_resolutions.drop(agent.id)
                     now = datetime.now(UTC)
                     for target in (original, agent):
                         target.container_id = container.id
@@ -729,7 +757,6 @@ class AgentManager:
                 models.primary,
                 secondary=models.secondary,
                 fallback=models.fallback,
-                selected=models.primary,
                 gateway_token=ensure_gateway_token(stage),
             )
             self._atomic_write_json(stage / "openclaw.json", preserve_guest_resources(stage / "openclaw.json", config))
@@ -751,7 +778,6 @@ class AgentManager:
             models.primary,
             secondary=models.secondary,
             fallback=models.fallback,
-            selected=models.primary,
         )
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -763,10 +789,10 @@ class AgentManager:
             primary=models.primary,
             secondary=models.secondary,
             fallback=models.fallback,
-            selected=models.primary,
         )
         self._ensure_openclaw_workspace_layout(agent_dir)
         gateway_token = ensure_gateway_token(agent_dir)
+        forget_native_retirement(agent_dir)
         prepare_native_gateway_files(agent_dir)
         container_envs: dict[str, str] = {
             "OPENCLAW_GATEWAY_TOKEN": gateway_token,

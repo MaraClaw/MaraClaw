@@ -11,7 +11,7 @@ from app.db.errors import DbError
 from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
-from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, require_guest_owner
+from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
 
 
 def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
@@ -20,6 +20,7 @@ def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
             guest = client.container.inspect(listed.id)
             config = guest.config
             require_guest_owner(agent_id, listed.id, (config.labels or {}).get(AGENT_LABEL) if config else None)
+            guest_resolutions.drop(agent_id)
             client.container.stop(guest.id, time=10)
             type(client.container).remove(client.container, [guest.id])
         except NoSuchContainer:

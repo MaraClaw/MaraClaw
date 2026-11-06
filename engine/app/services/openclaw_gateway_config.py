@@ -25,6 +25,8 @@ There is no extra founding ritual file for this agent.
 
 Use `SOUL.md` and `IDENTITY.md`.
 """
+_RETIRED_LIMIT = 1024
+_retired_dirs: dict[str, None] = {}
 
 
 def guest_engine_base_url() -> str:
@@ -51,6 +53,23 @@ def _atomic_write(directory: int, name: str, data: bytes, mode: int) -> None:
     finally:
         with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=directory)
+
+
+def _has_exact_contents(directory: int, name: str, data: bytes) -> bool:
+    try:
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != len(data):
+            return False
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as stream:
+        return stream.read() == data
+
+
+def forget_native_retirement(agent_dir: Path) -> None:
+    """Make the next preparation of ``agent_dir`` retire legacy assets again (the tree was rehydrated)."""
+    _ = _retired_dirs.pop(str(agent_dir), None)
 
 
 def ensure_gateway_token(agent_dir: Path) -> str:
@@ -128,12 +147,17 @@ def prepare_native_gateway_files(agent_dir: Path) -> Path:
     """Stage the adapter and retire only the reserved legacy transport assets.
 
     The caller owns the per-agent workspace exclusion while invoking this function.
-    Retired skills are quarantined rather than discarded to preserve user edits.
+    The adapter is rewritten only when its bytes differ, and legacy retirement runs once per directory per
+    process (see ``forget_native_retirement``). Retired skills are quarantined rather than discarded to
+    preserve user edits.
     """
     source = _ADAPTER.read_bytes()
     directory = _open_directory(agent_dir)
     try:
-        _atomic_write(directory, ".maraclaw-rpc.mjs", source, 0o600)
+        if not _has_exact_contents(directory, ".maraclaw-rpc.mjs", source):
+            _atomic_write(directory, ".maraclaw-rpc.mjs", source, 0o600)
+        if str(agent_dir) in _retired_dirs:
+            return agent_dir / ".maraclaw-rpc.mjs"
         with os.scandir(directory) as entries:
             names = [entry.name for entry in entries]
         for name in names:
@@ -147,6 +171,9 @@ def prepare_native_gateway_files(agent_dir: Path) -> Path:
                     dst_dir_fd=directory,
                 )
         _retire_workspace(directory)
+        _retired_dirs[str(agent_dir)] = None
+        if len(_retired_dirs) > _RETIRED_LIMIT:
+            del _retired_dirs[next(iter(_retired_dirs))]
     finally:
         os.close(directory)
     return agent_dir / ".maraclaw-rpc.mjs"

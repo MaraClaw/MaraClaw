@@ -5,7 +5,7 @@ import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -166,6 +166,13 @@ class Settings(BaseSettings):
     DOCKER_NETWORK: str = "maraclaw_network"
     MARACLAW_OPENCLAW_IMAGE: str = "openclaw:2026.11.1"
     OPENCLAW_GATEWAY_PORT: int = 18789
+    OPENCLAW_THINKING_DEFAULT: (
+        Literal["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"] | None
+    ) = None
+    OPENCLAW_ANTHROPIC_CACHE_RETENTION: Literal["long"] | None = None
+    OPENCLAW_BOOTSTRAP_MAX_CHARS: int | None = Field(default=None, gt=0)
+    OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS: int | None = Field(default=None, gt=0)
+    OPENCLAW_AGENT_MAX_PARALLEL_TURNS: int = Field(default=4, ge=1, le=16)
     # Trial limits for newly created/replacement guests; never auto-update existing guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)

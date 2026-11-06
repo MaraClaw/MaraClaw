@@ -50,9 +50,11 @@ _PLATFORM_PATHS: Final[tuple[tuple[str, ...], ...]] = (
     ("agents", "defaults", "workspace"),
     ("agents", "defaults", "model"),
     ("agents", "defaults", "models"),
+    ("agents", "defaults", "modelPolicy", "allow"),
     ("agents", "defaults", "memorySearch"),
     ("agents", "defaults", "heartbeat"),
 )
+# Optional thinking/bootstrap defaults remain guest-owned when omitted; explicit generated values win in _merge.
 # Guest records merged entry by entry below, with generated entries winning.
 _RESOURCE_PATHS: Final[tuple[tuple[str, ...], ...]] = (
     ("mcp", "servers"),
@@ -80,6 +82,7 @@ def _guest_owned(guest: JsonObject) -> JsonObject:
     for entry in json_object_from(json_object_from(guest.get("agents")).get("entries")).values():
         if is_json_object(entry):
             _ = entry.pop("model", None)
+            _drop(entry, ("modelPolicy", "allow"))
     return guest
 
 

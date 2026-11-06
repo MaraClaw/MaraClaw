@@ -13,7 +13,7 @@ from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import setup_workspace_lock
-from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, require_guest_owner
+from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
 ORPHAN_GRACE = timedelta(minutes=2)
@@ -24,6 +24,7 @@ def _inspect_container(client: DockerClient, reference: str) -> Container:
 
 
 async def _remove_orphan(client: DockerClient, container_id: str, agent_id: UUID) -> None:
+    guest_resolutions.drop(agent_id)
     await to_thread.run_sync(partial(client.container.stop, container_id, time=10))
     await to_thread.run_sync(partial(type(client.container).remove, client.container, [container_id]))
     logger.info("Removed orphan container container_id=%s agent_id=%s", container_id, agent_id)

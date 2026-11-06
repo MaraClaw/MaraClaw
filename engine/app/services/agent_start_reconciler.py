@@ -13,7 +13,13 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
-from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name, inspect_guest_container
+from app.services.guest_identity import (
+    AGENT_LABEL,
+    GuestOwnershipError,
+    guest_container_name,
+    guest_resolutions,
+    inspect_guest_container,
+)
 from app.services.guest_start import start_operation_id
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
@@ -102,6 +108,7 @@ async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
         if labels.get(AGENT_LABEL) != str(operation.agent_id):
             return
         if guest.id == candidate or labels.get("maraclaw.start_operation") == str(operation.operation_id):
+            guest_resolutions.drop(operation.agent_id)
             await to_thread.run_sync(client.container.stop, guest.id)
     async with committed_start_connection() as db:
         await db.execute(
