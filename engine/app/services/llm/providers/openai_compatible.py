@@ -9,6 +9,7 @@ from typing import Any, ClassVar, override
 
 import httpx
 
+from app.config import get_settings
 from app.core.json_types import (
     JsonObject,
     is_any_list,
@@ -22,6 +23,7 @@ from app.core.json_types import (
     object_list_from_row,
 )
 from app.core.logging import logger
+from app.services.llm.attribution import openrouter_attribution_headers
 from app.services.llm.base import (
     ChunkCallback,
     LLMClient,
@@ -84,6 +86,7 @@ class OpenAICompatibleClient(LLMClient):
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
+            **openrouter_attribution_headers(self._normalize_base_url(), get_settings().APP_NAME),
         }
 
     def _normalize_base_url(self) -> str:
