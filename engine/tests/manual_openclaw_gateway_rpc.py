@@ -1,6 +1,6 @@
 """Disposable real-gateway smoke: python tests/manual_openclaw_gateway_rpc.py.
 
-Requires the already-present arm64-openclaw:2026.10.10 image and Docker. No pull,
+Requires the already-present arm64-openclaw:2026.11.1 image and Docker. No pull,
 existing guest, engine services, or database is used. The container has no network.
 """
 
