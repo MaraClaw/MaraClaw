@@ -112,17 +112,23 @@ one-second deadline. Only the send is deadlined: Shared-session authorization an
 Redis routing run to completion, because cancelling authorization discards the
 positive decision it would cache (valid for 5 seconds per socket and ACL version)
 and would starve every later chunk whenever it is merely slower than the deadline.
-A timed-out send skips that socket and still routes to remote instances. The native
-path drains queued deltas before settlement for at most 2 seconds
-(`DRAIN_SECONDS`); undelivered deltas are superseded by the authoritative `done`.
+A timed-out send skips that socket and still routes to remote instances. Ingestion
+never waits for delivery: each admitted frame is redacted at once, and one sender
+publishes a single chunk at a time. Frames that arrive meanwhile merge into one
+pending snapshot, so the next chunk carries the latest complete safe text since the
+last publication with its newest `seq` (and `replace` when a snapshot arrived). A
+slow but healthy path skips obsolete intermediate updates instead of queueing them.
+The native path drains the in-flight chunk and that one snapshot before settlement
+for at most 2 seconds (`DRAIN_SECONDS`); anything left is superseded by the
+authoritative `done`.
 IM-origin turns, including Personal bursts in Shared, remain final-only.
 
 Every native payload also carries `extraSystemPrompt` (`response_identity.identity_prompt`), which the adapter
 forwards unchanged to the Gateway `agent` request: keep the agent's own name and persona, and never disclose the
-provider, model or routing behind it. `DeltaRelay` passes each delta through a per-turn `StreamRedactor`. It holds
-back only a tail that may still become a configured model id (at most the longest alias plus one character), never
-emits a raw prefix, restarts on a `replace` snapshot and, after a sequence gap from a dropped delta, withholds
-appends until the next snapshot or the authoritative `done`.
+provider, model or routing behind it. `DeltaRelay` passes every admitted delta through a per-turn `StreamRedactor`
+before it can be merged into a pending snapshot. It holds back only a tail that may still become a configured model
+id (at most the longest alias plus one character), never emits a raw prefix, restarts on a `replace` snapshot and,
+after a sequence gap from a dropped delta, withholds appends until the next snapshot or the authoritative `done`.
 
 Socket `chunk` and `done` correlate through `turn_id` (the gateway message UUID).
 `chunk.seq` orders updates, and `replace` replaces the live text. `done.message_id`
