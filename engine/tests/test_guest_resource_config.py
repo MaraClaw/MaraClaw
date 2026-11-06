@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.records.agent import AgentRecord
+from app.records.llm import LLMModelRecord
 from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager, guest_container_name
 from app.services.guest_admission import GuestStartPreflightError
@@ -173,6 +174,132 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
     }
 
 
+GUEST_DEFAULTS: JsonObject = {"modelPolicy": {"mode": "strict", "allow": ["openai/*"]}, "thinkingDefault": "low"}
+GUEST_ENTRIES: JsonObject = {"main": {"identity": {"name": "Ada", "emoji": "A"}, "skills": ["custom"]}}
+
+
+def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp_path: Path) -> None:
+    # Given: guest-owned values sit beside stale values at every platform-generated path
+    path = tmp_path / "openclaw.json"
+    stale_entry: JsonObject = {**json_object_from(GUEST_ENTRIES["main"]), "model": "retired/model"}
+    path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        **GUEST_DEFAULTS,
+                        "workspace": "/stale/workspace",
+                        "model": {"primary": "stale/model", "fallbacks": ["retired/model"]},
+                        "models": {"retired/model": {"alias": "fallback"}},
+                        "memorySearch": {"remote": {"apiKey": "stale-embedding-key"}},
+                        "heartbeat": {
+                            "every": "30s",
+                            "prompt": "Check the MaraClaw inbox with the maraclaw-sync skill",
+                        },
+                    },
+                    "entries": {"main": stale_entry},
+                },
+                "channels": {"slack": {"enabled": True}},
+                "memory": {"citations": "off", "search": {"remote": {"apiKey": "stale-embedding-key"}}},
+                "plugins": {"enabled": False, "slots": {"memory": "stale"}, "load": {"paths": ["/custom/plugin"]}},
+                "models": {"providers": {"retired": {"apiKey": "stale-provider-key"}}},
+                "env": {"vars": {"RETIRED_API_KEY": "stale-provider-key"}},
+                "auth": {"profiles": {"retired": {"provider": "retired", "mode": "oauth"}}},
+                "gateway": {"auth": {"token": "stale-token"}},
+                "tools": {"deny": []},
+                "hooks": {"enabled": True, "path": "/hooks", "token": "retired-token"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    platform_defaults: JsonObject = {"workspace": "/workspace", "model": {"primary": "new/model"}}
+    generated: JsonObject = {
+        "agents": {"defaults": platform_defaults},
+        "memory": {"search": {"enabled": True}},
+        "plugins": {"slots": {"memory": "memory-core"}},
+        "env": {"vars": {"NEW_API_KEY": "fresh"}},
+        "gateway": {"auth": {"token": "fresh-token"}},
+        "tools": {"deny": ["web_search"]},
+    }
+
+    # When
+    result = preserve_guest_resources(path, generated)
+
+    # Then
+    assert result == {
+        "agents": {"defaults": {**GUEST_DEFAULTS, **platform_defaults}, "entries": GUEST_ENTRIES},
+        "channels": {"slack": {"enabled": True}},
+        "memory": {"citations": "off", "search": {"enabled": True}},
+        "plugins": {"load": {"paths": ["/custom/plugin"]}, "slots": {"memory": "memory-core"}},
+        "env": generated["env"],
+        "gateway": generated["gateway"],
+        "tools": generated["tools"],
+    }
+
+
+@pytest.mark.parametrize("writer", ["refresh", "recreate"])
+async def test_guest_agent_settings_survive_regeneration_beside_platform_model(guest: Guest, writer: Writer) -> None:
+    # Given
+    guest.path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {**GUEST_DEFAULTS, "model": {"primary": "stale/model"}},
+                    "entries": GUEST_ENTRIES,
+                },
+                "env": {"vars": {"RETIRED_API_KEY": "stale"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated = guest.manager._generate_openclaw_config(guest.agent, None)
+
+    # When
+    await rewrite(guest, writer)
+
+    # Then
+    stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    agents = json_object_from(stored["agents"])
+    defaults = json_object_from(agents["defaults"])
+    assert agents["entries"] == GUEST_ENTRIES
+    assert defaults["modelPolicy"] == GUEST_DEFAULTS["modelPolicy"]
+    assert defaults["model"] == json_object_from(json_object_from(generated["agents"])["defaults"])["model"]
+    assert stored["env"] == generated["env"]
+
+
+def test_guest_agent_settings_survive_model_switch_and_retired_provider_is_removed(
+    guest: Guest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a guest running on provider A whose agent later customised its own settings
+    monkeypatch.setattr(module, "get_model_api_key", lambda row: row.api_key_encrypted)
+
+    def model(provider: str, name: str) -> LLMModelRecord:
+        return LLMModelRecord(
+            id=uuid4(), provider=provider, model=name, api_key_encrypted=f"{provider}-secret", label=name
+        )
+
+    old, new = model("openai", "gpt-old"), model("anthropic", "claude-new")
+    _ = guest.manager.write_guest_config(guest.agent, primary=old, selected=old)
+    config = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    written = json_object_from(json_object_from(config["agents"])["defaults"])
+    config["agents"] = {"defaults": {**written, **GUEST_DEFAULTS}, "entries": GUEST_ENTRIES}
+    _ = guest.path.write_text(json.dumps(config), encoding="utf-8")
+
+    # When
+    _ = guest.manager.write_guest_config(guest.agent, primary=new, selected=new)
+
+    # Then
+    stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    agents = json_object_from(stored["agents"])
+    defaults = json_object_from(agents["defaults"])
+    assert agents["entries"] == GUEST_ENTRIES
+    assert defaults["modelPolicy"] == GUEST_DEFAULTS["modelPolicy"]
+    assert defaults["model"] == {"primary": "anthropic/claude-new"}
+    assert defaults["models"] == {"anthropic/claude-new": {"alias": "primary"}}
+    assert json_object_from(json_object_from(stored["env"])["vars"]).get("ANTHROPIC_API_KEY") == "anthropic-secret"
+    assert "OPENAI_API_KEY" not in json_object_from(json_object_from(stored["env"])["vars"])
+
+
 @pytest.mark.parametrize("writer", ["refresh", "recreate"])
 @pytest.mark.parametrize("config_exists", [False, True])
 async def test_native_memory_and_custom_data_survive_config_rewrites(
@@ -214,7 +341,9 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
 
 
 @pytest.mark.parametrize("writer", ["refresh", "recreate"])
-@pytest.mark.parametrize("text", ["{broken", "[]", '{"skills":{"entries":[]}}'])
+@pytest.mark.parametrize(
+    "text", ["{broken", "[]", '{"skills":{"entries":[]}}', '{"agents":[]}', '{"agents":{"entries":{"main":[]}}}']
+)
 async def test_corrupt_guest_resource_config_is_not_overwritten(guest: Guest, writer: Writer, text: str) -> None:
     # Given
     guest.path.write_text(text, encoding="utf-8")
