@@ -41,9 +41,11 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
+from app.services import im_token_cache
 from app.services.auth_registry import auth_provider_registry
 from app.services.platform_service import platform_service
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
+from app.services.wecom_service import get_wecom_access_token
 from app.services.wecom_stream import wecom_stream_manager
 
 router = APIRouter(tags=["wecom"])
@@ -457,15 +459,7 @@ async def _process_wecom_kf_event(
             return
 
         async with httpx.AsyncClient(timeout=10) as client:
-            tok_resp = await client.get(
-                "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
-                params={"corpid": config.app_id, "corpsecret": config.app_secret},
-            )
-            token_data = json_object_from_response(tok_resp)
-            access_token = json_as_str(token_data.get("access_token"))
-            if access_token in (None, ""):
-                raise HTTPException(status_code=503, detail="WeCom KF token unavailable")
-
+            corp_id, secret = config.app_id or "", config.app_secret or ""
             current_cursor = token
             has_more = 1
 
@@ -480,10 +474,21 @@ async def _process_wecom_kf_event(
                     payload["cursor"] = current_cursor
 
                 logger.info(f"[WeCom KF] Calling sync_msg with payload: {payload}")
-                sync_resp = await client.post(
-                    f"https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg?access_token={access_token}", json=payload
-                )
-                sync_data = json_object_from_response(sync_resp)
+                sync_data: JsonObject = {}
+                for _ in range(2):
+                    token_data = await get_wecom_access_token(corp_id, secret)
+                    access_token = json_as_str(token_data.get("access_token"))
+                    if access_token in (None, ""):
+                        raise HTTPException(status_code=503, detail="WeCom KF token unavailable")
+                    sync_resp = await client.post(
+                        "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg",
+                        params={"access_token": access_token},
+                        json=payload,
+                    )
+                    sync_data = json_object_from_response(sync_resp)
+                    if sync_data.get("errcode") not in (40014, 42001, 40001):
+                        break
+                    await im_token_cache.drop_cached_im_token("wecom", corp_id, secret=secret)
                 if sync_data.get("errcode") != 0:
                     raise HTTPException(status_code=503, detail="WeCom KF sync failed")
 
