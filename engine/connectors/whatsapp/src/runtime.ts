@@ -13,10 +13,13 @@ import type { DropReason } from './diagnostics.js';
 
 const disconnectError = z.object({ output: z.object({ statusCode: z.number().int() }) });
 const reconnectMs = [1000, 2000, 4000, 8000, 16000] as const;
+const healthyMs = 60_000;
+const defaultJitter = (ms: number): number => ms * (0.5 + Math.random() * 0.5);
 export type RuntimeHost = {
   readonly factory: TransportFactory;
   readonly write: (line: string) => void;
   readonly exit: () => void;
+  readonly jitter?: (ms: number) => number;
 };
 export class Runtime {
   private peer: Peer | undefined;
@@ -30,6 +33,7 @@ export class Runtime {
   private detach: (() => void) | undefined;
   private lease: ReturnType<typeof setTimeout> | undefined;
   private reconnect: ReturnType<typeof setTimeout> | undefined;
+  private healthy: ReturnType<typeof setTimeout> | undefined;
   private pairTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly sends: Sends;
   private pairDeadline = 0;
@@ -112,6 +116,7 @@ export class Runtime {
     if (this.closing.has(socket)) return;
     if (update.connection === 'close') {
       this.closing.add(socket); this.connected = false; this.identity = null; this.sends.disconnect(socket);
+      clearTimeout(this.healthy);
     }
     await this.auth?.barrier();
     if (this.stopped || this.socket !== socket) return;
@@ -126,6 +131,9 @@ export class Runtime {
         this.identity = identity;
         this.connected = true;
         clearTimeout(this.pairTimer);
+        // Only a connection that stays open resets the reconnect budget, so a flapping socket still ends.
+        clearTimeout(this.healthy);
+        this.healthy = setTimeout(() => { this.retries = 0; }, healthyMs);
         this.emit(identity);
         return;
       }
@@ -155,14 +163,17 @@ export class Runtime {
 
   private async reopen(socket: Transport): Promise<void> {
     this.socket = undefined;
+    clearTimeout(this.healthy);
     const timeout = setTimeout(() => { void this.stop('transport_failed'); }, 2000);
     await this.release(socket);
     clearTimeout(timeout);
     if (this.stopped) return;
-    const delay = reconnectMs[this.retries++];
+    const base = reconnectMs[this.retries++];
+    const delay = base === undefined ? undefined : Math.max(0, Math.round((this.host.jitter ?? defaultJitter)(base)));
     diagnostic(this.peer, { type: 'diagnostic', stage: 'reconnect', event: delay === undefined ? 'failure' : 'start',
       retry_count: this.retries, ...(delay === undefined ? {} : { delay_ms: delay }) });
     if (delay === undefined) { await this.stop('transport_failed'); return; }
+    clearTimeout(this.reconnect);
     this.reconnect = setTimeout(() => {
       void this.auth?.barrier().then(() => this.open()).catch(() => this.stop('auth_store_failed'));
     }, delay);
@@ -177,7 +188,7 @@ export class Runtime {
     diagnostic(this.peer, { type: 'diagnostic', stage: 'stop', event: 'finished', close_reason: reason });
     this.stopped = true;
     this.connected = false;
-    clearTimeout(this.lease); clearTimeout(this.reconnect); clearTimeout(this.pairTimer);
+    clearTimeout(this.lease); clearTimeout(this.reconnect); clearTimeout(this.pairTimer); clearTimeout(this.healthy);
     this.auth?.close();
     this.sends.close();
     const force = setTimeout(() => this.finish(reason), 2000);
