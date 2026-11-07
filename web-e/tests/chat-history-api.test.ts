@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { ZodError } from 'zod'
 
 import { authSession } from '../src/lib/auth-session.ts'
-import { listChatHistoryPage } from '../src/lib/chat-history-api.ts'
+import { listChatHistoryPage, refreshChatHistory, type ChatHistoryRefresh } from '../src/lib/chat-history-api.ts'
 import type { ChatJsonValue } from '../src/lib/chat/message.ts'
 import { mergeServerHistory, type ChatLine } from '../src/lib/chat/transcript.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
@@ -29,12 +29,42 @@ for (const cursor of [null, historyCursor]) {
   })
 }
 
+const held = { revision: 'held-revision', created_at: '2026-10-24T12:00:00.123456+00:00', message_id: '00000000-0000-0000-0000-000000000001' }
+const refreshes: readonly ChatHistoryRefresh[] = [
+  { kind: 'unchanged', revision: held.revision },
+  { kind: 'delta', revision: 'next-revision', items: historyPage(1, 3).items },
+  { kind: 'reset', page: historyPage(100, 150, historyCursor) },
+]
+for (const refresh of refreshes) {
+  test(`conditional history validates ${refresh.kind} independently of older-page cursor rules`, async (context) => {
+    const signal = new AbortController().signal
+    context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
+      const params = new URL(path, 'https://fixture.test').searchParams
+      assert.deepEqual([...params], [['limit', '50'], ['revision', held.revision], ['after_created_at', held.created_at], ['after_message_id', held.message_id]])
+      assert.equal(init.signal, signal)
+      return Response.json(refresh)
+    })
+    assert.deepEqual(await refreshChatHistory(historyTarget, held, { signal }), refresh)
+  })
+}
+
+for (const body of [
+  { kind: 'unchanged', revision: null }, { kind: 'delta', revision: 'next' },
+  { kind: 'reset', page: { ...historyPage(0, 1), has_more: true } },
+  { kind: 'other', revision: 'next', items: [] },
+]) {
+  test(`conditional history rejects malformed envelope ${JSON.stringify(body)}`, async (context) => {
+    context.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    await assert.rejects(refreshChatHistory(historyTarget, held), ZodError)
+  })
+}
+
 test('chat history preserves attachment and receipt identities and strips unknown wire fields', async (context) => {
   // Given
   const row = { entry_id: 'entry', message_id: 'parent', client_submission_id: 'submission', role: 'user', content: '',
     attachments: [{ path: 'uploads/opaque.pdf', name: 'Report.pdf' }] }
   context.mock.method(globalThis, 'fetch', async () => Response.json({
-    items: [{ ...row, internal_payload: 'private' }], next_cursor: null, has_more: false,
+    items: [{ ...row, internal_payload: 'private' }], next_cursor: null, has_more: false, revision: null,
   }))
   // When
   const page = await listChatHistoryPage(historyTarget)
@@ -52,7 +82,7 @@ for (const toolArgs of toolArguments) {
     const row = { entry_id: 'parent:1', message_id: 'parent', role: 'tool_call', content: '',
       toolName: 'lookup', toolArgs, toolStatus: 'done', toolResult: 'Found', toolThinking: 'Search terms',
       thinking: 'Planning', sender_name: 'Research assistant', participant_id: 'participant' }
-    context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [row], next_cursor: null, has_more: false }))
+    context.mock.method(globalThis, 'fetch', async () => Response.json({ items: [row], next_cursor: null, has_more: false, revision: null }))
     // When
     const page = await listChatHistoryPage(historyTarget)
     const transcript: readonly ChatLine[] = mergeServerHistory(page.items, [])
@@ -73,7 +103,7 @@ for (const body of [
 ]) {
   test(`chat history rejects malformed page ${JSON.stringify(body)}`, async (context) => {
     // Given
-    context.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    context.mock.method(globalThis, 'fetch', async () => Response.json(Array.isArray(body) ? body : { revision: null, ...body }))
     // When / Then
     await assert.rejects(listChatHistoryPage(historyTarget), ZodError)
   })

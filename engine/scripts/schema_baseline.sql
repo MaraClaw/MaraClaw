@@ -7,7 +7,7 @@ BEGIN;
 DO $$ BEGIN CREATE TYPE im_provider_enum AS ENUM ('feishu', 'dingtalk', 'wecom', 'microsoft_teams', 'google_chat', 'web_only'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE user_role_enum AS ENUM ('platform_admin', 'org_admin', 'agent_admin', 'member'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE agent_status_enum AS ENUM ('creating', 'running', 'idle', 'stopped', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE activity_action_enum AS ENUM ('chat_reply', 'tool_call', 'feishu_msg_sent', 'agent_msg_sent', 'web_msg_sent', 'task_created', 'task_updated', 'file_written', 'error', 'schedule_run', 'heartbeat', 'plaza_post'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE activity_action_enum AS ENUM ('chat_reply', 'tool_call', 'feishu_msg_sent', 'agent_msg_sent', 'web_msg_sent', 'task_created', 'task_updated', 'file_written', 'error', 'schedule_run', 'heartbeat', 'clawbook_post'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE permission_scope_enum AS ENUM ('company', 'department', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE approval_status_enum AS ENUM ('pending', 'approved', 'rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE channel_type_enum AS ENUM ('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', 'atlassian', 'microsoft_teams', 'agentbay', 'google_chat'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS participants (
 
 CREATE INDEX IF NOT EXISTS ix_participants_ref_id ON participants (ref_id);
 
-CREATE TABLE IF NOT EXISTS plaza_posts (
+CREATE TABLE IF NOT EXISTS clawbook_posts (
 	id UUID NOT NULL, 
 	author_id UUID NOT NULL, 
 	author_type VARCHAR(10) NOT NULL, 
@@ -117,9 +117,9 @@ CREATE TABLE IF NOT EXISTS plaza_posts (
 	PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_plaza_posts_created_at ON plaza_posts (created_at);
+CREATE INDEX IF NOT EXISTS ix_clawbook_posts_created_at ON clawbook_posts (created_at);
 
-CREATE INDEX IF NOT EXISTS ix_plaza_posts_author_id ON plaza_posts (author_id);
+CREATE INDEX IF NOT EXISTS ix_clawbook_posts_author_id ON clawbook_posts (author_id);
 
 CREATE TABLE IF NOT EXISTS sso_scan_sessions (
 	id UUID NOT NULL, 
@@ -313,7 +313,7 @@ CREATE TABLE IF NOT EXISTS okr_settings (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS plaza_comments (
+CREATE TABLE IF NOT EXISTS clawbook_comments (
 	id UUID NOT NULL, 
 	post_id UUID NOT NULL, 
 	author_id UUID NOT NULL, 
@@ -322,22 +322,22 @@ CREATE TABLE IF NOT EXISTS plaza_comments (
 	content TEXT NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(post_id) REFERENCES plaza_posts (id)
+	FOREIGN KEY(post_id) REFERENCES clawbook_posts (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_plaza_comments_post_id ON plaza_comments (post_id);
+CREATE INDEX IF NOT EXISTS ix_clawbook_comments_post_id ON clawbook_comments (post_id);
 
-CREATE TABLE IF NOT EXISTS plaza_likes (
+CREATE TABLE IF NOT EXISTS clawbook_likes (
 	id UUID NOT NULL, 
 	post_id UUID NOT NULL, 
 	author_id UUID NOT NULL, 
 	author_type VARCHAR(10) NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(post_id) REFERENCES plaza_posts (id)
+	FOREIGN KEY(post_id) REFERENCES clawbook_posts (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_plaza_likes_post_id ON plaza_likes (post_id);
+CREATE INDEX IF NOT EXISTS ix_clawbook_likes_post_id ON clawbook_likes (post_id);
 
 CREATE TABLE IF NOT EXISTS skills (
 	id UUID NOT NULL, 
@@ -750,7 +750,7 @@ CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
 
-CREATE TABLE IF NOT EXISTS linkup_proxy_tokens (
+CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) = 32)
 );
@@ -1415,20 +1415,39 @@ CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent
 
 -- Durable cache fingerprints cover all writers, including raw cascade SQL,
 -- row edits/deletes and conversation reassignment, in the writer's transaction.
+-- UUID predecessors make late commits discoverable independently of created_at.
+CREATE TABLE IF NOT EXISTS chat_history_changes (
+    session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    revision UUID NOT NULL,
+    previous_revision UUID NOT NULL,
+    message_id UUID,
+    PRIMARY KEY (session_id, revision)
+);
+
 CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
 DECLARE
     old_conversation TEXT;
     new_conversation TEXT;
+    changed_session RECORD;
+    next_revision UUID;
 BEGIN
     IF TG_OP <> 'INSERT' THEN old_conversation := OLD.conversation_id; END IF;
     IF TG_OP <> 'DELETE' THEN new_conversation := NEW.conversation_id; END IF;
-    UPDATE chat_sessions SET history_revision = gen_random_uuid()
-    WHERE id IN (
+    FOR changed_session IN SELECT id, history_revision FROM chat_sessions WHERE id IN (
         CASE WHEN old_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
              THEN old_conversation::uuid END,
         CASE WHEN new_conversation ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
              THEN new_conversation::uuid END
-    );
+    ) ORDER BY id FOR UPDATE LOOP
+        next_revision := gen_random_uuid();
+        INSERT INTO chat_history_changes (session_id, revision, previous_revision, message_id)
+        VALUES (changed_session.id, next_revision, changed_session.history_revision,
+            CASE WHEN TG_OP = 'DELETE' OR
+                (TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.conversation_id, OLD.created_at) IS DISTINCT FROM
+                                     ROW(NEW.id, NEW.conversation_id, NEW.created_at))
+                THEN NULL ELSE NEW.id END);
+        UPDATE chat_sessions SET history_revision = next_revision WHERE id = changed_session.id;
+    END LOOP;
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -1475,6 +1494,63 @@ CREATE INDEX IF NOT EXISTS ix_daily_token_usage_date ON daily_token_usage (date)
 
 CREATE INDEX IF NOT EXISTS ix_daily_token_usage_agent_id ON daily_token_usage (agent_id);
 
+CREATE TABLE IF NOT EXISTS openclaw_reply_bindings (
+    id UUID PRIMARY KEY,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    session_id UUID NOT NULL UNIQUE REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cursor JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_reply_bindings_agent_id_id ON openclaw_reply_bindings (agent_id, id);
+
+CREATE OR REPLACE FUNCTION revoke_openclaw_reply_bindings() RETURNS trigger AS $$
+BEGIN
+    IF TG_TABLE_NAME = 'agents' THEN
+        IF OLD.creator_id IS DISTINCT FROM NEW.creator_id OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id THEN
+            DELETE FROM openclaw_reply_bindings WHERE agent_id = OLD.id;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_TABLE_NAME = 'chat_sessions' THEN
+        DELETE FROM openclaw_reply_bindings WHERE session_id = OLD.id;
+        RETURN NEW;
+    END IF;
+    PERFORM id FROM chat_sessions WHERE id::text = OLD.conversation_id FOR UPDATE;
+    DELETE FROM openclaw_reply_bindings WHERE session_id::text = OLD.conversation_id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_transfer ON agents;
+CREATE TRIGGER revoke_openclaw_replies_on_transfer AFTER UPDATE OF creator_id, tenant_id ON agents
+FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+
+DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_clear ON chat_messages;
+CREATE TRIGGER revoke_openclaw_replies_on_clear AFTER DELETE ON chat_messages
+FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+
+CREATE OR REPLACE TRIGGER revoke_openclaw_replies_on_session_change
+AFTER UPDATE OF agent_id, user_id, source_channel ON chat_sessions FOR EACH ROW
+WHEN (OLD.agent_id IS DISTINCT FROM NEW.agent_id OR OLD.user_id IS DISTINCT FROM NEW.user_id
+      OR OLD.source_channel IS DISTINCT FROM NEW.source_channel)
+EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+
+CREATE TABLE IF NOT EXISTS openclaw_reply_receipts (
+    binding_id UUID NOT NULL REFERENCES openclaw_reply_bindings(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL,
+    message_id UUID NOT NULL,
+    pending_text TEXT,
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    publish_pending BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (binding_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_openclaw_reply_receipts_pending ON openclaw_reply_receipts (binding_id)
+    WHERE publish_pending OR pending_text IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS gateway_messages (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
@@ -1488,6 +1564,7 @@ CREATE TABLE IF NOT EXISTS gateway_messages (
 	guest_model_ref VARCHAR(200),
 	complexity VARCHAR(20),
 	routing_reason VARCHAR(40),
+    reply_binding_id UUID REFERENCES openclaw_reply_bindings(id) ON DELETE SET NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	delivered_at TIMESTAMP WITH TIME ZONE, 
 	completed_at TIMESTAMP WITH TIME ZONE, 
@@ -1496,6 +1573,47 @@ CREATE TABLE IF NOT EXISTS gateway_messages (
 	FOREIGN KEY(sender_agent_id) REFERENCES agents (id), 
 	FOREIGN KEY(sender_user_id) REFERENCES users (id)
 );
+
+-- Explicit legacy upgrade: gateway rows created before reply bindings lack the binding column that every gateway
+-- query selects. One statement adds it nullable with the fresh foreign key so rows are kept unbound (historical
+-- transcripts are never inferred), and reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'gateway_messages'
+			AND column_name = 'reply_binding_id'
+	) THEN
+		ALTER TABLE gateway_messages
+			ADD COLUMN reply_binding_id UUID REFERENCES openclaw_reply_bindings(id) ON DELETE SET NULL;
+	END IF;
+END $$;
+
+-- New claims use a fresh authorization epoch; historical unbound transcripts are never inferred.
+CREATE OR REPLACE FUNCTION bind_openclaw_reply(aid UUID, conversation TEXT) RETURNS UUID AS $$
+DECLARE
+    destination chat_sessions%ROWTYPE;
+    execution_owner agents%ROWTYPE;
+    binding UUID;
+BEGIN
+    IF conversation IS NULL OR conversation !~
+       '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN
+        RETURN NULL;
+    END IF;
+    -- Production claims already hold the scope/agent lock, before the session lock.
+    SELECT * INTO execution_owner FROM agents WHERE id = aid;
+    SELECT * INTO destination FROM chat_sessions
+    WHERE id = conversation::uuid AND agent_id = aid AND source_channel IN ('web', 'shared') FOR UPDATE;
+    IF NOT FOUND THEN RETURN NULL; END IF;
+    INSERT INTO openclaw_reply_bindings (id, session_id, agent_id, tenant_id, owner_id, user_id)
+    VALUES (gen_random_uuid(), destination.id, aid, execution_owner.tenant_id, execution_owner.creator_id, destination.user_id)
+    ON CONFLICT (session_id) DO NOTHING
+    RETURNING id INTO binding;
+    IF binding IS NULL THEN
+        SELECT id INTO binding FROM openclaw_reply_bindings WHERE session_id = destination.id;
+    END IF;
+    RETURN binding;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     id UUID PRIMARY KEY,
@@ -1763,6 +1881,26 @@ CREATE TABLE IF NOT EXISTS broadcast_submissions (
 );
 CREATE INDEX IF NOT EXISTS ix_broadcast_submissions_sender ON broadcast_submissions (sender_id);
 
+-- One row per committed broadcast, keyed or not, written in the fan-out transaction. The sender name is a
+-- snapshot, so the row stays attributable after the sender is removed. clock_timestamp() stamps the insert
+-- (end of the fan-out), not the request start.
+CREATE TABLE IF NOT EXISTS broadcast_history (
+    broadcast_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    sender_name TEXT NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    body VARCHAR(1000) NOT NULL,
+    send_email BOOLEAN NOT NULL,
+    users_notified INTEGER NOT NULL CHECK (users_notified >= 0),
+    agents_notified INTEGER NOT NULL CHECK (agents_notified >= 0),
+    emails_sent INTEGER NOT NULL CHECK (emails_sent >= 0),
+    published_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS ix_broadcast_history_tenant_published
+    ON broadcast_history (tenant_id, published_at DESC, broadcast_id DESC);
+CREATE INDEX IF NOT EXISTS ix_broadcast_history_sender ON broadcast_history (sender_id);
+
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,
 	request_id UUID NOT NULL,
@@ -1864,6 +2002,8 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS ix_tasks_lease_expires_at ON tasks (lease_expires_at) WHERE claim_token IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS ix_tasks_agent_created_id ON tasks (agent_id, created_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS user_tenant_onboardings (
 	id UUID NOT NULL, 
 	user_id UUID NOT NULL, 
@@ -1945,6 +2085,8 @@ CREATE TABLE IF NOT EXISTS task_logs (
 	FOREIGN KEY(task_id) REFERENCES tasks (id)
 );
 
+CREATE INDEX IF NOT EXISTS ix_task_logs_task_created_id ON task_logs (task_id, created_at, id);
+
 CREATE TABLE IF NOT EXISTS trigger_executions (
 	id UUID NOT NULL, 
 	trigger_id UUID NOT NULL, 
@@ -1973,7 +2115,7 @@ CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions 
 
 CREATE INDEX IF NOT EXISTS ix_trigger_executions_trigger_id ON trigger_executions (trigger_id);
 
-CREATE TABLE IF NOT EXISTS linkup_api_keys (
+CREATE TABLE IF NOT EXISTS tavily_api_keys (
 	id UUID NOT NULL,
 	tenant_id UUID,
 	label VARCHAR(200) NOT NULL,
@@ -1987,28 +2129,20 @@ CREATE TABLE IF NOT EXISTS linkup_api_keys (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (id),
-	CONSTRAINT uq_linkup_api_keys_fingerprint UNIQUE (key_fingerprint)
+	CONSTRAINT uq_tavily_api_keys_fingerprint UNIQUE (key_fingerprint)
 );
 
-CREATE INDEX IF NOT EXISTS ix_linkup_api_keys_position ON linkup_api_keys (position);
+CREATE INDEX IF NOT EXISTS ix_tavily_api_keys_position ON tavily_api_keys (position);
 
-CREATE TABLE IF NOT EXISTS linkup_key_ring_state (
+CREATE TABLE IF NOT EXISTS tavily_key_ring_state (
 	id SMALLINT NOT NULL DEFAULT 1,
 	current_key_id UUID,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (id),
-	CONSTRAINT ck_linkup_key_ring_state_singleton CHECK (id = 1)
+	CONSTRAINT ck_tavily_key_ring_state_singleton CHECK (id = 1)
 );
 
-INSERT INTO linkup_key_ring_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS linkup_async_jobs (
-	upstream_job_id VARCHAR(200) NOT NULL,
-	key_id UUID NOT NULL,
-	kind VARCHAR(20) NOT NULL,
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	PRIMARY KEY (upstream_job_id)
-);
+INSERT INTO tavily_key_ring_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS web_search_events (
 	id UUID NOT NULL,
@@ -2030,7 +2164,6 @@ CREATE TABLE IF NOT EXISTS web_search_events (
 	primary_domain VARCHAR(255),
 	result_count INTEGER,
 	error_class VARCHAR(40),
-	upstream_job_id VARCHAR(200),
 	request_bytes INTEGER,
 	response_bytes INTEGER,
 	export_state VARCHAR(20) NOT NULL DEFAULT 'skipped',

@@ -41,3 +41,30 @@ export function clearLiveStream(state: LiveStream, finishedTurnId?: string | nul
   }
   return { text: '', turnId: null, lastSeq: -1, finishedTurnIds }
 }
+
+export type LiveStreamStore = ReturnType<typeof createLiveStreamStore>
+
+export function createLiveStreamStore() {
+  let snapshot = createLiveStream()
+  const listeners = new Set<() => void>()
+  function publish(next: LiveStream) {
+    if (snapshot === next) return
+    snapshot = next
+    for (const listener of listeners) listener()
+  }
+  return {
+    getSnapshot: () => snapshot,
+    hasLive: () => Boolean(snapshot.text),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    chunk: (chunk: ChunkEvent) => {
+      const previous = snapshot
+      publish(applyLiveChunk(previous, chunk))
+      return snapshot !== previous
+    },
+    clear: (finishedTurnId?: string | null) => publish(clearLiveStream(snapshot, finishedTurnId)),
+    reset: () => publish(createLiveStream()),
+  }
+}

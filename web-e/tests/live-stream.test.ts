@@ -1,10 +1,34 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyLiveChunk, clearLiveStream, createLiveStream } from '../src/lib/chat/live-stream.ts'
+import { applyLiveChunk, clearLiveStream, createLiveStream, createLiveStreamStore } from '../src/lib/chat/live-stream.ts'
 import { ChunkEventSchema, DoneEventSchema } from '../src/lib/engine-contracts.generated.ts'
 
 const turnA = '11111111-1111-4111-8111-111111111111'
 const turnB = '22222222-2222-4222-8222-222222222222'
+
+test('live store publishes reducer snapshots, ignores stale chunks and releases subscriptions', () => {
+  const store = createLiveStreamStore()
+  const snapshots = [store.getSnapshot()]
+  const unsubscribe = store.subscribe(() => snapshots.push(store.getSnapshot()))
+  assert.equal(store.hasLive(), false)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'First' }), true)
+  assert.equal(store.hasLive(), true)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Stale' }), false)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnB, seq: 1, content: 'Foreign' }), false)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, replace: true, content: 'Replaced' })
+  store.clear(turnB)
+  assert.equal(store.getSnapshot().text, 'Replaced')
+  store.clear(turnA)
+  assert.equal(store.hasLive(), false)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 3, content: 'Late' }), false)
+  store.reset()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'New session' })
+  assert.deepEqual(snapshots.map((state) => state.text), ['', 'First', 'Replaced', 'Replaced', '', '', 'New session'])
+  unsubscribe()
+  store.clear()
+  assert.equal(snapshots.length, 7)
+  assert.equal(store.getSnapshot().text, '')
+})
 
 test('increasing correlated chunks append to the live text', () => {
   const state = applyLiveChunk(createLiveStream(), { type: 'chunk', turn_id: turnA, seq: 0, content: 'Hello' })

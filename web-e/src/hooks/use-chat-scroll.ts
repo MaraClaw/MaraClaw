@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, type RefObject } from 'react'
 
 type ScrollSnapshot = {
   readonly anchor: HTMLElement | undefined
@@ -33,7 +33,7 @@ export function useChatScroll(threadRef: RefObject<HTMLDivElement | null>, state
 
   // The saved entry offset describes the DOM before React's next update.
   // Native overflow anchoring is disabled on the thread to avoid double compensation.
-  useLayoutEffect(() => {
+  const updateScroll = useCallback(() => {
     const thread = threadRef.current
     if (!thread) return
     if (scopeRef.current !== state.scope) {
@@ -54,7 +54,8 @@ export function useChatScroll(threadRef: RefObject<HTMLDivElement | null>, state
         : saved.scrollTop
     }
     savedRef.current = snapshot(thread)
-  })
+  }, [threadRef, state.scope, state.ready])
+  useLayoutEffect(updateScroll)
 
   function loadEarlier() {
     const thread = threadRef.current
@@ -74,5 +75,5 @@ export function useChatScroll(threadRef: RefObject<HTMLDivElement | null>, state
     }
   }
 
-  return { onScroll, loadEarlier }
+  return { onScroll, loadEarlier, updateScroll }
 }

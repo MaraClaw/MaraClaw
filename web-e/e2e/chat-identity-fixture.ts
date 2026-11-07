@@ -41,6 +41,8 @@ export const sessionRow = (index: number, agent_id = originalAgent.id): SessionR
 export async function prepareChat(page: Page, initial: readonly ChatMessage[] = []) {
   await prepareWorkspace(page)
   let history = initial
+  let revision = 1
+  const historySnapshots = new Map([[String(revision), initial]])
   let sessionRows: readonly SessionRow[] | undefined
   const sessionRequests: { readonly scope: string | null; readonly limit: string | null; readonly cursor: string | null }[] = []
   const lookups: string[] = []
@@ -116,11 +118,25 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       const end = cursor === null ? snapshot.length : snapshot.findIndex((row) => row.entry_id === cursor)
       expect(end).toBeGreaterThanOrEqual(0)
       const start = Math.max(0, end - 50)
+      const currentRevision = String(revision)
+      const latestPage = { items: snapshot.slice(start, end), next_cursor: start > 0 ? snapshot[start]?.entry_id : null,
+        has_more: start > 0, revision: currentRevision }
+      const heldRevision = params.get('revision')
+      let response: unknown = latestPage
+      if (heldRevision !== null) {
+        const previous = historySnapshots.get(heldRevision)
+        const boundary = snapshot.findIndex((row) => row.message_id === params.get('after_message_id'))
+        const changed = snapshot.filter((row) => JSON.stringify(row) !== JSON.stringify(previous?.find((held) => held.message_id === row.message_id)))
+        const delta = snapshot.filter((row, index) => index >= boundary || changed.includes(row))
+        response = heldRevision === currentRevision ? { kind: 'unchanged', revision: currentRevision }
+          : previous && boundary >= 0 && delta.length <= 50 ? { kind: 'delta', revision: currentRevision, items: delta }
+          : { kind: 'reset', page: latestPage }
+      }
       const gate = deferred
       deferred = undefined
       if (gate) await gate.release.promise
       try {
-        return await route.fulfill({ json: { items: snapshot.slice(start, end), next_cursor: start > 0 ? snapshot[start]?.entry_id : null, has_more: start > 0 } })
+        return await route.fulfill({ json: response })
       } finally {
         gate?.finished.resolve()
       }
@@ -153,7 +169,7 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       delayedTicket = gate
       return { requested: gate.requested.promise, release: async (status = 200) => { gate.response.resolve(status); await gate.finished.promise } }
     },
-    setHistory: (rows: readonly ChatMessage[]) => { history = rows },
+    setHistory: (rows: readonly ChatMessage[]) => { history = rows; historySnapshots.set(String(++revision), rows) },
     setOnboarded: (value: boolean) => { onboarded = value },
     holdNextHistory: () => {
       const gate = { release: Promise.withResolvers<void>(), finished: Promise.withResolvers<void>() }

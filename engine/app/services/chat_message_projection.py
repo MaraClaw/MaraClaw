@@ -70,7 +70,14 @@ async def project_messages(messages: Sequence[ChatMessageRecord], source_channel
                     part["sender_name"] = sender_name
                 if m.participant_id:
                     part["participant_id"] = str(m.participant_id)
-                out.append({**part, "message_id": str(m.id), "entry_id": f"{m.id}:{index}"})
+                out.append(
+                    {
+                        **part,
+                        "message_id": str(m.id),
+                        "entry_id": f"{m.id}:{index}",
+                        "created_at": m.created_at.isoformat() if m.created_at else None,
+                    }
+                )
         else:
             message_entry: ChatMessageEntry = {
                 "message_id": str(m.id),

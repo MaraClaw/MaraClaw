@@ -1,8 +1,8 @@
 import { queryOptions } from '@tanstack/react-query'
 
 import type { SessionQueryScope } from '../hooks/session-query-scope.ts'
-import { listChatHistoryPage, type ChatHistoryTarget } from './chat-history-api.ts'
-import { joinHistoryRanges, prependHistory, refreshHistory, type ChatHistory } from './chat/history.ts'
+import { listChatHistoryPage, refreshChatHistory, type ChatHistoryTarget } from './chat-history-api.ts'
+import { applyHistoryRefresh, prependHistory, type ChatHistory } from './chat/history.ts'
 
 export const chatHistoryKey = (target: ChatHistoryTarget) => ['chat-history', target.agentId, target.sessionId] as const
 const pageKey = (target: ChatHistoryTarget) => ['chat-history-page', target.agentId, target.sessionId] as const
@@ -15,21 +15,19 @@ export function chatLatestOptions(scope: SessionQueryScope, target: ChatHistoryT
   return queryOptions({
     queryKey: ['messages', target.agentId, target.sessionId],
     queryFn: ({ signal }) => scope.run(async () => {
-      const boundary = scope.client.getQueryData<ChatHistory>(chatHistoryKey(target))?.items.at(-1)?.entry_id
-      let range = await listChatHistoryPage(target, { owner: scope.owner, signal })
-      const cursors = new Set<string>()
-      // A latest window can miss more than 50 new entries. Bridge all the way to
-      // the previous newest entry before publishing, so no intervening row is lost.
-      while (boundary && !range.items.some((row) => row.entry_id === boundary) && range.next_cursor !== null) {
-        if (cursors.has(range.next_cursor)) throw new ChatHistoryCursorError()
-        cursors.add(range.next_cursor)
-        const older = await listChatHistoryPage(target, { cursor: range.next_cursor, owner: scope.owner, signal })
-        range = { ...older, items: joinHistoryRanges(older.items, range.items) }
-      }
+      const held = scope.client.getQueryData<ChatHistory>(chatHistoryKey(target))
+      const boundary = held?.items.at(-1)
+      const request = { owner: scope.owner, signal }
+      const refresh = held?.revision && boundary?.created_at && boundary.message_id
+        ? await refreshChatHistory(target, { revision: held.revision, created_at: boundary.created_at, message_id: boundary.message_id }, request)
+        : { kind: 'reset', page: await listChatHistoryPage(target, request) } as const
       signal.throwIfAborted()
       scope.assertCurrent()
-      scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (current) => refreshHistory(current, range))
-      return range
+      scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (current) => {
+        if (current) return applyHistoryRefresh(current, refresh)
+        return refresh.kind === 'reset' ? refresh.page : current
+      })
+      return refresh
     }),
     staleTime: 0,
     refetchOnMount: 'always',
@@ -44,7 +42,7 @@ export async function loadEarlierHistory(scope: SessionQueryScope, target: ChatH
     const cursor = current?.next_cursor
     if (!current || cursor == null) return
     const page = await scope.client.fetchQuery({
-      queryKey: [...pageKey(target), cursor],
+      queryKey: [...pageKey(target), current.revision, cursor],
       queryFn: ({ signal: querySignal }) => scope.run(() => listChatHistoryPage(target, {
         cursor, owner: scope.owner, signal: AbortSignal.any([signal, querySignal]),
       })),

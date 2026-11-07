@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -165,7 +166,7 @@ async def test_empty_history_has_terminal_envelope(history_http):
     # When the default latest page is fetched.
     response = await client.get(h.url)
     # Then there is no synthetic continuation cursor.
-    assert response.json() == {"items": [], "next_cursor": None, "has_more": False}
+    assert response.json() == {"items": [], "next_cursor": None, "has_more": False, "revision": h.revision}
 
 
 async def test_default_limit_and_page_identity_are_independent(history_http):
@@ -179,3 +180,142 @@ async def test_default_limit_and_page_identity_are_independent(history_http):
     assert len(default["items"]) == 50
     assert len(small["items"]) == 1
     assert h.page_reads == h.projections == 2
+
+
+async def test_matching_revision_is_unchanged_without_row_reads_and_still_marks_read(history_http):
+    # Given a client holding the current revision and its newest message.
+    h, client = history_http
+    # When it polls conditionally.
+    response = await client.get(h.url, params=h.held(h.rows[-1]))
+    # Then no rows are read or projected, but the private-session read marker is still written.
+    assert response.json() == {"kind": "unchanged", "revision": h.revision}
+    assert h.page_reads == h.after_reads == h.projections == 0
+    assert len(h.read_marks) == 1
+
+
+async def test_changed_revision_delivers_new_rows_and_a_late_commit_with_an_older_created_at(history_http):
+    # Given a held boundary, then one new row and one row committed late with an older transaction-start timestamp.
+    h, client = history_http
+    held = h.held(h.rows[-1])
+    newer = h.message(6)
+    newer.created_at = h.timestamp + timedelta(seconds=1)
+    late = h.message(7)
+    late.created_at = h.timestamp - timedelta(seconds=1)
+    h.rows.extend([newer, late])
+    h.revision = str(uuid4())
+    # When the client polls with the stale revision.
+    response = await client.get(h.url, params=held)
+    # Then the single delta carries both, oldest first, with the revision read before the rows.
+    body = response.json()
+    assert body["kind"] == "delta"
+    assert body["revision"] == h.revision
+    assert [entry["message_id"] for entry in body["items"]] == [str(late.id), str(UUID(int=5)), str(newer.id)]
+    assert len(h.read_marks) == 1
+    assert not h.cache.store
+
+
+async def test_delta_window_is_bounded_and_keeps_inline_tool_entries_with_their_parent(history_http):
+    # Given an agent session whose newest row projects into three entries, and a limit of three rows.
+    h, client = history_http
+    h.session.source_channel = "agent"
+    inline = h.rows[-1]
+    inline.content = 'Before\n```tool_code\nlookup\n```\n```json\n{"q":"x"}\n```\nAfter'
+    held = h.held(h.rows[-3])
+    h.revision = str(uuid4())
+    # When the client polls from three rows back.
+    body = (await client.get(h.url, params={**held, "limit": 3})).json()
+    # Then the window is exactly three rows (boundary, its successor, and the inline row) with every split entry.
+    assert body["kind"] == "delta"
+    assert [entry["entry_id"] for entry in body["items"]] == [
+        str(UUID(int=3)),
+        str(UUID(int=4)),
+        *(f"{inline.id}:{index}" for index in range(3)),
+    ]
+    assert all(entry["created_at"] == h.timestamp.isoformat() for entry in body["items"])
+
+
+@pytest.mark.parametrize("cause", ["gap", "deleted_boundary"])
+async def test_unbridgeable_gap_or_missing_boundary_resets_to_the_latest_page(history_http, cause):
+    # Given a client whose boundary is more than one window behind, or no longer exists.
+    h, client = history_http
+    held = h.held(h.rows[0])
+    if cause == "deleted_boundary":
+        h.rows.pop(0)
+    h.revision = str(uuid4())
+    # When it polls with a limit smaller than the gap.
+    body = (await client.get(h.url, params={**held, "limit": 2})).json()
+    # Then the server resets it to the cacheable latest page, with a cursor for older rows.
+    assert body["kind"] == "reset"
+    assert [entry["message_id"] for entry in body["page"]["items"]] == [str(UUID(int=4)), str(UUID(int=5))]
+    assert body["page"]["has_more"] is True
+    assert body["page"]["next_cursor"] is not None
+    assert body["page"]["revision"] == h.revision
+    assert len(h.read_marks) == 1
+
+
+async def test_missing_revision_is_never_unchanged_and_is_not_cached(history_http):
+    # Given a session without a readable history revision (legacy schema).
+    h, client = history_http
+    h.revision = None
+    # When a client presents any revision.
+    body = (await client.get(h.url, params=h.held(h.rows[-1], "stale"))).json()
+    # Then the poll is treated as changed, and nothing is cached under a null fingerprint.
+    assert body["kind"] == "reset"
+    assert body["page"]["revision"] is None
+    assert not h.cache.store
+
+
+async def test_cache_keys_are_versioned_and_never_keyed_by_a_client_boundary(history_http):
+    # Given reset and plain reads with different client boundaries.
+    h, client = history_http
+    h.revision = str(uuid4())
+    await client.get(h.url, params={**h.held(h.rows[0], "stale"), "limit": 1})
+    await client.get(h.url, params={**h.held(h.rows[1], "stale"), "limit": 1})
+    await client.get(h.url, params={"limit": 1})
+    # Then only the one latest-page entry exists, under the v2 namespace.
+    assert len(h.cache.store) == 1
+    assert all(":chat-history:v2:" in key and key.endswith(":latest") for key in h.cache.store)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    ["no_revision", "no_created_at", "no_message_id", "naive", "bad_uuid", "cursor", "empty_revision"],
+)
+async def test_invalid_refresh_boundaries_are_client_errors_before_any_history_read(history_http, broken):
+    # Given a refresh boundary that is incomplete, malformed or combined with an older-page cursor.
+    h, client = history_http
+    params = h.held(h.rows[-1])
+    match broken:
+        case "no_revision":
+            del params["revision"]
+        case "no_created_at":
+            del params["after_created_at"]
+        case "no_message_id":
+            del params["after_message_id"]
+        case "naive":
+            params["after_created_at"] = "2026-10-24T12:00:00.123456"
+        case "bad_uuid":
+            params["after_message_id"] = "entry-1:2"
+        case "cursor":
+            params["cursor"] = HistoryCursor(
+                agent_id=h.agent.id, session_id=h.session.id, created_at=h.timestamp, message_id=UUID(int=4)
+            ).encode()
+        case "empty_revision":
+            params["revision"] = ""
+    # When it crosses the HTTP boundary.
+    response = await client.get(h.url, params=params)
+    # Then it is rejected without reading history or marking anything read.
+    assert response.status_code == 400
+    assert h.revision_reads == h.page_reads == h.after_reads == 0
+    assert not h.read_marks
+
+
+async def test_refresh_boundary_is_accepted_only_after_authorization(history_http):
+    # Given a revoked agent grant.
+    h, client = history_http
+    h.allowed = False
+    # When a conditional poll arrives.
+    response = await client.get(h.url, params=h.held(h.rows[-1]))
+    # Then authorization answers first, with no revision read.
+    assert response.status_code == 403
+    assert h.revision_reads == 0

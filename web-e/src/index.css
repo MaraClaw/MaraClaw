@@ -64,6 +64,13 @@
   --popover-foreground: oklch(0.2 0.02 45);
   --primary: oklch(0.52 0.16 38);
   --primary-foreground: oklch(0.99 0.005 80);
+  --chat-canvas: #ede0d7;
+  --chat-incoming: #ffffff;
+  --chat-incoming-foreground: #111b21;
+  --chat-outgoing: #94f16d;
+  --chat-outgoing-foreground: #111b21;
+  --chat-bubble-radius: 0.375rem;
+  --chat-bubble-shadow: 0 1px 1px rgb(17 27 33 / 0.16);
   --secondary: oklch(0.96 0.01 75);
   --secondary-foreground: oklch(0.28 0.02 45);
   --muted: oklch(0.955 0.008 80);
@@ -112,6 +119,12 @@
   --popover-foreground: oklch(0.97 0.008 80);
   --primary: oklch(0.74 0.15 42);
   --primary-foreground: oklch(0.18 0.02 40);
+  --chat-canvas: #27221e;
+  --chat-incoming: #35302b;
+  --chat-incoming-foreground: #f4f0eb;
+  --chat-outgoing: #185c37;
+  --chat-outgoing-foreground: #e9edef;
+  --chat-bubble-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
   --secondary: oklch(0.255 0.018 40);
   --secondary-foreground: oklch(0.95 0.008 80);
   --muted: oklch(0.245 0.016 40);
@@ -192,6 +205,52 @@
   ::selection {
     background: oklch(0.72 0.16 40 / 0.3);
     color: var(--foreground);
+  }
+}
+
+@layer components {
+  .chat-thread {
+    background-color: var(--chat-canvas);
+  }
+
+  .chat-bubble {
+    @apply relative w-fit max-w-[min(calc(100%_-_0.5rem),var(--container-2xl))] px-4 py-3 wrap-anywhere;
+    border-radius: var(--chat-bubble-radius);
+    box-shadow: var(--chat-bubble-shadow);
+  }
+
+  .chat-agent-bubble {
+    background-color: var(--chat-incoming);
+    color: var(--chat-incoming-foreground);
+  }
+
+  .chat-user-bubble {
+    background-color: var(--chat-outgoing);
+    color: var(--chat-outgoing-foreground);
+  }
+
+  .chat-message-metadata {
+    @apply mt-1 flex items-center justify-end gap-1 whitespace-nowrap text-xs tabular-nums;
+    color: color-mix(in srgb, currentColor 75%, transparent);
+  }
+
+  .chat-bubble::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    width: 0.5rem;
+    height: 0.625rem;
+    background-color: inherit;
+  }
+
+  .chat-user-bubble::after {
+    right: -0.5rem;
+    clip-path: polygon(0 0, 100% 0, 0 100%);
+  }
+
+  .chat-agent-bubble::after {
+    left: -0.5rem;
+    clip-path: polygon(0 0, 100% 0, 100% 100%);
   }
 }
 
