@@ -1,10 +1,12 @@
 """Pydantic schemas for request/response validation."""
 
+import base64
+import re
 import uuid
 from datetime import datetime
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.domain.agents import (
     AgentAccessReason,
@@ -422,6 +424,77 @@ class TaskLogOut(BaseModel):
     created_at: datetime
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+def _decode_cursor_payload(token: str) -> bytes:
+    if len(token) > 2048 or re.fullmatch(r"[A-Za-z0-9_-]+", token) is None:
+        raise ValueError("Invalid cursor")
+    return base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
+
+
+def _encode_cursor_payload(payload: str) -> str:
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+class TaskPage(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: list[TaskOut]
+    next_cursor: str | None
+
+
+class TaskPageCursor(BaseModel):
+    """Position in the newest-first task board, bound to the agent and the status/type filters."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    agent_id: uuid.UUID
+    status: TaskStatus | None
+    type: TaskType | None
+    created_at: AwareDatetime
+    id: uuid.UUID
+
+    @classmethod
+    def decode(
+        cls, token: str, agent_id: uuid.UUID, status: TaskStatus | None, task_type: TaskType | None
+    ) -> TaskPageCursor:
+        position = cls.model_validate_json(_decode_cursor_payload(token))
+        if position.agent_id != agent_id or position.status != status or position.type != task_type:
+            raise ValueError("Invalid cursor")
+        return position
+
+    def encode(self) -> str:
+        return _encode_cursor_payload(self.model_dump_json())
+
+
+class TaskLogPage(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: list[TaskLogOut]
+    next_cursor: str | None
+
+
+class TaskLogPageCursor(BaseModel):
+    """Position in a task's oldest-first progress log, bound to the agent and the task."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    agent_id: uuid.UUID
+    task_id: uuid.UUID
+    created_at: AwareDatetime
+    id: uuid.UUID
+
+    @classmethod
+    def decode(cls, token: str, agent_id: uuid.UUID, task_id: uuid.UUID) -> TaskLogPageCursor:
+        position = cls.model_validate_json(_decode_cursor_payload(token))
+        if position.agent_id != agent_id or position.task_id != task_id:
+            raise ValueError("Invalid cursor")
+        return position
+
+    def encode(self) -> str:
+        return _encode_cursor_payload(self.model_dump_json())
 
 
 # ─── LLM ────────────────────────────────────────────────
