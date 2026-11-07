@@ -1,6 +1,6 @@
 # MaraClaw architecture
 
-**Source snapshot: 2026-11-01.** These views describe the checked-in implementation and launcher defaults, not a proposed architecture, live deployment proof, or a successful image build. Configuration and the running environment can differ from this snapshot.
+**Source snapshot: 2026-11-01; search integration updated 2026-11-07.** These views describe the checked-in implementation and launcher defaults, not a proposed architecture, live deployment proof, or a successful image build. Configuration and the running environment can differ from this snapshot.
 
 ## Read the views
 

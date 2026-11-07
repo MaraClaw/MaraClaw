@@ -26,8 +26,8 @@ Scope: console navigation, notification entry point and shared screen chrome.
 6. `paymentReviewOnly` (`/transfer-payments`) uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
    Active platform admins pass. An org admin needs an active genesis account whose `/api/tenants/me`
    is its own active default end-user organization; the entry stays hidden while that lookup is pending or failed.
-7. Under `mustChangePassword`, surviving nav entries other than `/account`
-   and `/settings` render non-link spans with `aria-disabled="true"`.
+7. Under `mustChangePassword`, surviving nav entries other than `/settings`
+   render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.
 8. The Notifications nav tile links to `/notifications`; positive counts show
    a badge capped at `99+` with the full unread count in its accessible label.

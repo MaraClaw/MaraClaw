@@ -32,7 +32,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.
 - Managed storage quota docs should track `app/services/storage_runtime/quota_*.py`, `facade.py`, `app/dao/agent_storage_dao.py`, `app/db/pool.py` (`durable_pool`), `app/services/company_transfer_disposition.py` and the `agent_storage_*` tables.
-- Search-analytics docs should track `app/services/linkup/`, `app/api/admin_search_analytics.py`, `app/api/linkup_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
+- Search-analytics docs should track `app/services/tavily/`, `app/api/admin_search_analytics.py`, `app/api/tavily_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
 - gogcli credential docs should track `app/services/gogcli_runtime.py` and the guest image project's `Dockerfile.openclaw` and `docker/openclaw/` scripts.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.
 

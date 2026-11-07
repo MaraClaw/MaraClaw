@@ -31,7 +31,7 @@ Authentication has several trust boundaries in one route file: local credential 
 
 ## Coupling Map
 
-- Inbound: mounted from `app/main.py`; referenced by OKR, plaza, and triggers for auth dependencies.
+- Inbound: mounted from `app/main.py`; referenced by OKR, clawbook, and triggers for auth dependencies.
 - Outbound: imports 79 targets across security, DAOs, tenants, email verification, password reset, registration, auth providers, Redis, and schemas.
 - Hidden coupling: OAuth two-step pending tokens in Redis, first-user/default-tenant behavior, email verification fallback when SMTP is absent, and cross-domain tenant switching redirects.
 

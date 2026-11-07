@@ -13,8 +13,7 @@ Each page owns Query/mutations + layout. Extract a component only when reused.
 | Login | `login.tsx` | Custom chrome (not `AuthShell`). Multi-tenant re-calls `login` with `tenant_id`. |
 | Forgot / reset | `forgot-password.tsx`, `reset-password.tsx` | Use `AuthShell`. |
 | Overview | `overview.tsx` | PA gets `SearchAnalyticsSnapshot`. |
-| Account | `account.tsx` | After password change: `refreshUser()`. |
-| Settings | `settings.tsx`, `tenant-email-*.tsx`, `transfer-policy-*` | Sign out. `TenantEmailSettings` only for `tenantEmailScope` (active genesis admin with a tenant); `TransferPolicySettings` only for platform admins. Both show an Account link instead of loading while `mustChangePassword`. |
+| Settings | `settings.tsx`, `settings-password.tsx`, `tenant-email-*.tsx`, `transfer-policy-*` | Profile, eligible organization settings, Change password, Session/Sign out. Password changes retain owner fences and validate the replacement token through `refreshReplacement`. `TenantEmailSettings` only for `tenantEmailScope` (active genesis admin with a tenant); `TransferPolicySettings` only for platform admins. Both link to `#change-password` instead of loading while `mustChangePassword`. |
 | Companies | `companies.tsx` | Debounced server `?q=`. 403 + `tenant_id` → `getTenant` fallback. |
 | Company domains | `company-detail.tsx`, `company-deletion.tsx` | Loads full `listCompanies()` then `.find`. Deletion: platform admins only, hidden for system and default end-user orgs; preview first, then type the company name; counts are advisory. |
 | Users | `users.tsx`, `user-detail.tsx`, `users-pagination.ts`, `users-roster-export.ts` | URL `?q=` `?company=`. Company users use server search and opaque-cursor pages (`useUsersPagination`, key `['admin-users', tenant, 'page', search, generation, revision]`, `gcTime: 0`); never filter them client-side. Platform admins are a separate unpaged list, filtered client-side on name/email, shown to PAs only. PAs must pick a company (defaults to own, else first); OAs use their tenant. Scroll key `web-a:users-scroll`. |
@@ -38,7 +37,7 @@ Largest files: `llm-models.tsx` (live Models screen), `search-engine-analytics.t
 ## CONVENTIONS
 
 - Chrome: `mx-auto max-w-{2xl|3xl|5xl|6xl} flex-col gap-6`; title `font-display text-2xl`.
-- Query keys: `['admin-companies']`, `['admin-users', tenant, ...]`, `['admin-departments', tenant]`, `['admin-platform-admins']`, `['admin-user', id]`, `['admin-linkup-keys']`, `['admin-llm-models', tenant]`, `['admin-llm-providers']`, `['email-domains', id]`, `['admin-search-analytics-*', scope]`. Review, notification and invitation keys live in `../hooks/*-options.ts`.
+- Query keys: `['admin-companies']`, `['admin-users', tenant, ...]`, `['admin-departments', tenant]`, `['admin-platform-admins']`, `['admin-user', id]`, `['admin-tavily-keys']`, `['admin-llm-models', tenant]`, `['admin-llm-providers']`, `['email-domains', id]`, `['admin-search-analytics-*', scope]`. Review, notification and invitation keys live in `../hooks/*-options.ts`.
 - `['admin-companies']`, `['admin-users']` and `['admin-user']` are shared prefixes: user toggles, department changes, agent transfers and deletion approvals invalidate them. Keep those key shapes stable; after company/user mutations invalidate them.
 - Errors: `error instanceof ApiError ? error.message : 'Failed to load …'`. Toasts on mutate. Special-case 409 (dup) / 403 (role).
 - Forms: RHF + Zod, `noValidate`, `useId()`. Emails `.trim().toLowerCase()`. Passwords min 6.

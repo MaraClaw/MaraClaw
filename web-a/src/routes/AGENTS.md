@@ -10,7 +10,8 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 |------|------|--------|
 | `/login` `/forgot-password` `/reset-password` | public | auth pages (no shell) |
 | `/` | admin | overview |
-| `/account` `/settings` | admin; the only force-pw allowlist | account, settings (SMTP for genesis, transfer policy for PA) |
+| `/settings` | admin; the force-pw destination | profile, SMTP for genesis, transfer policy for PA, password, session |
+| `/account` | admin | legacy redirect to `/settings` |
 | `/users` `/users/:userId` | admin (PA + OA) | users list, user detail |
 | `/models` | admin (PA + OA) | llm-models |
 | `/tools` | admin (PA + OA) | `tools.tsx`; PA `?company=`, OA fixed own company |
@@ -26,7 +27,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/openclaw-updates` | `PlatformAdminRoute` | openclaw-updates |
 | `*` (inside shell) | none | `Navigate` → `/` |
 
-Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/account` and `/settings` redirects to `/account`.
+Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
 Analytics is `?tab=analytics` on `/search-engine`, not a route.
 
 **Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `TransferReviewRoute`, `AdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
@@ -36,7 +37,7 @@ Analytics is `?tab=analytics` on `/search-engine`, not a route.
 | File | Role |
 |------|------|
 | `index.tsx` | `AppRouter`, all pages lazy under one `Suspense`, plus the `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `AgentDeletionReviewRoute` guards. |
-| `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/account` and `/settings` (and `/*` under them) until cleared; else `/account`. |
+| `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine` and `/openclaw-updates`; their nav items use `platformAdminOnly`. |
 | `transfer-review.tsx` | `TransferReviewRoute`: waits on `useTransferReviewAccess().isPending`, shows a retry card on lookup error (stays locked), else `canReview ? Outlet : /`. |
 

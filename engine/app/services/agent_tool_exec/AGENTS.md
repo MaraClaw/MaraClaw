@@ -26,7 +26,7 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 
 - Put new execution handlers here and register them; do not add duplicate dispatch branches.
 - Register in `_agent_tool_exec_<family>.py` (side-effect imported from `agent_tools.py`). Put implementation in the unprefixed family module (`workspace_*.py`, `feishu_*.py`, …).
-- `_agent_tool_exec_leftover.py` registers plaza / publish / clawhub / email / tasks / images / code / channel send / MCP discover-import / OKR / deploy. `dispatcher.py` resolves registered handlers, otherwise executes MCP tools; there are no duplicate builtin fallbacks. New work: add `@register` here; do not grow the leftover file or the facade.
+- `_agent_tool_exec_leftover.py` registers clawbook / publish / clawhub / email / tasks / images / code / channel send / MCP discover-import / OKR / deploy. `dispatcher.py` resolves registered handlers, otherwise executes MCP tools; there are no duplicate builtin fallbacks. New work: add `@register` here; do not grow the leftover file or the facade.
 - Keep tool catalog metadata in `app/services/tool_definitions/` (seed) and `app/services/agent_tools_definitions/` (OpenAI shapes).
 - Avoid importing route modules or FastAPI dependencies here; handlers should stay service-layer code.
 
@@ -44,8 +44,8 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - `x_search.py` - `search_x` via xAI Responses API `x_search` (posts/users/threads). Not a web search engine.
 - `xai_credentials.py` - shared `XAI_API_KEY` fallback and `api.x.ai` base-url allowlist for Search X and Grok Imagine.
 - Register those names in `_agent_tool_exec_search.py`. Do not re-add Google/Bing/Tavily-style search-engine tools.
-- Web search/fetch for OpenClaw agents are guest image-bundled Linkup skills; engine configuration keys are in `app/services/linkup_runtime.py`.
-- Tests: `tests/test_search_web_tools.py`, `tests/test_x_search.py`, `tests/test_linkup_search_skill.py`. Update dispatch-name freeze if tool names change.
+- Web search/fetch for OpenClaw agents are guest image-bundled Tavily skills; engine configuration keys are in `app/services/tavily_runtime.py`.
+- Tests: `tests/test_search_web_tools.py`, `tests/test_x_search.py`, `tests/test_tavily_search_skill.py`. Update dispatch-name freeze if tool names change.
 
 ## Code Execution
 

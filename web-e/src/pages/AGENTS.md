@@ -19,7 +19,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 | `forgot-password.tsx` | `/forgot-password` | `forgotPasswordRequest`. No session. |
 | `reset-password.tsx` | `/reset-password` | `?token=` (≥20 chars). `resetPasswordRequest`. |
 | `verify-email.tsx` | `/verify-email` | `?code=` or form. `verifyEmailRequest` then `/join` or `/app`. |
-| `join-org.tsx` | `/join` | Session required. Pending admission check first → `/app/admissions`. Invitation code: `useInvitationPreview` shows the destination, then `joinInvitation` accepts it; otherwise `joinDefaultOrg`. Pending result renders `AdmissionPending`; approved or immediate results go through `useJoinedWorkspace`. Has tenant → `/app`. Anon → `/login`. |
+| `join-org.tsx` | `/join` | Session required. Pending admission check first → `/app/notifications?category=admissions`. Invitation code: `useInvitationPreview` shows the destination, then `joinInvitation` accepts it; otherwise `joinDefaultOrg`. Pending result renders `AdmissionPending`; approved or immediate results go through `useJoinedWorkspace`. Has tenant → `/app`. Anon → `/login`. |
 | `transfer.tsx` | `/transfer` | Session required, tenant required (else `/join`). Invitation preview, then password. `useTransferFunnel` loads the quote (default-organization sources only); `TransferChoice` forces paid or free (free needs destructive consent). Outcomes: immediate join, pending/approved admission, or payment review linking to `/app/admissions/transfers/:id`. |
 | `app/` | `/app/*` | Member workspace — see `app/AGENTS.md`. |
 
@@ -39,7 +39,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 ## ANTI-PATTERNS
 
 - Putting `/app` screens in this folder.
-- Adding `QueryClient` or importing workspace/plaza/okr/control APIs here.
+- Adding `QueryClient` or importing workspace/clawbook/okr/control APIs here.
 - Inventing IM connectors engine lacks (channel truth: `components/sections/AGENTS.md`).
 - Calling `/api/admin/*` or creating `platform_admin` from register.
 - Moving join/transfer under `/app`.
