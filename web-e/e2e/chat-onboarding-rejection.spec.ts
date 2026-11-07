@@ -47,7 +47,7 @@ for (const accepted of [false, true]) {
 
     // Then
     await expect(page.getByText(/Onboarding could not start\..*Onboarding blocked\./)).toBeVisible()
-    await expect(page.locator('article')).toHaveText(['An ordinary submitted question'])
+    await expect(page.locator('article > [data-chat-content]')).toHaveText(['An ordinary submitted question'])
     await expect(page.getByRole('button', { name: 'Retry this message', exact: true })).toHaveCount(0)
     await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
     await expect(composer).toHaveValue('A separate draft')

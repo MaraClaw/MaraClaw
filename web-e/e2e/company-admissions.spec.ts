@@ -29,6 +29,7 @@ async function prepare(page: Page, detail: AdmissionDetail = pending, tenantId: 
       case '/api/tenants/invitations/preview': await route.fulfill({ json: { tenant: { id: target.id, name: target.name } } }); break
       case '/api/company-admissions/transfer-quote': await route.fulfill({ json: { fee_amount_minor: 1000, currency: 'USD', instructions: 'Synthetic instructions', source_eligible: true, has_owned_agents: false, explicit_choice_required: false, free_requires_destructive_consent: true } }); break
       case '/api/company-admissions/transfers/mine': await route.fulfill({ json: [] }); break
+      case '/api/company-admissions/transfers/mine/page': await route.fulfill({ json: { items: [], next_cursor: null } }); break
       case '/api/company-admissions/mine': await route.fulfill({ json: [detail] }); break
       case '/api/company-admissions/mine/page': await route.fulfill({ json: { items: [detail], next_cursor: null } }); break
       case `/api/company-admissions/${detail.id}`: await route.fulfill({ json: detail }); break
@@ -54,7 +55,7 @@ for (const width of [390, 1440]) {
       await page.goto(`/app/admissions/${pending.id}`)
       const back = page.getByRole('link', { name: 'All admission requests', exact: true })
       await expect(back).toBeVisible()
-      await expect(back).toHaveAttribute('href', '/app/admissions')
+      await expect(back).toHaveAttribute('href', '/app/notifications?category=admissions')
       await expect(back.locator('svg[aria-hidden="true"]')).toHaveCount(1)
       await expect(back).toHaveCSS('border-radius', '16px')
       await expect(back).toHaveCSS('border-top-width', '1px')
@@ -65,7 +66,7 @@ for (const width of [390, 1440]) {
       await expect(back).not.toHaveCSS('box-shadow', 'none')
       await back.press('Enter')
       // Then
-      await expect(page).toHaveURL('/app/admissions')
+      await expect(page).toHaveURL('/app/notifications?category=admissions')
     })
 
     for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) {
@@ -178,7 +179,7 @@ test('an admission notification opens its persisted result and marking read clea
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/read')) { read = true; await route.fulfill({ json: { ok: true } }); return }
     if (path.endsWith('/unread-count')) { await route.fulfill({ json: { count: read ? 0 : 1 } }); return }
-    await route.fulfill({ json: [{ id: 'notice', title: 'Admission decided', body: null, link: `/app/admissions/${pending.id}`, type: 'company_admission_resolved', is_read: read, created_at: '2026-10-25T12:00:00Z', archived_at: null } satisfies NotificationRow] })
+    await route.fulfill({ json: { items: [{ id: 'notice', title: 'Admission decided', body: null, link: `/app/admissions/${pending.id}`, type: 'company_admission_resolved', is_read: read, created_at: '2026-10-25T12:00:00Z', archived_at: null } satisfies NotificationRow], next_cursor: null } })
   })
   await page.goto('/app/notifications')
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()

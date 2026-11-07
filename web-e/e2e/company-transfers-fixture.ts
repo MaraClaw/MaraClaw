@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test'
 import type { AdmissionDetail } from '../src/lib/types/company-admissions'
 import type { TransferQuote, TransferSummary } from '../src/lib/types/company-transfers'
+import { completedOnboarding } from './admission-access-fixture'
 
 export const tokenKey = 'maraclaw-enduser-token'
 export const source = { id: 'bdd07e40-83a6-48f3-9049-5ffae4774f75', name: 'KABERs', slug: 'kabers' }
@@ -80,6 +81,9 @@ export async function prepareTransfers(page: Page, options: {
       case '/api/company-admissions/transfers/mine':
         expect(url.searchParams.get('limit')).toBe('100')
         await route.fulfill({ json: replacing ? [] : state.transfer ? [state.transfer] : [] }); return
+      case '/api/company-admissions/transfers/mine/page':
+        expect(url.searchParams.get('limit')).toBe('50')
+        await route.fulfill({ json: { items: replacing ? [] : state.transfer ? [state.transfer] : [], next_cursor: null } }); return
       case `/api/company-admissions/transfers/${payment.id}`:
         await route.fulfill(replacing ? { status: 404, json: { detail: 'Not found for replacement member' } } : { json: state.transfer }); return
       case `/api/company-admissions/transfers/${payment.id}/withdraw`:
@@ -90,7 +94,7 @@ export async function prepareTransfers(page: Page, options: {
       case '/api/company-admissions/mine/page': await route.fulfill({ json: { items: state.destination ? [state.destination] : [], next_cursor: null } }); return
       case `/api/company-admissions/${admission.id}`: await route.fulfill({ json: state.destination }); return
       case '/api/notifications/unread-count': await route.fulfill({ json: { unread_count: 0 } }); return
-      case '/api/onboarding/status': await route.fulfill({ json: { exists: true, status: 'completed', current_step: 'completed' } }); return
+      case '/api/onboarding/status': await route.fulfill({ json: completedOnboarding }); return
       case '/api/agents/': await route.fulfill({ json: [] }); return
       case '/api/auth/switch-tenant':
         state.switches++

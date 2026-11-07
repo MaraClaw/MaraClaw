@@ -1,5 +1,6 @@
 import { apiFormRequest, apiRequest } from './http.ts'
 import type { ChatMessage } from './chat/message.ts'
+export { listFilesPage } from './agent-files-api.ts'
 export type { ChatMessage } from './chat/message.ts'
 export { createSchedule, deleteSchedule, listScheduleHistory, listSchedules, runSchedule, updateSchedule } from './schedules-api.ts'
 export type { ScheduleOut } from './schedules-api.ts'

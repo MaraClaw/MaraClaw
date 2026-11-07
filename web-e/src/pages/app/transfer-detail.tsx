@@ -52,7 +52,7 @@ function TransferDetail({ id }: { readonly id: string }) {
     })
   }, [joined, enter, isCurrent, scope.owner])
   return <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-    <Button asChild variant="outline"><Link to="/app/admissions">All admission requests</Link></Button>
+    <Button asChild variant="outline"><Link to="/app/notifications?category=admissions">All admission requests</Link></Button>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h1 className="font-display text-2xl font-semibold">Transfer request</h1>
       <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })}>Refresh status</Button>

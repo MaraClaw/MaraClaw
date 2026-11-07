@@ -34,6 +34,8 @@ export async function prepareAdmission(page: Page, initial: AdmissionDetail = pe
         return route.fulfill({ json: [detail] })
       case '/api/company-admissions/transfers/mine':
         return route.fulfill({ json: [] })
+      case '/api/company-admissions/transfers/mine/page':
+        return route.fulfill({ json: { items: [], next_cursor: null } })
       case '/api/company-admissions/mine/page': {
         expect(request.method()).toBe('GET')
         const query = new URL(request.url()).searchParams

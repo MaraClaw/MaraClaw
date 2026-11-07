@@ -12,7 +12,7 @@ const reasons = [
 ] as const
 
 for (const [reason, label] of reasons) {
-  test(`server-derived ${reason} explanation agrees on cards, shared chat, and Settings`, async ({ page }) => {
+  test(`server-derived ${reason} explanation appears on cards and Settings, but not shared chat`, async ({ page }) => {
     // Given
     await prepareChat(page)
     let reads = 0
@@ -27,7 +27,7 @@ for (const [reason, label] of reasons) {
     await page.getByRole('link', { name: new RegExp(agent.name) }).click()
     // Then
     await expect(page).toHaveURL(`/app/agents/${agent.id}/chat`)
-    await expect(page.getByText(label, { exact: true })).toBeVisible()
+    await expect(page.getByText(label, { exact: true })).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: `Message ${agent.name}` })).toBeVisible()
     await page.getByRole('navigation', { name: 'Agent sections' }).getByRole('link', { name: 'Settings', exact: true }).click()
     await expect(page.getByText(label, { exact: true })).toBeVisible()

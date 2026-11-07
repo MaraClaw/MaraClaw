@@ -81,7 +81,7 @@ function TransferForm({ initialCode }: { readonly initialCode: string }) {
     </form> : null}
     <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm">
       <Link to="/app" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">Back to workspace</Link>
-      <Link to="/app/admissions" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">View saved requests</Link>
+      <Link to="/app/notifications?category=admissions" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">View saved requests</Link>
     </div>
     {flow.selection && flow.quote ? <TransferChoice quote={flow.quote} busy={flow.busy} error={flow.error} onCancel={flow.cancel} onConfirm={flow.confirm} /> : null}
   </AuthShell>

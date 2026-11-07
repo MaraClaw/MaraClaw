@@ -40,7 +40,7 @@ for (const path of ['/app/notifications', '/app/settings', '/app/account', '/app
   })
 }
 
-for (const path of ['/app', '/app/agents', '/app/agents/one/settings', '/app/onboarding', '/app/plaza', '/app/okr', '/app/directory', '/app/admissions-other', '/app/settings/agent', '/app/notifications/other']) {
+for (const path of ['/app', '/app/agents', '/app/agents/one/settings', '/app/onboarding', '/app/clawbook', '/app/okr', '/app/directory', '/app/admissions-other', '/app/settings/agent', '/app/notifications/other']) {
   test(`restricted admission access blocks ${path}`, () => {
     // Given / When
     const allowed = isAdmissionAccessPath(path)

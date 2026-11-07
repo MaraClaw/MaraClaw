@@ -107,16 +107,16 @@ export function AgentLayout() {
 
   return (
     <div className={layoutClass}>
-      <div className="min-w-0 space-y-2 bg-background px-5 pt-4 pb-2 empty:p-0 md:col-start-2 md:row-start-1">
-        {!chat ? <AgentsListButton /> : null}
+      {!chat ? <div className="min-w-0 space-y-2 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
+        <AgentsListButton />
         <AgentAccessExplanation reason={agent.access_reason} />
-      </div>
+      </div> : null}
       <SectionRail
         items={visibleTabs}
         label="Agent sections"
         className={railClass}
       />
-      <div className="relative min-h-0 min-w-0 md:col-start-2 md:row-start-2">
+      <div className="relative row-start-3 min-h-0 min-w-0 md:col-start-2 md:row-start-2">
         <div className="absolute inset-0 overflow-y-auto overscroll-y-contain">
           {canMountAgentOutlet(pathname, update.gate)
             ? <Outlet context={{ agent }} />

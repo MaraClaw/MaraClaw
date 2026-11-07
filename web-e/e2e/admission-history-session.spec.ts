@@ -13,7 +13,7 @@ test('tenantless applicants can filter their persisted requests without entering
   await page.getByLabel('Request status').selectOption('approved')
   // Then
   await expect(page.getByRole('heading', { name: 'History approved company' })).toBeVisible()
-  await expect(page).toHaveURL('/app/admissions')
+  await expect(page).toHaveURL('/app/notifications?category=admissions')
   await expect(page.getByRole('button', { name: /Open .*workspace/ })).toHaveCount(0)
 })
 

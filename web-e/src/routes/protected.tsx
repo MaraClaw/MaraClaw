@@ -24,14 +24,14 @@ export function ProtectedRoute() {
 
   const path = location.pathname
   const isAdmissionPath = path === '/app/admissions' || path.startsWith('/app/admissions/')
-  if (needsOrgConfirm && !isAdmissionPath) {
-    return <Navigate to="/join" replace />
-  }
-
+    || (path === '/app/notifications' && new URLSearchParams(location.search).get('category') === 'admissions')
   const allowedWhileForced =
     path === '/app/account' || path.startsWith('/app/account/') || path === '/app/settings'
   if (mustChangePassword && !allowedWhileForced) {
     return <Navigate to="/app/settings" replace state={{ from: location, forcePasswordChange: true }} />
+  }
+  if (needsOrgConfirm && !isAdmissionPath && !(mustChangePassword && allowedWhileForced)) {
+    return <Navigate to="/join" replace />
   }
 
   return <Outlet />

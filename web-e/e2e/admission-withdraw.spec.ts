@@ -31,7 +31,7 @@ test('keyboard withdrawal refreshes persisted detail and list without replacing 
   await expect(page.getByRole('button', { name: /Withdraw request|Open Fencing/ })).toHaveCount(0)
   expect(fixture.calls.filter((call) => call === `GET ${admissionPath}`).length).toBeGreaterThan(1)
   await page.getByRole('link', { name: 'All admission requests' }).click()
-  await expect(page).toHaveURL('/app/admissions')
+  await expect(page).toHaveURL('/app/notifications?category=admissions')
   await expect(page.getByRole('listitem').getByText('Withdrawn', { exact: true })).toBeVisible()
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(originalToken)
 })
