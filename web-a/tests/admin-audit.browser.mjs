@@ -44,7 +44,7 @@ try {
         state.result = [event, nullableEvent]
         await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
         await expect(page.getByRole('heading', { name: '2 recent events' })).toBeVisible()
-        await page.getByRole('link', { name: 'Account', exact: true }).click()
+    await page.getByRole('link', { name: 'Overview', exact: true }).click()
         await nav.click()
         await expect(page.getByRole('heading', { name: 'Recent activity', exact: true })).toBeVisible()
         assert.equal(state.exchanges[0].path, role === 'platform_admin' ? '/api/admin/audit-logs/page' : '/api/users/admin-audit-logs/page')
@@ -155,7 +155,7 @@ try {
   await runTargetScenarios(harness)
 
   for (const mobile of [false, true]) await scenario({ name: `${mobile ? 'phone' : 'desktop'} password requirement locks direct route and navigation`, mobile, user: { must_change_password: true } }, async (page, state) => {
-    await expect(page).toHaveURL(`${base}account`)
+    await expect(page).toHaveURL(`${base}settings`)
     await expect(page.getByRole('link', { name: 'Activity', exact: true })).toHaveCount(0)
     await expect(page.locator('[aria-disabled="true"]:visible').filter({ hasText: /^Activity$/ })).toHaveCount(1)
     assert.equal(state.exchanges.length, 0)

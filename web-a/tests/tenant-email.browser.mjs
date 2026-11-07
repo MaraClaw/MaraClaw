@@ -117,7 +117,7 @@ try {
   for (const role of ['org_admin', 'platform_admin']) await harness.scenario({ name: `forced-change-${role}`, user: { role, is_platform_admin: role === 'platform_admin', must_change_password: true } }, async (page, state, capture) => {
     // Given / When: an eligible genesis administrator must change their password.
     const section = page.getByRole('region', { name: 'Organization SMTP', exact: true })
-    await expect(section.getByRole('link', { name: 'Account' })).toBeVisible()
+    await expect(section.getByRole('link', { name: 'Change your password' })).toBeVisible()
     // Then
     await expect(section.getByRole('textbox')).toHaveCount(0); await expect(section.getByRole('button')).toHaveCount(0)
     assert.equal(state.requests.length, 0); assert.equal(state.auxiliaryRequests.length, 0)

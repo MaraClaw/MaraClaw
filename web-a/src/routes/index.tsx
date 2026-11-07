@@ -8,7 +8,6 @@ import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
 
-const AccountPage = lazy(() => import('@/pages/account').then((module) => ({ default: module.AccountPage })))
 const BroadcastPage = lazy(() => import('@/pages/broadcast').then((module) => ({ default: module.BroadcastPage })))
 const InvitationsPage = lazy(() => import('@/pages/invitations').then((module) => ({ default: module.InvitationsPage })))
 const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((module) => ({ default: module.ForgotPasswordPage })))
@@ -71,7 +70,7 @@ export function AppRouter() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AdminShell />}>
               <Route index element={<OverviewPage />} />
-              <Route path="account" element={<AccountPage />} />
+              <Route path="account" element={<Navigate to="/settings" replace />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="activity" element={<AdminAuditPage />} />
               <Route element={<AgentDeletionReviewRoute />}>

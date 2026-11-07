@@ -119,8 +119,8 @@ export async function exerciseRosterExports(scenario, h) {
       await page.getByRole('button', { name: 'Sign in', exact: true }).click()
       await expect(exportButton(page)).toBeEnabled()
     } else {
-      await page.getByRole('link', { name: 'Account', exact: true }).click()
-      await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible()
+    await page.getByRole('link', { name: 'Overview', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
     }
     const currentView = transition !== 'unmount'
     if (currentView) {

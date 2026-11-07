@@ -97,7 +97,7 @@ try {
     await expect(links).toHaveCount(target === 'openclaw-updates' ? 1 : 0)
     if (target === 'openclaw-updates') {
       await expect(links).toHaveAttribute('aria-current', 'page')
-      await page.getByRole('link', { name: 'Account', exact: true }).click()
+      await page.getByRole('link', { name: 'Overview', exact: true }).click()
       await links.click()
       await expect(page).toHaveURL(`${base}openclaw-updates`)
     }
@@ -107,7 +107,7 @@ try {
   for (const mobile of [false, true]) await scenario({ name: `password guard ${mobile}`, mobile, user: { must_change_password: true } }, async (page, state) => {
     // Given / When: a PA with a required password change navigates directly.
     // Then
-    await expect(page).toHaveURL(`${base}account`)
+    await expect(page).toHaveURL(`${base}settings`)
     await expect(page.getByRole('link', { name: 'Updates', exact: true })).toHaveCount(0)
     assert.equal(state.exchanges.length, 0)
   })
@@ -184,7 +184,7 @@ try {
     await expect(page.getByRole('alert')).toBeFocused()
     const original = state.exchanges[0].payload
     // When: the operator navigates away, reloads, and temporarily uses another account.
-    await page.getByRole('link', { name: 'Account', exact: true }).click()
+    await page.getByRole('link', { name: 'Overview', exact: true }).click()
     await page.getByRole('link', { name: 'Updates', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Retry this notice', exact: true })).toBeVisible()
     await page.reload()

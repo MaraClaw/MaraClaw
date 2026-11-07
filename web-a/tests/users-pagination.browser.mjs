@@ -53,7 +53,7 @@ async function scenario(name, exercise, options = {}) {
       const currentAdmin = { ...admin, role: state.role, is_platform_admin: state.role === 'platform_admin' }
       if (path === '/api/auth/me') body = currentAdmin
       else if (path === '/api/auth/login') body = { access_token: 'synthetic-token', token_type: 'bearer', user: currentAdmin }
-      else if (path === '/api/admin/companies') { state.companyCalls++; body = [company('alpha'), company('beta')] }
+      else if (path === '/api/admin/companies/options') { state.companyCalls++; body = [company('alpha'), company('beta')] }
       else if (path === '/api/admin/platform-admins') body = [row('Hidden supervisor', null, { role: 'platform_admin' })]
       else if (path === '/api/departments') body = { departments: [], assignments: [] }
       else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }

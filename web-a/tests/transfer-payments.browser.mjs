@@ -93,7 +93,7 @@ await runPayments(async ({ scenario, capture, verify }) => {
         await visible(page.locator('main a[href^="/transfer-payments/"]'))
         verify('canonical PA flag skips tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
       } else {
-        await visible(page.locator('main h1').filter({ hasText: state.forcePassword ? /^Account$/u : /^Overview$/u }))
+        await visible(page.locator('main h1').filter({ hasText: state.forcePassword ? /^Settings$/u : /^Overview$/u }))
         verify('denied reviewer sends no transfer API requests', state.calls.filter((call) => call.path.startsWith('/api/company-admissions/transfers')).length, 0)
         if (state.genesis === false || state.forcePassword) verify('additional admin or force-password sends no tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
       }
