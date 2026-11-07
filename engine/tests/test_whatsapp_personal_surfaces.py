@@ -1,8 +1,13 @@
+import asyncio
 import sys
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from time import monotonic
+from uuid import uuid4
 
 import anyio
 import httpx
+import pytest
 from fastapi import FastAPI
 from tests.channel_submission_fixtures import channel_db, receipt_db
 from tests.test_whatsapp_personal_integration import connected
@@ -14,6 +19,8 @@ from app.dao.whatsapp_personal_dao import claim, get_personal
 from app.db import session as db_session
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
+from app.records.whatsapp_personal import PersonalConnection
+from app.services.channels import whatsapp_personal_supervisor as supervisor
 from app.services.channels.whatsapp_personal_child import PersonalChild
 from app.services.channels.whatsapp_personal_control import start
 
@@ -138,3 +145,107 @@ async def test_lifecycle_stop_revokes_route_and_owner_change_purges(channel_db):
         assert row is not None
         assert row.purge_requested
         assert row.account_id == owner.account_id
+
+
+def pending_connection() -> PersonalConnection:
+    return PersonalConnection(
+        config_id=uuid4(),
+        agent_id=uuid4(),
+        tenant_id=uuid4(),
+        owner_id=uuid4(),
+        auth_epoch=uuid4(),
+        generation=uuid4(),
+        attempt_id=uuid4(),
+        revision=1,
+        state="pending",
+        desired=True,
+        created_at=datetime.now(UTC),
+    )
+
+
+async def stop_supervisor(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+
+
+@pytest.mark.parametrize("failing_stage", ["claim", "run_child"])
+async def test_supervisor_contains_a_failing_connection_and_respawns_it_after_the_cooldown(monkeypatch, failing_stage):
+    # Given one connection that raises an unclassified error and a healthy sibling.
+    monkeypatch.setattr(supervisor, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(supervisor, "_COOLDOWN_SECONDS", 0.2)
+    bad, good = pending_connection(), pending_connection()
+    claims: dict[object, list[float]] = {bad.config_id: [], good.config_id: []}
+    retried, sibling_cancelled = asyncio.Event(), asyncio.Event()
+    hold = asyncio.Event()
+
+    async def candidates():
+        return [bad, good]
+
+    async def claim(config_id):
+        claims[config_id].append(monotonic())
+        if config_id == bad.config_id and failing_stage == "claim" and len(claims[config_id]) == 1:
+            raise RuntimeError("claim exploded")
+        if config_id == bad.config_id and len(claims[config_id]) == 2:
+            retried.set()
+        return bad if config_id == bad.config_id else good
+
+    async def run_child(connection, _command):
+        if connection is bad and failing_stage == "run_child" and len(claims[bad.config_id]) == 1:
+            raise RuntimeError("child exploded")
+        try:
+            await hold.wait()
+        except asyncio.CancelledError:
+            if connection is good:
+                sibling_cancelled.set()
+            raise
+
+    monkeypatch.setattr(supervisor, "candidates", candidates)
+    monkeypatch.setattr(supervisor, "claim", claim)
+    monkeypatch.setattr(supervisor, "run_child", run_child)
+    # When the supervisor runs until the failing connection has been respawned.
+    task = asyncio.create_task(supervisor.personal_supervisor())
+    await asyncio.wait_for(retried.wait(), 5)
+    # Then the supervisor and the sibling survive, and the respawn waited out the cooldown.
+    assert not task.done()
+    assert not sibling_cancelled.is_set()
+    assert len(claims[good.config_id]) == 1
+    first, second = claims[bad.config_id][:2]
+    assert second - first >= 0.2
+    await stop_supervisor(task)
+
+
+async def test_supervisor_backs_off_when_candidates_fails(monkeypatch):
+    # Given a candidates query that fails twice before recovering.
+    monkeypatch.setattr(supervisor, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(supervisor, "_BACKOFF_START_SECONDS", 0.05)
+    monkeypatch.setattr(supervisor, "_BACKOFF_MAX_SECONDS", 0.1)
+    connection = pending_connection()
+    calls: list[float] = []
+    spawned = asyncio.Event()
+
+    async def candidates():
+        calls.append(monotonic())
+        if len(calls) <= 2:
+            raise RuntimeError("database unavailable")
+        return [connection]
+
+    async def claim(_config_id):
+        return connection
+
+    async def run_child(_connection, _command):
+        spawned.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(supervisor, "candidates", candidates)
+    monkeypatch.setattr(supervisor, "claim", claim)
+    monkeypatch.setattr(supervisor, "run_child", run_child)
+    # When the supervisor runs.
+    task = asyncio.create_task(supervisor.personal_supervisor())
+    await asyncio.wait_for(spawned.wait(), 5)
+    # Then the failure never escapes, each retry waits out the growing backoff, and the connection is spawned.
+    assert not task.done()
+    assert calls[1] - calls[0] >= 0.05
+    assert calls[2] - calls[1] >= 0.1
+    await stop_supervisor(task)
