@@ -1,4 +1,4 @@
-"""Proxy client rotation, async job binding, and the request, response and deadline bounds."""
+"""Proxy client rotation and the request, response and deadline bounds."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import gzip
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, override
+from typing import Any, final, override
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -15,25 +15,26 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 
-from app.api import linkup_proxy
-from app.records.linkup_api_key import LinkupApiKeyRecord
-from app.services.linkup import client as client_mod
-from app.services.linkup.client import LinkupProxyError, allowed_upstream_path, proxy_linkup
-from app.services.linkup.errors import LinkupDeadlineExceededError, LinkupLimitError, LinkupResponseTooLargeError
-from app.services.linkup.jobs import LinkupJobKeyRemovedError, bind_job, key_for_job
-from app.services.linkup.keys import add_key
-from app.services.linkup.tokens import _proxy_token, parse_proxy_token
+from app.api import tavily_proxy
+from app.dao.tavily_proxy_dao import TavilyAgentAvailability
+from app.records.tavily_api_key import TavilyApiKeyRecord
+from app.services.tavily import client as client_mod, http_client
+from app.services.tavily.client import TavilyProxyError, allowed_upstream_path, proxy_tavily
+from app.services.tavily.errors import TavilyDeadlineExceededError, TavilyLimitError, TavilyResponseTooLargeError
+from app.services.tavily.http_client import reset_tavily_client, shutdown_tavily_client, tavily_client
+from app.services.tavily.keys import add_key
+from app.services.tavily.tokens import _proxy_token, parse_proxy_token
 
 
 class MemoryKeyDao:
     def __init__(self) -> None:
-        self.rows: dict[UUID, LinkupApiKeyRecord] = {}
+        self.rows: dict[UUID, TavilyApiKeyRecord] = {}
         self.cursor: UUID | None = None
 
-    async def get(self, key_id: UUID) -> LinkupApiKeyRecord | None:
+    async def get(self, key_id: UUID) -> TavilyApiKeyRecord | None:
         return self.rows.get(key_id)
 
-    async def get_by_fingerprint(self, fingerprint: str) -> LinkupApiKeyRecord | None:
+    async def get_by_fingerprint(self, fingerprint: str) -> TavilyApiKeyRecord | None:
         for row in self.rows.values():
             if row.key_fingerprint == fingerprint:
                 return row
@@ -47,18 +48,18 @@ class MemoryKeyDao:
             return None
         return max(row.position for row in self.rows.values())
 
-    async def list_ordered(self) -> list[LinkupApiKeyRecord]:
+    async def list_ordered(self) -> list[TavilyApiKeyRecord]:
         return sorted(self.rows.values(), key=lambda row: row.position)
 
-    async def list_active_ordered(self, *, now) -> list[LinkupApiKeyRecord]:
+    async def list_active_ordered(self, *, now) -> list[TavilyApiKeyRecord]:
         del now
         return sorted(
             [row for row in self.rows.values() if row.status == "active"],
             key=lambda row: row.position,
         )
 
-    async def create(self, *, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
-        record = LinkupApiKeyRecord(
+    async def create(self, *, obj_in: dict[str, Any]) -> TavilyApiKeyRecord:
+        record = TavilyApiKeyRecord(
             id=uuid4(),
             label=str(obj_in["label"]),
             key_ciphertext=str(obj_in["key_ciphertext"]),
@@ -69,12 +70,12 @@ class MemoryKeyDao:
         self.rows[record.id] = record
         return record
 
-    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
+    async def update(self, *, db_obj: TavilyApiKeyRecord, obj_in: dict[str, Any]) -> TavilyApiKeyRecord:
         for key, value in obj_in.items():
             setattr(db_obj, key, value)
         return db_obj
 
-    async def delete(self, *, record_id: UUID) -> LinkupApiKeyRecord | None:
+    async def delete(self, *, record_id: UUID) -> TavilyApiKeyRecord | None:
         return self.rows.pop(record_id, None)
 
     async def get_cursor_key_id(self) -> UUID | None:
@@ -82,25 +83,6 @@ class MemoryKeyDao:
 
     async def set_cursor_key_id(self, key_id: UUID | None) -> None:
         self.cursor = key_id
-
-
-class MemoryJobDao:
-    def __init__(self) -> None:
-        self.rows: dict[str, object] = {}
-
-    async def get_by_job_id(self, upstream_job_id: str):
-        return self.rows.get(upstream_job_id)
-
-    async def create(self, *, obj_in: dict[str, Any]):
-        from app.records.linkup_api_key import LinkupAsyncJobRecord
-
-        record = LinkupAsyncJobRecord(
-            upstream_job_id=str(obj_in["upstream_job_id"]),
-            key_id=obj_in["key_id"],
-            kind=str(obj_in["kind"]),
-        )
-        self.rows[record.upstream_job_id] = record
-        return record
 
 
 class FakeStream(httpx.AsyncByteStream):
@@ -191,10 +173,10 @@ class RingSpy:
 def proxy_settings(**overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "SECRET_KEY": "test-secret",
-        "LINKUP_API_KEY": "",
-        "LINKUP_PROXY_MAX_REQUEST_BYTES": 1024,
-        "LINKUP_PROXY_MAX_RESPONSE_BYTES": 1024,
-        "LINKUP_PROXY_DEADLINE_SECONDS": 30.0,
+        "TAVILY_API_KEY": "",
+        "TAVILY_PROXY_MAX_REQUEST_BYTES": 1024,
+        "TAVILY_PROXY_MAX_RESPONSE_BYTES": 1024,
+        "TAVILY_PROXY_DEADLINE_SECONDS": 30.0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -202,7 +184,7 @@ def proxy_settings(**overrides: object) -> SimpleNamespace:
 
 def use_upstream(monkeypatch: pytest.MonkeyPatch, responses: list[FakeResponse]) -> list[tuple[str, str, str]]:
     calls: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: FakeClient(responses, calls))
+    monkeypatch.setattr(client_mod, "tavily_client", lambda: FakeClient(responses, calls))
     return calls
 
 
@@ -225,14 +207,11 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
 
 @pytest.fixture
 def ring(monkeypatch: pytest.MonkeyPatch, limits: SimpleNamespace, recorded: list[dict[str, object]]) -> MemoryKeyDao:
-    from app.services.linkup import jobs as jobs_mod, keys as keys_mod
+    from app.services.tavily import keys as keys_mod
 
     store = MemoryKeyDao()
-    jobs = MemoryJobDao()
-    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", store)
+    monkeypatch.setattr(keys_mod, "tavily_api_key_dao", store)
     monkeypatch.setattr(keys_mod, "get_settings", lambda: limits)
-    monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", store)
-    monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", jobs)
     monkeypatch.setattr(client_mod, "get_settings", lambda: limits)
 
     async def _passthrough_record(
@@ -255,7 +234,7 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> RingSpy:
         watcher.exhausted.append(key_id)
         await original_mark(key_id, message=message, until=until)
 
-    async def advance(from_key_id: UUID) -> LinkupApiKeyRecord | None:
+    async def advance(from_key_id: UUID) -> TavilyApiKeyRecord | None:
         watcher.advanced.append(from_key_id)
         following = await original_advance(from_key_id)
         if watcher.on_advance is not None:
@@ -268,30 +247,31 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> RingSpy:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("path", "quota_status"), [("search", 432), ("search", 433), ("crawl", 432), ("crawl", 433)])
 async def test_proxy_rotates_on_quota_and_succeeds_on_next_key(
-    ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch
+    ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch, path: str, quota_status: int
 ) -> None:
     from app.core.security import decrypt_data
-    from app.services.linkup import client as client_mod
+    from app.services.tavily import client as client_mod
 
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     calls: list[tuple[str, str, str]] = []
     responses = [
-        FakeResponse(429, '{"error":"insufficient quota"}'),
+        FakeResponse(quota_status, '{"detail":{"error":"This request exceeds your plan\'s set usage limit."}}'),
         FakeResponse(200, '{"ok":true}'),
     ]
     monkeypatch.setattr(
         client_mod,
-        "_httpx_client",
-        lambda *a, **k: FakeClient(responses, calls),
+        "tavily_client",
+        lambda: FakeClient(responses, calls),
     )
 
-    status, body, _headers = await proxy_linkup(
+    status, body, _headers = await proxy_tavily(
         method="POST",
-        path="search",
+        path=path,
         headers={},
-        content=b'{"q":"x"}',
+        content=b'{"query":"x"}',
     )
     assert status == 200
     assert body == '{"ok":true}'
@@ -303,10 +283,28 @@ async def test_proxy_rotates_on_quota_and_succeeds_on_next_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [402, 429, 434])
+async def test_proxy_passes_non_quota_client_errors_through_without_rotating(
+    ring: MemoryKeyDao, spy: RingSpy, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    first = await add_key(label="a", api_key="key-a")
+    second = await add_key(label="b", api_key="key-b")
+    calls = use_upstream(
+        monkeypatch, [FakeResponse(status, '{"detail":{"error":"slow down"}}'), FakeResponse(200, "{}")]
+    )
+
+    result = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+
+    assert result[0] == status
+    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"]
+    _assert_ring_untouched(ring, spy, first, second)
+
+
+@pytest.mark.asyncio
 async def test_proxy_does_not_rotate_on_500_then_retries_same_key(
     ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.services.linkup import client as client_mod
+    from app.services.tavily import client as client_mod
 
     _ = ring
     _ = await add_key(label="a", api_key="key-a")
@@ -316,66 +314,40 @@ async def test_proxy_does_not_rotate_on_500_then_retries_same_key(
         FakeResponse(500, "boom"),
         FakeResponse(200, '{"ok":true}'),
     ]
-    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: FakeClient(responses, calls))
-    status, body, _headers = await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    monkeypatch.setattr(client_mod, "tavily_client", lambda: FakeClient(responses, calls))
+    status, body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert status == 200
     assert body == '{"ok":true}'
     assert [auth for _m, _u, auth in calls] == ["Bearer key-a", "Bearer key-a"]
 
 
 @pytest.mark.asyncio
-async def test_research_post_and_get_use_same_bound_key(ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import client as client_mod
-
-    first = await add_key(label="a", api_key="key-a")
-    _ = await add_key(label="b", api_key="key-b")
-    calls: list[tuple[str, str, str]] = []
-    responses = [
-        FakeResponse(200, '{"id":"job-1","status":"pending"}'),
-        FakeResponse(200, '{"id":"job-1","status":"completed"}'),
-    ]
-    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: FakeClient(responses, calls))
-    status, body, _h = await proxy_linkup(method="POST", path="research", headers={}, content=b"{}")
-    assert status == 200
-    assert "job-1" in body
-    bound = await key_for_job("job-1")
-    assert bound.id == first.id
-
-    status, _body, _h = await proxy_linkup(method="GET", path="research/job-1", headers={}, content=None)
-    assert status == 200
-    assert calls[1][2] == "Bearer key-a"
-
-
-@pytest.mark.asyncio
-async def test_get_after_bound_key_removed_fails_closed(ring: MemoryKeyDao) -> None:
-    first = await add_key(label="a", api_key="key-a")
-    await bind_job(upstream_job_id="job-9", key_id=first.id, kind="research")
-    _ = await remove_key_safe(first.id)
-    with pytest.raises(LinkupJobKeyRemovedError):
-        _ = await key_for_job("job-9")
-    with pytest.raises(LinkupProxyError) as exc:
-        await proxy_linkup(method="GET", path="research/job-9", headers={}, content=None)
-    assert exc.value.status_code == 410
-
-
-async def remove_key_safe(key_id: UUID):
-    from app.services.linkup.keys import remove_key
-
-    return await remove_key(key_id)
-
-
-@pytest.mark.asyncio
 async def test_empty_ring_returns_503(ring: MemoryKeyDao) -> None:
     _ = ring
-    with pytest.raises(LinkupProxyError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyProxyError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert exc.value.status_code == 503
 
 
 def test_path_allowlist_and_proxy_token() -> None:
     assert allowed_upstream_path("search") is True
-    assert allowed_upstream_path("research/abc") is True
-    assert allowed_upstream_path("admin") is False
+    assert allowed_upstream_path("/crawl") is True
+    for rejected in (
+        "research",
+        "extract",
+        "map",
+        "research/123e4567-e89b-12d3-a456-426614174111",
+        "admin",
+        "fetch",
+        "extract/job-1",
+        "search/anything",
+        "research/",
+        "research/a/b",
+        "research/..",
+        "research/a?x=1",
+        "research/a%2Fb",
+    ):
+        assert allowed_upstream_path(rejected) is False, rejected
     agent_id = uuid4()
     token = _proxy_token(agent_id, secret="s")
     assert parse_proxy_token(token, secret="s") == agent_id
@@ -384,7 +356,18 @@ def test_path_allowlist_and_proxy_token() -> None:
     assert parse_proxy_token(f"{agent_id}.short", secret="s") is None
 
 
-def _assert_ring_untouched(ring: MemoryKeyDao, spy: RingSpy, *keys: LinkupApiKeyRecord) -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"), [("GET", "search"), ("GET", "crawl"), ("PUT", "search"), ("DELETE", "crawl")]
+)
+async def test_method_must_match_the_endpoint(ring: MemoryKeyDao, method: str, path: str) -> None:
+    _ = ring
+    with pytest.raises(TavilyProxyError) as exc:
+        await proxy_tavily(method=method, path=path, headers={}, content=None)
+    assert exc.value.status_code == 405
+
+
+def _assert_ring_untouched(ring: MemoryKeyDao, spy: RingSpy, *keys: TavilyApiKeyRecord) -> None:
     assert spy.exhausted == []
     assert spy.advanced == []
     assert ring.cursor == keys[0].id
@@ -399,17 +382,17 @@ async def test_response_ceiling_crossed_mid_stream_aborts_with_502(
     recorded: list[dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limits.LINKUP_PROXY_MAX_RESPONSE_BYTES = 10
+    limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 10
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     oversized = FakeResponse(200, chunks=[b"123456", b"789012", b"never-read"])
     healthy = FakeResponse(200, '{"ok":true}')
     calls = use_upstream(monkeypatch, [oversized, healthy])
 
-    with pytest.raises(LinkupResponseTooLargeError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyResponseTooLargeError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
-    assert not isinstance(exc.value, LinkupProxyError)
+    assert not isinstance(exc.value, TavilyProxyError)
     assert exc.value.status_code == 502
     assert exc.value.bytes_read == 12
     assert oversized.stream.sent == 12
@@ -425,15 +408,15 @@ async def test_response_ceiling_is_inclusive(
     ring: MemoryKeyDao, limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, size: int, allowed: bool
 ) -> None:
     _ = ring
-    limits.LINKUP_PROXY_MAX_RESPONSE_BYTES = 10
+    limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 10
     _ = await add_key(label="a", api_key="key-a")
     _ = use_upstream(monkeypatch, [FakeResponse(200, "x" * size)])
     if allowed:
-        status, body, _headers = await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+        status, body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
         assert (status, body) == (200, "x" * size)
     else:
-        with pytest.raises(LinkupResponseTooLargeError):
-            await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+        with pytest.raises(TavilyResponseTooLargeError):
+            await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
 
 @pytest.mark.asyncio
@@ -441,13 +424,13 @@ async def test_response_ceiling_counts_decoded_bytes(
     ring: MemoryKeyDao, limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ = ring
-    limits.LINKUP_PROXY_MAX_RESPONSE_BYTES = 50
+    limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 50
     _ = await add_key(label="a", api_key="key-a")
     squeezed = gzip.compress(b"a" * 400)
     assert len(squeezed) < 50
     _ = use_upstream(monkeypatch, [FakeResponse(200, chunks=[squeezed], headers={"content-encoding": "gzip"})])
-    with pytest.raises(LinkupResponseTooLargeError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyResponseTooLargeError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert exc.value.bytes_read == 400
 
 
@@ -464,10 +447,10 @@ async def test_deadline_expiring_mid_stream_aborts_with_504(
     slow = FakeResponse(200, chunks=[b"abc", b"def", b"ghi", b"never-read"], after_chunk=lambda: clock.advance(20))
     calls = use_upstream(monkeypatch, [slow, FakeResponse(200, "{}")])
 
-    with pytest.raises(LinkupDeadlineExceededError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
-    assert not isinstance(exc.value, LinkupProxyError)
+    assert not isinstance(exc.value, TavilyProxyError)
     assert exc.value.status_code == 504
     assert exc.value.bytes_read == 9
     assert slow.stream.sent == 9
@@ -488,10 +471,10 @@ async def test_deadline_expiring_during_rotation_stops_before_next_key(
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     spy.on_advance = lambda: clock.advance(31)
-    calls = use_upstream(monkeypatch, [FakeResponse(402, '{"error":"payment required"}'), FakeResponse(200, "{}")])
+    calls = use_upstream(monkeypatch, [FakeResponse(432, '{"detail":{"error":"plan limit"}}'), FakeResponse(200, "{}")])
 
-    with pytest.raises(LinkupDeadlineExceededError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert exc.value.bytes_read == 0
     assert len(calls) == 1
@@ -514,7 +497,7 @@ async def test_one_deadline_spans_the_transient_retry(
     clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limits.LINKUP_PROXY_DEADLINE_SECONDS = 120.0
+    limits.TAVILY_PROXY_DEADLINE_SECONDS = 120.0
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     calls = use_upstream(
@@ -525,8 +508,8 @@ async def test_one_deadline_spans_the_transient_retry(
         ],
     )
 
-    with pytest.raises(LinkupDeadlineExceededError):
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError):
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert [auth for _m, _u, auth in calls] == ["Bearer key-a", "Bearer key-a"]
     _assert_ring_untouched(ring, spy, first, second)
@@ -545,8 +528,8 @@ async def test_deadline_spent_before_the_retry_does_not_resend(
         monkeypatch,
         [FakeResponse(500, "boom", on_send=lambda: clock.advance(31)), FakeResponse(200, "{}")],
     )
-    with pytest.raises(LinkupDeadlineExceededError):
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError):
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert len(calls) == 1
     _assert_ring_untouched(ring, spy, first)
 
@@ -560,14 +543,14 @@ async def test_deadline_covers_the_env_key_fallback(
     recorded: list[dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limits.LINKUP_API_KEY = "env-key"
+    limits.TAVILY_API_KEY = "env-key"
     stored = await add_key(label="a", api_key="key-a")
     stored.status = "disabled"
     slow = FakeResponse(200, chunks=[b"abc", b"def"], after_chunk=lambda: clock.advance(31))
     calls = use_upstream(monkeypatch, [slow])
 
-    with pytest.raises(LinkupDeadlineExceededError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert [auth for _m, _u, auth in calls] == ["Bearer env-key"]
     assert slow.stream.closed
@@ -578,49 +561,21 @@ async def test_deadline_covers_the_env_key_fallback(
 
 
 @pytest.mark.asyncio
-async def test_bound_poll_shares_the_bounds_and_is_not_recorded(
-    ring: MemoryKeyDao,
-    limits: SimpleNamespace,
-    spy: RingSpy,
-    clock: FakeClock,
-    recorded: list[dict[str, object]],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first = await add_key(label="a", api_key="key-a")
-    _ = await add_key(label="b", api_key="key-b")
-    await bind_job(upstream_job_id="job-1", key_id=first.id, kind="research")
-    limits.LINKUP_PROXY_MAX_RESPONSE_BYTES = 5
-    _ = use_upstream(monkeypatch, [FakeResponse(200, "x" * 6)])
-    with pytest.raises(LinkupResponseTooLargeError):
-        await proxy_linkup(method="GET", path="research/job-1", headers={}, content=None)
-
-    slow = FakeResponse(200, chunks=[b"ab", b"cd"], after_chunk=lambda: clock.advance(31))
-    calls = use_upstream(monkeypatch, [slow])
-    with pytest.raises(LinkupDeadlineExceededError):
-        await proxy_linkup(method="GET", path="research/job-1", headers={}, content=None)
-
-    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"]
-    assert recorded == []
-    assert spy.exhausted == []
-    assert spy.advanced == []
-
-
-@pytest.mark.asyncio
 async def test_redirects_are_still_followed(ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch) -> None:
     _ = ring
     _ = await add_key(label="a", api_key="key-a")
     calls = use_upstream(
         monkeypatch,
         [
-            FakeResponse(302, headers={"location": "https://api.linkup.so/v1/search/moved"}),
+            FakeResponse(302, headers={"location": "https://api.tavily.com/search/moved"}),
             FakeResponse(200, '{"ok":true}'),
         ],
     )
-    status, body, _headers = await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    status, body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert (status, body) == (200, '{"ok":true}')
     assert [(method, url) for method, url, _auth in calls] == [
-        ("POST", "https://api.linkup.so/v1/search"),
-        ("GET", "https://api.linkup.so/v1/search/moved"),
+        ("POST", "https://api.tavily.com/search"),
+        ("GET", "https://api.tavily.com/search/moved"),
     ]
     assert {auth for _m, _u, auth in calls} == {"Bearer key-a"}
 
@@ -630,15 +585,13 @@ async def test_redirects_are_still_followed(ring: MemoryKeyDao, monkeypatch: pyt
 async def test_response_ceiling_applies_before_redirect_following_or_success(
     ring: MemoryKeyDao, limits: SimpleNamespace, spy: RingSpy, monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
-    limits.LINKUP_PROXY_MAX_RESPONSE_BYTES = 10
+    limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 10
     first = await add_key(label="a", api_key="key-a")
-    oversized = FakeResponse(
-        status, chunks=[b"123456", b"789012", b"not read"], headers={"location": "/v1/search/next"}
-    )
+    oversized = FakeResponse(status, chunks=[b"123456", b"789012", b"not read"], headers={"location": "/search/next"})
     calls = use_upstream(monkeypatch, [oversized, FakeResponse(200, "{}")])
 
-    with pytest.raises(LinkupResponseTooLargeError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyResponseTooLargeError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert exc.value.bytes_read == 12
     assert oversized.stream.sent == 12
@@ -654,11 +607,11 @@ async def test_redirect_request_keeps_httpx_method_and_auth_rules(
 ) -> None:
     _ = ring
     _ = await add_key(label="a", api_key="key-a")
-    url = "https://other.example/next" if status == 307 else "https://api.linkup.so/next"
+    url = "https://other.example/next" if status == 307 else "https://api.tavily.com/next"
     calls = use_upstream(
         monkeypatch, [FakeResponse(status, "redirect body", headers={"location": url}), FakeResponse(200, "{}")]
     )
-    result = await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    result = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert result[0] == 200
     assert calls[-1] == (method, url, authorization)
 
@@ -675,20 +628,22 @@ async def test_transport_failure_is_still_a_proxy_error_not_a_limit(
         def _respond(self, request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("refused", request=request)
 
-    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: Refusing([], []))
-    with pytest.raises(LinkupProxyError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    monkeypatch.setattr(client_mod, "tavily_client", lambda: Refusing([], []))
+    with pytest.raises(TavilyProxyError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
     assert exc.value.status_code == 502
 
 
 def _route_app(monkeypatch: pytest.MonkeyPatch, limits: SimpleNamespace, upstream: AsyncMock) -> FastAPI:
     agent_id = uuid4()
-    monkeypatch.setattr(linkup_proxy, "parse_proxy_token", lambda _token: agent_id)
-    monkeypatch.setattr(linkup_proxy, "agent_available", AsyncMock(return_value=True))
-    monkeypatch.setattr(linkup_proxy, "get_settings", lambda: limits)
-    monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
+    monkeypatch.setattr(tavily_proxy, "parse_proxy_token", lambda _token: agent_id)
+    monkeypatch.setattr(
+        tavily_proxy, "agent_available", AsyncMock(return_value=TavilyAgentAvailability(tenant_id=uuid4()))
+    )
+    monkeypatch.setattr(tavily_proxy, "get_settings", lambda: limits)
+    monkeypatch.setattr(tavily_proxy, "proxy_tavily", upstream)
     app = FastAPI()
-    app.include_router(linkup_proxy.router)
+    app.include_router(tavily_proxy.router)
 
     @app.post("/other")
     async def other(request: Request) -> dict[str, int]:
@@ -750,10 +705,10 @@ async def test_deadline_cancels_a_stalled_operation_without_sleep(
         monkeypatch.setattr(client_mod, "current_key", stall)
     else:
         transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=StalledStream()))
-        monkeypatch.setattr(client_mod, "_httpx_client", lambda **_kwargs: httpx.AsyncClient(transport=transport))
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: httpx.AsyncClient(transport=transport))
 
-    with pytest.raises(LinkupDeadlineExceededError) as exc:
-        await proxy_linkup(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(TavilyDeadlineExceededError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert exc.value.bytes_read == (0 if stalled_at == "lookup" else 3)
     assert len(scopes) == 1
@@ -766,14 +721,14 @@ async def test_deadline_cancels_a_stalled_operation_without_sleep(
 async def test_route_rejects_chunked_body_over_the_ceiling_while_reading(
     limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    limits.LINKUP_PROXY_MAX_REQUEST_BYTES = 1024
+    limits.TAVILY_PROXY_MAX_REQUEST_BYTES = 1024
     upstream = AsyncMock(return_value=(200, "{}", {}))
     app = _route_app(monkeypatch, limits, upstream)
     consumed: list[int] = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy.test") as client:
         request = client.build_request(
             "POST",
-            "/api/linkup/v1/search",
+            "/api/tavily/v1/search",
             headers={"Authorization": "Bearer agent.digest"},
             content=_chunked([600] * 4, consumed),
         )
@@ -789,10 +744,10 @@ async def test_route_rejects_chunked_body_over_the_ceiling_while_reading(
 async def test_route_body_ceiling_is_exact(
     limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, sizes: list[int], status: int
 ) -> None:
-    limits.LINKUP_PROXY_MAX_REQUEST_BYTES = 1024
+    limits.TAVILY_PROXY_MAX_REQUEST_BYTES = 1024
     upstream = AsyncMock(return_value=(200, "{}", {}))
     app = _route_app(monkeypatch, limits, upstream)
-    response = await _post(app, "/api/linkup/v1/search", _chunked(sizes, []))
+    response = await _post(app, "/api/tavily/v1/search", _chunked(sizes, []))
     assert response.status_code == status
     if status == 200:
         assert upstream.await_args is not None
@@ -806,36 +761,41 @@ async def test_route_body_ceiling_is_exact(
 async def test_route_rejects_declared_content_length_over_the_ceiling(
     limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, size: int, status: int
 ) -> None:
-    limits.LINKUP_PROXY_MAX_REQUEST_BYTES = 1024
+    limits.TAVILY_PROXY_MAX_REQUEST_BYTES = 1024
     upstream = AsyncMock(return_value=(200, "{}", {}))
     app = _route_app(monkeypatch, limits, upstream)
-    response = await _post(app, "/api/linkup/v1/search", b"x" * size)
+    response = await _post(app, "/api/tavily/v1/search", b"x" * size)
     assert response.status_code == status
     assert upstream.await_count == (1 if status == 200 else 0)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["unknown_path", "bad_token", "agent_unavailable"])
+@pytest.mark.parametrize("failure", ["unknown_path", "retired_fetch", "extract_poll", "bad_token", "agent_unavailable"])
 async def test_route_validates_path_and_token_before_reading_the_body(
     limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     upstream = AsyncMock(return_value=(200, "{}", {}))
     app = _route_app(monkeypatch, limits, upstream)
     if failure == "bad_token":
-        monkeypatch.setattr(linkup_proxy, "parse_proxy_token", lambda _token: None)
+        monkeypatch.setattr(tavily_proxy, "parse_proxy_token", lambda _token: None)
     if failure == "agent_unavailable":
-        monkeypatch.setattr(linkup_proxy, "agent_available", AsyncMock(return_value=False))
+        monkeypatch.setattr(tavily_proxy, "agent_available", AsyncMock(return_value=None))
     consumed: list[int] = []
-    path = "/api/linkup/v1/admin" if failure == "unknown_path" else "/api/linkup/v1/search"
+    paths = {
+        "unknown_path": "/api/tavily/v1/admin",
+        "retired_fetch": "/api/tavily/v1/fetch",
+        "extract_poll": "/api/tavily/v1/extract/job-1",
+    }
+    path = paths.get(failure, "/api/tavily/v1/search")
     response = await _post(app, path, _chunked([600] * 4, consumed))
-    assert response.status_code == (404 if failure == "unknown_path" else 401)
+    assert response.status_code == (401 if failure in {"bad_token", "agent_unavailable"} else 404)
     assert consumed == []
     upstream.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_route_limit_does_not_cap_other_routes(limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    limits.LINKUP_PROXY_MAX_REQUEST_BYTES = 1024
+    limits.TAVILY_PROXY_MAX_REQUEST_BYTES = 1024
     app = _route_app(monkeypatch, limits, AsyncMock(return_value=(200, "{}", {})))
     response = await _post(app, "/other", b"x" * 4096)
     assert response.status_code == 200
@@ -845,12 +805,308 @@ async def test_route_limit_does_not_cap_other_routes(limits: SimpleNamespace, mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "status"),
-    [(LinkupResponseTooLargeError(bytes_read=5), 502), (LinkupDeadlineExceededError(), 504)],
+    [(TavilyResponseTooLargeError(bytes_read=5), 502), (TavilyDeadlineExceededError(), 504)],
 )
 async def test_route_returns_the_local_failure_status(
-    limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: LinkupLimitError, status: int
+    limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: TavilyLimitError, status: int
 ) -> None:
     app = _route_app(monkeypatch, limits, AsyncMock(side_effect=failure))
-    response = await _post(app, "/api/linkup/v1/search", b"{}")
+    response = await _post(app, "/api/tavily/v1/search", b"{}")
     assert response.status_code == status
     assert response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant_id", [None, uuid4()])
+async def test_route_hands_the_available_agents_tenant_to_the_client(
+    limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tenant_id: UUID | None
+) -> None:
+    upstream = AsyncMock(return_value=(200, "{}", {}))
+    app = _route_app(monkeypatch, limits, upstream)
+    availability = AsyncMock(return_value=TavilyAgentAvailability(tenant_id=tenant_id))
+    monkeypatch.setattr(tavily_proxy, "agent_available", availability)
+
+    response = await _post(app, "/api/tavily/v1/search", b"{}")
+
+    assert response.status_code == 200
+    assert upstream.await_args is not None
+    assert upstream.await_args.kwargs["tenant_id"] == tenant_id
+
+
+@final
+class SharedWire:
+    """The real shared client over an injected transport: what was built, and what reached the wire."""
+
+    def __init__(self) -> None:
+        self.built: list[dict[str, object]] = []
+        self.requests: list[httpx.Request] = []
+        self.responses: list[FakeResponse] = []
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.responses.pop(0).build()
+
+
+@pytest.fixture
+async def shared_wire(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SharedWire]:
+    wire = SharedWire()
+    original = httpx.AsyncClient
+
+    def factory(**kwargs: Any) -> httpx.AsyncClient:
+        wire.built.append(kwargs)
+        return original(transport=httpx.MockTransport(wire.respond), **kwargs)
+
+    reset_tavily_client()
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", factory)
+    yield wire
+    await shutdown_tavily_client()
+    reset_tavily_client()
+
+
+@pytest.mark.asyncio
+async def test_every_attempt_and_later_call_shares_one_open_client(ring: MemoryKeyDao, shared_wire: SharedWire) -> None:
+    _ = ring
+    _ = await add_key(label="a", api_key="key-a")
+    _ = await add_key(label="b", api_key="key-b")
+    shared_wire.responses = [
+        FakeResponse(500, "boom"),
+        FakeResponse(432, '{"detail":{"error":"plan limit"}}'),
+        FakeResponse(200, '{"results":[]}'),
+        FakeResponse(200, "{}"),
+    ]
+
+    first = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+    second = await proxy_tavily(method="POST", path="crawl", headers={}, content=b"{}")
+
+    assert (first[0], second[0]) == (200, 200)
+    assert [request.headers["authorization"] for request in shared_wire.requests] == [
+        "Bearer key-a",
+        "Bearer key-a",
+        "Bearer key-b",
+        "Bearer key-b",
+    ]
+    assert len(shared_wire.built) == 1
+    assert shared_wire.built[0]["follow_redirects"] is False
+    limits = shared_wire.built[0]["limits"]
+    assert isinstance(limits, httpx.Limits)
+    assert limits.max_connections is not None
+    assert limits.max_keepalive_connections is not None
+    assert not tavily_client().is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("search", b'{"query":"stripe ceo","search_depth":"advanced","max_results":3}'),
+        ("crawl", b'{"url":"https://example.com/a","extract_depth":"basic"}'),
+    ],
+)
+async def test_upstream_request_is_the_unprefixed_tavily_url_with_the_payload_and_ring_key(
+    ring: MemoryKeyDao, shared_wire: SharedWire, path: str, payload: bytes
+) -> None:
+    _ = ring
+    _ = await add_key(label="a", api_key="tvly-key-a")
+    shared_wire.responses = [FakeResponse(200, '{"results":[],"failed_results":[],"request_id":"r"}')]
+
+    status, body, _headers = await proxy_tavily(
+        method="POST",
+        path=path,
+        headers={"content-type": "application/json", "authorization": "Bearer tvly-guest-token"},
+        content=payload,
+    )
+
+    assert status == 200
+    assert body == '{"results":[],"failed_results":[],"request_id":"r"}'
+    request = shared_wire.requests[0]
+    assert (request.method, str(request.url)) == ("POST", f"https://api.tavily.com/{path}")
+    assert request.content == payload
+    assert request.headers["authorization"] == "Bearer tvly-key-a"
+    assert request.headers["content-type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_http_boundary_rotates_and_forwards_search_and_crawl(
+    ring: MemoryKeyDao, limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hashlib import sha256
+
+    from app.services.tavily import tokens
+
+    first = await add_key(label="first", api_key="upstream-first")
+    second = await add_key(label="second", api_key="upstream-second")
+    agent = uuid4()
+    token = _proxy_token(agent, secret=limits.SECRET_KEY)
+    availability = AsyncMock(return_value=TavilyAgentAvailability(tenant_id=None))
+    monkeypatch.setattr(tokens, "get_settings", lambda: limits)
+    monkeypatch.setattr(tavily_proxy, "agent_available", availability)
+    monkeypatch.setattr(tavily_proxy, "get_settings", lambda: limits)
+    requests: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(432, json={"detail": {"error": "plan limit"}})
+        if request.url.path == "/search":
+            return httpx.Response(200, json={"results": [{"url": "https://example.org", "content": "found"}]})
+        return httpx.Response(
+            200,
+            json={
+                "base_url": "https://example.org",
+                "results": [{"url": "https://example.org", "raw_content": "page"}],
+                "response_time": 1,
+                "request_id": "r",
+            },
+        )
+
+    app = FastAPI()
+    app.include_router(tavily_proxy.router)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as outbound:
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: outbound)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as guest:
+            denied = await guest.post("/api/tavily/v1/search", headers={"Authorization": "Bearer invalid"})
+            research = await guest.post(
+                "/api/tavily/v1/research", headers={"Authorization": f"Bearer {token}"}, json={"input": "x"}
+            )
+            poll = await guest.get("/api/tavily/v1/research/job-1", headers={"Authorization": f"Bearer {token}"})
+            extract = await guest.post("/api/tavily/v1/extract", headers={"Authorization": f"Bearer {token}"})
+            map_response = await guest.post("/api/tavily/v1/map", headers={"Authorization": f"Bearer {token}"})
+            search = await guest.post(
+                "/api/tavily/v1/search", headers={"Authorization": f"Bearer {token}"}, json={"query": "question"}
+            )
+            crawl = await guest.post(
+                "/api/tavily/v1/crawl",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"url": "https://example.org"},
+            )
+
+    assert denied.status_code == 401
+    assert research.status_code == 404
+    assert poll.status_code == 404
+    assert extract.status_code == 404
+    assert map_response.status_code == 404
+    assert search.json()["results"][0]["content"] == "found"
+    assert crawl.json()["results"][0]["raw_content"] == "page"
+    assert [str(request.url) for request in requests] == [
+        "https://api.tavily.com/search",
+        "https://api.tavily.com/search",
+        "https://api.tavily.com/crawl",
+    ]
+    assert [request.headers["authorization"] for request in requests] == [
+        "Bearer upstream-first",
+        "Bearer upstream-second",
+        "Bearer upstream-second",
+    ]
+    assert requests[0].content == requests[1].content == b'{"query":"question"}'
+    assert requests[2].content == b'{"url":"https://example.org"}'
+    assert first.exhausted_until is not None
+    assert ring.cursor == second.id
+    assert availability.await_args_list[0].args == (agent, sha256(token.encode()).digest())
+
+
+@pytest.mark.asyncio
+async def test_client_is_replaced_when_the_loop_changes_or_it_is_closed(shared_wire: SharedWire) -> None:
+    first = tavily_client()
+    assert tavily_client() is first
+
+    def on_another_loop() -> httpx.AsyncClient:
+        async def build() -> httpx.AsyncClient:
+            return tavily_client()
+
+        return asyncio.run(build())
+
+    second = await asyncio.to_thread(on_another_loop)
+    assert second is not first
+    third = tavily_client()
+    assert third is not second
+    assert tavily_client() is third
+
+    await third.aclose()
+    fourth = tavily_client()
+    assert fourth is not third
+    assert len(shared_wire.built) == 4
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_the_client_and_is_idempotent(shared_wire: SharedWire) -> None:
+    _ = shared_wire
+    client = tavily_client()
+
+    await shutdown_tavily_client()
+    await shutdown_tavily_client()
+
+    assert client.is_closed
+    assert tavily_client() is not client
+
+
+@pytest.mark.asyncio
+async def test_set_cookie_is_never_replayed_on_a_later_call_retry_or_redirect(
+    ring: MemoryKeyDao, shared_wire: SharedWire
+) -> None:
+    _ = ring
+    _ = await add_key(label="a", api_key="key-a")
+    cookie = {"set-cookie": "sid=agent-a; Path=/; Domain=api.tavily.com"}
+    shared_wire.responses = [
+        FakeResponse(302, headers={"location": "https://api.tavily.com/search/moved", **cookie}),
+        FakeResponse(500, "boom", headers=cookie),
+        FakeResponse(200, "{}", headers=cookie),
+        FakeResponse(200, "{}"),
+    ]
+
+    for _ in range(2):
+        status, _body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+        assert status == 200
+
+    assert len(shared_wire.requests) == 4
+    assert [request.headers.get("cookie") for request in shared_wire.requests] == [None] * 4
+    assert list(tavily_client().cookies.jar) == []
+
+
+@pytest.mark.asyncio
+async def test_each_hop_carries_a_timeout_that_shrinks_with_the_deadline(
+    ring: MemoryKeyDao, clock: FakeClock, shared_wire: SharedWire
+) -> None:
+    _ = ring
+    _ = await add_key(label="a", api_key="key-a")
+    shared_wire.responses = [
+        FakeResponse(
+            302, headers={"location": "https://api.tavily.com/search/moved"}, on_send=lambda: clock.advance(10)
+        ),
+        FakeResponse(200, "{}", on_send=lambda: clock.advance(1)),
+    ]
+
+    status, _body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+
+    assert status == 200
+    timeouts = [request.extensions["timeout"] for request in shared_wire.requests]
+    assert [(t["connect"], t["read"], t["write"], t["pool"]) for t in timeouts] == [(30.0,) * 4, (20.0,) * 4]
+
+
+@pytest.mark.asyncio
+async def test_phase_timeout_caps_the_per_attempt_budget(
+    ring: MemoryKeyDao, limits: SimpleNamespace, shared_wire: SharedWire
+) -> None:
+    _ = ring
+    limits.TAVILY_PROXY_DEADLINE_SECONDS = 600.0
+    _ = await add_key(label="a", api_key="key-a")
+    shared_wire.responses = [FakeResponse(200, "{}")]
+
+    _ = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+
+    assert shared_wire.requests[0].extensions["timeout"]["pool"] == client_mod._PHASE_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_pool_timeout_comes_back_as_the_proxys_502(ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = ring
+    _ = await add_key(label="a", api_key="key-a")
+
+    class Saturated(FakeClient):
+        @override
+        def _respond(self, request: httpx.Request) -> httpx.Response:
+            raise httpx.PoolTimeout("no free connection", request=request)
+
+    monkeypatch.setattr(client_mod, "tavily_client", lambda: Saturated([], []))
+    with pytest.raises(TavilyProxyError) as exc:
+        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+    assert exc.value.status_code == 502

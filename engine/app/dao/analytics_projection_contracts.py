@@ -52,7 +52,7 @@ class SearchAnalyticsExportStatusProjection(TypedDict):
     last_exported_at: object
 
 
-class PlazaContributorProjection(TypedDict):
+class ClawbookContributorProjection(TypedDict):
     """Only the post count is normalized, not the SQL-selected author labels."""
 
     name: object
@@ -60,8 +60,8 @@ class PlazaContributorProjection(TypedDict):
     posts: int
 
 
-class PlazaStatsProjection(TypedDict):
+class ClawbookStatsProjection(TypedDict):
     total_posts: int
     total_comments: int
     today_posts: int
-    top_contributors: list[PlazaContributorProjection]
+    top_contributors: list[ClawbookContributorProjection]

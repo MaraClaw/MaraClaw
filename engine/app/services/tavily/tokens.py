@@ -1,4 +1,4 @@
-"""Agent-scoped tokens for the Linkup proxy (not real Linkup secrets)."""
+"""Agent-scoped tokens for the Tavily proxy (not real Tavily secrets)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from hashlib import sha256
 from uuid import UUID
 
 from app.config import get_settings
-from app.dao.linkup_proxy_dao import save_proxy_token
+from app.dao.tavily_proxy_dao import save_proxy_token
 
 
 def _proxy_token(agent_id: UUID, *, secret: str | None = None) -> str:
     key = (secret if secret is not None else get_settings().SECRET_KEY).encode("utf-8")
-    digest = hmac.new(key, f"linkup-proxy:{agent_id}".encode(), sha256).hexdigest()
+    digest = hmac.new(key, f"tavily-proxy:{agent_id}".encode(), sha256).hexdigest()
     return f"{agent_id}.{digest}"
 
 

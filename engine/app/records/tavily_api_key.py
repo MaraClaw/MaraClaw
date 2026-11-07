@@ -1,4 +1,4 @@
-"""Linkup API key ring records."""
+"""Tavily API key ring records."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from app.core.json_types import datetime_from_row, int_from_row, str_from_row, u
 
 
 @dataclass(slots=True)
-class LinkupApiKeyRecord:
-    """One stored Linkup API key. Ciphertext is for DAO/service use only."""
+class TavilyApiKeyRecord:
+    """One stored Tavily API key. Ciphertext is for DAO/service use only."""
 
     id: UUID
     label: str
@@ -28,7 +28,7 @@ class LinkupApiKeyRecord:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> LinkupApiKeyRecord:
+    def from_row(cls, row: Mapping[str, object]) -> TavilyApiKeyRecord:
         last_error = row.get("last_error")
         return cls(
             id=uuid_from_row(row["id"]),
@@ -43,23 +43,4 @@ class LinkupApiKeyRecord:
             last_used_at=datetime_from_row(row.get("last_used_at")),
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
-        )
-
-
-@dataclass(slots=True)
-class LinkupAsyncJobRecord:
-    """Bind an async Linkup research/extract job to the key that created it."""
-
-    upstream_job_id: str
-    key_id: UUID
-    kind: str
-    created_at: datetime | None = None
-
-    @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> LinkupAsyncJobRecord:
-        return cls(
-            upstream_job_id=str_from_row(row["upstream_job_id"]),
-            key_id=uuid_from_row(row["key_id"]),
-            kind=str_from_row(row["kind"]),
-            created_at=datetime_from_row(row.get("created_at")),
         )

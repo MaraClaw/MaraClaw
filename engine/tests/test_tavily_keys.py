@@ -1,4 +1,4 @@
-"""Add/remove and ring picker for stored Linkup API keys."""
+"""Add/remove and ring picker for stored Tavily API keys."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.security import encrypt_data
-from app.records.linkup_api_key import LinkupApiKeyRecord
-from app.services.linkup.errors import is_quota_error, is_transient_error
-from app.services.linkup.keys import (
-    DuplicateLinkupKeyError,
-    LinkupKeyNotFoundError,
+from app.records.tavily_api_key import TavilyApiKeyRecord
+from app.services.tavily.errors import is_quota_error, is_transient_error
+from app.services.tavily.keys import (
+    DuplicateTavilyKeyError,
+    TavilyKeyNotFoundError,
     add_key,
     advance_cursor,
     current_key,
@@ -22,19 +22,19 @@ from app.services.linkup.keys import (
     list_keys,
     public_key_view,
     remove_key,
-    should_use_linkup_proxy,
+    should_use_tavily_proxy,
 )
 
 
 class MemoryKeyDao:
     def __init__(self) -> None:
-        self.rows: dict[UUID, LinkupApiKeyRecord] = {}
+        self.rows: dict[UUID, TavilyApiKeyRecord] = {}
         self.cursor: UUID | None = None
 
-    async def get(self, key_id: UUID) -> LinkupApiKeyRecord | None:
+    async def get(self, key_id: UUID) -> TavilyApiKeyRecord | None:
         return self.rows.get(key_id)
 
-    async def get_by_fingerprint(self, fingerprint: str) -> LinkupApiKeyRecord | None:
+    async def get_by_fingerprint(self, fingerprint: str) -> TavilyApiKeyRecord | None:
         for row in self.rows.values():
             if row.key_fingerprint == fingerprint:
                 return row
@@ -48,10 +48,10 @@ class MemoryKeyDao:
             return None
         return max(row.position for row in self.rows.values())
 
-    async def list_ordered(self) -> list[LinkupApiKeyRecord]:
+    async def list_ordered(self) -> list[TavilyApiKeyRecord]:
         return sorted(self.rows.values(), key=lambda row: (row.position, str(row.id)))
 
-    async def list_active_ordered(self, *, now: datetime) -> list[LinkupApiKeyRecord]:
+    async def list_active_ordered(self, *, now: datetime) -> list[TavilyApiKeyRecord]:
         active = [
             row
             for row in self.rows.values()
@@ -59,8 +59,8 @@ class MemoryKeyDao:
         ]
         return sorted(active, key=lambda row: (row.position, str(row.id)))
 
-    async def create(self, *, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
-        record = LinkupApiKeyRecord(
+    async def create(self, *, obj_in: dict[str, Any]) -> TavilyApiKeyRecord:
+        record = TavilyApiKeyRecord(
             id=uuid4(),
             label=str(obj_in["label"]),
             key_ciphertext=str(obj_in["key_ciphertext"]),
@@ -71,12 +71,12 @@ class MemoryKeyDao:
         self.rows[record.id] = record
         return record
 
-    async def update(self, *, db_obj: LinkupApiKeyRecord, obj_in: dict[str, Any]) -> LinkupApiKeyRecord:
+    async def update(self, *, db_obj: TavilyApiKeyRecord, obj_in: dict[str, Any]) -> TavilyApiKeyRecord:
         for key, value in obj_in.items():
             setattr(db_obj, key, value)
         return db_obj
 
-    async def delete(self, *, record_id: UUID) -> LinkupApiKeyRecord | None:
+    async def delete(self, *, record_id: UUID) -> TavilyApiKeyRecord | None:
         return self.rows.pop(record_id, None)
 
     async def get_cursor_key_id(self) -> UUID | None:
@@ -88,11 +88,11 @@ class MemoryKeyDao:
 
 @pytest.fixture
 def key_dao(monkeypatch: pytest.MonkeyPatch) -> MemoryKeyDao:
-    from app.services.linkup import keys as keys_mod
+    from app.services.tavily import keys as keys_mod
 
     store = MemoryKeyDao()
-    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", store)
-    monkeypatch.setattr(keys_mod, "get_settings", lambda: SimpleNamespace(SECRET_KEY="test-secret", LINKUP_API_KEY=""))
+    monkeypatch.setattr(keys_mod, "tavily_api_key_dao", store)
+    monkeypatch.setattr(keys_mod, "get_settings", lambda: SimpleNamespace(SECRET_KEY="test-secret", TAVILY_API_KEY=""))
     return store
 
 
@@ -129,13 +129,13 @@ async def test_add_rejects_blank_label(key_dao: MemoryKeyDao) -> None:
 @pytest.mark.asyncio
 async def test_add_duplicate_fingerprint_raises(key_dao: MemoryKeyDao) -> None:
     _ = await add_key(label="a", api_key="same-secret")
-    with pytest.raises(DuplicateLinkupKeyError):
+    with pytest.raises(DuplicateTavilyKeyError):
         _ = await add_key(label="b", api_key="same-secret")
 
 
 @pytest.mark.asyncio
 async def test_remove_missing_key_raises(key_dao: MemoryKeyDao) -> None:
-    with pytest.raises(LinkupKeyNotFoundError):
+    with pytest.raises(TavilyKeyNotFoundError):
         await remove_key(uuid4())
 
 
@@ -180,9 +180,10 @@ async def test_public_view_hides_ciphertext(key_dao: MemoryKeyDao) -> None:
 
 
 def test_quota_classifier_distinguishes_quota_from_transient() -> None:
-    assert is_quota_error(402, "") is True
-    assert is_quota_error(429, "insufficient quota for this plan") is True
-    assert is_quota_error(429, "too many requests") is False
+    assert is_quota_error(432) is True
+    assert is_quota_error(433) is True
+    assert is_quota_error(429) is False
+    assert is_quota_error(434) is False
     assert is_transient_error(503) is True
     assert is_transient_error(429) is False
 
@@ -191,15 +192,15 @@ def test_quota_classifier_distinguishes_quota_from_transient() -> None:
 async def test_proxy_eligibility_uses_key_ring_when_base_is_derived(
     key_dao: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch, enabled: bool, has_key: bool
 ) -> None:
-    from app.services.linkup import keys as keys_mod
+    from app.services.tavily import keys as keys_mod
 
     settings = keys_mod.get_settings()
-    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", enabled, raising=False)
-    monkeypatch.setattr(settings, "LINKUP_PROXY_BASE_URL", "", raising=False)
+    monkeypatch.setattr(settings, "TAVILY_PROXY_ENABLED", enabled, raising=False)
+    monkeypatch.setattr(settings, "TAVILY_PROXY_BASE_URL", "", raising=False)
     monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
     if has_key:
         await add_key(label="stored", api_key="ring-only-key")
 
-    eligible = await should_use_linkup_proxy()
+    eligible = await should_use_tavily_proxy()
 
     assert eligible is (enabled and has_key)

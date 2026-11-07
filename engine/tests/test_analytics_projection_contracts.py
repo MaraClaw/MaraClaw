@@ -9,14 +9,14 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypeForm
 
 from app.dao.analytics_projection_contracts import (
-    PlazaStatsProjection,
+    ClawbookStatsProjection,
     SearchAnalyticsExportStatusProjection,
     SearchAnalyticsOrgRankingProjection,
     SearchAnalyticsSummaryProjection,
     SearchAnalyticsTimeBucketProjection,
     SearchAnalyticsTrendingQueryProjection,
 )
-from app.dao.plaza_dao import plaza_post_dao
+from app.dao.clawbook_dao import clawbook_post_dao
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.db import pool as pool_module, session as session_module
 from app.db.connection import Params, Row
@@ -281,7 +281,7 @@ async def test_trending_keeps_normalization_and_scope_order(
 
 
 @pytest.mark.parametrize("tenant_id", [None, UUID(int=13), "tenant-'quoted"])
-async def test_plaza_stats_keep_raw_labels_and_normalize_counts(
+async def test_clawbook_stats_keep_raw_labels_and_normalize_counts(
     raw: _RawConnection, tenant_id: UUID | str | None
 ) -> None:
     label = {"raw": None}
@@ -295,9 +295,9 @@ async def test_plaza_stats_keep_raw_labels_and_normalize_counts(
         ],
     ]
 
-    result = await plaza_post_dao.get_stats(tenant_id)
+    result = await clawbook_post_dao.get_stats(tenant_id)
 
-    assert_type(result, PlazaStatsProjection)
+    assert_type(result, ClawbookStatsProjection)
     assert result == {
         "total_posts": 3,
         "total_comments": 0,
@@ -308,7 +308,7 @@ async def test_plaza_stats_keep_raw_labels_and_normalize_counts(
         ],
     }
     assert result["top_contributors"][0]["name"] is label
-    adapter = TypeAdapter(PlazaStatsProjection)
+    adapter = TypeAdapter(ClawbookStatsProjection)
     assert adapter.validate_json(adapter.dump_json(result), strict=True) == result
     assert [params for _query, params in raw.executed] == (
         [{}] if tenant_id is None else [{"tenant_id": tenant_id}]
@@ -317,10 +317,10 @@ async def test_plaza_stats_keep_raw_labels_and_normalize_counts(
     assert raw.executed[-1][0].endswith("GROUP BY author_name, author_type ORDER BY post_count DESC LIMIT 5")
 
 
-async def test_plaza_stats_keep_empty_defaults(raw: _RawConnection) -> None:
+async def test_clawbook_stats_keep_empty_defaults(raw: _RawConnection) -> None:
     raw.responses = [[], [], [], []]
 
-    result = await plaza_post_dao.get_stats()
+    result = await clawbook_post_dao.get_stats()
 
     assert result == {"total_posts": 0, "total_comments": 0, "today_posts": 0, "top_contributors": []}
 
@@ -337,7 +337,7 @@ async def test_plaza_stats_keep_empty_defaults(raw: _RawConnection) -> None:
         (SearchAnalyticsTrendingQueryProjection, {"query_hash": "hash", "hits": 1}),
         (SearchAnalyticsExportStatusProjection, {"pending": 0, "exporting": 0, "exported": 0, "skipped": 0}),
         (
-            PlazaStatsProjection,
+            ClawbookStatsProjection,
             {
                 "total_posts": 0,
                 "total_comments": 0,

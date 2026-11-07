@@ -1,7 +1,7 @@
-import type { LinkupKey } from './linkup-keys-api.ts'
+import type { TavilyKey } from './tavily-keys-api.ts'
 
-export function linkupKeyPresentation(
-  key: Pick<LinkupKey, 'status' | 'exhausted_until'>,
+export function tavilyKeyPresentation(
+  key: Pick<TavilyKey, 'status' | 'exhausted_until'>,
   now: number,
 ) {
   const coolingDown = key.status === 'active' && key.exhausted_until !== null &&

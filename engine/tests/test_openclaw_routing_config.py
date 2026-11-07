@@ -70,7 +70,7 @@ def test_config_defaults_to_primary_and_registers_all_models() -> None:
 def test_experiment_rewrites_and_unset_respects_guest_ownership(
     manager: AgentManager, monkeypatch: pytest.MonkeyPatch, setting: str, value: str | int, path: str
 ) -> None:
-    monkeypatch.setattr(manager_module.settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(manager_module.settings, "TAVILY_PROXY_ENABLED", False)
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
     primary, secondary = model("opus"), model("gpt-5.4", "openai")
     config_path = manager.write_guest_config(agent, primary=primary, secondary=secondary)
@@ -135,7 +135,7 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
     settings = manager_module.settings
     for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
         monkeypatch.setattr(settings, name, "")
-    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", False)
+    monkeypatch.setattr(settings, "TAVILY_PROXY_ENABLED", False)
     monkeypatch.setattr(settings, "OPENCLAW_ENGINE_BASE_URL", "http://maraclaw-engine:8000")
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
     actual = AgentManager.__new__(AgentManager)._generate_openclaw_config(agent, None, gateway_token="test-token")
@@ -159,7 +159,10 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
         "env": {"vars": {"MARACLAW_API_BASE": "http://maraclaw-engine:8000"}},
         "skills": {
             "load": {"extraDirs": ["/home/node/.openclaw/skills"]},
-            "entries": {"linkup-search": {"enabled": False, "env": {}}, "linkup-fetch": {"enabled": False, "env": {}}},
+            "entries": {
+                "tavily-search": {"enabled": False, "env": {}},
+                "tavily-crawl": {"enabled": False, "env": {}},
+            },
         },
         "tools": {"deny": ["web_search"], "web": {"search": {"enabled": False}}},
     }

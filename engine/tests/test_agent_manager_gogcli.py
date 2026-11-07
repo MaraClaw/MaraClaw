@@ -12,7 +12,7 @@ from app.services.agent_manager import AgentManager
 
 @pytest.fixture(autouse=True)
 def fake_token_preparation(monkeypatch):
-    monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", AsyncMock())
+    monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", AsyncMock())
 
 
 class _RecordingContainerAPI:

@@ -1,35 +1,35 @@
-"""Capture billed Linkup calls as web_search_events (no live PG/Linkup)."""
+"""Capture billed Tavily calls as web_search_events (no live PG/Tavily)."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from tests.test_linkup_proxy_client import (
+from tests.test_tavily_proxy_client import (
     FakeClock,
     FakeResponse,
-    MemoryJobDao,
     MemoryKeyDao,
     proxy_settings,
     use_upstream,
 )
 
+from app.dao.tavily_proxy_dao import TavilyAgentAvailability
 from app.records.web_search_event import WebSearchEventRecord
-from app.services.linkup.analytics import (
+from app.services.tavily.analytics import (
     cheap_result_count,
     hash_text,
     host_only,
     is_billed_call,
     normalize_text,
-    record_linkup_call,
+    record_tavily_call,
     status_class_for,
 )
-from app.services.linkup.export import event_to_export_row, object_key
+from app.services.tavily.export import event_to_export_row, object_key
 
 
 class MemoryEventDao:
@@ -76,8 +76,10 @@ def _settings(**overrides: object) -> SimpleNamespace:
 
 def test_billed_vs_poll() -> None:
     assert is_billed_call("POST", "search") is True
-    assert is_billed_call("POST", "fetch") is True
-    assert is_billed_call("POST", "research") is True
+    assert is_billed_call("POST", "crawl") is True
+    assert is_billed_call("POST", "extract") is False
+    assert is_billed_call("POST", "fetch") is False
+    assert is_billed_call("POST", "research") is False
     assert is_billed_call("GET", "research/job-1") is False
     assert is_billed_call("GET", "search") is False
 
@@ -89,10 +91,12 @@ def test_normalize_and_host() -> None:
 
 
 def test_status_class_and_result_count() -> None:
-    assert status_class_for(200, "{}") == "ok"
-    assert status_class_for(429, '{"error":"insufficient quota"}') == "quota"
-    assert status_class_for(400, "bad") == "client_error"
-    assert status_class_for(502, "nope") == "upstream_error"
+    assert status_class_for(200) == "ok"
+    assert status_class_for(432) == "quota"
+    assert status_class_for(433) == "quota"
+    assert status_class_for(429) == "client_error"
+    assert status_class_for(400) == "client_error"
+    assert status_class_for(502) == "upstream_error"
     assert cheap_result_count('{"results":[1,2,3]}') == 3
     assert cheap_result_count("not-json") is None
 
@@ -100,7 +104,7 @@ def test_status_class_and_result_count() -> None:
 def test_object_key_never_uses_agents_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import UTC, datetime
 
-    from app.services.linkup import export as export_mod
+    from app.services.tavily import export as export_mod
 
     monkeypatch.setattr(
         export_mod,
@@ -117,7 +121,7 @@ def test_object_key_never_uses_agents_prefix(monkeypatch: pytest.MonkeyPatch) ->
 async def test_record_search_omits_raw_and_sets_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     tenant = uuid4()
@@ -126,11 +130,11 @@ async def test_record_search_omits_raw_and_sets_tenant(
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(tenant))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
 
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=agent,
         method="POST",
         path="search",
-        content=b'{"q":"Who is the CEO of Stripe?"}',
+        content=b'{"query":"Who is the CEO of Stripe?"}',
         status=200,
         body='{"results":[{"url":"https://stripe.com"}]}',
         latency_ms=12,
@@ -153,41 +157,60 @@ async def test_record_search_omits_raw_and_sets_tenant(
 
 
 @pytest.mark.asyncio
-async def test_record_fetch_stores_host_not_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+async def test_record_crawl_normalizes_instructions_and_stores_only_url_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
 
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
-        path="fetch",
-        content=b'{"url":"https://internal.example.com/secret?token=abc"}',
+        path="crawl",
+        content=(
+            b'{"url":"https://internal.example.com/secret?token=abc",'
+            b'"instructions":"  Find  DOCS ","extract_depth":"advanced","format":"text"}'
+        ),
+        status=200,
+        body='{"base_url":"https://internal.example.com","results":[{"url":"https://internal.example.com/secret"}],"response_time":1,"request_id":"r-1"}',
+        latency_ms=8,
+        key_id=None,
+    )
+    await record_tavily_call(
+        agent_id=uuid4(),
+        method="POST",
+        path="crawl",
+        content=b'{"url":"https://single.example.net/p?token=abc"}',
         status=200,
         body="{}",
         latency_ms=8,
         key_id=None,
     )
-    row = store.rows[0]
+    row, single = store.rows
+    assert row.kind == "crawl"
     assert row.primary_domain == "internal.example.com"
-    assert row.query_normalized == "internal.example.com"
-    assert "token=abc" not in row.query_normalized
-    assert "secret" not in row.query_normalized
+    assert row.query_normalized == "find docs"
+    assert row.query_hash == hash_text("find docs", secret="analytics-secret")
+    assert row.query_char_len == len("  Find  DOCS ")
+    assert (row.depth, row.output_type, row.result_count) == ("advanced", "text", 1)
+    assert (single.primary_domain, single.query_normalized) == ("single.example.net", "single.example.net")
+    for event in store.rows:
+        assert "token=abc" not in event.query_normalized
+        assert "secret" not in event.query_normalized
 
 
 @pytest.mark.asyncio
 async def test_record_skips_polls_and_disabled_capture(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
 
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="GET",
         path="research/job-1",
@@ -200,11 +223,11 @@ async def test_record_skips_polls_and_disabled_capture(monkeypatch: pytest.Monke
     assert store.rows == []
 
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings(WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED=False))
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
         path="search",
-        content=b'{"q":"x"}',
+        content=b'{"query":"x"}',
         status=200,
         body="{}",
         latency_ms=1,
@@ -215,7 +238,7 @@ async def test_record_skips_polls_and_disabled_capture(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_record_insert_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     class BoomDao:
         async def create(self, *, obj_in: dict[str, Any]) -> None:
@@ -225,11 +248,11 @@ async def test_record_insert_failure_is_swallowed(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", BoomDao())
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
         path="search",
-        content=b'{"q":"x"}',
+        content=b'{"query":"x"}',
         status=200,
         body="{}",
         latency_ms=1,
@@ -239,7 +262,7 @@ async def test_record_insert_failure_is_swallowed(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_include_raw_writes_side_table_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
@@ -253,7 +276,7 @@ async def test_include_raw_writes_side_table_only(monkeypatch: pytest.MonkeyPatc
             ANALYTICS_S3_BUCKET="lake",
         ),
     )
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
         path="search",
@@ -271,7 +294,7 @@ async def test_include_raw_writes_side_table_only(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_include_raw_without_export_does_not_stage(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
@@ -281,7 +304,7 @@ async def test_include_raw_without_export_does_not_stage(monkeypatch: pytest.Mon
         "get_settings",
         lambda: _settings(WEB_SEARCH_ANALYTICS_INCLUDE_RAW=True, WEB_SEARCH_ANALYTICS_EXPORT_ENABLED=False),
     )
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
         path="search",
@@ -309,22 +332,19 @@ def test_float_from_row_accepts_decimal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.test_linkup_proxy_client import FakeClient, FakeResponse, MemoryJobDao, MemoryKeyDao, proxy_settings
+async def test_proxy_post_records_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_tavily_proxy_client import FakeClient, FakeResponse, MemoryKeyDao, proxy_settings
 
-    from app.services.linkup import analytics as analytics_mod, client as client_mod, jobs as jobs_mod, keys as keys_mod
-    from app.services.linkup.client import proxy_linkup
-    from app.services.linkup.keys import add_key
+    from app.services.tavily import analytics as analytics_mod, client as client_mod, keys as keys_mod
+    from app.services.tavily.client import proxy_tavily
+    from app.services.tavily.keys import add_key
 
     keys = MemoryKeyDao()
-    jobs = MemoryJobDao()
     events = MemoryEventDao()
     agent = uuid4()
     settings = proxy_settings()
-    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", keys)
+    monkeypatch.setattr(keys_mod, "tavily_api_key_dao", keys)
     monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
-    monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", keys)
-    monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", jobs)
     monkeypatch.setattr(client_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", events)
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(uuid4()))
@@ -334,16 +354,14 @@ async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.M
     calls: list[tuple[str, str, str]] = []
     responses = [
         FakeResponse(200, '{"results":[1]}'),
-        FakeResponse(200, '{"id":"job-1","status":"pending"}'),
-        FakeResponse(200, '{"id":"job-1","status":"completed"}'),
     ]
-    monkeypatch.setattr(client_mod, "_httpx_client", lambda *a, **k: FakeClient(responses, calls))
+    monkeypatch.setattr(client_mod, "tavily_client", lambda: FakeClient(responses, calls))
 
-    status, _body, _h = await proxy_linkup(
+    status, _body, _h = await proxy_tavily(
         method="POST",
         path="search",
         headers={},
-        content=b'{"q":"Stripe CEO"}',
+        content=b'{"query":"Stripe CEO"}',
         agent_id=agent,
     )
     assert status == 200
@@ -351,40 +369,20 @@ async def test_proxy_post_records_agent_and_skips_get_poll(monkeypatch: pytest.M
     assert events.rows[0].agent_id == agent
     assert events.rows[0].kind == "search"
 
-    status, _body, _h = await proxy_linkup(
-        method="POST",
-        path="research",
-        headers={},
-        content=b'{"q":"deep"}',
-        agent_id=agent,
-    )
-    assert status == 200
-    assert len(events.rows) == 2
-
-    status, _body, _h = await proxy_linkup(
-        method="GET",
-        path="research/job-1",
-        headers={},
-        content=None,
-        agent_id=agent,
-    )
-    assert status == 200
-    assert len(events.rows) == 2
-
 
 @pytest.mark.asyncio
 async def test_quota_rotated_marks_error_class(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import analytics as analytics_mod
+    from app.services.tavily import analytics as analytics_mod
 
     store = MemoryEventDao()
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
     monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=uuid4(),
         method="POST",
         path="search",
-        content=b'{"q":"x"}',
+        content=b'{"query":"x"}',
         status=200,
         body="{}",
         latency_ms=3,
@@ -401,7 +399,7 @@ async def test_proxy_v1_rejects_bad_token() -> None:
 
     from fastapi import HTTPException
 
-    from app.api.linkup_proxy import proxy_v1
+    from app.api.tavily_proxy import proxy_v1
 
     request = MagicMock()
     request.body = AsyncMock(return_value=b"{}")
@@ -412,29 +410,32 @@ async def test_proxy_v1_rejects_bad_token() -> None:
 
 @pytest.fixture
 def bounded_proxy(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    from app.api import linkup_proxy
-    from app.services.linkup import analytics as analytics_mod, client as client_mod, jobs as jobs_mod, keys as keys_mod
+    from app.api import tavily_proxy
+    from app.services.tavily import analytics as analytics_mod, client as client_mod, keys as keys_mod
 
     keys = MemoryKeyDao()
     events = MemoryEventDao()
     clock = FakeClock()
-    settings = proxy_settings(LINKUP_PROXY_MAX_RESPONSE_BYTES=10)
+    settings = proxy_settings(TAVILY_PROXY_MAX_RESPONSE_BYTES=10)
     agent = uuid4()
-    monkeypatch.setattr(keys_mod, "linkup_api_key_dao", keys)
+    tenant = uuid4()
+    monkeypatch.setattr(keys_mod, "tavily_api_key_dao", keys)
     monkeypatch.setattr(keys_mod, "get_settings", lambda: settings)
-    monkeypatch.setattr(jobs_mod, "linkup_api_key_dao", keys)
-    monkeypatch.setattr(jobs_mod, "linkup_async_job_dao", MemoryJobDao())
     monkeypatch.setattr(client_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(client_mod, "_monotonic", clock)
     monkeypatch.setattr(analytics_mod, "web_search_event_dao", events)
-    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(uuid4()))
+    monkeypatch.setattr(analytics_mod, "agent_dao", MemoryAgentDao(None))
     monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
-    monkeypatch.setattr(linkup_proxy, "get_settings", lambda: settings)
-    monkeypatch.setattr(linkup_proxy, "parse_proxy_token", lambda _token: agent)
-    monkeypatch.setattr(linkup_proxy, "agent_available", AsyncMock(return_value=True))
+    monkeypatch.setattr(tavily_proxy, "get_settings", lambda: settings)
+    monkeypatch.setattr(tavily_proxy, "parse_proxy_token", lambda _token: agent)
+    monkeypatch.setattr(
+        tavily_proxy, "agent_available", AsyncMock(return_value=TavilyAgentAvailability(tenant_id=tenant))
+    )
     app = FastAPI()
-    app.include_router(linkup_proxy.router)
-    return SimpleNamespace(keys=keys, events=events, clock=clock, settings=settings, app=app, agent=agent)
+    app.include_router(tavily_proxy.router)
+    return SimpleNamespace(
+        keys=keys, events=events, clock=clock, settings=settings, app=app, agent=agent, tenant=tenant
+    )
 
 
 @pytest.mark.asyncio
@@ -456,8 +457,8 @@ async def test_bounded_post_records_one_event_at_http_boundary(
     response_bytes: int,
     attempts: int,
 ) -> None:
-    from app.services.linkup import client as client_mod
-    from app.services.linkup.keys import add_key
+    from app.services.tavily import client as client_mod
+    from app.services.tavily.keys import add_key
 
     first = await add_key(label="a", api_key="key-a")
     _ = await add_key(label="b", api_key="key-b")
@@ -467,7 +468,7 @@ async def test_bounded_post_records_one_event_at_http_boundary(
     if failure == "deadline":
         responses = [FakeResponse(500, "boom", on_send=lambda: bounded_proxy.clock.advance(31))]
     if failure == "rotation":
-        responses = [FakeResponse(402, "quota")]
+        responses = [FakeResponse(432, "quota")]
         advance = client_mod.advance_cursor
 
         async def expire_during_rotation(key_id: UUID):
@@ -481,7 +482,7 @@ async def test_bounded_post_records_one_event_at_http_boundary(
         transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/linkup/v1/search", content=b'{"q":"x"}', headers={"Authorization": "Bearer agent.digest"}
+            "/api/tavily/v1/search", content=b'{"query":"x"}', headers={"Authorization": "Bearer agent.digest"}
         )
 
     assert response.status_code == status
@@ -491,6 +492,7 @@ async def test_bounded_post_records_one_event_at_http_boundary(
     assert (row.http_status, row.error_class, row.response_bytes) == (status, error_class, response_bytes)
     assert row.key_id == first.id
     assert row.agent_id == bounded_proxy.agent
+    assert row.tenant_id == bounded_proxy.tenant
     assert len(row.error_class) <= 40
 
 
@@ -499,9 +501,9 @@ async def test_bounded_post_records_one_event_at_http_boundary(
 async def test_oversize_request_has_no_key_lookup_upstream_or_event(
     bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, declared_length: bool
 ) -> None:
-    from tests.test_linkup_proxy_client import _chunked
+    from tests.test_tavily_proxy_client import _chunked
 
-    from app.services.linkup import client as client_mod
+    from app.services.tavily import client as client_mod
 
     lookup = AsyncMock()
     monkeypatch.setattr(client_mod, "ensure_env_key_seeded", lookup)
@@ -514,7 +516,7 @@ async def test_oversize_request_has_no_key_lookup_upstream_or_event(
         transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/linkup/v1/search", content=_chunked([512, 513, 1024], consumed), headers=headers
+            "/api/tavily/v1/search", content=_chunked([512, 513, 1024], consumed), headers=headers
         )
 
     assert response.status_code == 413
@@ -525,40 +527,13 @@ async def test_oversize_request_has_no_key_lookup_upstream_or_event(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["ceiling", "deadline"])
-async def test_failed_bound_poll_has_no_event(
-    bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    from app.services.linkup.jobs import bind_job
-    from app.services.linkup.keys import add_key
-
-    key = await add_key(label="a", api_key="key-a")
-    await bind_job(upstream_job_id="job-1", key_id=key.id, kind="research")
-    upstream = FakeResponse(200, "x" * 11)
-    status = 502
-    if failure == "deadline":
-        upstream = FakeResponse(200, "ok", on_send=lambda: bounded_proxy.clock.advance(31))
-        status = 504
-    calls = use_upstream(monkeypatch, [upstream])
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
-    ) as client:
-        response = await client.get("/api/linkup/v1/research/job-1", headers={"Authorization": "Bearer agent.digest"})
-
-    assert response.status_code == status
-    assert len(calls) == 1
-    assert upstream.stream.closed
-    assert bounded_proxy.events.rows == []
-
-
-@pytest.mark.asyncio
 async def test_analytics_write_is_outside_deadline(
     bounded_proxy: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import asyncio
 
-    from app.services.linkup import client as client_mod
-    from app.services.linkup.keys import add_key
+    from app.services.tavily import client as client_mod
+    from app.services.tavily.keys import add_key
 
     _ = await add_key(label="a", api_key="key-a")
     _ = use_upstream(monkeypatch, [FakeResponse(200, "{}")])
@@ -584,9 +559,56 @@ async def test_analytics_write_is_outside_deadline(
         transport=httpx.ASGITransport(app=bounded_proxy.app), base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/linkup/v1/search", content=b'{"q":"x"}', headers={"Authorization": "Bearer agent.digest"}
+            "/api/tavily/v1/search", content=b'{"query":"x"}', headers={"Authorization": "Bearer agent.digest"}
         )
 
     assert response.status_code == 200
     assert len(bounded_proxy.events.rows) == 1
     assert bounded_proxy.events.rows[0].error_class is None
+
+
+class CountingAgentDao(MemoryAgentDao):
+    def __init__(self, tenant_id: UUID | None) -> None:
+        super().__init__(tenant_id)
+        self.lookups = 0
+
+    @override
+    async def get(self, agent_id: UUID):
+        self.lookups += 1
+        return await super().get(agent_id)
+
+
+SUPPLIED_TENANT = uuid4()
+LOOKED_UP_TENANT = uuid4()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("supplied", "looked_up", "lookups"),
+    [(SUPPLIED_TENANT, LOOKED_UP_TENANT, 0), (None, LOOKED_UP_TENANT, 1), (None, None, 1)],
+)
+async def test_record_attributes_the_supplied_tenant_before_looking_up_the_agent(
+    monkeypatch: pytest.MonkeyPatch, supplied: UUID | None, looked_up: UUID | None, lookups: int
+) -> None:
+    from app.services.tavily import analytics as analytics_mod
+
+    store = MemoryEventDao()
+    agents = CountingAgentDao(looked_up)
+    monkeypatch.setattr(analytics_mod, "web_search_event_dao", store)
+    monkeypatch.setattr(analytics_mod, "agent_dao", agents)
+    monkeypatch.setattr(analytics_mod, "get_settings", lambda: _settings())
+
+    await record_tavily_call(
+        agent_id=uuid4(),
+        tenant_id=supplied,
+        method="POST",
+        path="search",
+        content=b'{"query":"x"}',
+        status=200,
+        body="{}",
+        latency_ms=1,
+        key_id=None,
+    )
+
+    assert agents.lookups == lookups
+    assert store.rows[0].tenant_id == (supplied or looked_up)

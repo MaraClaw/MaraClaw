@@ -6,9 +6,9 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.api import linkup_proxy
+from app.api import tavily_proxy
 from app.dao.agent_dao import agent_dao
-from app.services.linkup.tokens import _proxy_token, make_proxy_token
+from app.services.tavily.tokens import _proxy_token, make_proxy_token
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from company_transfer_blocker_fixtures import isolated_transfer_runtime, sealed_transfer, submit_free, transfer_scenario
 from test_company_transfer_retention_postgres import seed_retained_data
@@ -18,10 +18,10 @@ __all__ = ["admission_scenario", "isolated_transfer_runtime", "sealed_transfer",
 
 async def search(token: str):
     app = FastAPI()
-    app.include_router(linkup_proxy.router)
+    app.include_router(tavily_proxy.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy.test") as client:
         return await client.post(
-            "/api/linkup/v1/search", headers={"Authorization": f"Bearer {token}"}, json={"q": "qa"}
+            "/api/tavily/v1/search", headers={"Authorization": f"Bearer {token}"}, json={"query": "qa"}
         )
 
 
@@ -47,7 +47,7 @@ async def test_proxy_checks_current_agent_before_forwarding(
         )
         agent_id = agent.id
     upstream = AsyncMock(return_value=(200, '{"results":[]}', {}))
-    monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
+    monkeypatch.setattr(tavily_proxy, "proxy_tavily", upstream)
     # When a guest presents the token.
     token = _proxy_token(agent_id) if state == "missing" else await make_proxy_token(agent_id)
     response = await search(token)
@@ -55,6 +55,9 @@ async def test_proxy_checks_current_agent_before_forwarding(
     expected = 200 if state in {"active", "future"} else 401
     assert response.status_code == expected, response.text
     assert upstream.await_count == (1 if expected == 200 else 0)
+    if expected == 200:
+        assert upstream.await_args is not None
+        assert upstream.await_args.kwargs["tenant_id"] == scenario.source_id
 
 
 async def test_free_approval_revokes_previously_usable_copied_proxy_token(
@@ -64,7 +67,7 @@ async def test_free_approval_revokes_previously_usable_copied_proxy_token(
     scenario = transfer_scenario
     agent_id = await seed_retained_data(scenario)
     upstream = AsyncMock(return_value=(200, "{}", {}))
-    monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
+    monkeypatch.setattr(tavily_proxy, "proxy_tavily", upstream)
     token = await make_proxy_token(agent_id)
     assert (await search(token)).status_code == 200
     upstream.reset_mock()
@@ -89,7 +92,7 @@ async def test_retention_ledger_seals_proxy_even_if_expiry_flag_is_cleared(
     scenario, agent_id = sealed_transfer
     await scenario.db.execute("UPDATE agents SET is_expired=false, expires_at=NULL WHERE id=%(id)s", {"id": agent_id})
     upstream = AsyncMock(return_value=(200, "{}", {}))
-    monkeypatch.setattr(linkup_proxy, "proxy_linkup", upstream)
+    monkeypatch.setattr(tavily_proxy, "proxy_tavily", upstream)
     # When the old token is presented.
     token = await make_proxy_token(agent_id)
     response = await search(token)

@@ -129,7 +129,7 @@ and moves `workspace/skills/maraclaw-sync` outside loaded skills into
 former generated `BOOTSTRAP.md` is replaced with neutral SOUL/IDENTITY guidance;
 user, template and empty variants remain unchanged. Directory and artifact opens
 refuse symlinks. Regenerated config omits the old hooks and model-poll heartbeat;
-the Gateway token/API key, OAuth profiles, Linkup configuration and guest-owned
+the Gateway token/API key, OAuth profiles, Tavily configuration and guest-owned
 MCP/skill/plugin resources keep their independent lifecycle. No sibling guest
 image change is required for this transport retirement.
 

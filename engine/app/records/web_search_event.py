@@ -19,7 +19,7 @@ from app.core.json_types import (
 
 @dataclass(slots=True)
 class WebSearchEventRecord:
-    """One billed Linkup call. No raw query, no response body."""
+    """One billed Tavily call. No raw query, no response body."""
 
     id: UUID
     kind: str
@@ -41,7 +41,6 @@ class WebSearchEventRecord:
     primary_domain: str | None = None
     result_count: int | None = None
     error_class: str | None = None
-    upstream_job_id: str | None = None
     request_bytes: int | None = None
     response_bytes: int | None = None
     occurred_at: datetime | None = None
@@ -74,7 +73,6 @@ class WebSearchEventRecord:
             primary_domain=str_from_row(row.get("primary_domain")) or None,
             result_count=int_from_row(result_count) if result_count is not None else None,
             error_class=str_from_row(row.get("error_class")) or None,
-            upstream_job_id=str_from_row(row.get("upstream_job_id")) or None,
             request_bytes=int_from_row(request_bytes) if request_bytes is not None else None,
             response_bytes=int_from_row(response_bytes) if response_bytes is not None else None,
             occurred_at=datetime_from_row(row.get("occurred_at")),

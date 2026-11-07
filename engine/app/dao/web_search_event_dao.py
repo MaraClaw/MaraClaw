@@ -37,7 +37,6 @@ _EVENT_COLUMNS = (
     "primary_domain",
     "result_count",
     "error_class",
-    "upstream_job_id",
     "request_bytes",
     "response_bytes",
     "export_state",
@@ -57,7 +56,7 @@ def _range_clause(alias: str = "") -> str:
 
 @final
 class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
-    """Append-only billed Linkup events."""
+    """Append-only billed Tavily events."""
 
     table: ClassVar[str] = "web_search_events"
     columns: ClassVar[tuple[str, ...]] = _EVENT_COLUMNS

@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
-import { listCompanies } from '@/lib/companies-api'
+import { companyOptions } from '@/hooks/company-options'
 import { ApiError } from '@/lib/http'
 import {
   getSearchAnalyticsExportStatus,
@@ -94,7 +94,7 @@ export function SearchEngineAnalytics() {
   const window = useMemo(() => rangeFor(range), [range])
   const scoped = { ...window, tenantId: tenantId || undefined }
 
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: ({ signal }) => listCompanies(undefined, signal) })
+  const companies = useQuery(companyOptions())
   const systemSummary = useQuery({
     queryKey: ['admin-search-analytics-summary', window, 'system'],
     queryFn: ({ signal }) => getSearchAnalyticsSummary(window, signal),
@@ -269,7 +269,7 @@ export function SearchEngineAnalytics() {
           <CardHeader>
             <CardTitle>Daily volume</CardTitle>
             <CardDescription>
-              {systemWide ? 'Billed Linkup calls across every company.' : 'Billed Linkup calls for this company.'}
+              {systemWide ? 'Tavily calls across every company.' : 'Tavily calls for this company.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -280,7 +280,7 @@ export function SearchEngineAnalytics() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Kind mix</CardTitle>
-            <CardDescription>Search vs fetch vs research vs extract.</CardDescription>
+            <CardDescription>Tavily search requests.</CardDescription>
           </CardHeader>
           <CardContent>
             <KindMix items={kindMix} total={totals?.event_count ?? 0} loading={summary.isLoading} />
@@ -387,7 +387,7 @@ export function SearchAnalyticsSnapshot() {
               <MiniStat label="Companies" value={formatCount(data?.unique_orgs)} />
             </div>
             {(data?.event_count ?? 0) === 0 ? (
-              <p className="text-sm text-muted-foreground">No billed searches yet this week.</p>
+              <p className="text-sm text-muted-foreground">No search requests yet this week.</p>
             ) : top.length > 0 ? (
               <p className="text-sm text-muted-foreground">
                 Busiest: {top.map((org) => org.name).join(', ')}.

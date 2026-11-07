@@ -1,4 +1,4 @@
-"""Capture billed Linkup calls as privacy-safe web_search_events."""
+"""Capture billed Tavily calls as privacy-safe web_search_events."""
 
 from __future__ import annotations
 
@@ -10,32 +10,37 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.json_types import json_as_str, json_loads_object, json_loads_value, json_object_from
+from app.core.json_types import (
+    json_as_str,
+    json_loads_object,
+    json_loads_value,
+    json_object_from,
+)
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.db.session import optional_connection_ctx
-from app.services.linkup.errors import (
-    LinkupDeadlineExceededError,
-    LinkupLimitError,
-    LinkupResponseTooLargeError,
+from app.services.tavily.errors import (
+    TavilyDeadlineExceededError,
+    TavilyLimitError,
+    TavilyResponseTooLargeError,
     is_quota_error,
 )
 
-BILLED_KINDS = frozenset({"search", "fetch", "research", "extract"})
+BILLED_KINDS = frozenset({"search", "crawl"})
 SCHEMA_VERSION = 1
 _QUERY_MAX = 500
 _DEPTH_MAX = 20
 _OUTPUT_TYPE_MAX = 40
 # error_class is VARCHAR(40). The proxy's own limit failures get names no upstream status can produce.
-LIMIT_ERROR_CLASSES: dict[type[LinkupLimitError], str] = {
-    LinkupResponseTooLargeError: "response_ceiling",
-    LinkupDeadlineExceededError: "deadline_exceeded",
+LIMIT_ERROR_CLASSES: dict[type[TavilyLimitError], str] = {
+    TavilyResponseTooLargeError: "response_ceiling",
+    TavilyDeadlineExceededError: "deadline_exceeded",
 }
 
 
 def is_billed_call(method: str, path: str) -> bool:
-    """True for POST /v1/{search,fetch,research,extract} with no extra path."""
+    """True for POST {search,crawl} with no extra path."""
     if method.upper() != "POST":
         return False
     cleaned = path.lstrip("/")
@@ -60,8 +65,8 @@ def host_only(url: str) -> str:
     return (parsed.hostname or "").lower()
 
 
-def status_class_for(status_code: int, body: str) -> str:
-    if is_quota_error(status_code, body):
+def status_class_for(status_code: int) -> str:
+    if is_quota_error(status_code):
         return "quota"
     if 200 <= status_code < 400:
         return "ok"
@@ -84,7 +89,7 @@ def cheap_result_count(body: str) -> int | None:
     if not isinstance(payload, dict):
         return None
     mapping = json_object_from(payload)
-    for key in ("results", "sources", "items"):
+    for key in ("results", "sources"):
         value = mapping.get(key)
         if isinstance(value, list):
             return len(value)
@@ -99,11 +104,11 @@ def _hash_secret() -> str:
 
 def _raw_and_normalized(kind: str, payload: dict[str, object]) -> tuple[str, str, str]:
     """Return (raw_for_len, normalized, primary_domain)."""
-    if kind in {"fetch", "extract"}:
-        raw_url = json_as_str(payload.get("url")) or json_as_str(payload.get("link")) or ""
-        host = host_only(raw_url)
-        return raw_url, host, host
-    raw_query = json_as_str(payload.get("query")) or json_as_str(payload.get("q")) or ""
+    if kind == "crawl":
+        domain = host_only(json_as_str(payload.get("url")) or "")
+        instructions = json_as_str(payload.get("instructions")) or ""
+        return instructions, normalize_text(instructions) if instructions else domain[:_QUERY_MAX], domain
+    raw_query = json_as_str(payload.get("query")) or ""
     return raw_query, normalize_text(raw_query), ""
 
 
@@ -123,9 +128,10 @@ def should_stage_raw_query() -> bool:
     return bool((settings.ANALYTICS_S3_BUCKET or settings.S3_BUCKET).strip())
 
 
-async def record_linkup_call(
+async def record_tavily_call(
     *,
     agent_id: UUID | None,
+    tenant_id: UUID | None = None,
     method: str,
     path: str,
     content: bytes | None,
@@ -134,12 +140,13 @@ async def record_linkup_call(
     latency_ms: int,
     key_id: UUID | None,
     quota_rotated: bool = False,
-    local_failure: LinkupLimitError | None = None,
+    local_failure: TavilyLimitError | None = None,
 ) -> None:
     """Insert one event on a fresh connection. Never raises to the caller."""
     try:
-        await _record_linkup_call(
+        await _record_tavily_call(
             agent_id=agent_id,
+            tenant_id=tenant_id,
             method=method,
             path=path,
             content=content,
@@ -154,9 +161,10 @@ async def record_linkup_call(
         logger.exception("web search analytics capture failed")
 
 
-async def _record_linkup_call(
+async def _record_tavily_call(
     *,
     agent_id: UUID | None,
+    tenant_id: UUID | None,
     method: str,
     path: str,
     content: bytes | None,
@@ -165,7 +173,7 @@ async def _record_linkup_call(
     latency_ms: int,
     key_id: UUID | None,
     quota_rotated: bool = False,
-    local_failure: LinkupLimitError | None = None,
+    local_failure: TavilyLimitError | None = None,
 ) -> None:
     settings = get_settings()
     if not settings.WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED:
@@ -185,35 +193,27 @@ async def _record_linkup_call(
     export_state = "pending" if export_ready else "skipped"
     include_raw = should_stage_raw_query() and bool(raw)
 
-    tenant_id: UUID | None = None
-    if agent_id is not None:
+    attributed_tenant = tenant_id
+    if attributed_tenant is None and agent_id is not None:
         agent = await agent_dao.get(agent_id)
         if agent is not None:
-            tenant_id = agent.tenant_id
+            attributed_tenant = agent.tenant_id
 
-    klass = status_class_for(status, body)
+    klass = status_class_for(status)
     error_class = "quota_rotated" if quota_rotated and klass == "ok" else (None if klass == "ok" else klass)
     response_bytes = len(body.encode("utf-8"))
     if local_failure is not None:
         # The proxy's 502/504 body is its own; the event records what was read from upstream before the abort.
         error_class = LIMIT_ERROR_CLASSES[type(local_failure)]
         response_bytes = local_failure.bytes_read
-    depth = json_as_str(payload.get("depth")) or json_as_str(payload.get("reasoningDepth"))
-    output_type = json_as_str(payload.get("outputType") or payload.get("output_type"))
-    job_id = None
-    if kind in {"research", "extract"} and 200 <= status < 400:
-        try:
-            parsed = json_loads_value(body)
-        except JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            job_id = json_as_str(json_object_from(parsed).get("id")) or None
+    depth = json_as_str(payload.get("search_depth")) or json_as_str(payload.get("extract_depth"))
+    output_type = json_as_str(payload.get("format"))
 
     async with optional_connection_ctx():
         record = await web_search_event_dao.create(
             obj_in={
                 "agent_id": agent_id,
-                "tenant_id": tenant_id,
+                "tenant_id": attributed_tenant,
                 "kind": kind,
                 "billed": True,
                 "method": method.upper(),
@@ -229,7 +229,6 @@ async def _record_linkup_call(
                 "primary_domain": domain or None,
                 "result_count": cheap_result_count(body),
                 "error_class": error_class,
-                "upstream_job_id": job_id,
                 "request_bytes": len(content) if content not in (None, b"") else 0,
                 "response_bytes": response_bytes,
                 "export_state": export_state,

@@ -1,4 +1,4 @@
-"""Forward Linkup API calls with one-cycle quota rotation, bounded by one deadline and a response ceiling."""
+"""Forward Tavily API calls with one-cycle quota (432/433) rotation, bounded by one deadline and a response ceiling."""
 
 from __future__ import annotations
 
@@ -6,25 +6,22 @@ import asyncio
 import time
 from contextlib import aclosing
 from dataclasses import dataclass
-from json import JSONDecodeError
-from typing import TYPE_CHECKING, final
+from typing import final
 from uuid import UUID
 
-if TYPE_CHECKING:
-    import httpx
+import httpx
 
 from app.config import get_settings
-from app.core.json_types import json_as_str, json_loads_value, json_object_from
-from app.services.linkup.errors import (
-    LinkupDeadlineExceededError,
-    LinkupLimitError,
-    LinkupResponseTooLargeError,
+from app.services.tavily.errors import (
+    TavilyDeadlineExceededError,
+    TavilyLimitError,
+    TavilyResponseTooLargeError,
     is_quota_error,
     is_transient_error,
 )
-from app.services.linkup.jobs import LinkupJobKeyRemovedError, bind_job, key_for_job
-from app.services.linkup.keys import (
-    DuplicateLinkupKeyError,
+from app.services.tavily.http_client import tavily_client
+from app.services.tavily.keys import (
+    DuplicateTavilyKeyError,
     add_key,
     advance_cursor,
     current_key,
@@ -34,13 +31,15 @@ from app.services.linkup.keys import (
     touch_used,
 )
 
-UPSTREAM_BASE = "https://api.linkup.so"
-ALLOWED_PREFIXES = ("search", "fetch", "research", "extract")
+# Tavily's REST API has no version prefix: POST /search and POST /crawl.
+# The guest-facing proxy keeps its /api/tavily/v1 mount; the version segment never reaches the upstream.
+UPSTREAM_BASE = "https://api.tavily.com"
+SUBMIT_PATHS = frozenset({"search", "crawl"})
 _PHASE_TIMEOUT_SECONDS = 60.0
 
 
 @final
-class LinkupProxyError(Exception):
+class TavilyProxyError(Exception):
     status_code: int
     body: str
 
@@ -51,15 +50,8 @@ class LinkupProxyError(Exception):
 
 
 def allowed_upstream_path(path: str) -> bool:
-    cleaned = path.lstrip("/")
-    head = cleaned.split("/", 1)[0]
-    return head in ALLOWED_PREFIXES
-
-
-def _httpx_client(*, follow_redirects: bool, timeout: float) -> httpx.AsyncClient:
-    import httpx
-
-    return httpx.AsyncClient(follow_redirects=follow_redirects, timeout=timeout)
+    """Allow exactly the supported Tavily endpoints: search and crawl."""
+    return path.lstrip("/") in SUBMIT_PATHS
 
 
 def _monotonic() -> float:
@@ -68,7 +60,7 @@ def _monotonic() -> float:
 
 @final
 class _Deadline:
-    """One monotonic budget for a whole proxied call: rotation, retry, env fallback and bound polls."""
+    """One monotonic budget for a whole proxied call: rotation, retry and env fallback."""
 
     __slots__ = ("_expires_at", "bytes_read")
 
@@ -84,7 +76,7 @@ class _Deadline:
 
     def check(self) -> None:
         if self.expired():
-            raise LinkupDeadlineExceededError(bytes_read=self.bytes_read)
+            raise TavilyDeadlineExceededError(bytes_read=self.bytes_read)
 
 
 @dataclass(slots=True)
@@ -93,7 +85,6 @@ class _CallState:
 
     key_id: UUID | None = None
     quota_rotated: bool = False
-    result: tuple[int, str, dict[str, str]] | None = None
 
 
 async def _send(
@@ -106,8 +97,6 @@ async def _send(
     deadline: _Deadline,
     max_response_bytes: int,
 ) -> tuple[int, str, dict[str, str]]:
-    import httpx
-
     deadline.check()
     outbound = {
         key: value
@@ -116,56 +105,47 @@ async def _send(
     }
     outbound["Authorization"] = f"Bearer {api_key}"
     deadline.bytes_read = 0
-    timeout = min(_PHASE_TIMEOUT_SECONDS, deadline.remaining())
-    async with _httpx_client(follow_redirects=False, timeout=timeout) as client:
-        request = client.build_request(method, url, headers=outbound, content=content)
-        redirects = 0
-        while True:
-            deadline.check()
-            if redirects > client.max_redirects:
-                raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.", request=request)
-            deadline.bytes_read = 0
-            # HTTPX builds the next request (method, auth, cookies), but must not buffer redirect bodies itself.
-            async with aclosing(await client.send(request, stream=True, follow_redirects=False)) as response:
-                chunks: list[bytes] = []
-                async for chunk in response.aiter_bytes():
-                    deadline.bytes_read += len(chunk)
-                    if deadline.bytes_read > max_response_bytes:
-                        raise LinkupResponseTooLargeError(bytes_read=deadline.bytes_read)
-                    deadline.check()
-                    if response.next_request is None:
-                        chunks.append(chunk)
+    # The client is shared and long-lived: never `async with` it, and bound every hop on the request itself so
+    # waiting for a pooled connection counts against the call deadline.
+    client = tavily_client()
+    request = client.build_request(method, url, headers=outbound, content=content)
+    redirects = 0
+    while True:
+        deadline.check()
+        if redirects > client.max_redirects:
+            raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.", request=request)
+        deadline.bytes_read = 0
+        timeout = httpx.Timeout(min(_PHASE_TIMEOUT_SECONDS, deadline.remaining()))
+        request.extensions = {**request.extensions, "timeout": timeout.as_dict()}
+        # HTTPX builds the next request (method, auth, cookies), but must not buffer redirect bodies itself.
+        async with aclosing(await client.send(request, stream=True, follow_redirects=False)) as response:
+            chunks: list[bytes] = []
+            async for chunk in response.aiter_bytes():
+                deadline.bytes_read += len(chunk)
+                if deadline.bytes_read > max_response_bytes:
+                    raise TavilyResponseTooLargeError(bytes_read=deadline.bytes_read)
                 deadline.check()
                 if response.next_request is None:
-                    text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
-                    out_headers = {
-                        key: value for key, value in response.headers.items() if key.lower() != "transfer-encoding"
-                    }
-                    return response.status_code, text, out_headers
-                request = response.next_request
-                redirects += 1
-
-
-def _extract_job_id(body: str) -> str | None:
-    try:
-        payload = json_loads_value(body)
-    except JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    mapping = json_object_from(payload)
-    job_id = json_as_str(mapping.get("id"))
-    return job_id or None
+                    chunks.append(chunk)
+            deadline.check()
+            if response.next_request is None:
+                text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+                out_headers = {
+                    key: value for key, value in response.headers.items() if key.lower() != "transfer-encoding"
+                }
+                return response.status_code, text, out_headers
+            request = response.next_request
+            redirects += 1
 
 
 async def _env_fallback_key() -> str | None:
-    env_key = get_settings().LINKUP_API_KEY.strip()
+    env_key = get_settings().TAVILY_API_KEY.strip()
     if not env_key:
         return None
     try:
-        record = await add_key(label="Environment LINKUP_API_KEY", api_key=env_key)
+        record = await add_key(label="Environment TAVILY_API_KEY", api_key=env_key)
         return decrypt_api_key(record)
-    except DuplicateLinkupKeyError:
+    except DuplicateTavilyKeyError:
         current = await current_key()
         return decrypt_api_key(current) if current is not None else env_key
     except Exception:
@@ -182,13 +162,15 @@ async def _record_result(
     key_id: UUID | None,
     started: float,
     quota_rotated: bool = False,
-    local_failure: LinkupLimitError | None = None,
+    local_failure: TavilyLimitError | None = None,
+    tenant_id: UUID | None = None,
 ) -> tuple[int, str, dict[str, str]]:
-    from app.services.linkup.analytics import record_linkup_call
+    from app.services.tavily.analytics import record_tavily_call
 
     status, body, _headers = result
-    await record_linkup_call(
+    await record_tavily_call(
         agent_id=agent_id,
+        tenant_id=tenant_id,
         method=method,
         path=path,
         content=content,
@@ -203,7 +185,7 @@ async def _record_result(
 
 
 async def _record_failure(
-    exc: LinkupProxyError | LinkupLimitError,
+    exc: TavilyProxyError | TavilyLimitError,
     *,
     agent_id: UUID | None,
     method: str,
@@ -212,17 +194,19 @@ async def _record_failure(
     key_id: UUID | None,
     started: float,
     quota_rotated: bool = False,
+    tenant_id: UUID | None = None,
 ) -> None:
     _ = await _record_result(
         (exc.status_code, exc.body, {}),
         agent_id=agent_id,
+        tenant_id=tenant_id,
         method=method,
         path=path,
         content=content,
         key_id=key_id,
         started=started,
         quota_rotated=quota_rotated,
-        local_failure=exc if isinstance(exc, LinkupLimitError) else None,
+        local_failure=exc if isinstance(exc, TavilyLimitError) else None,
     )
 
 
@@ -246,40 +230,39 @@ async def _send_or_unavailable(
             deadline=deadline,
             max_response_bytes=max_response_bytes,
         )
-    except LinkupLimitError:
+    except TavilyLimitError:
         raise
     except Exception as exc:
         # A transport error that lands after the budget is gone is the deadline's doing, not the upstream's.
         if deadline.expired():
-            raise LinkupDeadlineExceededError(bytes_read=deadline.bytes_read) from exc
-        raise LinkupProxyError(502, "Linkup upstream unavailable") from exc
+            raise TavilyDeadlineExceededError(bytes_read=deadline.bytes_read) from exc
+        raise TavilyProxyError(502, "Tavily upstream unavailable") from exc
 
 
-async def proxy_linkup(
+async def proxy_tavily(
     *,
     method: str,
     path: str,
     headers: dict[str, str],
     content: bytes | None,
     agent_id: UUID | None = None,
+    tenant_id: UUID | None = None,
 ) -> tuple[int, str, dict[str, str]]:
     if not allowed_upstream_path(path):
-        raise LinkupProxyError(404, "Unknown Linkup path")
+        raise TavilyProxyError(404, "Unknown Tavily path")
+    if method.upper() != "POST":
+        raise TavilyProxyError(405, "Tavily path does not allow this method")
 
     settings = get_settings()
-    deadline = _Deadline(settings.LINKUP_PROXY_DEADLINE_SECONDS)
-    max_response_bytes = settings.LINKUP_PROXY_MAX_RESPONSE_BYTES
+    deadline = _Deadline(settings.TAVILY_PROXY_DEADLINE_SECONDS)
+    max_response_bytes = settings.TAVILY_PROXY_MAX_RESPONSE_BYTES
     started = time.perf_counter()
-    cleaned = path.lstrip("/")
-    kind = cleaned.split("/", 1)[0]
-    rest = cleaned.split("/", 1)[1] if "/" in cleaned else ""
-    bound_poll = method.upper() == "GET" and kind in {"research", "extract"} and bool(rest)
     state = _CallState()
     scope = asyncio.timeout(deadline.remaining())
     try:
-        # One scope covers key selection, rotation, retries, fallback, polls and streaming.
+        # One scope covers key selection, rotation, retries, fallback and streaming.
         async with scope:
-            result = await _proxy_linkup(
+            result = await _proxy_tavily(
                 method=method,
                 path=path,
                 headers=headers,
@@ -292,52 +275,37 @@ async def proxy_linkup(
     except TimeoutError as exc:
         if not scope.expired():
             raise
-        failure = LinkupDeadlineExceededError(bytes_read=deadline.bytes_read)
-        if not bound_poll:
-            await _record_failure(
-                failure,
-                agent_id=agent_id,
-                method=method,
-                path=path,
-                content=content,
-                key_id=state.key_id,
-                started=started,
-                quota_rotated=state.quota_rotated,
-            )
+        failure = TavilyDeadlineExceededError(bytes_read=deadline.bytes_read)
+        await _record_failure(
+            failure,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            method=method,
+            path=path,
+            content=content,
+            key_id=state.key_id,
+            started=started,
+            quota_rotated=state.quota_rotated,
+        )
         raise failure from exc
-    except (LinkupProxyError, LinkupLimitError) as exc:
-        if not bound_poll:
-            await _record_failure(
-                exc,
-                agent_id=agent_id,
-                method=method,
-                path=path,
-                content=content,
-                key_id=state.key_id,
-                started=started,
-                quota_rotated=state.quota_rotated,
-            )
+    except (TavilyProxyError, TavilyLimitError) as exc:
+        await _record_failure(
+            exc,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            method=method,
+            path=path,
+            content=content,
+            key_id=state.key_id,
+            started=started,
+            quota_rotated=state.quota_rotated,
+        )
         raise
-    except Exception:
-        # A completed billed response still counts if persisting its job binding fails.
-        if state.result is not None and not bound_poll:
-            await _record_result(
-                state.result,
-                agent_id=agent_id,
-                method=method,
-                path=path,
-                content=content,
-                key_id=state.key_id,
-                started=started,
-                quota_rotated=state.quota_rotated,
-            )
-        raise
-    if bound_poll:
-        return result
     # Analytics runs after the deadline scope has exited, even for failures.
     return await _record_result(
         result,
         agent_id=agent_id,
+        tenant_id=tenant_id,
         method=method,
         path=path,
         content=content,
@@ -347,7 +315,7 @@ async def proxy_linkup(
     )
 
 
-async def _proxy_linkup(
+async def _proxy_tavily(
     *,
     method: str,
     path: str,
@@ -360,30 +328,13 @@ async def _proxy_linkup(
     await ensure_env_key_seeded()
     deadline.check()
     cleaned = path.lstrip("/")
-    kind, _, rest = cleaned.partition("/")
-    url = f"{UPSTREAM_BASE}/v1/{cleaned}"
-
-    if method.upper() == "GET" and kind in {"research", "extract"} and rest:
-        try:
-            bound = await key_for_job(rest.split("/", 1)[0])
-        except LinkupJobKeyRemovedError as exc:
-            raise LinkupProxyError(410, str(exc)) from exc
-        status, body, out_headers = await _send_or_unavailable(
-            method=method,
-            url=url,
-            headers=headers,
-            content=content,
-            api_key=decrypt_api_key(bound),
-            deadline=deadline,
-            max_response_bytes=max_response_bytes,
-        )
-        return status, body, out_headers
+    url = f"{UPSTREAM_BASE}/{cleaned}"
 
     start = await current_key()
     if start is None:
         env_key = await _env_fallback_key()
         if env_key is None:
-            raise LinkupProxyError(503, "no Linkup API keys configured")
+            raise TavilyProxyError(503, "no Tavily API keys configured")
         return await _send_or_unavailable(
             method=method,
             url=url,
@@ -417,7 +368,7 @@ async def _proxy_linkup(
         last = (status, body, out_headers)
         deadline.check()
 
-        if is_quota_error(status, body):
+        if is_quota_error(status):
             await mark_exhausted(record.id, message=body[:200])
             deadline.bytes_read = 0
             deadline.check()
@@ -432,13 +383,8 @@ async def _proxy_linkup(
             seen.discard(record.id)
             continue
 
-        if status < 400 and kind in {"research", "extract"} and method.upper() == "POST":
-            job_id = _extract_job_id(body)
-            if job_id not in (None, ""):
-                state.result = last
-                await bind_job(upstream_job_id=job_id, key_id=record.id, kind=kind)
         return last
 
     if last is None:
-        raise LinkupProxyError(503, "no Linkup API keys configured")
+        raise TavilyProxyError(503, "no Tavily API keys configured")
     return last

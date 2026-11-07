@@ -1,4 +1,4 @@
-"""Platform-admin add/list/remove for stored Linkup API keys."""
+"""Platform-admin add/list/remove for stored Tavily API keys."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field, field_validator
 from app.core.security import require_role
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
-from app.services.linkup.keys import (
-    DuplicateLinkupKeyError,
-    LinkupKeyNotFoundError,
+from app.services.tavily.keys import (
+    DuplicateTavilyKeyError,
+    TavilyKeyNotFoundError,
     add_key,
     list_keys,
     public_key_view,
@@ -23,7 +23,7 @@ from app.services.linkup.keys import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-class LinkupKeyCreateRequest(BaseModel):
+class TavilyKeyCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     api_key: str = Field(min_length=1, max_length=512)
 
@@ -33,7 +33,7 @@ class LinkupKeyCreateRequest(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
-class LinkupKeyOut(BaseModel):
+class TavilyKeyOut(BaseModel):
     id: UUID
     label: str
     fingerprint: str
@@ -50,35 +50,35 @@ async def get_client_ip(request: Request) -> str | None:
     return request.client.host
 
 
-def _to_out(view: dict[str, object]) -> LinkupKeyOut:
-    return LinkupKeyOut.model_validate(view)
+def _to_out(view: dict[str, object]) -> TavilyKeyOut:
+    return TavilyKeyOut.model_validate(view)
 
 
-@router.get("/linkup-keys", response_model=list[LinkupKeyOut])
-async def list_linkup_keys(
+@router.get("/tavily-keys", response_model=list[TavilyKeyOut])
+async def list_tavily_keys(
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> list[LinkupKeyOut]:
+) -> list[TavilyKeyOut]:
     del current_user
     return [_to_out(public_key_view(record)) for record in await list_keys()]
 
 
-@router.post("/linkup-keys", response_model=LinkupKeyOut, status_code=201)
-async def create_linkup_key(
-    data: LinkupKeyCreateRequest,
+@router.post("/tavily-keys", response_model=TavilyKeyOut, status_code=201)
+async def create_tavily_key(
+    data: TavilyKeyCreateRequest,
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-) -> LinkupKeyOut:
+) -> TavilyKeyOut:
     try:
         record = await add_key(label=data.label, api_key=data.api_key)
-    except DuplicateLinkupKeyError as exc:
-        raise HTTPException(status_code=409, detail="This Linkup API key is already stored") from exc
+    except DuplicateTavilyKeyError as exc:
+        raise HTTPException(status_code=409, detail="This Tavily API key is already stored") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     await write_admin_audit(
         actor=current_user,
-        action="linkup_key_add",
-        target_type="linkup_api_key",
+        action="tavily_key_add",
+        target_type="tavily_api_key",
         target_id=record.id,
         changes={"fingerprint": field_change(None, record.key_fingerprint)},
         ip_address=client_ip,
@@ -86,21 +86,21 @@ async def create_linkup_key(
     return _to_out(public_key_view(record))
 
 
-@router.delete("/linkup-keys/{key_id}", response_model=LinkupKeyOut)
-async def delete_linkup_key(
+@router.delete("/tavily-keys/{key_id}", response_model=TavilyKeyOut)
+async def delete_tavily_key(
     key_id: UUID,
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-) -> LinkupKeyOut:
+) -> TavilyKeyOut:
     try:
         record = await remove_key(key_id)
-    except LinkupKeyNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Linkup API key not found") from exc
+    except TavilyKeyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tavily API key not found") from exc
 
     await write_admin_audit(
         actor=current_user,
-        action="linkup_key_remove",
-        target_type="linkup_api_key",
+        action="tavily_key_remove",
+        target_type="tavily_api_key",
         target_id=record.id,
         changes={"fingerprint": field_change(record.key_fingerprint, None)},
         ip_address=client_ip,
