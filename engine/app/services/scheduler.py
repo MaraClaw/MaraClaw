@@ -7,6 +7,7 @@ and executes them by calling the LLM with the schedule's instruction.
 
 import asyncio
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from functools import partial
 
@@ -18,7 +19,7 @@ from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from app.services.schedule_time import next_local_run
-from app.services.scheduler_tasks import schedule_execution
+from app.services.scheduler_tasks import free_schedule_capacity, schedule_execution
 
 
 def compute_next_run(cron_expr: str, after: datetime | None = None, timezone: str = "UTC") -> datetime | None:
@@ -200,25 +201,43 @@ async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
         logger.bind(schedule_id=str(schedule.id)).exception("Periodic schedule execution error")
 
 
-async def _tick() -> None:
-    """One scheduler tick: find and execute due schedules."""
+async def _release_unlaunched(claims: Sequence[AgentScheduleRecord]) -> None:
+    """Expire the leases of claims that never launched, keeping their occurrence slot for a peer."""
+    from app.dao.schedule_dao import agent_schedule_dao
+
+    logger.warning("Releasing {} periodic schedule claims that could not launch", len(claims))
+    now = datetime.now(UTC)
+    async with connection_ctx():
+        for claim in claims:
+            if claim.lease_token is not None:
+                _ = await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, now)
+
+
+async def _tick(limit: int | None = None) -> None:
+    """One scheduler tick: claim and execute at most ``limit`` due schedules (default: free capacity)."""
     new_trace_id()
     from app.dao.schedule_dao import agent_schedule_dao
     from app.services.audit_logger import write_audit_log
 
     now = datetime.now(UTC)
+    budget = free_schedule_capacity() if limit is None else limit
+    if budget < 1:
+        return
 
     try:
         async with connection_ctx():
-            due_schedules = await agent_schedule_dao.claim_due(now, compute_next_run)
-            for sched in due_schedules:
-                schedule_execution(partial(_execute_periodic_schedule, sched))
+            due_schedules = await agent_schedule_dao.claim_due(now, compute_next_run, budget)
+            launches = [
+                (sched, schedule_execution(partial(_execute_periodic_schedule, sched))) for sched in due_schedules
+            ]
+        launched = [sched for sched, started in launches if not started.done() or started.result()]
+        unlaunched = [sched for sched, started in launches if started.done() and not started.result()]
 
         # Audit writes swallow errors, so they must not share the claim transaction.
-        if due_schedules:
-            await write_audit_log("schedule_tick", {"due_count": len(due_schedules)})
+        if launched:
+            await write_audit_log("schedule_tick", {"due_count": len(launched)})
 
-        for sched in due_schedules:
+        for sched in launched:
             await write_audit_log(
                 "schedule_fire",
                 {
@@ -232,18 +251,44 @@ async def _tick() -> None:
 
             logger.info(f"Triggered schedule '{sched.name}' (next: {sched.next_run_at})")
 
+        if unlaunched:
+            await _release_unlaunched(unlaunched)
+
     except Exception as e:
         logger.exception(f"Scheduler tick error: {e}")
         await write_audit_log("schedule_error", {"error": str(e)[:300]})
+
+
+_manual_first = True
+
+
+async def _dispatch_round() -> None:
+    """Split free capacity between manual and periodic work, alternating who claims first each round.
+
+    The first class takes the larger half, the second takes whatever is still free, so a spare slot is never wasted
+    and a single slot goes to each class on alternate rounds.
+    """
+    global _manual_first
+    from app.services.schedule_manual import recover_manual_runs
+
+    capacity = free_schedule_capacity()
+    if capacity < 1:
+        return
+    first_share = (capacity + 1) // 2
+    if _manual_first:
+        await recover_manual_runs(first_share)
+        await _tick(free_schedule_capacity())
+    else:
+        await _tick(first_share)
+        await recover_manual_runs(free_schedule_capacity())
+    _manual_first = not _manual_first
 
 
 async def start_scheduler() -> None:
     """Start the background scheduler loop. Call from FastAPI startup."""
     new_trace_id()
     logger.info("🕐 Agent scheduler started (30s interval)")
-    from app.services.schedule_manual import recover_manual_runs
 
     while True:
-        await recover_manual_runs()
-        await _tick()
+        await _dispatch_round()
         await asyncio.sleep(30)

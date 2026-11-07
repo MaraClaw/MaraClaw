@@ -189,3 +189,19 @@ async def test_external_cancellation_wins_when_heartbeat_also_revokes(occurrence
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 1)
     assert task.cancelled()
+
+
+async def test_stale_release_cannot_expire_a_reclaimed_or_started_lease(occurrence, pool):
+    # Given a released claim that a peer already reclaimed.
+    assert occurrence.lease_token is not None
+    assert await agent_schedule_dao.release_unstarted_occurrence(occurrence.id, occurrence.lease_token, NOW)
+    (reclaimed,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+    assert reclaimed.lease_token is not None
+    # When the previous owner releases again with its old token, nothing changes.
+    assert not await agent_schedule_dao.release_unstarted_occurrence(occurrence.id, occurrence.lease_token, NOW)
+    assert pool.rows[occurrence.id] == reclaimed
+    # When the new owner has started, even its own token can no longer release.
+    assert await agent_schedule_dao.start_occurrence(reclaimed.id, reclaimed.lease_token, NOW)
+    started = pool.rows[occurrence.id]
+    assert not await agent_schedule_dao.release_unstarted_occurrence(reclaimed.id, reclaimed.lease_token, NOW)
+    assert pool.rows[occurrence.id] == started

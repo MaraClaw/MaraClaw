@@ -6,17 +6,20 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import TypeAdapter
 
+from app.config import get_settings
 from app.core.json_types import uuid_from_row
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao as runs
 from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
-from app.services import schedule_manual, scheduler_tasks
+from app.services import schedule_manual, scheduler, scheduler_tasks
 from app.services.llm.background_guard import BackgroundCallGuard, BackgroundCallOutcome
 from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
+    add_due_schedules,
+    leased_ids,
     live_schedule,
     manual_schedule,
 )
@@ -351,3 +354,32 @@ async def test_live_manual_release_is_token_safe_and_only_for_unstarted_runs(
     (again,) = await runs.claim_pending(datetime.now(UTC), 1)
     assert again.id == claimed.id
     assert again.lease_token != claimed.lease_token
+
+
+async def test_live_worker_leases_exactly_its_cap_and_splits_it_between_manual_and_periodic(
+    manual_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given 200 due manual runs and 200 due periodic schedules, a cap of ten, and executions that stay running.
+    monkeypatch.setattr(get_settings(), "SCHEDULE_MAX_CONCURRENT_EXECUTIONS", 10)
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
+    await accept_many(manual_schedule, 200)
+    await add_due_schedules(manual_schedule, 199)
+    gate = asyncio.Event()
+
+    async def hold(_claim: object) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", hold)
+    monkeypatch.setattr(schedule_manual, "execute_manual_run", hold)
+    monkeypatch.setattr(scheduler, "_manual_first", True)
+    # When a round runs and then another while the worker is full.
+    await scheduler._dispatch_round()
+    manual_leased, periodic_leased = await leased_runs(), await leased_ids()
+    await scheduler._dispatch_round()
+    # Then it leased exactly ten in total, five of each class, and the full worker claimed nothing more.
+    assert (len(manual_leased), len(periodic_leased)) == (5, 5)
+    assert len(scheduler_tasks._tasks) == 10
+    assert await leased_runs() == manual_leased
+    assert await leased_ids() == periodic_leased
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(*tuple(scheduler_tasks._tasks)), timeout=5)

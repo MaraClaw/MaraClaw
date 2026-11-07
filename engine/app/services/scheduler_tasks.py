@@ -3,7 +3,9 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextvars import Context
+from functools import partial
 
+from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.logging import logger, new_trace_id
 from app.db.session import run_after_commit
@@ -31,20 +33,37 @@ def _completed(task: asyncio.Task[None]) -> None:
         logger.opt(exception=error).error("Schedule execution failed")
 
 
-def schedule_execution(factory: Callable[[], Coroutine[object, object, None]]) -> None:
-    """Launch lazily after commit, without inheriting request or transaction context."""
+def free_schedule_capacity() -> int:
+    """Executions this worker can still start: the configured cap minus live tasks, zero while closed."""
     if not _accepting:
-        return
+        return 0
+    live = sum(not task.done() for task in _tasks)
+    return max(0, get_settings().SCHEDULE_MAX_CONCURRENT_EXECUTIONS - live)
+
+
+def schedule_execution(factory: Callable[[], Coroutine[object, object, None]]) -> asyncio.Future[bool]:
+    """Launch lazily after commit, without inheriting request or transaction context.
+
+    The future resolves True once the task started and False when it never will (closed or replaced runtime,
+    no free capacity, or the owning transaction rolled back), so the caller can release what it claimed.
+    """
+    launched = asyncio.Future[bool]()
+    if not _accepting:
+        launched.set_result(False)
+        return launched
     generation = _generation
 
     def launch() -> None:
-        if not _accepting or generation != _generation:
+        if generation != _generation or free_schedule_capacity() == 0:
+            launched.set_result(False)
             return
         task = asyncio.create_task(factory(), name="schedule-execution", context=Context())
         _tasks.add(task)
         task.add_done_callback(_completed, context=Context())
+        launched.set_result(True)
 
-    run_after_commit(launch)
+    run_after_commit(launch, on_rollback=partial(launched.set_result, False))
+    return launched
 
 
 async def stop_schedule_tasks() -> None:

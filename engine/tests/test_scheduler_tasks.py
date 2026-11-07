@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from app.config import get_settings
 from app.core import access_cache, redis_cache
 from app.core.logging import get_trace_id, set_trace_id
 from app.core.logging.context import trace_id_var
@@ -185,3 +186,85 @@ async def test_late_commit_cannot_launch_in_closed_or_new_generation(raw: _FakeR
 
         scheduler_tasks.schedule_execution(work)
         await asyncio.wait_for(completed.wait(), timeout=1)
+
+
+@pytest.fixture
+def cap(monkeypatch: pytest.MonkeyPatch) -> int:
+    monkeypatch.setattr(get_settings(), "SCHEDULE_MAX_CONCURRENT_EXECUTIONS", 2)
+    return 2
+
+
+async def test_capacity_is_cap_minus_live_tasks_and_ignores_finished(cap: int) -> None:
+    # Given a cap of two and two executions blocked in flight.
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+        await gate.wait()
+
+    assert scheduler_tasks.free_schedule_capacity() == cap
+    first = scheduler_tasks.schedule_execution(work)
+    assert await first is True
+    assert scheduler_tasks.free_schedule_capacity() == cap - 1
+    assert await scheduler_tasks.schedule_execution(work) is True
+    assert scheduler_tasks.free_schedule_capacity() == 0
+    (running, _other) = tuple(scheduler_tasks._tasks)
+    # When one finishes, even before its callback discards it.
+    gate.set()
+    await asyncio.wait_for(running, timeout=1)
+    # Then the finished execution no longer counts against the cap.
+    assert scheduler_tasks.free_schedule_capacity() == cap
+
+
+async def test_launch_beyond_capacity_reports_failure_without_running(cap: int) -> None:
+    gate = asyncio.Event()
+
+    async def work() -> None:
+        await gate.wait()
+
+    for _ in range(cap):
+        assert await scheduler_tasks.schedule_execution(work) is True
+    refused = Mock(side_effect=AssertionError("launched beyond the cap"))
+    assert await scheduler_tasks.schedule_execution(refused) is False
+    refused.assert_not_called()
+    assert len(scheduler_tasks._tasks) == cap
+    gate.set()
+
+
+async def test_capacity_is_zero_after_stop_and_refills_in_the_next_generation(cap: int) -> None:
+    await scheduler_tasks.stop_schedule_tasks()
+    assert scheduler_tasks.free_schedule_capacity() == 0
+    rejected = Mock(side_effect=AssertionError("admitted while stopped"))
+    assert await scheduler_tasks.schedule_execution(rejected) is False
+    scheduler_tasks.start_schedule_tasks()
+    assert scheduler_tasks.free_schedule_capacity() == cap
+
+
+@pytest.mark.parametrize("restart", [False, True])
+async def test_late_commit_reports_unlaunched_after_stop_or_generation_change(
+    raw: _FakeRawConnection, restart: bool
+) -> None:
+    factory = Mock(side_effect=AssertionError("stale callback launched"))
+    async with session.connection_ctx():
+        launched = scheduler_tasks.schedule_execution(factory)
+        assert not launched.done()
+        await scheduler_tasks.stop_schedule_tasks()
+        if restart:
+            scheduler_tasks.start_schedule_tasks()
+    assert launched.result() is False
+    factory.assert_not_called()
+    assert raw.commits == 1
+
+
+async def test_rollback_reports_unlaunched(raw: _FakeRawConnection) -> None:
+    launched: list[asyncio.Future[bool]] = []
+
+    async def rollback() -> None:
+        async with session.connection_ctx():
+            launched.append(scheduler_tasks.schedule_execution(Mock(side_effect=AssertionError("rolled back"))))
+            raise ValueError("rollback")
+
+    with pytest.raises(ValueError, match="rollback"):
+        await rollback()
+    assert launched[0].result() is False
+    assert raw.rollbacks == 1

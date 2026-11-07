@@ -1,18 +1,22 @@
 import asyncio
 from dataclasses import replace
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from typing import Self, override
 from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 
+from app.config import get_settings
 from app.core.domain.agents import AgentStatus
 from app.core.logging import get_trace_id, set_trace_id
 from app.dao.agent_dao import agent_dao
+from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
-from app.services import scheduler, scheduler_tasks
+from app.records.schedule_manual_run import ScheduleManualRunRecord
+from app.services import schedule_manual, scheduler, scheduler_tasks
 from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool
 from test_scheduler_tasks import owner
 
@@ -281,3 +285,196 @@ async def test_tick_launches_once_after_commit_when_competing_ticks_interleave(
     assert launches[0].pending_instruction == row.instruction
     assert pool.rows[row.id] == launches[0]
     assert pool.rows[row.id].next_run_at == NEXT
+
+
+def _cap(monkeypatch: pytest.MonkeyPatch, cap: int) -> None:
+    monkeypatch.setattr(get_settings(), "SCHEDULE_MAX_CONCURRENT_EXECUTIONS", cap)
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
+
+
+async def test_tick_claims_only_free_capacity_and_leaves_the_rest_for_peers(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given five due schedules, a cap of two and executions that stay running.
+    rows = [replace(_schedule(), next_run_at=NOW - timedelta(hours=hour + 1)) for hour in range(5)]
+    pool.rows = {row.id: row for row in rows}
+    _cap(monkeypatch, 2)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    gate = asyncio.Event()
+
+    async def execute(_claim: AgentScheduleRecord) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    # When two consecutive ticks run.
+    await scheduler._tick()
+    await scheduler._tick()
+    # Then the two oldest are leased and running; the second tick saw no capacity and touched nothing.
+    leased = {row.id for row in pool.rows.values() if row.lease_token is not None}
+    assert leased == {rows[4].id, rows[3].id}
+    assert len(scheduler_tasks._tasks) == 2
+    assert len(pool.connections) == 1
+    gate.set()
+
+
+async def test_tick_does_not_claim_when_worker_is_not_accepting(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _schedule()
+    pool.rows[row.id] = row
+    _cap(monkeypatch, 2)
+    await scheduler_tasks.stop_schedule_tasks()
+    await scheduler._tick()
+    assert pool.connections == []
+    assert pool.rows[row.id] == row
+
+
+async def test_tick_releases_claims_that_never_launched_and_a_peer_reclaims_them(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a claim whose launch is refused after commit (for example a stop racing the tick).
+    row = _schedule()
+    pool.rows[row.id] = row
+    _cap(monkeypatch, 2)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+
+    def refuse(_factory: object) -> asyncio.Future[bool]:
+        refused = asyncio.Future[bool]()
+        refused.set_result(False)
+        return refused
+
+    with monkeypatch.context() as refusing:
+        refusing.setattr(scheduler, "schedule_execution", refuse)
+        # When the tick finishes.
+        await scheduler._tick()
+    # Then the lease expires now while the occurrence and next slot stay intact.
+    released = pool.rows[row.id]
+    assert released.lease_expires_at == NOW
+    assert released.lease_token is not None
+    assert released.pending_due_at == row.next_run_at
+    assert released.pending_instruction == row.instruction
+    assert released.next_run_at == NEXT
+    # And another worker's next tick takes the same occurrence without a new cron computation.
+    monkeypatch.setattr(scheduler, "compute_next_run", Mock(side_effect=AssertionError("recomputed")))
+    launched: list[AgentScheduleRecord] = []
+
+    async def execute(claim: AgentScheduleRecord) -> None:
+        launched.append(claim)
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    await scheduler._tick()
+    await asyncio.gather(*scheduler_tasks._tasks)
+    assert [claim.pending_due_at for claim in launched] == [row.next_run_at]
+    assert launched[0].lease_token != released.lease_token
+
+
+def _manual_queue(monkeypatch: pytest.MonkeyPatch, count: int) -> list[str]:
+    """Fake the manual-run table: a FIFO queue handing out at most ``limit`` runs per claim."""
+    pending = [
+        ScheduleManualRunRecord(
+            id=uuid4(), schedule_id=uuid4(), agent_id=uuid4(), requester_id=uuid4(), instruction="Run"
+        )
+        for _ in range(count)
+    ]
+    events: list[str] = []
+
+    async def claim_pending(_now: datetime, limit: int = 100) -> list[ScheduleManualRunRecord]:
+        taken, pending[:] = pending[:limit], pending[limit:]
+        return [replace(run, lease_token=uuid4()) for run in taken]
+
+    async def execute(_run: ScheduleManualRunRecord) -> None:
+        events.append("manual")
+
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", claim_pending)
+    monkeypatch.setattr(schedule_manual, "execute_manual_run", execute)
+    return events
+
+
+@pytest.mark.parametrize("cap", [1, 2])
+async def test_dispatch_rounds_alternate_manual_and_periodic_when_both_are_backlogged(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+    cap: int,
+) -> None:
+    # Given a deep backlog of both classes and a cap too small to serve everything.
+    pool.rows = {
+        row.id: row for row in (replace(_schedule(), next_run_at=NOW - timedelta(minutes=i)) for i in range(9))
+    }
+    _cap(monkeypatch, cap)
+    monkeypatch.setattr(scheduler, "_manual_first", True)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    events = _manual_queue(monkeypatch, 9)
+
+    async def execute(_claim: AgentScheduleRecord) -> None:
+        events.append("periodic")
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    # When consecutive rounds run to completion.
+    for _ in range(3):
+        await scheduler._dispatch_round()
+        await asyncio.gather(*scheduler_tasks._tasks)
+    # Then neither class is starved: every round serves both (cap 2) or hands the slot over (cap 1).
+    if cap == 1:
+        assert events == ["manual", "periodic", "manual"]
+    else:
+        assert sorted(events) == ["manual"] * 3 + ["periodic"] * 3
+        assert events[:2] == ["manual", "periodic"]
+
+
+async def test_dispatch_round_gives_the_whole_budget_to_the_class_that_has_work(
+    pool: _Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given only periodic work and a cap of three.
+    pool.rows = {
+        row.id: row for row in (replace(_schedule(), next_run_at=NOW - timedelta(minutes=i)) for i in range(5))
+    }
+    _cap(monkeypatch, 3)
+    monkeypatch.setattr(scheduler, "_manual_first", True)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    _ = _manual_queue(monkeypatch, 0)
+    gate = asyncio.Event()
+
+    async def execute(_claim: AgentScheduleRecord) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    # When a round runs.
+    await scheduler._dispatch_round()
+    # Then manual's idle share is not wasted.
+    assert len(scheduler_tasks._tasks) == 3
+    gate.set()
+
+
+async def test_manual_recovery_releases_runs_that_never_launched(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a claimed run whose launch is refused after commit.
+    _cap(monkeypatch, 2)
+    run = ScheduleManualRunRecord(
+        id=uuid4(), schedule_id=uuid4(), agent_id=uuid4(), requester_id=uuid4(), instruction="Run", lease_token=uuid4()
+    )
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", AsyncMock(return_value=[run]))
+    release = AsyncMock(return_value=True)
+    monkeypatch.setattr(schedule_manual_run_dao, "release_unstarted", release)
+    monkeypatch.setattr(schedule_manual, "schedule_execution", lambda _factory: _resolved(False))
+    monkeypatch.setattr(schedule_manual, "connection_ctx", _NoDb)
+    # When recovery cannot launch it.
+    await schedule_manual.recover_manual_runs()
+    # Then its token is released.
+    release.assert_awaited_once_with(run.id, run.lease_token)
+
+
+def _resolved(value: bool) -> asyncio.Future[bool]:
+    future = asyncio.Future[bool]()
+    future.set_result(value)
+    return future
+
+
+class _NoDb:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
