@@ -57,6 +57,8 @@ from app.services.tool_config import (
 from app.services.tool_ownership import can_configure_tool, can_mutate_tool, tool_capabilities
 
 router = APIRouter(prefix="/tools", tags=["tools"])
+# Connectivity probes wait on MCP, mail and provider servers, so they stay off the request-wide CRUD checkout.
+probe_router = APIRouter(prefix="/tools", tags=["tools"])
 
 
 CATEGORY_CONFIG_PRIMARY_TOOL = {
@@ -481,7 +483,7 @@ class MCPTestRequest(BaseModel):
     api_key: str | None = None
 
 
-@router.post("/test-mcp")
+@probe_router.post("/test-mcp")
 async def check_mcp_connection(
     data: MCPTestRequest,
     current_user: UserRecord = Depends(get_current_user),
@@ -740,7 +742,7 @@ class EmailTestRequest(BaseModel):
     config: EmailConfig
 
 
-@router.post("/test-email")
+@probe_router.post("/test-email")
 async def check_email_connection(
     data: EmailTestRequest,
     current_user: UserRecord = Depends(get_current_user),
@@ -914,7 +916,7 @@ async def delete_category_config(
     return Response(status_code=204)
 
 
-@router.post("/agents/{agent_id}/category-config/{category}/test", response_model=CategoryTestResponse)
+@probe_router.post("/agents/{agent_id}/category-config/{category}/test", response_model=CategoryTestResponse)
 async def check_category_config(
     agent_id: uuid.UUID, category: str, current_user: UserRecord = Depends(get_current_user)
 ) -> CategoryTestPassthrough:

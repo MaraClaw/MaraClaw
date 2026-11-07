@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextvars import Context
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self, cast
-from unittest.mock import Mock
-from uuid import uuid4
+from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import pytest
 from psycopg import AsyncConnection
@@ -27,6 +28,9 @@ from app.db.session import (
     long_running_statement,
     transaction,
 )
+from app.records.user import UserRecord
+from app.services import agent_setup_lock, openclaw_update_exclusion as exclusion
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from transaction_pool_fakes import CountingPool
 
 _REAL_FLUSH_VERSIONS = redis_cache.flush_deferred_versions
@@ -828,3 +832,98 @@ async def test_cancellation_during_flush_propagates_and_still_launches(
         await task
     assert events == ["commit", "acl", "launched"]
     assert raw.commits == 1
+
+
+@pytest.fixture
+def guest_write_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> CountingPool:
+    pool = CountingPool()
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+    monkeypatch.setattr(exclusion, "assert_no_active_run", AsyncMock())
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_guest_write_flock_wait_times_out_with_no_checkout_held(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given an exclusive cutover holder and a short shared-lock wait budget
+    agent_id = uuid4()
+    waits: list[int] = []
+    real_sleep = agent_setup_lock.anyio.sleep
+
+    async def observed_sleep(delay: float) -> None:
+        waits.append(guest_write_pool.active)
+        await real_sleep(delay)
+
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(agent_setup_lock.anyio, "sleep", observed_sleep)
+
+    # When the writer waits out GUEST_WRITE_LOCK_TIMEOUT_SECONDS behind the holder
+    async with setup_workspace_lock(tmp_path / str(agent_id)):
+        with pytest.raises(WorkspaceLockTimeoutError):
+            async with exclusion.guest_write_section(agent_id):
+                pytest.fail("a contended writer must not enter")
+
+    # Then every poll of the flock ran with the pool slot free, after one committed gate scope
+    assert waits
+    assert set(waits) == {0}
+    assert (guest_write_pool.active, guest_write_pool.checkouts, guest_write_pool.releases) == (0, 1, 1)
+    assert (guest_write_pool.raw.commits, guest_write_pool.raw.rollbacks) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_guest_write_section_checks_in_short_scopes_around_the_flock(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given gate checks that register callbacks with the scope they run in
+    effects: list[tuple[str, int, int]] = []
+
+    def after_commit(name: str) -> None:
+        session_module.run_after_commit(
+            lambda: effects.append((name, guest_write_pool.raw.commits, guest_write_pool.active))
+        )
+
+    checks = iter(["before the lock", "under the lock"])
+
+    async def gate(_agent_id: UUID) -> None:
+        after_commit(next(checks))
+
+    async def transfer(_agent_id: UUID) -> None:
+        after_commit("transfer")
+
+    monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", transfer)
+
+    # When the section runs its body
+    async with exclusion.guest_write_section(uuid4()):
+        effects.append(("body", guest_write_pool.raw.commits, guest_write_pool.active))
+
+    # Then each callback fires only after its own scope commits, and the body holds no checkout
+    assert effects == [("before the lock", 1, 1), ("under the lock", 2, 1), ("transfer", 2, 1), ("body", 2, 0)]
+    assert (guest_write_pool.checkouts, guest_write_pool.releases) == (2, 2)
+
+
+@pytest.mark.asyncio
+async def test_guest_write_exclusion_authorizes_in_one_scope_then_holds_no_checkout(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an access check that must run inside a scope
+    seen: list[int] = []
+
+    async def access(_user: UserRecord, _agent_id: UUID) -> tuple[None, str]:
+        seen.append(guest_write_pool.active)
+        return None, "use"
+
+    monkeypatch.setattr(exclusion, "check_agent_access", access)
+
+    # When the dependency is suspended at its yield, as it is while the handler runs
+    dependency = exclusion.guest_write_exclusion(uuid4(), UserRecord(id=uuid4()))
+    await anext(dependency)
+
+    # Then authorization held the slot and the handler does not
+    assert seen == [1]
+    assert guest_write_pool.active == 0
+    await dependency.aclose()
+    assert (guest_write_pool.checkouts, guest_write_pool.releases) == (3, 3)

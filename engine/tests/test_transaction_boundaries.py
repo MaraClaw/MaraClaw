@@ -54,8 +54,28 @@ def pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[CountingPool]:
 
 @pytest.mark.parametrize(
     "router",
-    [main.auth_router, main.files_router, main.enterprise_router, main.skills_router, main.google_workspace_router],
-    ids=["auth", "files", "enterprise", "skills", "google_workspace"],
+    [
+        main.auth_router,
+        main.files_router,
+        main.enterprise_router,
+        main.skills_router,
+        main.google_workspace_router,
+        main.upload_router,
+        main.tools_probe_router,
+        main.files_upload_router,
+        main.enterprise_kb_router,
+    ],
+    ids=[
+        "auth",
+        "files",
+        "enterprise",
+        "skills",
+        "google_workspace",
+        "chat_upload",
+        "tools_probes",
+        "workspace_upload",
+        "enterprise_kb",
+    ],
 )
 def test_io_router_has_no_request_wide_checkout(router: APIRouter) -> None:
     originals = {id(route) for route in router.routes}
@@ -79,15 +99,12 @@ def test_io_router_has_no_request_wide_checkout(router: APIRouter) -> None:
         main.sso_router,
         main.org_router,
         main.advanced_router,
-        main.upload_router,
         main.relationships_router,
         main.activity_router,
         main.messages_router,
         main.tenants_router,
         main.schedules_router,
         main.tools_router,
-        main.files_upload_router,
-        main.enterprise_kb_router,
         main.users_router,
         main.triggers_router,
         main.focus_router,

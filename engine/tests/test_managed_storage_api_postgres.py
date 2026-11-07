@@ -1,5 +1,6 @@
 """Managed storage quota through the real ASGI app, auth and upload route (opt-in ``MARACLAW_TEST_POSTGRES_DSN``)."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -8,10 +9,12 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from agent_deletion_fixtures import deletion_scenario
 from app.db.errors import DbError
+from app.db.pool import close_pool, get_pool, init_pool
 from app.main import app
 from app.records.organization_plan import OrganizationPlanId
 from app.services.storage_runtime import quota_ledger
 from managed_storage_fixtures import StorageWorld, quota_world
+from s3_wire_server import Gate
 from tier_limit_fixtures import approve_admission_for
 
 __all__ = ["deletion_scenario", "quota_world"]
@@ -103,3 +106,44 @@ async def test_an_organization_without_a_paid_tier_has_no_file_or_total_ceiling(
     response = await upload(world, api, "owner", agent, CEILING * 4)
     assert response.status_code == 200, response.text
     assert await world.usage(agent) == CEILING * 4
+
+
+@pytest.mark.parametrize("surface", ["chat", "workspace"])
+async def test_a_blocked_upload_leaves_the_single_pool_slot_available(
+    quota_world: StorageWorld, api: AsyncClient, surface: str
+):
+    world = quota_world
+    world.scale(LIMIT, CEILING)
+    agent = await paid_agent(world, "owner")
+    conninfo = get_pool().conninfo
+    assert isinstance(conninfo, str)
+    await close_pool()
+    pool = await init_pool(conninfo=conninfo, min_size=1, max_size=1)
+    await pool.wait()
+    assert pool.get_stats()["pool_size"] == 1
+    gate = Gate()
+    world.s3.state.gates[world.key(agent, "workspace/uploads/note.txt")] = gate
+
+    async def send() -> Response:
+        if surface == "chat":
+            return await upload(world, api, "owner", agent, 10)
+        return await api.post(
+            f"/api/agents/{agent}/files/upload",
+            params={"path": "workspace/uploads"},
+            headers=world.scenario.headers("owner"),
+            files={"file": ("note.txt", b"a" * 10, "text/plain")},
+        )
+
+    pending = asyncio.create_task(send())
+    try:
+        assert await asyncio.to_thread(gate.arrived.wait, 5), "upload never reached the S3 provider"
+        async with asyncio.timeout(5):
+            response = await api.get("/api/departments", headers=world.scenario.headers("genesis"))
+        assert response.status_code == 200, response.text
+        assert response.json() == {"departments": [], "assignments": []}
+        assert not pending.done(), "upload must still be blocked while the other request completes"
+    finally:
+        gate.release.set()
+        uploaded = await pending
+    assert uploaded.status_code == 200, uploaded.text
+    assert await world.usage(agent) == 10

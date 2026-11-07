@@ -158,7 +158,7 @@ async def test_mcp_wire_preserves_dynamic_provider_tools_and_failure_variant(
 
     monkeypatch.setattr(mcp_client.MCPClient, "list_tools", list_tools)
     app = FastAPI()
-    app.include_router(tools_api.router)
+    app.include_router(tools_api.probe_router)
     app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4())
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

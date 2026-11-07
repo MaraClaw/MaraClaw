@@ -18,6 +18,7 @@ from app.core.permissions import check_agent_access
 from app.core.row_memo import memo_drop
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import agent_manager
@@ -30,13 +31,19 @@ GUEST_WRITE_LOCK_TIMEOUT_SECONDS = 1.0
 
 @asynccontextmanager
 async def guest_write_section(agent_id: UUID) -> AsyncGenerator[None]:
-    """Shared section for code that changes files the guest can see."""
-    await assert_no_active_run(agent_id)
+    """Shared section for code that changes files the guest can see.
+
+    Gate reads run in short scopes of their own, so no pooled connection is held while waiting for the flock or
+    while the section body runs.
+    """
+    async with optional_connection_ctx():
+        await assert_no_active_run(agent_id)
     async with setup_workspace_lock(
         agent_manager._agent_dir(agent_id), shared=True, timeout_seconds=GUEST_WRITE_LOCK_TIMEOUT_SECONDS
     ):
-        await assert_no_active_run(agent_id)
-        await assert_transfer_ready(agent_id)
+        async with optional_connection_ctx():
+            await assert_no_active_run(agent_id)
+            await assert_transfer_ready(agent_id)
         yield
 
 
@@ -44,7 +51,8 @@ async def guest_write_exclusion(
     agent_id: UUID, current_user: Annotated[UserRecord, Depends(get_current_user)]
 ) -> AsyncGenerator[None]:
     """Route dependency for every handler that changes files the guest can see."""
-    _ = await check_agent_access(current_user, agent_id)
+    async with optional_connection_ctx():
+        _ = await check_agent_access(current_user, agent_id)
     async with guest_write_section(agent_id):
         yield
 

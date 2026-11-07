@@ -144,7 +144,7 @@ async def test_api_blocks_preflight_and_mid_discovery_policy_failures(monkeypatc
     # Given: the actual route stack with an authenticated member and a blocked destination or redirect.
     install_wire(monkeypatch, lambda _request: httpx.Response(307, headers={"location": "https://1.1.1.1/mcp"}))
     app = FastAPI()
-    app.include_router(tools_api.router)
+    app.include_router(tools_api.probe_router)
     app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4())
 
     # When: testing the MCP connection through HTTP.
