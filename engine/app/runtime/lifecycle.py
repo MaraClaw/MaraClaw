@@ -96,7 +96,7 @@ class Runtime:
 
             self.realtime_attempted = True
             try:
-                await realtime_router.start(ws_manager.deliver_pubsub_message)
+                await realtime_router.start(ws_manager.deliver_pubsub_message, ws_manager.close_local_connections)
             except Exception as exc:
                 report_exception(exc, source="runtime", operation="realtime-startup")
                 logger.error("[startup] realtime router start failed: {}", exc)

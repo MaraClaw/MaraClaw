@@ -52,7 +52,11 @@ from app.services.realtime_runtime.chat_authorization import (
     read_shared_acl_version,
 )
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
-from app.services.realtime_runtime.router import PRESENCE_REFRESH_SECONDS
+from app.services.realtime_runtime.router import (
+    DEFAULT_SEND_TIMEOUT_SECONDS,
+    PRESENCE_REFRESH_SECONDS,
+    resolve_send_timeout,
+)
 from app.services.shared_chat import is_shared_session, require_writable_session
 
 router = APIRouter(tags=["websocket"])
@@ -62,6 +66,8 @@ type WebSocketConnection = tuple[WebSocket, str | None, str | None]
 type RealtimeMessage = dict[str, object]
 
 _presence_sleep = asyncio.sleep
+# Not 4001/4003: the client treats every other close as transient, reconnects with a fresh ticket and refetches history.
+RESUBSCRIBE_CLOSE_CODE = 1012
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
@@ -129,8 +135,9 @@ class ConnectionManager:
     ) -> None:
         """Deliver one received event to the matching local sockets before the subscriber takes the next one.
 
-        Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Chunks get the same per-socket send
-        bound the publisher uses, so a stalled receiver delays the subscriber loop by at most that bound.
+        Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Every send is bounded: chunks get the
+        same bound the publisher uses and other events the default or terminal bound, so a stalled receiver delays
+        the subscriber loop by at most that bound. Authorization stays outside the bound.
         """
         targets = [
             (ws, sid)
@@ -146,7 +153,9 @@ class ConnectionManager:
             logger.warning(f"[WS] Failed to encode message for connected clients: {error}")
             return
         acl_version = await read_shared_acl_version(agent_id, (sid for _, sid in targets))
-        send_timeout = CHUNK_SEND_TIMEOUT_SECONDS if payload.get("type") == ChatEventType.CHUNK else None
+        send_timeout = (
+            CHUNK_SEND_TIMEOUT_SECONDS if payload.get("type") == ChatEventType.CHUNK else resolve_send_timeout(payload)
+        )
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
             ws, sid = target
@@ -162,6 +171,22 @@ class ConnectionManager:
             return True
 
         _ = await fan_out(targets, deliver)
+
+    async def close_local_connections(self) -> None:
+        """Close every local chat socket with a reconnectable code so each client refetches what a lost subscription dropped."""
+        sockets = [ws for connections in list(self.active_connections.values()) for ws, _, _ in list(connections)]
+
+        async def close(ws: WebSocket) -> bool:
+            try:
+                async with asyncio.timeout(DEFAULT_SEND_TIMEOUT_SECONDS):
+                    await ws.close(code=RESUBSCRIBE_CLOSE_CODE)
+            except Exception as error:
+                report_exception(error, source="websocket", operation="resubscribe-close")
+                logger.warning(f"[WS] Failed to close connected client after resubscribe: {error}")
+                return False
+            return True
+
+        _ = await fan_out(sockets, close)
 
     async def send_message(self, agent_id: str, message: RealtimeMessage):
         await realtime_router.route_message(

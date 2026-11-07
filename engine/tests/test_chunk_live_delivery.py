@@ -412,7 +412,7 @@ async def test_stalled_remote_socket_delays_healthy_receivers_only_until_the_sen
 
 
 @pytest.mark.parametrize("kind", ["chunk", "done"])
-async def test_only_chunk_events_get_a_receive_side_send_bound(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+async def test_the_chunk_bound_applies_to_chunk_events_only(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
     pipe = Pipeline(monkeypatch, shared=False)
     receiver = Receiver(pipe)
@@ -434,6 +434,71 @@ async def test_only_chunk_events_get_a_receive_side_send_bound(monkeypatch: pyte
     assert healthy.sent.is_set()
     assert slow.send_cancelled is (kind == "chunk")
     assert bool(slow.frames) is (kind == "done")
+
+
+async def test_stalled_done_socket_is_bounded_and_the_next_event_still_reaches_healthy_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
+    pipe = Pipeline(monkeypatch, shared=False)
+    receiver = Receiver(pipe)
+    stalled = await receiver.connect(stalled=True)
+    healthy = await receiver.connect()
+    turn_id = str(uuid4())
+    events: list[dict[str, object]] = [
+        {"type": "done", "role": "assistant", "content": "x", "turn_id": turn_id},
+        {"type": "chunk", "content": "y", "turn_id": str(uuid4()), "seq": 0, "replace": False},
+        {"type": "error", "content": "z"},
+    ]
+
+    for event in events:
+        await asyncio.wait_for(receiver.manager.deliver_pubsub_message(agent_id=str(pipe.agent_id), payload=event), 5)
+
+    assert [json.loads(str(frame["text"]))["type"] for frame in healthy.frames] == ["done", "chunk", "error"]
+    assert stalled.send_cancelled
+    assert not stalled.frames
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_stalled_done_socket_cannot_hold_back_the_publisher_or_remote_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.01)
+    pipe = Pipeline(monkeypatch, shared=False)
+    pipe.store = remote_presence(pipe)
+    stalled = await pipe.connect(stalled=True)
+    healthy = await pipe.connect()
+
+    await asyncio.wait_for(
+        websocket.manager.send_to_session(
+            str(pipe.agent_id), str(pipe.session_id), {"type": "done", "role": "assistant", "content": "x"}
+        ),
+        5,
+    )
+
+    assert [json.loads(str(frame["text"]))["type"] for frame in healthy.frames] == ["done"]
+    assert stalled.send_cancelled
+    assert len(pipe.store.published) == 1
+
+
+async def test_terminal_send_bound_never_cancels_shared_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
+    pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate()
+    link = await pipe.connect()
+
+    task = asyncio.create_task(
+        websocket.manager.send_to_session(
+            str(pipe.agent_id), str(pipe.session_id), {"type": "done", "role": "assistant", "content": "x"}
+        )
+    )
+    await asyncio.wait_for(pipe.auth_gate.saturated.wait(), 5)
+    pipe.auth_gate.open.set()
+    await asyncio.wait_for(task, 5)
+
+    assert not pipe.authorization_cancelled
+    assert [json.loads(str(frame["text"]))["type"] for frame in link.frames] == ["done"]
 
 
 async def test_receiver_serializes_each_event_once(monkeypatch: pytest.MonkeyPatch) -> None:

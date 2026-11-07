@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import assert_never, cast
 
@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
+from app.schemas.chat_wire import ChatEventType
 from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, read_shared_acl_version
 from app.services.realtime_runtime.contracts import (
     LocalDeliverer,
@@ -33,6 +34,20 @@ settings = get_settings()
 PRESENCE_TTL_SECONDS = 180
 PRESENCE_REFRESH_SECONDS = 60
 PUBSUB_PREFIX = "realtime:ws"
+# Per-socket ``send_text`` bounds. Chunks use the publisher's own tighter bound; every other event is bounded by default
+# and the terminal events that end a turn wait longer so a slow but healthy client still receives them.
+DEFAULT_SEND_TIMEOUT_SECONDS = 5.0
+TERMINAL_SEND_TIMEOUT_SECONDS = 15.0
+TERMINAL_EVENT_TYPES = frozenset({ChatEventType.DONE, ChatEventType.ERROR})
+
+type ResubscribeHook = Callable[[], Awaitable[object]]
+
+
+def resolve_send_timeout(message: Mapping[str, object]) -> float:
+    """Return the ``ws.send_text`` bound for an event that carries no explicit one."""
+    return (
+        TERMINAL_SEND_TIMEOUT_SECONDS if message.get("type") in TERMINAL_EVENT_TYPES else DEFAULT_SEND_TIMEOUT_SECONDS
+    )
 
 
 class RealtimeRouter:
@@ -41,6 +56,7 @@ class RealtimeRouter:
         self._subscriber_task: asyncio.Task[None] | None = None
         self._started: bool = False
         self._subscription: AcknowledgedPubSub | None = None
+        self._acknowledgments: int = 0
 
     @property
     def ready(self) -> bool:
@@ -156,9 +172,10 @@ class RealtimeRouter:
 
         Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
         for a shared session, the ACL version is read once before any socket authorizes. ``send_timeout`` bounds
-        only ``ws.send_text``, the one wait a client controls. Authorization and Redis presence are never cancelled
-        by it: aborting authorization discards the positive decision it would cache, and aborting routing skips
-        remote instances. A stalled socket is skipped like any other failed send.
+        only ``ws.send_text``, the one wait a client controls; without one, ``resolve_send_timeout`` picks the default
+        or terminal bound. Authorization and Redis presence are never cancelled by it: aborting authorization discards
+        the positive decision it would cache, and aborting routing skips remote instances. A stalled socket is skipped
+        like any other failed send.
         """
         targets = [
             (ws, local_session_id)
@@ -167,7 +184,8 @@ class RealtimeRouter:
         ]
         presence = asyncio.create_task(self._remote_targets(agent_id, session_id, user_id), name="realtime-presence")
         try:
-            local_sent = await self._deliver_local(agent_id, message, targets, send_timeout)
+            bound = resolve_send_timeout(message) if send_timeout is None else send_timeout
+            local_sent = await self._deliver_local(agent_id, message, targets, bound)
             remote_targets = await presence
         finally:
             if not presence.done():
@@ -197,7 +215,7 @@ class RealtimeRouter:
         agent_id: str,
         message: dict[str, object],
         targets: list[tuple[WebSocket, str | None]],
-        send_timeout: float | None,
+        send_timeout: float,
     ) -> int:
         if not targets:
             return 0
@@ -232,11 +250,19 @@ class RealtimeRouter:
                 remote_targets[target_instance] = remote_targets.get(target_instance, 0) + 1
         return remote_targets
 
-    async def start(self, deliver_local: LocalDeliverer) -> None:
+    async def start(self, deliver_local: LocalDeliverer, on_resubscribe: ResubscribeHook | None = None) -> None:
+        """Start the subscriber; ``on_resubscribe`` runs after every subscribe acknowledgment except the first.
+
+        Events published while the subscription was down are gone, so the hook is where local clients are told to
+        reconnect and refetch history. It runs inside the serial subscriber loop, ahead of the next event.
+        """
         if self._started:
             return
         self._started = True
-        self._subscriber_task = asyncio.create_task(self._subscriber_loop(deliver_local), name="realtime-subscriber")
+        self._acknowledgments = 0
+        self._subscriber_task = asyncio.create_task(
+            self._subscriber_loop(deliver_local, on_resubscribe), name="realtime-subscriber"
+        )
 
     async def stop(self) -> None:
         self._started = False
@@ -256,7 +282,7 @@ class RealtimeRouter:
         self._subscription = None
         self._started = False
 
-    async def _subscriber_loop(self, deliver_local: LocalDeliverer) -> None:
+    async def _subscriber_loop(self, deliver_local: LocalDeliverer, on_resubscribe: ResubscribeHook | None) -> None:
         redis = await get_redis()
         while True:
             pubsub = AcknowledgedPubSub(redis.connection_pool)
@@ -271,6 +297,8 @@ class RealtimeRouter:
                     channel = message.get("channel")
                     if message.get("type") == "subscribe":
                         pubsub.acknowledged = channel in (self._instance_channel(), self._instance_channel().encode())
+                        if pubsub.acknowledged:
+                            await self._acknowledged(on_resubscribe)
                     elif message.get("type") == "unsubscribe":
                         pubsub.acknowledged = False
                     elif message.get("type") == "message":
@@ -281,6 +309,15 @@ class RealtimeRouter:
                 pubsub.acknowledged = False
                 await pubsub.aclose()
             await asyncio.sleep(1.0)
+
+    async def _acknowledged(self, on_resubscribe: ResubscribeHook | None) -> None:
+        self._acknowledgments += 1
+        if self._acknowledgments == 1 or on_resubscribe is None:
+            return
+        try:
+            await on_resubscribe()
+        except Exception as exc:
+            logger.warning("[Realtime] Resubscribe hook failed: {}", type(exc).__name__)
 
     @staticmethod
     async def _deliver_message(payload_raw: object, deliver_local: Callable[..., Awaitable[object]]) -> None:

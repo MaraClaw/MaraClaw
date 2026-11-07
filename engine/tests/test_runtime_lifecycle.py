@@ -204,7 +204,10 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     async def audit(*_args: object) -> None:
         return None
 
-    async def realtime(_callback: object) -> None:
+    async def realtime(_callback: object, on_resubscribe: Callable[[], Awaitable[None]]) -> None:
+        from app.api.websocket import manager as ws_manager
+
+        assert on_resubscribe == ws_manager.close_local_connections
         events.append("api")
 
     async def loop() -> None:
