@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
 import { useId } from 'react'
-import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
@@ -22,7 +21,7 @@ export function TenantEmailSettings() {
       <CardDescription>Configure email delivery only for your organization. Only its genesis administrator can manage these settings.</CardDescription>
     </CardHeader>
     <CardContent className="flex min-w-0 flex-col gap-5 [overflow-wrap:anywhere]">
-      {mustChangePassword ? <p className="text-sm text-muted-foreground">Change your password on <Link to="/account" className="text-primary underline underline-offset-4">Account</Link> before viewing or changing SMTP settings.</p> : <ScopedEmailSettings key={tenantId} tenantId={tenantId} recipient={user?.email ?? null} />}
+      {mustChangePassword ? <p className="text-sm text-muted-foreground"><a href="#change-password" className="text-primary underline underline-offset-4">Change your password</a> before viewing or changing SMTP settings.</p> : <ScopedEmailSettings key={tenantId} tenantId={tenantId} recipient={user?.email ?? null} />}
     </CardContent>
   </Card>
 }
