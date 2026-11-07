@@ -20,6 +20,9 @@ from app.records.user import UserRecord
 from app.services import file_download_tickets
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.workspace_collaboration import safe_agent_path
+from materialize_fixtures import GatedObject, temp_files, temp_root
+
+__all__ = ["temp_root"]
 
 
 def test_safe_agent_path_rejects_sibling_symlink_and_accepts_symlinked_root(tmp_path):
@@ -78,12 +81,9 @@ async def test_preview_cancel_reaches_owned_parser(monkeypatch, tmp_path, suffix
     async def sheets(*_args, **_kwargs):
         raise files_api.DocumentParseError("not an xlsx")
 
-    async def local(_key):
-        return tmp_path / key
-
     monkeypatch.setattr(files_api, "check_agent_access", AsyncMock())
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
-    monkeypatch.setattr(files_api, "ensure_local_path", local)
+    monkeypatch.setattr("app.services.storage_runtime.facade.get_storage_backend", lambda: storage)
     monkeypatch.setattr(files_api, "convert_document_isolated_async", parse)
     monkeypatch.setattr(files_api, "extract_xlsx_sheets_isolated_async", sheets)
     task = asyncio.create_task(files_api.preview_file(agent_id=agent_id, path=rel, current_user=user))
@@ -96,6 +96,54 @@ async def test_preview_cancel_reaches_owned_parser(monkeypatch, tmp_path, suffix
             await task
     # Then
     assert cancelled.is_set()
+    assert (tmp_path / key).read_bytes() == b"document"
+
+
+@pytest.mark.parametrize("outcome", ["return", "raise"])
+async def test_local_preview_never_removes_the_workspace_file(monkeypatch, tmp_path, temp_root, outcome):
+    # Given
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path / "storage"))
+    key = f"{agent_id}/workspace/report.docx"
+    await storage.write_bytes(key, b"document")
+
+    async def parse(*_args, **_kwargs):
+        if outcome == "raise":
+            raise RuntimeError("parser crashed")
+        return "extracted"
+
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock())
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr("app.services.storage_runtime.facade.get_storage_backend", lambda: storage)
+    monkeypatch.setattr(files_api, "convert_document_isolated_async", parse)
+    # When
+    request = files_api.preview_file(agent_id=agent_id, path="workspace/report.docx", current_user=user)
+    if outcome == "raise":
+        with pytest.raises(RuntimeError, match="parser crashed"):
+            await request
+    else:
+        assert dict(await request)["text"] == "extracted"
+    # Then
+    assert await storage.read_bytes(key) == b"document"
+    assert temp_files(temp_root) == []
+
+
+async def test_download_without_a_presigned_url_buffers_bytes_instead_of_copying_to_disk(
+    monkeypatch, temp_root, download
+):
+    # Given: an S3 backend that cannot presign, so the response must come from memory
+    key = f"{download.agent_id}/workspace/report.pdf"
+    source = GatedObject(key, b"report-bytes")
+    storage = source.backend(monkeypatch)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    # When
+    response = await _download(download, "bearer")
+    # Then
+    assert not isinstance(response, FileResponse)
+    assert response.body == b"report-bytes"
+    assert source.get_calls == 1
+    assert temp_files(temp_root) == []
 
 
 async def test_cancelled_office_sidecar_keeps_attachment_without_markdown(monkeypatch, tmp_path):

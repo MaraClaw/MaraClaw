@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import itertools
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
@@ -16,10 +17,10 @@ from app.services.trigger_runtime.scan import TriggerScanner
 
 @pytest.fixture(autouse=True)
 def isolated_daemon(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    async def no_triggers() -> list[AgentTriggerRecord]:
+    async def no_triggers(*, after: uuid.UUID | None, limit: int) -> list[AgentTriggerRecord]:
         return []
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled", no_triggers)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", no_triggers)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
     monkeypatch.setattr(trigger_daemon, "_A2A_WAKE_CHAIN", {})
     trigger_daemon.open_trigger_admission()
@@ -306,10 +307,28 @@ async def test_reopened_gate_admits_again(monkeypatch: pytest.MonkeyPatch) -> No
     await trigger_daemon.drain_trigger_tasks(grace_seconds=1)
 
 
+_scan_ids = itertools.count(1)
+
+
 def scan_trigger(name: str, trigger_type: str = "poll", **config: object) -> AgentTriggerRecord:
+    # Ids ascend in creation order, like the id-ordered pages the daemon reads.
     return AgentTriggerRecord(
-        id=uuid.uuid4(), agent_id=uuid.uuid4(), name=name, type=trigger_type, config=dict(config), is_enabled=True
+        id=uuid.UUID(int=next(_scan_ids)),
+        agent_id=uuid.uuid4(),
+        name=name,
+        type=trigger_type,
+        config=dict(config),
+        is_enabled=True,
     )
+
+
+def trigger_pages(triggers: list[AgentTriggerRecord]) -> Callable[..., Awaitable[list[AgentTriggerRecord]]]:
+    ordered = sorted(triggers, key=lambda trigger: trigger.id)
+
+    async def page(*, after: uuid.UUID | None, limit: int) -> list[AgentTriggerRecord]:
+        return [trigger for trigger in ordered if after is None or trigger.id > after][:limit]
+
+    return page
 
 
 def patch_scan(
@@ -319,14 +338,11 @@ def patch_scan(
 ) -> list[datetime]:
     claims: list[datetime] = []
 
-    async def enabled() -> list[AgentTriggerRecord]:
-        return triggers
-
     async def claim_ready(now: datetime) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
         claims.append(now)
         return {}, set()
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", trigger_pages(triggers))
     monkeypatch.setattr(trigger_daemon, "_evaluate_trigger", evaluate)
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim_ready)
     return claims
@@ -384,14 +400,15 @@ async def test_one_failing_trigger_does_not_cancel_the_rest(monkeypatch: pytest.
 async def test_concurrent_evaluations_stay_under_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given six triggers and a scanner bounded at two
     triggers = [scan_trigger(f"t{i}") for i in range(6)]
-    monkeypatch.setattr(trigger_daemon, "_scanner", TriggerScanner(limit=2))
+    scanner = TriggerScanner(limit=2)
+    monkeypatch.setattr(trigger_daemon, "_scanner", scanner)
     release = asyncio.Event()
-    all_done = asyncio.Event()
     both_started = asyncio.Event()
-    active = peak = completed = 0
+    active = peak = 0
+    evaluated: list[str] = []
 
-    async def evaluate(_trigger: AgentTriggerRecord, _now: datetime, _zone: str | None = None) -> bool:
-        nonlocal active, peak, completed
+    async def evaluate(trigger: AgentTriggerRecord, _now: datetime, _zone: str | None = None) -> bool:
+        nonlocal active, peak
         active += 1
         peak = max(peak, active)
         if active == 2:
@@ -400,22 +417,25 @@ async def test_concurrent_evaluations_stay_under_the_bound(monkeypatch: pytest.M
             await release.wait()
         finally:
             active -= 1
-            completed += 1
-            if completed == len(triggers):
-                all_done.set()
+            evaluated.append(trigger.name)
         return False
 
     _ = patch_scan(monkeypatch, triggers, evaluate)
     monkeypatch.setattr(trigger_daemon, "EVALUATION_SETTLE_SECONDS", 0)
-    # When a tick leaves them all pending, then they are released
+    # When a tick leaves two pending
     await trigger_daemon._tick()
     await asyncio.wait_for(both_started.wait(), 1)
+    # Then only those two exist, not one task per trigger
     assert active == peak == 2
+    assert len(scanner._tasks) == 2
+    # And once released, the next tick picks up the four that were deferred
     release.set()
-    await asyncio.wait_for(all_done.wait(), 1)
-    # Then no more than two ever ran together
+    _ = await asyncio.gather(*scanner._tasks.values())
+    monkeypatch.setattr(trigger_daemon, "EVALUATION_SETTLE_SECONDS", 5)
+    await trigger_daemon._tick()
+    assert sorted(evaluated) == [f"t{i}" for i in range(6)]
     assert peak == 2
-    await trigger_daemon._scanner.close()
+    await scanner.close()
 
 
 async def test_evaluations_start_in_an_empty_context(monkeypatch: pytest.MonkeyPatch) -> None:

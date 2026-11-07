@@ -57,6 +57,22 @@ class ConditionalWriteResult:
     current_version: StorageVersion | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedFile:
+    """A local file holding one storage key, and whether the holder must remove it.
+
+    ``owned`` is true only for a temporary copy made for the caller. A real workspace file or an unpromoted legacy
+    file is never owned, so ``close`` never unlinks it.
+    """
+
+    path: Path
+    owned: bool = False
+
+    def close(self) -> None:
+        if self.owned:
+            self.path.unlink(missing_ok=True)
+
+
 class AtomicCreateUnsupportedError(NotImplementedError):
     def __init__(self, backend: str, key: str):
         self.backend: str = backend
@@ -256,8 +272,18 @@ class StorageBackend:
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
 
     async def local_path_for(self, key: str) -> Path | None:
+        """The key's existing local file, or None. Never copies, so a caller can stream it without cleanup."""
         del key
         return None
+
+    async def materialize(self, key: str) -> MaterializedFile | None:
+        """A local file for ``key``, or None when the backend cannot provide one.
+
+        The default reports an existing local file as not owned. Backends that copy the object override this and
+        report the copy as owned; the caller closes the handle exactly once.
+        """
+        path = await self.local_path_for(key)
+        return None if path is None else MaterializedFile(path)
 
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
         del key, filename, inline

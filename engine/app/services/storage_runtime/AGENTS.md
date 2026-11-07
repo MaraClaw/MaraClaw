@@ -5,7 +5,8 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 ## Backend Contract
 
 - Backends implement async primitives from `base.py`: `exists`, `is_file`, `is_dir`, `list_dir`, `read_bytes`, `write_bytes`, `delete`, `delete_tree`, and `stat`.
-- Helper APIs include `read_text`, `write_text`, `get_version`, `write_bytes_if_match`, `delete_if_match`, `local_path_for`, and `presign_download_url`.
+- Helper APIs include `read_text`, `write_text`, `get_version`, `write_bytes_if_match`, `delete_if_match`, `local_path_for`, `materialize`, and `presign_download_url`.
+- `local_path_for(key)` returns an existing local file or `None` and never copies, so `_download_response` can stream it. `materialize(key)` returns a `MaterializedFile` (`path`, `owned`); the base default wraps `local_path_for` as not owned, so a real workspace or legacy file is never unlinked. S3 streams the object in bounded chunks into a temp file made by its worker thread and reports it owned. The worker removes the file on error or when its awaiter was cancelled; the awaiter removes it only when the worker already delivered it. Fallback returns the handle of the backend that produced the file (the primary winner after promotion). Callers use `materialized_local_path(key)` from the facade so release runs in `finally`; check size with `get_version_bounded` first.
 - `read_bytes_bounded(key, max_bytes)` measures actual bytes, including growth, with at most one overflow byte. It raises `StorageReadLimitExceededError` or `FileNotFoundError` without a full read/hash/version preflight. Blocking workers own open/GET, read, and close even if the awaiter is cancelled. Fallback bounds both promotion and the primary winner; legacy stays read only.
 - `StorageVersion.token` precedence is `version_id`, then `etag`, then `content_hash`, then modified-time/size.
 - Conditional write/delete conflicts return `ConditionalWriteResult`; version conflicts are normal outcomes, not exceptions.
@@ -31,7 +32,7 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 - Use `WriteCondition(version_token=...)` for user-visible or concurrent edits.
 - Upload callers must attempt `create_bytes_if_absent` directly, not check `exists` then write. Advance to a new filename only on `conflict`; bound filename attempts. Set response filename/key only after `ok`; never delete a conflict winner or hide provider failures. Use the accepted candidate for content type, extraction, materialization, and response fields.
 - Do not assume local files are authoritative when S3/fallback is enabled.
-- `ensure_local_path()` can raise for backends that cannot materialize local files.
+- `materialized_local_path()` raises for backends that cannot materialize local files. Materialize only when a caller reads the path: `store_agent_upload` and chat upload do not, and the public tenant logo is a bounded `read_bytes_bounded` served as a plain `Response`.
 
 ## Managed Quota (S3 only)
 

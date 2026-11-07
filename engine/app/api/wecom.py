@@ -488,7 +488,9 @@ async def _process_wecom_kf_event(
                     sync_data = json_object_from_response(sync_resp)
                     if sync_data.get("errcode") not in (40014, 42001, 40001):
                         break
-                    await im_token_cache.drop_cached_im_token("wecom", corp_id, secret=secret)
+                    await im_token_cache.drop_rejected_im_token(
+                        im_token_cache.ImTokenKey("wecom", corp_id, secret), access_token
+                    )
                 if sync_data.get("errcode") != 0:
                     raise HTTPException(status_code=503, detail="WeCom KF sync failed")
 

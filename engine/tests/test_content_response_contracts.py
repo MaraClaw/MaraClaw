@@ -68,14 +68,9 @@ async def client(application: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 def storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> LocalStorageBackend:
     backend = LocalStorageBackend(str(tmp_path))
-
-    async def local_path(key: str) -> Path:
-        return tmp_path / key
-
     for module in (files, upload, pages):
         monkeypatch.setattr(module, "get_storage_backend", lambda: backend)
-    monkeypatch.setattr(files, "ensure_local_path", local_path)
-    monkeypatch.setattr(upload, "ensure_local_path", local_path)
+    monkeypatch.setattr("app.services.storage_runtime.facade.get_storage_backend", lambda: backend)
     return backend
 
 

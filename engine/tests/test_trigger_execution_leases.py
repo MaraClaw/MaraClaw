@@ -812,7 +812,7 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
     _, trigger = await claimed_lease(monkeypatch, table)
     launched = asyncio.Event()
 
-    async def enabled():
+    async def enabled(*, after, limit):
         return []
 
     async def claim(_now):
@@ -822,7 +822,7 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
         assert session_module.get_connection() is None
         launched.set()
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
     monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invoke)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})

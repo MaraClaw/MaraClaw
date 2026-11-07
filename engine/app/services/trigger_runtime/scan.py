@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import uuid
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from functools import partial
 
 from app.core.logging import logger
@@ -19,32 +19,44 @@ MAX_CONCURRENT_EVALUATIONS = 8
 """Well below the shared database pool (``DATABASE_POOL_MAX_SIZE``), which every worker loop draws from."""
 
 type Evaluate = Callable[[AgentTriggerRecord], Awaitable[None]]
+type ReadPage = Callable[[uuid.UUID | None, int], Awaitable[Sequence[AgentTriggerRecord]]]
+"""Enabled triggers in id order after the given id, at most the given count."""
 
 
 class TriggerScanner:
-    """Runs one owned task per trigger under a fixed concurrency bound.
+    """Walks the enabled triggers in id-ordered pages, never owning more than ``limit`` evaluation tasks.
 
-    A tick waits only ``settle`` seconds for its evaluations, so a slow poll never delays the claim phase. It keeps
-    running in its own task and the next tick skips that trigger until it finishes. ``close`` cancels and awaits
-    every task, so nothing outlives the loop that owns the scanner.
+    The cursor persists across ticks and wraps to the start at the end of the table. A page is never larger than the
+    free slots, so a trigger the tick had no capacity or time for stays ahead of the cursor and is evaluated on a
+    later tick; a hung evaluation cannot starve the triggers behind it. A tick waits only ``settle`` seconds in total
+    for what it started, so a slow poll never delays the claim phase. That evaluation keeps running in its own task
+    and the cursor skips its trigger until it finishes. ``close`` cancels and awaits every task, so nothing outlives
+    the loop that owns the scanner.
     """
 
     def __init__(self, limit: int = MAX_CONCURRENT_EVALUATIONS) -> None:
         self._limit: int = limit
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._gate: asyncio.Semaphore | None = None
-        self._gate_loop: asyncio.AbstractEventLoop | None = None
+        self._cursor: uuid.UUID | None = None
 
-    async def scan(self, triggers: Iterable[AgentTriggerRecord], evaluate: Evaluate, *, settle: float) -> None:
-        started = [self._start(trigger, evaluate) for trigger in triggers if trigger.id not in self._tasks]
-        if started:
-            _ = await asyncio.wait(started, timeout=settle)
+    async def scan(self, read_page: ReadPage, evaluate: Evaluate, *, settle: float) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + settle
+        while (free := self._limit - len(self._tasks)) > 0:
+            page = await read_page(self._cursor, free)
+            exhausted = len(page) < free
+            self._cursor = None if exhausted else page[-1].id
+            wave = [self._start(trigger, evaluate) for trigger in page if trigger.id not in self._tasks]
+            if wave:
+                _ = await asyncio.wait(wave, timeout=max(0.0, deadline - loop.time()))
+            if exhausted or loop.time() >= deadline:
+                return
 
     async def close(self) -> None:
         tasks = tuple(self._tasks.values())
         await cancel_tasks(tasks)
         self._tasks.clear()
-        self._gate = self._gate_loop = None
+        self._cursor = None
 
     def _start(self, trigger: AgentTriggerRecord, evaluate: Evaluate) -> asyncio.Task[None]:
         # An empty context: concurrent evaluations must never inherit and share a caller's connection.
@@ -57,19 +69,12 @@ class TriggerScanner:
         if self._tasks.get(trigger_id) is task:
             del self._tasks[trigger_id]
 
-    async def _run(self, trigger: AgentTriggerRecord, evaluate: Evaluate) -> None:
-        async with self._semaphore():
-            try:
-                await evaluate(trigger)
-            except Exception as error:
-                logger.warning(f"Error evaluating trigger {trigger.name}: {error}")
-
-    def _semaphore(self) -> asyncio.Semaphore:
-        loop = asyncio.get_running_loop()
-        if self._gate is None or self._gate_loop is not loop:
-            self._gate = asyncio.Semaphore(self._limit)
-            self._gate_loop = loop
-        return self._gate
+    @staticmethod
+    async def _run(trigger: AgentTriggerRecord, evaluate: Evaluate) -> None:
+        try:
+            await evaluate(trigger)
+        except Exception as error:
+            logger.warning(f"Error evaluating trigger {trigger.name}: {error}")
 
 
 async def cron_agent_timezones(triggers: Iterable[AgentTriggerRecord]) -> dict[uuid.UUID, str]:

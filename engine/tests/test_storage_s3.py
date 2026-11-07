@@ -21,7 +21,10 @@ from app.services.storage_runtime.base import (
     WriteCondition,
 )
 from app.services.storage_runtime.s3 import S3StorageBackend
+from materialize_fixtures import GatedObject, temp_files, temp_root
 from storage_walk_fixtures import EXPECTED_WALK, FILE_SIZE, PagedS3Client, s3_backend, shape, tree_client
+
+__all__ = ["temp_root"]
 
 
 class BotocoreConfigOptions(TypedDict):
@@ -444,6 +447,95 @@ async def test_s3_bounded_read_preserves_provider_errors_except_missing_key(monk
 
     with pytest.raises(ClientError if code in {"AccessDenied", "NoSuchBucket"} else FileNotFoundError):
         await backend.read_bytes_bounded("report.bin", 8)
+
+
+@pytest.mark.parametrize("size", [0, 1, 200_000])
+async def test_s3_materialize_streams_bounded_chunks_into_an_owned_copy(monkeypatch, temp_root, size):
+    # Given
+    data = (b"abc" * size)[:size]
+    source = GatedObject("agent/report.xlsx", data)
+    backend = source.backend(monkeypatch)
+
+    async def whole_object_read(key: str) -> bytes:
+        raise AssertionError(f"materialize must not buffer {key}")
+
+    monkeypatch.setattr(backend, "read_bytes", whole_object_read)
+    # When
+    handle = await backend.materialize("agent/report.xlsx")
+    # Then
+    assert handle.owned
+    assert (handle.path.parent, handle.path.suffix) == (temp_root, ".xlsx")
+    assert handle.path.read_bytes() == data
+    assert all(read is not None and 0 < read <= 1024 * 1024 for read in source.read_sizes)
+    assert (len(source.read_sizes) > 2) == (size > 100_000)
+    assert source.closed.is_set()
+    handle.close()
+    assert temp_files(temp_root) == []
+
+
+async def test_s3_materialize_removes_the_partial_copy_when_the_stream_fails(monkeypatch, temp_root):
+    # Given
+    source = GatedObject("agent/report.xlsx", b"x" * 200_000, fail_after=64 * 1024)
+    backend = source.backend(monkeypatch)
+    # When / Then
+    with pytest.raises(OSError, match="stream failed"):
+        await backend.materialize("agent/report.xlsx")
+    assert temp_files(temp_root) == []
+    assert source.closed.is_set()
+
+
+async def test_s3_materialize_creates_no_file_for_a_missing_key(monkeypatch, temp_root):
+    # Given
+    backend = S3StorageBackend(bucket="bucket")
+
+    class Client:
+        def get_object(self, **kwargs):
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+    # When / Then
+    with pytest.raises(FileNotFoundError):
+        await backend.materialize("agent/gone.xlsx")
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("phase", ["get", "read"])
+async def test_s3_cancel_during_copy_leaves_the_worker_to_remove_its_own_file(monkeypatch, temp_root, phase):
+    # Given
+    source = GatedObject("agent/report.xlsx", b"x" * 200_000, pause=phase)
+    backend = source.backend(monkeypatch)
+    task = asyncio.create_task(backend.materialize("agent/report.xlsx"))
+    try:
+        assert await anyio.to_thread.run_sync(source.blocked.wait, 10)
+        # When
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Then: the blocked worker still owns whatever it created, and the awaiter has not touched it
+        assert len(temp_files(temp_root)) == (0 if phase == "get" else 1)
+    finally:
+        source.release.set()
+    assert await anyio.to_thread.run_sync(source.closed.wait, 10)
+    assert temp_files(temp_root) == []
+    assert len(set(source.owners)) == 1
+    assert get_ident() not in source.owners
+
+
+async def test_s3_cancel_after_the_worker_delivered_removes_the_copy_the_awaiter_never_received(monkeypatch, temp_root):
+    # Given: the worker finishes and publishes its file, then the cancellation lands before the awaiter resumes
+    source = GatedObject("agent/report.xlsx", b"data")
+    backend = source.backend(monkeypatch)
+
+    async def finish_then_cancel(function, *arguments, **_options):
+        function(*arguments)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(anyio.to_thread, "run_sync", finish_then_cancel)
+    # When / Then
+    with pytest.raises(asyncio.CancelledError):
+        await backend.materialize("agent/report.xlsx")
+    assert temp_files(temp_root) == []
+    assert source.closed.is_set()
 
 
 @pytest.mark.parametrize("prefix", ["", "tenant"])

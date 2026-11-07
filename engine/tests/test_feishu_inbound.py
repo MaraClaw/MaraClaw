@@ -29,6 +29,7 @@ from app.services.channels.media_limits import (
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 from channel_media_fixtures import CountingStream, serve
+from im_token_cache_fakes import install_token_cache
 from test_channel_shared_processors import context, pipeline
 from test_db_session import _FakePool, _FakeRawConnection
 
@@ -302,6 +303,8 @@ def feishu_event(kind, content):
 
 
 def serve_resource(monkeypatch, resource):
+    _ = install_token_cache(monkeypatch)
+
     def handler(request):
         if request.method == "POST":
             return httpx.Response(200, json={"app_access_token": "token"})

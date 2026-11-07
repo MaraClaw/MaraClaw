@@ -32,26 +32,16 @@ def _feishu_token_rejected(response: httpx.Response) -> bool:
     return isinstance(code, int) and code in _FEISHU_TOKEN_REJECTED
 
 
-async def _feishu_token(client: httpx.AsyncClient, app_id: str, app_secret: str, provider: OutboundProvider) -> str:
-    """Cached app access token under the same key `FeishuService.get_tenant_access_token` uses."""
-    cached = await im_token_cache.get_cached_im_token("feishu", app_id, secret=app_secret)
-    if cached is not None and cached != "":
-        return cached
-    from app.services.feishu_service import FEISHU_APP_ACCESS_ENDPOINT
+async def _feishu_token(app_id: str, app_secret: str, provider: OutboundProvider) -> str:
+    """Shared cached app access token under the key every Feishu path uses."""
+    from app.services.feishu_service import get_feishu_app_token
 
-    auth = await client.post(FEISHU_APP_ACCESS_ENDPOINT, json={"app_id": app_id, "app_secret": app_secret})
-    auth_body = response_body(auth, provider)
-    token = json_as_str_or(auth_body.get("app_access_token"), "")
-    require_ack(auth, provider, auth_body.get("code") == 0 and bool(token), "authentication_failed")
-    expire = auth_body.get("expire")
-    await im_token_cache.set_cached_im_token(
-        "feishu",
-        app_id,
-        token,
-        secret=app_secret,
-        ttl=im_token_cache.refresh_ttl(expire if isinstance(expire, int) and not isinstance(expire, bool) else None),
-    )
-    return token
+    try:
+        return await get_feishu_app_token(app_id, app_secret)
+    except im_token_cache.ImTokenRefusedError as refused:
+        _ = response_body(refused.response, provider)
+        retry_at = provider_deadline(refused.response, datetime.now(UTC))
+        raise ProviderDeliveryError(provider, "authentication_failed", retry_at) from refused
 
 
 async def _feishu_send(
@@ -157,12 +147,14 @@ async def send_chunk(
                 "content": json.dumps({"text": chunk.text}),
                 "uuid": str(chunk.key),
             }
-            token = await _feishu_token(client, app_id, app_secret, target.provider)
+            token = await _feishu_token(app_id, app_secret, target.provider)
             response = await _feishu_send(client, target.recipient_type, token, feishu_payload)
             if _feishu_token_rejected(response):
                 # One retry with a fresh token; the payload's uuid keeps a delivered message from duplicating.
-                await im_token_cache.drop_cached_im_token("feishu", app_id, secret=app_secret)
-                token = await _feishu_token(client, app_id, app_secret, target.provider)
+                await im_token_cache.drop_rejected_im_token(
+                    im_token_cache.ImTokenKey("feishu", app_id, app_secret), token
+                )
+                token = await _feishu_token(app_id, app_secret, target.provider)
                 response = await _feishu_send(client, target.recipient_type, token, feishu_payload)
             body = response_body(response, target.provider)
             accepted = body.get("code") == 0 and bool(json_object_from(body.get("data")).get("message_id"))

@@ -8,6 +8,7 @@ from typing import override
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    MaterializedFile,
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
@@ -163,6 +164,14 @@ class FallbackStorageBackend(StorageBackend):
         if await self._promote_file(key):
             return await self.primary.local_path_for(key)
         return await self.fallback.local_path_for(key)
+
+    @override
+    async def materialize(self, key: str) -> MaterializedFile | None:
+        # Ownership is whatever the backend that produced the file reports: the primary winner after promotion
+        # (a temporary S3 copy is owned), otherwise the legacy backend's real file, which is never owned.
+        if await self._promote_file(key):
+            return await self.primary.materialize(key)
+        return await self.fallback.materialize(key)
 
     @override
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:

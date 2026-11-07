@@ -4,14 +4,14 @@ Caches tokens per app_key with auto-refresh before expiry.
 All DingTalk token acquisition should go through this manager.
 """
 
-import asyncio
 import time
 from json import JSONDecodeError
 
 import httpx
 
-from app.core.json_types import json_as_int, json_as_str, json_object_from_response
+from app.core.json_types import json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
+from app.services.im_token_cache import ImTokenKey, MintedToken, get_or_mint_im_token
 
 
 class DingTalkTokenManager:
@@ -19,74 +19,47 @@ class DingTalkTokenManager:
 
     - Cache by app_key
     - Token valid for 7200s, refresh 300s early
-    - Concurrency-safe with asyncio.Lock
+    - One shared mint per key (``get_or_mint_im_token``)
     """
 
     def __init__(self):
         self._cache: dict[str, tuple[str, float]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    def _get_lock(self, app_key: str) -> asyncio.Lock:
-        if app_key not in self._locks:
-            self._locks[app_key] = asyncio.Lock()
-        return self._locks[app_key]
 
     async def get_token(self, app_key: str, app_secret: str) -> str | None:
         """Get access_token, return cached if valid, refresh if expired."""
-        from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
-
         local_key = f"{app_key}\0{app_secret}"
         if local_key in self._cache:
             token, expires_at = self._cache[local_key]
             if time.time() < expires_at - 300:
                 return token
-        shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
-        if shared not in (None, ""):
-            return shared
 
-        async with self._get_lock(local_key):
-            # Double-check after acquiring lock
-            if local_key in self._cache:
-                token, expires_at = self._cache[local_key]
-                if time.time() < expires_at - 300:
-                    return token
-            shared = await get_cached_im_token("dingtalk", app_key, secret=app_secret)
-            if shared not in (None, ""):
-                return shared
+        async def mint() -> MintedToken:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "https://api.dingtalk.com/v1.0/oauth2/accessToken",
+                    json={"appKey": app_key, "appSecret": app_secret},
+                )
+            _ = resp.raise_for_status()
+            data = json_object_from_response(resp)
+            token = json_as_str_or(data.get("accessToken"), "")
+            expires_in = json_as_int(data.get("expireIn"), 7200)
+            if not token:
+                logger.error(f"[DingTalk Token] Failed to get token: {data}")
+                return MintedToken("")
+            self._cache[local_key] = (token, time.time() + expires_in)
+            logger.debug(f"[DingTalk Token] Refreshed for {app_key[:8]}..., expires in {expires_in}s")
+            return MintedToken(token, expires_in)
 
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.post(
-                        "https://api.dingtalk.com/v1.0/oauth2/accessToken",
-                        json={"appKey": app_key, "appSecret": app_secret},
-                    )
-                    _ = resp.raise_for_status()
-                    data = json_object_from_response(resp)
-                    token = json_as_str(data.get("accessToken"))
-                    expires_in = json_as_int(data.get("expireIn"), 7200)
-
-                    if token not in (None, ""):
-                        self._cache[local_key] = (token, time.time() + expires_in)
-                        await set_cached_im_token(
-                            "dingtalk",
-                            app_key,
-                            token,
-                            secret=app_secret,
-                            ttl=refresh_ttl(expires_in),
-                        )
-                        logger.debug(f"[DingTalk Token] Refreshed for {app_key[:8]}..., expires in {expires_in}s")
-                        return token
-
-                    logger.error(f"[DingTalk Token] Failed to get token: {data}")
-                    return None
-            except httpx.HTTPStatusError as e:
-                if e.response.is_server_error:
-                    raise
-                logger.error(f"[DingTalk Token] Error getting token: {e}")
-                return None
-            except JSONDecodeError as e:
-                logger.error(f"[DingTalk Token] Invalid token response: {e}")
-                return None
+        try:
+            return await get_or_mint_im_token(ImTokenKey("dingtalk", app_key, app_secret), mint) or None
+        except httpx.HTTPStatusError as e:
+            if e.response.is_server_error:
+                raise
+            logger.error(f"[DingTalk Token] Error getting token: {e}")
+            return None
+        except JSONDecodeError as e:
+            logger.error(f"[DingTalk Token] Invalid token response: {e}")
+            return None
 
     async def get_corp_token(self, app_key: str, app_secret: str) -> str | None:
         """Get corp access_token via oapi.dingtalk.com/gettoken (GET).

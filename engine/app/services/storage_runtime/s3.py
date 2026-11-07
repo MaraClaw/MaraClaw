@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from functools import partial
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import override
 
 import anyio
@@ -14,6 +13,7 @@ from botocore.exceptions import ClientError
 
 from app.core.json_types import json_as_int
 from app.services.storage_runtime.base import (
+    MaterializedFile,
     StorageDeleteFailedError,
     StorageEntry,
     StoragePage,
@@ -24,7 +24,7 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.s3_connection import S3ListArguments, S3ObjectIdentity
 from app.services.storage_runtime.s3_create import S3CreateBackend
-from app.services.storage_runtime.s3_read import read_object
+from app.services.storage_runtime.s3_read import materialize_object, read_object
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _LAST_CODE_POINT = "\U0010ffff"
@@ -296,16 +296,10 @@ class S3StorageBackend(S3CreateBackend):
         return entry.size == expected_size
 
     @override
-    async def local_path_for(self, key: str) -> Path | None:
-        suffix = Path(normalize_storage_key(key)).suffix
-        with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            path = Path(tmp.name)
-        await self.write_local_copy(key, path)
-        return path
-
-    async def write_local_copy(self, key: str, path: Path) -> None:
-        data = await self.read_bytes(key)
-        _ = await asyncio.to_thread(path.write_bytes, data)
+    async def materialize(self, key: str) -> MaterializedFile:
+        client = self._client_or_raise()
+        get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
+        return await materialize_object(get_object, Path(normalize_storage_key(key)).suffix)
 
     @override
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:

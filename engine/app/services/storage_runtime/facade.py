@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import mimetypes
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from app.config import get_settings
@@ -43,12 +45,16 @@ def get_storage_backend() -> StorageBackend:
     return _storage_backend
 
 
-async def ensure_local_path(key: str) -> Path:
-    backend = get_storage_backend()
-    path = await backend.local_path_for(key)
-    if path is None:
+@asynccontextmanager
+async def materialized_local_path(key: str) -> AsyncGenerator[Path]:
+    """Yield a local file for ``key`` and release it on exit; only a temporary copy is ever removed."""
+    materialized = await get_storage_backend().materialize(key)
+    if materialized is None:
         raise RuntimeError("Storage backend cannot materialize a local path")
-    return path
+    try:
+        yield materialized.path
+    finally:
+        materialized.close()
 
 
 def guess_content_type(filename: str) -> str:

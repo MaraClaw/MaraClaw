@@ -2,8 +2,15 @@
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_int, json_object_from_response
+from app.core.json_types import JsonObject, json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
+from app.services.im_token_cache import (
+    ImTokenKey,
+    ImTokenRefusedError,
+    MintedToken,
+    drop_rejected_im_token,
+    get_or_mint_im_token,
+)
 
 
 async def get_wecom_access_token(corp_id: str, secret: str, *, strict: bool = False) -> JsonObject:
@@ -11,41 +18,28 @@ async def get_wecom_access_token(corp_id: str, secret: str, *, strict: bool = Fa
 
     API: https://developer.work.weixin.qq.com/document/14403
     """
-    from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
 
-    if corp_id:
-        cached = await get_cached_im_token("wecom", corp_id, secret=secret)
-        if cached not in (None, ""):
-            return {"access_token": cached, "expires_in": 7200}
-
-    url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
-    params = {
-        "corpid": corp_id,
-        "corpsecret": secret,
-    }
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url, params=params)
-        if strict:
-            _ = resp.raise_for_status()
+    async def mint() -> MintedToken:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://qyapi.weixin.qq.com/cgi-bin/gettoken", params={"corpid": corp_id, "corpsecret": secret}
+            )
+        if resp.is_error:
+            raise ImTokenRefusedError(resp)
         data = json_object_from_response(resp)
+        if data.get("errcode") != 0:
+            raise ImTokenRefusedError(resp)
+        return MintedToken(json_as_str_or(data.get("access_token"), ""), json_as_int(data.get("expires_in")))
 
-        if data.get("errcode") == 0:
-            token = data.get("access_token")
-            if isinstance(token, str) and token and corp_id:
-                await set_cached_im_token(
-                    "wecom",
-                    corp_id,
-                    token,
-                    secret=secret,
-                    ttl=refresh_ttl(json_as_int(data.get("expires_in"))),
-                )
-            return {
-                "access_token": token,
-                "expires_in": data.get("expires_in"),
-            }
+    try:
+        token = await get_or_mint_im_token(ImTokenKey("wecom", corp_id, secret), mint)
+    except ImTokenRefusedError as refused:
+        if strict:
+            _ = refused.response.raise_for_status()
+        data = json_object_from_response(refused.response)
         logger.error(f"[WeCom] Failed to get access_token: {data}")
         return {"errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
+    return {"access_token": token, "expires_in": 7200}
 
 
 async def send_wecom_message(
@@ -106,8 +100,6 @@ async def send_wecom_message(
             logger.info(f"[WeCom] Message sent to {user_id}")
             return data
         if data.get("errcode") in {40001, 40014, 42001}:
-            from app.services.im_token_cache import drop_cached_im_token
-
-            await drop_cached_im_token("wecom", corp_id, secret=secret)
+            await drop_rejected_im_token(ImTokenKey("wecom", corp_id, secret), access_token)
         logger.error(f"[WeCom] Failed to send message: {data}")
         return data

@@ -1,12 +1,20 @@
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.core.json_types import JsonObject
 from app.services import feishu_service as feishu_service_module
-from app.services.feishu_service import FeishuOAuthUser
+from app.services.feishu_service import FeishuAPIError, FeishuOAuthUser
+from im_token_cache_fakes import install_token_cache
+
+
+@pytest.fixture(autouse=True)
+def _token_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = install_token_cache(monkeypatch)
 
 
 class _FakeResponse:
@@ -193,3 +201,43 @@ async def test_login_or_register_links_existing_user_to_feishu_member_without_le
     assert member_updates[-1]["user_id"] == user.id
     assert not hasattr(user, "external_id")
     assert not hasattr(user, "feishu_user_id")
+
+
+def _mock_feishu(monkeypatch: pytest.MonkeyPatch, token_body: JsonObject) -> list[httpx.Request]:
+    requests: list[httpx.Request] = []
+    original = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if "app_access_token" in request.url.path:
+            return httpx.Response(200, json=token_body)
+        return httpx.Response(200, json={"code": 0, "data": {"message_id": "om_1"}})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs)
+    )
+    return requests
+
+
+async def test_concurrent_calls_for_one_app_mint_a_single_token(monkeypatch):
+    requests = _mock_feishu(monkeypatch, {"code": 0, "app_access_token": "tok", "expire": 7200})
+    service = feishu_service_module.feishu_service
+
+    await asyncio.gather(
+        *(service.patch_message("app", "secret", f"om_{index}", "{}") for index in range(3)),
+        service.send_message("app", "secret", "ou_1", "text", "{}"),
+    )
+
+    assert sum("app_access_token" in request.url.path for request in requests) == 1
+    assert {request.headers["Authorization"] for request in requests if "app_access_token" not in request.url.path} == {
+        "Bearer tok"
+    }
+
+
+async def test_strict_send_raises_when_feishu_refuses_the_token(monkeypatch):
+    requests = _mock_feishu(monkeypatch, {"code": 10003, "msg": "invalid param"})
+
+    with pytest.raises(FeishuAPIError):
+        await feishu_service_module.feishu_service.send_message("app", "secret", "ou_1", "text", "{}", strict=True)
+
+    assert [request.url.path for request in requests] == ["/open-apis/auth/v3/app_access_token/internal"]

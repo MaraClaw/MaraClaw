@@ -27,7 +27,7 @@ from app.services.document_parser import (
 )
 from app.services.document_parser.errors import DocumentParseError, DocumentTooLargeError
 from app.services.openclaw_update_exclusion import guest_write_section
-from app.services.storage import ensure_local_path, get_storage_backend, guess_content_type, normalize_storage_key
+from app.services.storage import get_storage_backend, guess_content_type, normalize_storage_key
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -159,7 +159,6 @@ async def upload_file(
                     raise HTTPException(status_code=503, detail="Storage did not accept the upload")
             else:
                 raise HTTPException(status_code=409, detail="Too many attachments share this filename; rename the file")
-            _ = await ensure_local_path(key)
         saved_filename = filename
     else:
         # No agent workspace exists to retain this upload. Keep its bytes request-scoped.
