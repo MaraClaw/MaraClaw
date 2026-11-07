@@ -5,6 +5,7 @@ from enum import IntEnum, StrEnum
 from pydantic import JsonValue, TypeAdapter
 
 from app.api.agent_credentials import AgentCredentialPayload
+from app.api.files import list_files_page
 from app.api.upload import UploadPolicy
 from app.core.domain.activity import ActivityAction
 from app.core.domain.agents import (
@@ -135,6 +136,8 @@ PUBLIC_SCHEMA_NAMES = {
     "JsonObject-Input": "JsonInputObject",
     "JsonObject-Output": "JsonOutputObject",
 }
+
+AUDITED_HTTP_ENDPOINTS = frozenset({list_files_page})
 
 
 def explicit_schemas() -> dict[str, JsonValue]:

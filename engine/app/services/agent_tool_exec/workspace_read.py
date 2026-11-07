@@ -3,7 +3,8 @@ from __future__ import annotations
 import fnmatch
 import re
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import aclosing
 from pathlib import Path
 
 from app.services.storage_runtime.base import StorageBackend, StorageEntry
@@ -11,7 +12,7 @@ from app.services.storage_runtime.base import StorageBackend, StorageEntry
 type StorageBackendFactory = Callable[[], StorageBackend]
 type ToolStorageKeyFn = Callable[[uuid.UUID, str, str | None], tuple[str, str, bool]]
 type DisplaySizeFn = Callable[[int], str]
-type StorageWalkFn = Callable[[StorageBackend, str], Awaitable[list[StorageEntry]]]
+type StorageWalkFn = Callable[[StorageBackend, str], AsyncGenerator[StorageEntry]]
 type RelativeDisplayFn = Callable[[str, str, str], str]
 
 
@@ -31,11 +32,10 @@ async def _storage_list_dir(
     storage = get_storage_backend()
     storage_key, normalized, _is_enterprise = tool_storage_key(agent_id, rel_path, tenant_id)
 
-    exists = await storage.exists(storage_key)
     is_dir = await storage.is_dir(storage_key)
-    if exists and not is_dir:
+    if not is_dir and await storage.exists(storage_key):
         return f"Path is not a directory: {rel_path}"
-    if not exists and not is_dir and normalized:
+    if not is_dir and normalized:
         return f"Directory not found: {rel_path or '/'}"
 
     items: list[str] = []
@@ -45,7 +45,7 @@ async def _storage_list_dir(
         items.append("  📁 enterprise_info/ (shared company info)")
         dir_count += 1
 
-    entries = await storage.list_dir(storage_key) if exists or is_dir else []
+    entries = await storage.list_dir(storage_key) if is_dir else []
     for entry in entries:
         if entry.name.startswith("."):
             continue
@@ -102,15 +102,13 @@ async def _storage_read_file(
         return f"Read failed: {error}"
 
 
-async def _storage_walk_files(storage: StorageBackend, root_key: str) -> list[StorageEntry]:
-    out: list[StorageEntry] = []
-    for entry in await storage.list_dir(root_key):
-        if entry.name.startswith("."):
-            continue
-        out.append(entry)
-        if entry.is_dir:
-            out.extend(await _storage_walk_files(storage, entry.key))
-    return out
+def _storage_walk_files(storage: StorageBackend, root_key: str) -> AsyncGenerator[StorageEntry]:
+    return storage.walk(root_key)
+
+
+_BINARY_SUFFIXES = frozenset(
+    {".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".tar", ".gz"}
+)
 
 
 def _relative_storage_display(entry_key: str, base_key: str, display_base: str) -> str:
@@ -134,53 +132,44 @@ async def _storage_search_files(
     storage = get_storage_backend()
     rel_path = "" if path in ("", ".") else path
     base_key, normalized, _ = tool_storage_key(agent_id, rel_path, tenant_id)
-    if not await storage.is_dir(base_key) and normalized:
+    is_dir = await storage.is_dir(base_key)
+    if not is_dir and normalized:
         return f"Directory not found: {path}"
     flags = re.IGNORECASE if ignore_case else 0
     try:
         regex = re.compile(pattern, flags)
     except re.error as error:
         return f"Invalid regex pattern: {error}"
+    if not is_dir:
+        return f"No matches found for pattern '{pattern}' in 0 file(s)"
 
     results: list[str] = []
     total_matches = 0
     files_searched = 0
-    entries = await storage_walk_files(storage, base_key) if await storage.is_dir(base_key) else []
-    for entry in entries:
-        if entry.is_dir:
-            continue
-        rel_display = relative_storage_display(entry.key, base_key, normalized)
-        if not fnmatch.fnmatch(Path(rel_display).name, file_pattern) and not fnmatch.fnmatch(rel_display, file_pattern):
-            continue
-        if Path(rel_display).suffix.lower() in {
-            ".pyc",
-            ".pyo",
-            ".so",
-            ".dll",
-            ".exe",
-            ".bin",
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".zip",
-            ".tar",
-            ".gz",
-        }:
-            continue
-        files_searched += 1
-        try:
-            content = await storage.read_text(entry.key, encoding="utf-8", errors="ignore")
-        except Exception:
-            content = ""
-        for index, line in enumerate(content.splitlines(), 1):
-            if regex.search(line):
-                results.append(f"{rel_display}:{index}: {line.strip()[:100]}")
-                total_matches += 1
-                if len(results) >= 50:
-                    break
-        if len(results) >= 50:
-            break
+    async with aclosing(storage_walk_files(storage, base_key)) as entries:
+        async for entry in entries:
+            if entry.is_dir:
+                continue
+            rel_display = relative_storage_display(entry.key, base_key, normalized)
+            if not fnmatch.fnmatch(Path(rel_display).name, file_pattern) and not fnmatch.fnmatch(
+                rel_display, file_pattern
+            ):
+                continue
+            if Path(rel_display).suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            files_searched += 1
+            try:
+                content = await storage.read_text(entry.key, encoding="utf-8", errors="ignore")
+            except Exception:
+                content = ""
+            for index, line in enumerate(content.splitlines(), 1):
+                if regex.search(line):
+                    results.append(f"{rel_display}:{index}: {line.strip()[:100]}")
+                    total_matches += 1
+                    if len(results) >= 50:
+                        break
+            if len(results) >= 50:
+                break
     if not results:
         return f"No matches found for pattern '{pattern}' in {files_searched} file(s)"
     truncated = total_matches > len(results)
@@ -208,27 +197,31 @@ async def _storage_find_files(
     storage = get_storage_backend()
     rel_path = "" if path in ("", ".") else path
     base_key, normalized, _ = tool_storage_key(agent_id, rel_path, tenant_id)
-    if not await storage.is_dir(base_key) and normalized:
+    is_dir = await storage.is_dir(base_key)
+    if not is_dir and normalized:
         return f"Directory not found: {path}"
-    entries = await storage_walk_files(storage, base_key) if await storage.is_dir(base_key) else []
-    matches: list[tuple[StorageEntry, str]] = []
-    for entry in entries:
-        rel_display = relative_storage_display(entry.key, base_key, normalized)
-        if fnmatch.fnmatch(rel_display, pattern) or fnmatch.fnmatch(Path(rel_display).name, pattern):
-            matches.append((entry, rel_display))
-    if not matches:
+    total = 0
+    shown: list[tuple[StorageEntry, str]] = []
+    if is_dir:
+        async with aclosing(storage_walk_files(storage, base_key)) as entries:
+            async for entry in entries:
+                rel_display = relative_storage_display(entry.key, base_key, normalized)
+                if fnmatch.fnmatch(rel_display, pattern) or fnmatch.fnmatch(Path(rel_display).name, pattern):
+                    total += 1
+                    if len(shown) < 100:
+                        shown.append((entry, rel_display))
+    if not total:
         return f"No files matching pattern: {pattern}"
     results: list[str] = []
     dir_count = 0
     file_count = 0
-    for entry, rel_display in matches[:100]:
+    for entry, rel_display in shown:
         if entry.is_dir:
             dir_count += 1
             results.append(f"📁 {rel_display}/")
         else:
             file_count += 1
             results.append(f"📄 {rel_display} ({display_size(entry.size)})")
-    return (
-        f"📂 Found {len(matches)} item(s) ({dir_count} dirs, {file_count} files) matching '{pattern}':\n"
-        + "\n".join(results)
+    return f"📂 Found {total} item(s) ({dir_count} dirs, {file_count} files) matching '{pattern}':\n" + "\n".join(
+        results
     )

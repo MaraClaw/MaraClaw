@@ -5,21 +5,32 @@ import os
 from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
-from threading import Event
+from threading import Event, get_ident
 
 import anyio
 import pytest
 from fastapi import HTTPException
 
+from app.services.storage_runtime import local as local_module
 from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageBackend,
     StorageReadLimitExceededError,
     WriteCondition,
+    walk_order,
 )
 from app.services.storage_runtime.bounded import BoundedReader
 from app.services.storage_runtime.local import LocalStorageBackend
+from storage_walk_fixtures import (
+    EXPECTED_WALK,
+    FILE_SIZE,
+    ListOnlyBackend,
+    build_tree_on_disk,
+    s3_backend,
+    shape,
+    tree_client,
+)
 
 
 async def test_local_absence_condition_has_one_winner_when_writers_race(
@@ -338,3 +349,194 @@ async def test_local_storage_keeps_symlinks_that_stay_inside_root(tmp_path: Path
 
     assert backend._full_path("alias/a.txt") == (root / "real" / "a.txt").resolve()
     assert await backend.read_bytes("alias/a.txt") == b"inside"
+
+
+async def test_local_s3_and_list_only_backends_walk_the_same_tree_identically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given
+    build_tree_on_disk(tmp_path)
+    local = LocalStorageBackend(str(tmp_path))
+    backends: tuple[StorageBackend, ...] = (local, s3_backend(tree_client(), monkeypatch), ListOnlyBackend(local))
+    # When
+    walks = [[entry async for entry in backend.walk("w")] for backend in backends]
+    # Then
+    for entries in walks:
+        assert shape(entries) == list(EXPECTED_WALK)
+        assert {entry.size for entry in entries if not entry.is_dir} == {FILE_SIZE}
+
+
+async def test_local_probes_listing_and_walk_run_off_the_event_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Given
+    build_tree_on_disk(tmp_path)
+    backend = LocalStorageBackend(str(tmp_path))
+    resolve_threads: list[int] = []
+    resolve = backend._full_path
+
+    def spy(key: str) -> Path:
+        resolve_threads.append(get_ident())
+        return resolve(key)
+
+    monkeypatch.setattr(backend, "_full_path", spy)
+    # When
+    assert await backend.exists("w")
+    assert await backend.is_dir("w")
+    assert await backend.is_file("w/a.txt")
+    _ = await backend.list_dir("w")
+    _ = [entry async for entry in backend.walk("w")]
+    # Then
+    assert len(resolve_threads) > 4
+    assert get_ident() not in resolve_threads
+
+
+async def test_local_walk_scans_one_directory_at_a_time_and_stops_when_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given
+    build_tree_on_disk(tmp_path)
+    backend = LocalStorageBackend(str(tmp_path))
+    scanned: list[str] = []
+    scan = backend._scan_directory
+
+    def spy(key: str):
+        scanned.append(key)
+        return scan(key)
+
+    monkeypatch.setattr(backend, "_scan_directory", spy)
+    # When
+    walk = backend.walk("w")
+    names = [(await anext(walk)).name for _ in range(4)]
+    await walk.aclose()
+    # Then
+    assert names == ["B.txt", "a-b.txt", "a.txt", "a"]
+    assert scanned == ["w"]
+
+
+@pytest.mark.parametrize("operation", ["exists", "is_dir", "is_file", "list_dir", "walk"])
+async def test_local_probes_listing_and_walk_answer_403_for_keys_that_escape_the_root(tmp_path: Path, operation: str):
+    # Given
+    root = tmp_path / "storage"
+    sibling = tmp_path / "storage-other"
+    root.mkdir()
+    sibling.mkdir()
+    (root / "link").symlink_to(sibling, target_is_directory=True)
+    backend = LocalStorageBackend(str(root))
+
+    # When
+    async def attempt() -> None:
+        if operation == "walk":
+            _ = [entry async for entry in backend.walk("link")]
+        else:
+            _ = await getattr(backend, operation)("link")
+
+    with pytest.raises(HTTPException) as raised:
+        await attempt()
+    # Then
+    assert raised.value.status_code == 403
+
+
+# Sibling order of "w" by walk_order: hidden names stay (the API filters them), symlinks and .gitkeep never appear.
+PAGED_ROOT = (
+    ".env",
+    ".hidden/",
+    "B.txt",
+    "a-b.txt",
+    "a.txt",
+    "a/",
+    "a0",
+    "b/",
+    "empty/",
+    "\u00e9.txt",
+)
+
+
+async def drain_pages(backend: StorageBackend, key: str, limit: int) -> list[list[str]]:
+    pages: list[list[str]] = []
+    after = ""
+    while True:
+        page = await backend.list_dir_page(key, limit=limit, after=after)
+        pages.append([walk_order(entry) for entry in page.entries])
+        if not page.has_more:
+            return pages
+        after = walk_order(page.entries[-1])
+
+
+async def test_local_s3_and_list_only_backends_page_the_same_tree_identically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given
+    build_tree_on_disk(tmp_path)
+    local = LocalStorageBackend(str(tmp_path))
+    backends: tuple[StorageBackend, ...] = (local, s3_backend(tree_client(), monkeypatch), ListOnlyBackend(local))
+    # When
+    paged = [await drain_pages(backend, "w", 3) for backend in backends]
+    # Then
+    for pages in paged:
+        assert pages == [list(PAGED_ROOT[index : index + 3]) for index in range(0, len(PAGED_ROOT), 3)]
+
+
+async def test_local_page_resumes_after_a_folder_and_after_a_file(tmp_path: Path):
+    # Given
+    build_tree_on_disk(tmp_path)
+    backend = LocalStorageBackend(str(tmp_path))
+    # When
+    after_folder = await backend.list_dir_page("w", limit=2, after="a/")
+    after_file = await backend.list_dir_page("w", limit=2, after="a.txt")
+    last = await backend.list_dir_page("w", limit=5, after="empty/")
+    # Then
+    assert [walk_order(entry) for entry in after_folder.entries] == ["a0", "b/"]
+    assert after_folder.has_more
+    assert [walk_order(entry) for entry in after_file.entries] == ["a/", "a0"]
+    assert [walk_order(entry) for entry in last.entries] == ["\u00e9.txt"]
+    assert not last.has_more
+
+
+async def test_local_page_stats_only_the_returned_slice_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given
+    for index in range(40):
+        _ = (tmp_path / f"f{index:02d}").write_bytes(b"x")
+    backend = LocalStorageBackend(str(tmp_path))
+    built: list[str] = []
+    threads: list[int] = []
+    entry_for = local_module._storage_entry
+    resolve = backend._full_path
+
+    def spy_entry(entry: Path, root: Path):
+        built.append(entry.name)
+        return entry_for(entry, root)
+
+    def spy_path(key: str) -> Path:
+        threads.append(get_ident())
+        return resolve(key)
+
+    monkeypatch.setattr(local_module, "_storage_entry", spy_entry)
+    monkeypatch.setattr(backend, "_full_path", spy_path)
+    # When
+    page = await backend.list_dir_page("", limit=5, after="f09")
+    # Then
+    assert built == ["f10", "f11", "f12", "f13", "f14"]
+    assert (len(page.entries), page.has_more) == (5, True)
+    assert threads
+    assert get_ident() not in threads
+
+
+async def test_local_page_of_a_missing_directory_is_empty(tmp_path: Path):
+    page = await LocalStorageBackend(str(tmp_path)).list_dir_page("nowhere", limit=3)
+
+    assert (page.entries, page.has_more) == ([], False)
+
+
+async def test_local_page_answers_403_for_a_key_that_escapes_the_root(tmp_path: Path):
+    # Given
+    root = tmp_path / "storage"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    # When
+    with pytest.raises(HTTPException) as raised:
+        _ = await LocalStorageBackend(str(root)).list_dir_page("link", limit=3)
+    # Then
+    assert raised.value.status_code == 403

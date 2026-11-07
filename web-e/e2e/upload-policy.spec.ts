@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ownedUploadBrowser } from './upload-policy-browser-fixture'
 import { openUploads, prepareUploads, selectNativeUploadFile, uploadLabel, uploadPolicy } from './upload-policy-fixture'
+import { originalAgent } from './session-fencing-fixture'
 
 if (process.env.BROWSER_SKILL_ROOT) test.use({ browser: ownedUploadBrowser })
 
@@ -43,6 +44,80 @@ for (const surface of ['chat', 'workspace'] as const) {
     }
   }
 }
+
+for (const width of [390, 1440]) {
+  for (const colorScheme of ['light', 'dark'] as const) {
+    test.describe(`${width} ${colorScheme} composer limits`, () => {
+      test.use({ viewport: { width, height: width === 390 ? 844 : 900 }, isMobile: width === 390,
+        hasTouch: width === 390, deviceScaleFactor: width === 390 ? 3 : 1, colorScheme, reducedMotion: 'reduce' })
+      test('limits float without moving the editor and support keyboard and outside dismissal', async ({ page }) => {
+        // Given
+        await prepareUploads(page)
+        await page.route('**/api/chat/upload-policy', (route) => route.fulfill({ json: {
+          ...uploadPolicy, chat_image_max_bytes: 7, chat_file_max_bytes: 13,
+        } }))
+        await openUploads(page, 'chat')
+        const composer = page.getByRole('textbox', { name: `Message ${originalAgent.name}` })
+        const trigger = page.getByRole('button', { name: 'Attachment limits', exact: true })
+        const before = await composer.boundingBox()
+        const formBefore = await page.locator('form').boundingBox()
+        await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+        // When
+        await trigger.click()
+        // Then
+        const bubble = page.getByRole('dialog', { name: 'Attachment limits' })
+        await expect(bubble).toBeVisible()
+        await expect(bubble).toContainText('Images (by filename): up to 7 bytes; other files: up to 13 bytes.')
+        await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+        await expect(trigger).toHaveAttribute('aria-controls', await bubble.getAttribute('id') ?? '')
+        expect(await composer.boundingBox()).toEqual(before)
+        expect(await page.locator('form').boundingBox()).toEqual(formBefore)
+        await expect(bubble).toBeInViewport()
+        const bubbleBounds = await bubble.boundingBox()
+        expect((bubbleBounds?.y ?? 0) + (bubbleBounds?.height ?? 0)).toBeLessThanOrEqual(before?.y ?? 0)
+        await page.keyboard.press('Escape')
+        await expect(bubble).toHaveCount(0)
+        await expect(trigger).toBeFocused()
+        await trigger.press('Enter')
+        await expect(bubble).toBeVisible()
+        await page.keyboard.press('Escape')
+        await trigger.press('Space')
+        await expect(bubble).toBeVisible()
+        await composer.click()
+        await expect(bubble).toHaveCount(0)
+        await expect(composer).toBeFocused()
+        for (const name of ['Attach a file', 'Attachment limits', 'Send']) {
+          const bounds = await page.getByRole('button', { name, exact: true }).boundingBox()
+          expect(bounds?.height).toBeGreaterThanOrEqual(44)
+          expect(bounds?.width).toBeGreaterThanOrEqual(44)
+          expect(bounds?.y).toBeGreaterThanOrEqual((before?.y ?? 0) + (before?.height ?? 0))
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      })
+    })
+  }
+}
+
+test('paperclip opens the native chooser and selection submits then clears the hidden input', async ({ page }) => {
+  // Given
+  const fixture = await prepareUploads(page)
+  await openUploads(page, 'chat')
+  const socket = await fixture.socket()
+  const input = page.getByLabel('Attach a file', { exact: true })
+  await expect(input).toHaveAttribute('type', 'file')
+  await expect(input).toBeHidden()
+  const chooser = page.waitForEvent('filechooser')
+  // When
+  await page.getByRole('button', { name: 'Attach a file', exact: true }).click()
+  await (await chooser).setFiles({ name: 'report.txt', mimeType: 'text/plain', buffer: Buffer.from('Report') })
+  // Then
+  await expect.poll(() => fixture.uploads.length).toBe(1)
+  await expect.poll(() => socket.sent.length).toBe(1)
+  await expect(page.locator('article').filter({ hasText: 'accepted.txt' })).toBeVisible()
+  await expect(input).toHaveValue('')
+  await expect(page.getByRole('button', { name: 'Attach a file', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+})
 
 for (const [filename, mimeType, size, accepted] of [
   ['report.PNG', 'text/plain', 8, false], ['.png', 'image/png', 13, true],

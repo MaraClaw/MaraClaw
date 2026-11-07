@@ -11,7 +11,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import aiofiles
-from fastapi import APIRouter, Depends, File as FastFile, HTTPException, UploadFile as UploadFileType, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File as FastFile,
+    HTTPException,
+    Query,
+    UploadFile as UploadFileType,
+    status,
+)
 from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -40,6 +48,7 @@ from app.schemas.content_response_files import (
     NamedAgentSkillImportAcknowledgement,
     SpreadsheetFilePreview,
 )
+from app.schemas.file_pages import FileInfo, FileInfoPage, FileListingCursor
 from app.services import file_download_tickets, workspace_collaboration as workspace
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
@@ -67,6 +76,7 @@ from app.services.storage import (
     normalize_storage_key,
 )
 from app.services.storage_runtime.base import StorageBackend, StorageEntry, WriteCondition
+from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
@@ -252,16 +262,6 @@ async def _delete_workspace_file(
     )
 
 
-class FileInfo(BaseModel):
-    name: str
-    path: str
-    is_dir: bool
-    size: int = 0
-    modified_at: str = ""
-    version_token: str | None = None
-    url: str | None = None
-
-
 class FileContent(BaseModel):
     path: str
     content: str
@@ -387,6 +387,46 @@ async def _require_agent_file_delete_access(
     )
 
 
+async def _require_listable_directory(storage: StorageBackend, storage_key: str, *, lenient: bool) -> bool:
+    """Return whether ``storage_key`` can be listed; 404/400 for a missing path or a file, unless ``lenient``."""
+    path_exists = await storage.exists(storage_key)
+    path_is_dir = await storage.is_dir(storage_key)
+    if not path_exists and not path_is_dir:
+        if not lenient:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Path not found")
+    elif path_exists and not path_is_dir:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path is not a directory")
+    return path_exists or path_is_dir
+
+
+def _enterprise_info_row() -> FileInfo:
+    return FileInfo(name="enterprise_info", path="enterprise_info", is_dir=True)
+
+
+def _is_listed(entry: StorageEntry, *, at_root: bool) -> bool:
+    if entry.name == ".gitkeep":
+        return False
+    return not (at_root and (entry.name.lower() in {"focus.md", "agenda.md"} or entry.name == "enterprise_info"))
+
+
+def _file_info(entry: StorageEntry, agent_id: uuid.UUID, enterprise_root: str | None) -> FileInfo:
+    """Map one listing entry; ``enterprise_root`` is the tenant storage prefix when listing ``enterprise_info/``."""
+    if enterprise_root is not None:
+        rel = str(Path(entry.key).relative_to(enterprise_root))
+        rel_path = f"enterprise_info/{rel}" if rel != "." else "enterprise_info"
+    else:
+        rel_path = str(Path(entry.key).relative_to(str(agent_id)))
+    return FileInfo(
+        name=entry.name,
+        path=rel_path,
+        is_dir=entry.is_dir,
+        size=entry.size,
+        modified_at=entry.modified_at,
+        version_token=_entry_version_token(entry),
+        url=f"/api/agents/{agent_id}/files/download?path={rel_path}" if not entry.is_dir else None,
+    )
+
+
 @router.get("/", response_model=list[FileInfo])
 async def list_files(
     agent_id: uuid.UUID, path: str = "", current_user: UserRecord = Depends(get_current_user)
@@ -396,52 +436,59 @@ async def list_files(
     storage = get_storage_backend()
     storage_key, is_enterprise = _visible_storage_key(agent_id, path, current_user.tenant_id)
     normalized_path = (path or "").strip().strip("/")
-    path_exists = await storage.exists(storage_key)
-    path_is_dir = await storage.is_dir(storage_key)
-    if not path_exists and not path_is_dir:
-        if not (normalized_path == "" or (is_enterprise and normalized_path == "enterprise_info")):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Path not found")
-    elif path_exists and not path_is_dir:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path is not a directory")
+    lenient = normalized_path == "" or (is_enterprise and normalized_path == "enterprise_info")
+    listable = await _require_listable_directory(storage, storage_key, lenient=lenient)
 
     items: list[FileInfo] = []
     if not path and current_user.tenant_id:
-        items.append(
-            FileInfo(
-                name="enterprise_info",
-                path="enterprise_info",
-                is_dir=True,
-                size=0,
-                modified_at="",
-                version_token=None,
-                url=None,
-            )
-        )
-    entries = await storage.list_dir(storage_key) if path_exists or path_is_dir else []
-    for entry in entries:
-        if entry.name == ".gitkeep":
-            continue
-        if not path and entry.name.lower() in {"focus.md", "agenda.md"}:
-            continue
-        if not path and entry.name == "enterprise_info":
-            continue
-        if is_enterprise:
-            rel = str(Path(entry.key).relative_to(f"enterprise_info_{current_user.tenant_id}"))
-            rel_path = f"enterprise_info/{rel}" if rel != "." else "enterprise_info"
-        else:
-            rel_path = str(Path(entry.key).relative_to(str(agent_id)))
-        items.append(
-            FileInfo(
-                name=entry.name,
-                path=rel_path,
-                is_dir=entry.is_dir,
-                size=entry.size,
-                modified_at=entry.modified_at,
-                version_token=_entry_version_token(entry),
-                url=f"/api/agents/{agent_id}/files/download?path={rel_path}" if not entry.is_dir else None,
-            )
-        )
+        items.append(_enterprise_info_row())
+    entries = await storage.list_dir(storage_key) if listable else []
+    enterprise_root = f"enterprise_info_{current_user.tenant_id}" if is_enterprise else None
+    items.extend(
+        _file_info(entry, agent_id, enterprise_root) for entry in entries if _is_listed(entry, at_root=not path)
+    )
     return items
+
+
+@router.get("/page", response_model=FileInfoPage)
+async def list_files_page(
+    agent_id: uuid.UUID,
+    path: str = "",
+    limit: int = Query(100, ge=1, le=200),
+    cursor: str | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> FileInfoPage:
+    """One page of a directory in key order, so a large folder is never read whole.
+
+    ``limit`` counts storage rows; the synthetic ``enterprise_info`` row leads the first root page in addition to it.
+    ``next_cursor`` is present exactly when another visible row follows, and is only valid for this agent and path.
+    """
+    _ = await check_agent_access(current_user, agent_id)
+    position = FileListingCursor.decode(cursor) if cursor is not None else None
+    storage = get_storage_backend()
+    storage_key, is_enterprise = _visible_storage_key(agent_id, path, current_user.tenant_id)
+    if position is not None:
+        position.require_scope(agent_id, storage_key)
+    at_agent_root = storage_key == _agent_storage_key(agent_id)
+    listable = await _require_listable_directory(
+        storage,
+        storage_key,
+        lenient=at_agent_root or storage_key == _enterprise_storage_key(str(current_user.tenant_id)),
+    )
+    items: list[FileInfo] = []
+    if position is None and at_agent_root and current_user.tenant_id:
+        items.append(_enterprise_info_row())
+    next_cursor: str | None = None
+    if listable:
+        request = DirPageRequest(storage_key, limit, position.after if position is not None else "")
+        page = await collect_visible_page(storage, request, lambda entry: _is_listed(entry, at_root=at_agent_root))
+        enterprise_root = f"enterprise_info_{current_user.tenant_id}" if is_enterprise else None
+        items.extend(_file_info(entry, agent_id, enterprise_root) for entry in page.entries)
+        if page.next_after is not None:
+            next_cursor = FileListingCursor(
+                version=1, agent_id=agent_id, scope=FileListingCursor.scope_of(storage_key), after=page.next_after
+            ).encode()
+    return FileInfoPage(items=items, next_cursor=next_cursor)
 
 
 @router.get("/content", response_model=FileContent)

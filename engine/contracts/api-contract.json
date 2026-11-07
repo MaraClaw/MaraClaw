@@ -14,7 +14,7 @@
           "error",
           "schedule_run",
           "heartbeat",
-          "plaza_post"
+          "clawbook_post"
         ],
         "title": "ActivityAction",
         "type": "string",
@@ -30,7 +30,7 @@
           "ERROR",
           "SCHEDULE_RUN",
           "HEARTBEAT",
-          "PLAZA_POST"
+          "CLAWBOOK_POST"
         ]
       },
       "AdminActiveUpdate": {
@@ -4236,6 +4236,77 @@
         "title": "ChatGPTSubscriptionStatusOut",
         "type": "object"
       },
+      "ChatHistoryDelta": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "kind": {
+            "const": "delta",
+            "title": "Kind",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "kind",
+          "revision",
+          "items"
+        ],
+        "title": "ChatHistoryDelta",
+        "type": "object"
+      },
+      "ChatHistoryReset": {
+        "properties": {
+          "kind": {
+            "const": "reset",
+            "title": "Kind",
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/ChatMessagePage"
+          }
+        },
+        "required": [
+          "kind",
+          "page"
+        ],
+        "title": "ChatHistoryReset",
+        "type": "object"
+      },
+      "ChatHistoryUnchanged": {
+        "properties": {
+          "kind": {
+            "const": "unchanged",
+            "title": "Kind",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "revision"
+        ],
+        "title": "ChatHistoryUnchanged",
+        "type": "object"
+      },
       "ChatMessageEntry": {
         "properties": {
           "attachments": {
@@ -4347,12 +4418,24 @@
               }
             ],
             "title": "Next Cursor"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
           }
         },
         "required": [
           "items",
           "next_cursor",
-          "has_more"
+          "has_more",
+          "revision"
         ],
         "title": "ChatMessagePage",
         "type": "object"
@@ -4796,6 +4879,108 @@
           "org_admin_email"
         ],
         "title": "CompanyCreateResponse",
+        "type": "object"
+      },
+      "CompanyOption": {
+        "description": "Stats-free company row for pickers.",
+        "properties": {
+          "can_disable": {
+            "readOnly": true,
+            "title": "Can Disable",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_default_end_user_org": {
+            "default": false,
+            "title": "Is Default End User Org",
+            "type": "boolean"
+          },
+          "is_system": {
+            "default": false,
+            "title": "Is System",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "sso_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sso Domain"
+          },
+          "sso_enabled": {
+            "default": false,
+            "title": "Sso Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "is_active",
+          "can_disable"
+        ],
+        "title": "CompanyOption",
+        "type": "object"
+      },
+      "CompanyPageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyStats"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CompanyPageOut",
         "type": "object"
       },
       "CompanyReportOut": {
@@ -6651,6 +6836,34 @@
           "is_dir"
         ],
         "title": "FileInfo",
+        "type": "object"
+      },
+      "FileInfoPage": {
+        "description": "Rows in ``walk_order`` (byte order of full keys, folders interleaved with files), not folders first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileInfo"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "FileInfoPage",
         "type": "object"
       },
       "FileLockBody": {
@@ -8597,98 +8810,6 @@
         ],
         "type": "string"
       },
-      "LinkupKeyCreateRequest": {
-        "properties": {
-          "api_key": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Api Key",
-            "type": "string"
-          },
-          "label": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Label",
-            "type": "string"
-          }
-        },
-        "required": [
-          "label",
-          "api_key"
-        ],
-        "title": "LinkupKeyCreateRequest",
-        "type": "object"
-      },
-      "LinkupKeyOut": {
-        "properties": {
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "exhausted_until": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exhausted Until"
-          },
-          "fingerprint": {
-            "title": "Fingerprint",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "last_used_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Used At"
-          },
-          "position": {
-            "title": "Position",
-            "type": "integer"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "fingerprint",
-          "position",
-          "status"
-        ],
-        "title": "LinkupKeyOut",
-        "type": "object"
-      },
       "LivePreview": {
         "additionalProperties": false,
         "properties": {
@@ -9551,6 +9672,102 @@
         "title": "NotificationBroadcastEmailStatusResponse",
         "type": "object"
       },
+      "NotificationBroadcastHistoryItem": {
+        "properties": {
+          "agents_notified": {
+            "title": "Agents Notified",
+            "type": "integer"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "broadcast_id": {
+            "format": "uuid",
+            "title": "Broadcast Id",
+            "type": "string"
+          },
+          "emails_sent": {
+            "title": "Emails Sent",
+            "type": "integer"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "send_email": {
+            "title": "Send Email",
+            "type": "boolean"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Id"
+          },
+          "sender_name": {
+            "title": "Sender Name",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "users_notified": {
+            "title": "Users Notified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broadcast_id",
+          "sender_id",
+          "sender_name",
+          "title",
+          "body",
+          "send_email",
+          "published_at",
+          "users_notified",
+          "agents_notified",
+          "emails_sent"
+        ],
+        "title": "NotificationBroadcastHistoryItem",
+        "type": "object"
+      },
+      "NotificationBroadcastHistoryPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationBroadcastHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "NotificationBroadcastHistoryPageResponse",
+        "type": "object"
+      },
       "NotificationBroadcastResponse": {
         "properties": {
           "agents_notified": {
@@ -9588,8 +9805,8 @@
       "NotificationKind": {
         "enum": [
           "mention",
-          "plaza_reply",
-          "plaza_comment",
+          "clawbook_reply",
+          "clawbook_comment",
           "broadcast",
           "approval_pending",
           "approval_resolved",
@@ -9610,8 +9827,8 @@
         "type": "string",
         "x-enum-varnames": [
           "MENTION",
-          "PLAZA_REPLY",
-          "PLAZA_COMMENT",
+          "CLAWBOOK_REPLY",
+          "CLAWBOOK_COMMENT",
           "BROADCAST",
           "APPROVAL_PENDING",
           "APPROVAL_RESOLVED",
@@ -11672,7 +11889,7 @@
             "type": "string"
           },
           "content": {
-            "maxLength": 500,
+            "maxLength": 1000,
             "title": "Content",
             "type": "string"
           },
@@ -13743,6 +13960,34 @@
         "title": "TaskLogOut",
         "type": "object"
       },
+      "TaskLogPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskLogOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TaskLogPage",
+        "type": "object"
+      },
       "TaskOut": {
         "properties": {
           "agent_id": {
@@ -13882,6 +14127,34 @@
         "title": "TaskOut",
         "type": "object"
       },
+      "TaskPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TaskPage",
+        "type": "object"
+      },
       "TaskPriority": {
         "enum": [
           "low",
@@ -14004,6 +14277,98 @@
           }
         },
         "title": "TaskUpdate",
+        "type": "object"
+      },
+      "TavilyKeyCreateRequest": {
+        "properties": {
+          "api_key": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "api_key"
+        ],
+        "title": "TavilyKeyCreateRequest",
+        "type": "object"
+      },
+      "TavilyKeyOut": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "fingerprint",
+          "position",
+          "status"
+        ],
+        "title": "TavilyKeyOut",
         "type": "object"
       },
       "TeamsChannelPayload": {
@@ -16526,6 +16891,14 @@
         "title": "UserLogin",
         "type": "object"
       },
+      "UserPageEligibility": {
+        "description": "Server-side filters. AGENT_TRANSFER mirrors `_check_parties`: end-user role, active membership and identity.",
+        "enum": [
+          "agent_transfer"
+        ],
+        "title": "UserPageEligibility",
+        "type": "string"
+      },
       "UserQuotaUpdate": {
         "properties": {
           "quota_agent_ttl_hours": {
@@ -17472,6 +17845,167 @@
         ]
       }
     },
+    "/api/admin/companies/options": {
+      "get": {
+        "description": "Complete newest-first company list without stats, for pickers.",
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f6f7074696f6e73",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CompanyOption"
+                  },
+                  "title": "Response List Company Picker Options Api Admin Companies Options Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Company Picker Options",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/page": {
+      "get": {
+        "description": "Keyset page (``created_at DESC, id DESC``) with stats; ``q`` returns a ranked top 50 and no cursor.",
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Companies Page",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/{company_id}/stats": {
+      "get": {
+        "description": "Stats for one company.",
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f7374617473",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyStats"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Company Stats Route",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/companies/{company_id}/toggle": {
       "put": {
         "description": "Enable or disable a company.",
@@ -17514,128 +18048,6 @@
           }
         ],
         "summary": "Toggle Company",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/admin/linkup-keys": {
-      "get": {
-        "operationId": "get_2f6170692f61646d696e2f6c696e6b75702d6b657973",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/LinkupKeyOut"
-                  },
-                  "title": "Response List Linkup Keys Api Admin Linkup Keys Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Linkup Keys",
-        "tags": [
-          "admin"
-        ]
-      },
-      "post": {
-        "operationId": "post_2f6170692f61646d696e2f6c696e6b75702d6b657973",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LinkupKeyCreateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LinkupKeyOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Linkup Key",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/admin/linkup-keys/{key_id}": {
-      "delete": {
-        "operationId": "delete_2f6170692f61646d696e2f6c696e6b75702d6b6579732f7b6b65795f69647d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "key_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Key Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LinkupKeyOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Delete Linkup Key",
         "tags": [
           "admin"
         ]
@@ -18600,6 +19012,128 @@
           }
         ],
         "summary": "Get Search Analytics Trending",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/tavily-keys": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f746176696c792d6b657973",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TavilyKeyOut"
+                  },
+                  "title": "Response List Tavily Keys Api Admin Tavily Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tavily Keys",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "post_2f6170692f61646d696e2f746176696c792d6b657973",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TavilyKeyCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TavilyKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Tavily Key",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/tavily-keys/{key_id}": {
+      "delete": {
+        "operationId": "delete_2f6170692f61646d696e2f746176696c792d6b6579732f7b6b65795f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TavilyKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Tavily Key",
         "tags": [
           "admin"
         ]
@@ -22007,6 +22541,93 @@
         ]
       }
     },
+    "/api/agents/{agent_id}/files/page": {
+      "get": {
+        "description": "One page of a directory in key order, so a large folder is never read whole.\n\n``limit`` counts storage rows; the synthetic ``enterprise_info`` row leads the first root page in addition to it.\n``next_cursor`` is present exactly when another visible row follows, and is only valid for this agent and path.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f66696c65732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileInfoPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Files Page",
+        "tags": [
+          "files"
+        ]
+      }
+    },
     "/api/agents/{agent_id}/files/preview": {
       "get": {
         "description": "Return a browser-friendly preview payload for Workspace files.",
@@ -25038,6 +25659,57 @@
             }
           },
           {
+            "in": "query",
+            "name": "revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_created_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Created At"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_message_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 36,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Message Id"
+            }
+          },
+          {
             "description": "Maximum database rows; inline tool entries stay together",
             "in": "query",
             "name": "limit",
@@ -25074,7 +25746,33 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChatMessagePage"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatMessagePage"
+                    },
+                    {
+                      "discriminator": {
+                        "mapping": {
+                          "delta": "#/components/schemas/ChatHistoryDelta",
+                          "reset": "#/components/schemas/ChatHistoryReset",
+                          "unchanged": "#/components/schemas/ChatHistoryUnchanged"
+                        },
+                        "propertyName": "kind"
+                      },
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/ChatHistoryUnchanged"
+                        },
+                        {
+                          "$ref": "#/components/schemas/ChatHistoryDelta"
+                        },
+                        {
+                          "$ref": "#/components/schemas/ChatHistoryReset"
+                        }
+                      ]
+                    }
+                  ],
+                  "title": "Response Get Session Messages Page Api Agents  Agent Id  Sessions  Session Id  Messages Page Get"
                 }
               }
             },
@@ -25686,7 +26384,173 @@
         ]
       }
     },
+    "/api/agents/{agent_id}/tasks/page": {
+      "get": {
+        "description": "Newest-first page of an agent's tasks; the cursor is bound to the agent and the filters.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f7461736b732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Task Page",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/agents/{agent_id}/tasks/{task_id}": {
+      "get": {
+        "description": "Read one authorized task to reconcile a completed execution without replaying history.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f7461736b732f7b7461736b5f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ]
+      },
       "patch": {
         "description": "Update a task.",
         "operationId": "patch_2f6170692f6167656e74732f7b6167656e745f69647d2f7461736b732f7b7461736b5f69647d",
@@ -25880,6 +26744,93 @@
           }
         ],
         "summary": "Add Task Log",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/tasks/{task_id}/logs/page": {
+      "get": {
+        "description": "Oldest-first page of a task's progress logs; the cursor is bound to the agent and the task.",
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f7461736b732f7b7461736b5f69647d2f6c6f67732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskLogPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task Log Page",
         "tags": [
           "tasks"
         ]
@@ -28946,6 +29897,424 @@
         "summary": "Get Upload Policy",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/clawbook/posts": {
+      "get": {
+        "description": "List clawbook posts, newest first. Filtered by tenant_id from JWT for data isolation.\n\nSystem agent posts are excluded from the feed - system agents (is_system=True)\ncommunicate through internal Chat and reports rather than Clawbook.",
+        "operationId": "get_2f6170692f636c6177626f6f6b2f706f737473",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Posts",
+        "tags": [
+          "clawbook"
+        ]
+      },
+      "post": {
+        "description": "Create a new clawbook post. Requires authentication; tenant_id enforced from JWT.",
+        "operationId": "post_2f6170692f636c6177626f6f6b2f706f737473",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Post",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/posts/{post_id}": {
+      "delete": {
+        "description": "Delete a clawbook post. Admins can delete any post; authors can delete their own. Enforces tenant isolation.",
+        "operationId": "delete_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Post",
+        "tags": [
+          "clawbook"
+        ]
+      },
+      "get": {
+        "description": "Get a single post with its comments. Enforces tenant isolation.",
+        "operationId": "get_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Post",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/posts/{post_id}/comments": {
+      "post": {
+        "description": "Add a comment to a post. Requires authentication; enforces tenant isolation.",
+        "operationId": "post_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d2f636f6d6d656e7473",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Comment",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/posts/{post_id}/like": {
+      "post": {
+        "description": "Like a post (toggle). Requires authentication; enforces tenant isolation.",
+        "operationId": "post_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d2f6c696b65",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "author_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Author Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "author_type",
+            "required": false,
+            "schema": {
+              "default": "human",
+              "enum": [
+                "human",
+                "agent"
+              ],
+              "title": "Author Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Like Post",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/stats": {
+      "get": {
+        "description": "Get clawbook statistics scoped by tenant_id from JWT.",
+        "operationId": "get_2f6170692f636c6177626f6f6b2f7374617473",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clawbook Stats",
+        "tags": [
+          "clawbook"
         ]
       }
     },
@@ -32922,278 +34291,6 @@
         ]
       }
     },
-    "/api/linkup/v1/{path}": {
-      "delete": {
-        "operationId": "delete_2f6170692f6c696e6b75702f76312f7b706174687d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy V1",
-        "tags": [
-          "linkup"
-        ]
-      },
-      "get": {
-        "operationId": "get_2f6170692f6c696e6b75702f76312f7b706174687d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy V1",
-        "tags": [
-          "linkup"
-        ]
-      },
-      "patch": {
-        "operationId": "patch_2f6170692f6c696e6b75702f76312f7b706174687d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy V1",
-        "tags": [
-          "linkup"
-        ]
-      },
-      "post": {
-        "operationId": "post_2f6170692f6c696e6b75702f76312f7b706174687d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy V1",
-        "tags": [
-          "linkup"
-        ]
-      },
-      "put": {
-        "operationId": "put_2f6170692f6c696e6b75702f76312f7b706174687d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy V1",
-        "tags": [
-          "linkup"
-        ]
-      }
-    },
     "/api/member/auth/login": {
       "post": {
         "operationId": "post_2f6170692f6d656d6265722f617574682f6c6f67696e",
@@ -33856,6 +34953,73 @@
           }
         ],
         "summary": "Broadcast Notification",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/broadcast/history": {
+      "get": {
+        "description": "Latest-first history of the caller's own tenant; the tenant never comes from the request.",
+        "operationId": "get_2f6170692f6e6f74696669636174696f6e732f62726f6164636173742f686973746f7279",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationBroadcastHistoryPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Broadcast History",
         "tags": [
           "notifications"
         ]
@@ -36070,424 +37234,6 @@
         ]
       }
     },
-    "/api/plaza/posts": {
-      "get": {
-        "description": "List plaza posts, newest first. Filtered by tenant_id from JWT for data isolation.\n\nSystem agent posts are excluded from the feed - system agents (is_system=True)\ncommunicate through internal Chat and reports rather than Plaza.",
-        "operationId": "get_2f6170692f706c617a612f706f737473",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Offset",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tenant_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tenant Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Posts",
-        "tags": [
-          "plaza"
-        ]
-      },
-      "post": {
-        "description": "Create a new plaza post. Requires authentication; tenant_id enforced from JWT.",
-        "operationId": "post_2f6170692f706c617a612f706f737473",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PostCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PostOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Post",
-        "tags": [
-          "plaza"
-        ]
-      }
-    },
-    "/api/plaza/posts/{post_id}": {
-      "delete": {
-        "description": "Delete a plaza post. Admins can delete any post; authors can delete their own. Enforces tenant isolation.",
-        "operationId": "delete_2f6170692f706c617a612f706f7374732f7b706f73745f69647d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "post_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Post Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Delete Post",
-        "tags": [
-          "plaza"
-        ]
-      },
-      "get": {
-        "description": "Get a single post with its comments. Enforces tenant isolation.",
-        "operationId": "get_2f6170692f706c617a612f706f7374732f7b706f73745f69647d",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "post_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Post Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PostDetail"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Post",
-        "tags": [
-          "plaza"
-        ]
-      }
-    },
-    "/api/plaza/posts/{post_id}/comments": {
-      "post": {
-        "description": "Add a comment to a post. Requires authentication; enforces tenant isolation.",
-        "operationId": "post_2f6170692f706c617a612f706f7374732f7b706f73745f69647d2f636f6d6d656e7473",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "post_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Post Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CommentCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommentOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Comment",
-        "tags": [
-          "plaza"
-        ]
-      }
-    },
-    "/api/plaza/posts/{post_id}/like": {
-      "post": {
-        "description": "Like a post (toggle). Requires authentication; enforces tenant isolation.",
-        "operationId": "post_2f6170692f706c617a612f706f7374732f7b706f73745f69647d2f6c696b65",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "post_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Post Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "author_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Author Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "author_type",
-            "required": false,
-            "schema": {
-              "default": "human",
-              "enum": [
-                "human",
-                "agent"
-              ],
-              "title": "Author Type",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Like Post",
-        "tags": [
-          "plaza"
-        ]
-      }
-    },
-    "/api/plaza/stats": {
-      "get": {
-        "description": "Get plaza statistics scoped by tenant_id from JWT.",
-        "operationId": "get_2f6170692f706c617a612f7374617473",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "tenant_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tenant Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Plaza Stats",
-        "tags": [
-          "plaza"
-        ]
-      }
-    },
     "/api/ready": {
       "get": {
         "operationId": "get_2f6170692f7265616479",
@@ -37402,6 +38148,278 @@
         "summary": "Get Sso Session Status",
         "tags": [
           "sso"
+        ]
+      }
+    },
+    "/api/tavily/v1/{path}": {
+      "delete": {
+        "operationId": "delete_2f6170692f746176696c792f76312f7b706174687d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy V1",
+        "tags": [
+          "tavily"
+        ]
+      },
+      "get": {
+        "operationId": "get_2f6170692f746176696c792f76312f7b706174687d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy V1",
+        "tags": [
+          "tavily"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_2f6170692f746176696c792f76312f7b706174687d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy V1",
+        "tags": [
+          "tavily"
+        ]
+      },
+      "post": {
+        "operationId": "post_2f6170692f746176696c792f76312f7b706174687d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy V1",
+        "tags": [
+          "tavily"
+        ]
+      },
+      "put": {
+        "operationId": "put_2f6170692f746176696c792f76312f7b706174687d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy V1",
+        "tags": [
+          "tavily"
         ]
       }
     },
@@ -40383,6 +41401,43 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Keep only users the named operation can accept.",
+            "in": "query",
+            "name": "eligible_for",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UserPageEligibility"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only users the named operation can accept.",
+              "title": "Eligible For"
+            }
+          },
+          {
+            "description": "Omit this user from the page.",
+            "in": "query",
+            "name": "exclude_user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit this user from the page.",
+              "title": "Exclude User Id"
+            }
           }
         ],
         "responses": {
@@ -41000,6 +42055,9 @@
       "ChannelConfigOut",
       "ChannelType",
       "ChatEventType",
+      "ChatHistoryDelta",
+      "ChatHistoryReset",
+      "ChatHistoryUnchanged",
       "ChatMessageEntry",
       "ChatMessagePage",
       "ChatRejectionReason",
@@ -41037,6 +42095,7 @@
       "EmailConnectionResult",
       "EmailProviderHelp",
       "EmailTestRequest",
+      "FileInfoPage",
       "FocusItemResponse",
       "FocusKind",
       "FocusStatus",
@@ -41067,6 +42126,7 @@
       "MultiTenantResponse",
       "NotificationBroadcastEmailCancellationResponse",
       "NotificationBroadcastEmailStatusResponse",
+      "NotificationBroadcastHistoryPageResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
       "NotificationPageResponse",
@@ -41143,7 +42203,9 @@
       "TaskCreate",
       "TaskLogCreate",
       "TaskLogOut",
+      "TaskLogPage",
       "TaskOut",
+      "TaskPage",
       "TaskPriority",
       "TaskStatus",
       "TaskType",
@@ -41172,6 +42234,7 @@
       "UserActiveUpdate",
       "UserDetailOut",
       "UserLogin",
+      "UserPageEligibility",
       "UserQuotaUpdate",
       "UserRole",
       "UserRosterExportOut",
@@ -41259,6 +42322,9 @@
       "ChannelType",
       "ChatAttachmentReference",
       "ChatEventType",
+      "ChatHistoryDelta",
+      "ChatHistoryReset",
+      "ChatHistoryUnchanged",
       "ChatMessageEntry",
       "ChatMessagePage",
       "ChatRejectionReason",
@@ -41315,6 +42381,8 @@
       "EmailConnectionResult",
       "EmailProviderHelp",
       "EmailTestRequest",
+      "FileInfo",
+      "FileInfoPage",
       "FocusItemResponse",
       "FocusKind",
       "FocusStatus",
@@ -41356,6 +42424,8 @@
       "MultiTenantResponse",
       "NotificationBroadcastEmailCancellationResponse",
       "NotificationBroadcastEmailStatusResponse",
+      "NotificationBroadcastHistoryItem",
+      "NotificationBroadcastHistoryPageResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
       "NotificationPageResponse",
@@ -41448,7 +42518,9 @@
       "TaskCreate",
       "TaskLogCreate",
       "TaskLogOut",
+      "TaskLogPage",
       "TaskOut",
+      "TaskPage",
       "TaskPriority",
       "TaskStatus",
       "TaskType",
@@ -41486,6 +42558,7 @@
       "UserAgentOut",
       "UserDetailOut",
       "UserLogin",
+      "UserPageEligibility",
       "UserQuotaUpdate",
       "UserRole",
       "UserRosterExportOut",
