@@ -9,7 +9,14 @@ from psycopg import AsyncConnection
 from psycopg.rows import DictRow
 
 from app.db.connection import DbConnection
-from app.db.errors import DbError, UniqueViolationError, map_psycopg_error
+from app.db.errors import (
+    DbError,
+    PoolCheckoutTimeoutError,
+    QueryCanceledError,
+    UniqueViolationError,
+    map_psycopg_error,
+    overload_error,
+)
 
 
 class _FakeCursor:
@@ -66,15 +73,20 @@ class _FakeRawConnection:
         self.fail_with: BaseException | None = None
         self.commits = 0
         self.rollbacks = 0
+        self.finish_with: BaseException | None = None
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
 
     async def commit(self) -> None:
         self.commits += 1
+        if self.finish_with is not None:
+            raise self.finish_with
 
     async def rollback(self) -> None:
         self.rollbacks += 1
+        if self.finish_with is not None:
+            raise self.finish_with
 
     def transaction(self) -> _FakeTransaction:
         return _FakeTransaction()
@@ -162,3 +174,66 @@ async def test_lock_not_available_maps_with_original(method: str) -> None:
     with pytest.raises(LockNotAvailableError) as caught:
         await getattr(db, method)("SELECT 1")
     assert caught.value.orig is original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["execute", "fetchone", "fetchall"])
+async def test_query_canceled_maps_to_typed_overload(method: str) -> None:
+    # Given
+    from psycopg.errors import QueryCanceled
+
+    raw = _FakeRawConnection()
+    original = QueryCanceled("canceling statement due to statement timeout")
+    assert original.sqlstate == "57014"
+    raw.fail_with = original
+
+    # When / Then
+    with pytest.raises(QueryCanceledError) as caught:
+        await getattr(_wrap(raw), method)("SELECT pg_sleep(60)")
+    assert caught.value.orig is original
+
+
+def test_overload_error_classifies_raw_wrapped_and_unrelated() -> None:
+    # Given
+    from psycopg.errors import LockNotAvailable, QueryCanceled
+    from psycopg_pool import PoolTimeout
+
+    pool_timeout = PoolTimeout("couldn't get a connection after 30.00 sec")
+    canceled = QueryCanceled("canceled")
+
+    # Then
+    assert isinstance(overload_error(pool_timeout), PoolCheckoutTimeoutError)
+    assert isinstance(overload_error(canceled), QueryCanceledError)
+    wrapped = overload_error(DbError("wrapped", orig=canceled))
+    assert isinstance(wrapped, QueryCanceledError)
+    assert wrapped.orig is canceled
+    assert isinstance(overload_error(DbError("wrapped", orig=pool_timeout)), PoolCheckoutTimeoutError)
+    typed = QueryCanceledError(orig=canceled)
+    assert overload_error(typed) is typed
+    assert overload_error(DbError("plain")) is None
+    assert overload_error(LockNotAvailable("busy")) is None
+    assert overload_error(RuntimeError("boom")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["commit", "rollback"])
+async def test_commit_and_rollback_map_overload_only(method: str) -> None:
+    # Given
+    from psycopg.errors import QueryCanceled, UniqueViolation
+
+    raw = _FakeRawConnection()
+    db = _wrap(raw)
+    canceled = QueryCanceled("canceled")
+    raw.finish_with = canceled
+
+    # When / Then
+    with pytest.raises(QueryCanceledError) as caught:
+        await getattr(db, method)()
+    assert caught.value.orig is canceled
+    assert caught.value.__cause__ is canceled
+
+    other = UniqueViolation("duplicate")
+    raw.finish_with = other
+    with pytest.raises(UniqueViolation) as raw_caught:
+        await getattr(db, method)()
+    assert raw_caught.value is other

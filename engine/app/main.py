@@ -7,11 +7,14 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from psycopg.errors import QueryCanceled
+from psycopg_pool import PoolTimeout
 from starlette.routing import Route
 
 from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.middleware import TraceIdMiddleware
+from app.db.errors import DbError, overload_error
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
@@ -49,6 +52,21 @@ async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) 
 @app.exception_handler(StorageQuotaError)
 async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(DbError)
+@app.exception_handler(PoolTimeout)
+@app.exception_handler(QueryCanceled)
+async def database_overload(_request: Request, exc: Exception) -> JSONResponse:
+    overload = overload_error(exc)
+    if overload is None:
+        # Not an overload: hand the original to the catch-all so it is reported and answered with the usual 500.
+        raise exc
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(overload)},
+        headers={"Retry-After": str(overload.retry_after_seconds)},
+    )
 
 
 @app.exception_handler(Exception)

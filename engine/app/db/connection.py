@@ -9,7 +9,7 @@ from psycopg import AsyncConnection, AsyncCursor
 from psycopg.abc import Params as PgParams, QueryNoTemplate
 from psycopg.rows import DictRow
 
-from app.db.errors import map_psycopg_error
+from app.db.errors import map_psycopg_error, overload_error
 
 type Params = Mapping[str, object] | Sequence[object] | None
 type Row = dict[str, object]
@@ -88,7 +88,19 @@ class DbConnection:
         return self._conn.cursor()
 
     async def commit(self) -> None:
-        await self._conn.commit()
+        try:
+            await self._conn.commit()
+        except Exception as exc:
+            overload = overload_error(exc)
+            if overload is None:
+                raise
+            raise overload from exc
 
     async def rollback(self) -> None:
-        await self._conn.rollback()
+        try:
+            await self._conn.rollback()
+        except Exception as exc:
+            overload = overload_error(exc)
+            if overload is None:
+                raise
+            raise overload from exc
