@@ -12,11 +12,17 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
+from psycopg.pq import TransactionStatus
+
 from app.core.logging import logger
 from app.db.connection import DbConnection
 from app.db.pool import durable_pool, get_pool
 
 _conn_ctx: ContextVar[DbConnection | None] = ContextVar("psycopg_conn_ctx", default=None)
+
+
+_SHOW_STATEMENT_TIMEOUT_SQL = "SELECT current_setting('statement_timeout') AS value"
+_SET_LOCAL_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %(value)s, true)"
 
 
 @dataclass
@@ -118,6 +124,36 @@ async def connection_ctx() -> AsyncGenerator[DbConnection]:
     pool = get_pool()
     async with pool.connection() as raw, _own_transaction(DbConnection(raw)) as db:
         yield db
+
+
+async def _set_statement_timeout(db: DbConnection, value: str) -> None:
+    await db.execute(_SET_LOCAL_STATEMENT_TIMEOUT_SQL, {"value": value})
+
+
+@asynccontextmanager
+async def long_running_statement(db: DbConnection) -> AsyncGenerator[None]:
+    """Lift ``statement_timeout`` for one scoped block of deliberately long work.
+
+    The override is transaction-local (``set_config(..., is_local => true)``), so a leaked value can never outlive
+    the enclosing transaction or reach the pool. On exit the value read on entry is restored, so later statements of
+    a request-bound transaction keep the configured limit and nested scopes unwind one level at a time. When the
+    block failed or the transaction is already aborted, restoring is best effort: the original exception always
+    propagates and the owner's rollback (which also discards the local setting) is unchanged. Cancellation
+    (``BaseException``) skips the restore for the same reason. Never touches ``lock_timeout``.
+    """
+    prior = str(await db.fetchval(_SHOW_STATEMENT_TIMEOUT_SQL))
+    await _set_statement_timeout(db, "0")
+    try:
+        yield
+    except Exception:
+        if db.raw.info.transaction_status != TransactionStatus.INERROR:
+            try:
+                await _set_statement_timeout(db, prior)
+            except Exception as exc:
+                logger.opt(exception=exc).warning("Could not restore statement_timeout after a failed scope")
+        raise
+    if db.raw.info.transaction_status != TransactionStatus.INERROR:
+        await _set_statement_timeout(db, prior)
 
 
 @asynccontextmanager

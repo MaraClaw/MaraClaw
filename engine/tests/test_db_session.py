@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextvars import Context
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import Mock
 
 import pytest
 from psycopg import AsyncConnection
+from psycopg.pq import TransactionStatus
 from psycopg.rows import DictRow
 
 from app.core import access_cache, redis_cache
@@ -20,6 +22,7 @@ from app.db.session import (
     connection_ctx,
     flush_request_transaction,
     get_connection,
+    long_running_statement,
     transaction,
 )
 from transaction_pool_fakes import CountingPool
@@ -28,6 +31,7 @@ from transaction_pool_fakes import CountingPool
 class _FakeCursor:
     def __init__(self, parent: _FakeRawConnection) -> None:
         self._parent = parent
+        self._last = ""
 
     async def __aenter__(self) -> Self:
         return self
@@ -42,9 +46,18 @@ class _FakeCursor:
         return False
 
     async def execute(self, query: object, params: object = None) -> None:
-        self._parent.executed.append((str(query), params))
+        self._last = str(query)
+        self._parent.executed.append((self._last, params))
+        if "set_config('statement_timeout'" in self._last:
+            value = cast("dict[str, str]", params)["value"]
+            if value in self._parent.failing_values:
+                raise RuntimeError("restore failed")
+            self._parent.timeout = value
+            self._parent.timeouts.append(value)
 
-    async def fetchone(self) -> None:
+    async def fetchone(self) -> dict[str, str] | None:
+        if "current_setting('statement_timeout')" in self._last:
+            return {"value": self._parent.timeout}
         return None
 
     async def fetchall(self) -> list[Any]:
@@ -73,6 +86,10 @@ class _FakeRawConnection:
         self.executed: list[tuple[str, Any]] = []
         self.commits = 0
         self.rollbacks = 0
+        self.timeout = "30s"
+        self.timeouts: list[str] = []
+        self.failing_values: set[str] = set()
+        self.info = SimpleNamespace(transaction_status=TransactionStatus.INTRANS)
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
@@ -589,3 +606,90 @@ async def test_cancelled_task_cleans_owner_context_and_returns_slot(monkeypatch:
     async with asyncio.timeout(5), connection_ctx():
         pass
     assert (pool.active, pool.checkouts, pool.releases) == (0, 2, 2)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_lifts_then_restores_actual_prior_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a limit that is not the configured default
+    raw = _FakeRawConnection()
+    raw.timeout = "1min"
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    # When
+    async with connection_ctx() as db:
+        async with long_running_statement(db):
+            assert raw.timeout == "0"
+        assert raw.timeout == "1min"
+
+    # Then the override is transaction-local and the owner still commits once
+    assert raw.timeouts == ["0", "1min"]
+    assert (raw.commits, raw.rollbacks) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_nested_scopes_unwind_one_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async with connection_ctx() as db, long_running_statement(db):
+        async with long_running_statement(db):
+            assert raw.timeout == "0"
+        assert raw.timeout == "0"
+
+    assert raw.timeouts == ["0", "0", "0", "30s"]
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_failure_restores_and_keeps_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def failing_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raise ValueError("body failed")
+
+    with pytest.raises(ValueError, match="body failed"):
+        await failing_scope()
+
+    assert raw.timeouts == ["0", "30s"]
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_skips_restore_in_aborted_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def aborted_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raw.info.transaction_status = TransactionStatus.INERROR
+            raise ValueError("statement failed")
+
+    with pytest.raises(ValueError, match="statement failed"):
+        await aborted_scope()
+
+    assert raw.timeouts == ["0"]
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_restore_failure_does_not_mask_body_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _FakeRawConnection()
+    raw.failing_values = {"30s"}
+    logger = Mock()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(session_module, "logger", logger)
+
+    async def failing_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raise ValueError("body failed")
+
+    with pytest.raises(ValueError, match="body failed"):
+        await failing_scope()
+
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+    logger.opt.assert_called_once()

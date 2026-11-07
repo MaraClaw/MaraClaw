@@ -523,6 +523,67 @@ async def test_catalog_defaults_use_one_channel_query(raw: _FakeRawConnection, m
     assert calls["n"] == 1
 
 
+def _pool_settings(**overrides: object) -> Any:
+    values: dict[str, object] = {
+        "DATABASE_URL": "postgresql://u:p@localhost/db",
+        "DATABASE_POOL_MIN_SIZE": 1,
+        "DATABASE_POOL_MAX_SIZE": 2,
+        "DATABASE_POOL_TIMEOUT": 5.0,
+        "DATABASE_POOL_MAX_IDLE": 600.0,
+        "DATABASE_POOL_MAX_LIFETIME": 1800.0,
+        "DATABASE_STATEMENT_TIMEOUT_MS": 30000,
+        "DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": 60000,
+        "DATABASE_DURABLE_POOL_MAX_SIZE": 4,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class _ConfigureConnection:
+    def __init__(self) -> None:
+        self.row_factory: object = None
+        self.events: list[str] = []
+        self.executed: list[tuple[str, object]] = []
+
+    async def execute(self, query: str, params: object = None) -> None:
+        self.events.append("execute")
+        self.executed.append((query, params))
+
+    async def commit(self) -> None:
+        self.events.append("commit")
+
+
+class _RecordingPool:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.conninfo = kwargs["conninfo"]
+        self.max_size = kwargs["max_size"]
+        self.timeout = kwargs["timeout"]
+        self.max_idle = kwargs["max_idle"]
+        self.max_lifetime = kwargs["max_lifetime"]
+
+    async def open(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def recording_pools(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[_RecordingPool]]:
+    created: list[_RecordingPool] = []
+
+    def build(**kwargs: Any) -> _RecordingPool:
+        pool = _RecordingPool(**kwargs)
+        created.append(pool)
+        return pool
+
+    pool_module.reset_pool_for_tests()
+    monkeypatch.setattr(pool_module, "AsyncConnectionPool", build)
+    yield created
+    pool_module.reset_pool_for_tests()
+
+
 @pytest.mark.asyncio
 async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
@@ -537,18 +598,7 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
 
     pool_module.reset_pool_for_tests()
     monkeypatch.setattr(pool_module, "AsyncConnectionPool", FakePool)
-    monkeypatch.setattr(
-        pool_module,
-        "get_settings",
-        lambda: SimpleNamespace(
-            DATABASE_URL="postgresql://u:p@localhost/db",
-            DATABASE_POOL_MIN_SIZE=1,
-            DATABASE_POOL_MAX_SIZE=2,
-            DATABASE_POOL_TIMEOUT=5.0,
-            DATABASE_POOL_MAX_IDLE=600.0,
-            DATABASE_POOL_MAX_LIFETIME=1800.0,
-        ),
-    )
+    monkeypatch.setattr(pool_module, "get_settings", _pool_settings)
     try:
         await pool_module.init_pool()
         assert captured["max_idle"] == 600.0
@@ -561,3 +611,80 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
         await pool_module._check_pooled_connection(open_connection)
     finally:
         pool_module.reset_pool_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_both_pools_apply_session_limits_and_leave_no_open_transaction(
+    monkeypatch: pytest.MonkeyPatch, recording_pools: list[_RecordingPool]
+) -> None:
+    # Given
+    monkeypatch.setattr(
+        pool_module,
+        "get_settings",
+        lambda: _pool_settings(
+            DATABASE_STATEMENT_TIMEOUT_MS=1500,
+            DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS=2500,
+        ),
+    )
+
+    # When
+    await pool_module.init_pool()
+    await pool_module.durable_pool()
+
+    # Then
+    main, durable = recording_pools
+    for pool in (main, durable):
+        conn = _ConfigureConnection()
+        await pool.kwargs["configure"](conn)
+        assert conn.events == ["execute", "commit"]
+        query, params = conn.executed[0]
+        assert "set_config('statement_timeout'" in query
+        assert "set_config('idle_in_transaction_session_timeout'" in query
+        assert "lock_timeout" not in query
+        assert params == {"statement": "1500", "idle": "2500"}
+        assert conn.row_factory is not None
+
+
+@pytest.mark.asyncio
+async def test_durable_pool_size_is_independent_of_main_pool(
+    monkeypatch: pytest.MonkeyPatch, recording_pools: list[_RecordingPool]
+) -> None:
+    # Given
+    monkeypatch.setattr(pool_module, "get_settings", lambda: _pool_settings(DATABASE_DURABLE_POOL_MAX_SIZE=3))
+
+    # When
+    await pool_module.init_pool(max_size=17)
+    await pool_module.durable_pool()
+
+    # Then
+    main, durable = recording_pools
+    assert main.max_size == 17
+    assert durable.max_size == 3
+    assert durable.timeout == main.timeout
+    assert durable.conninfo == main.conninfo
+
+
+def test_database_limit_settings_defaults_and_boundaries() -> None:
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    defaults = Settings()
+    assert defaults.DATABASE_STATEMENT_TIMEOUT_MS == 30000
+    assert defaults.DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS == 60000
+    assert defaults.DATABASE_DURABLE_POOL_MAX_SIZE == 4
+
+    assert Settings.model_validate({"DATABASE_DURABLE_POOL_MAX_SIZE": 1}).DATABASE_DURABLE_POOL_MAX_SIZE == 1
+    assert Settings.model_validate({"DATABASE_STATEMENT_TIMEOUT_MS": 0}).DATABASE_STATEMENT_TIMEOUT_MS == 0
+    assert (
+        Settings.model_validate({"DATABASE_STATEMENT_TIMEOUT_MS": 2147483647}).DATABASE_STATEMENT_TIMEOUT_MS
+        == 2147483647
+    )
+    for invalid in (
+        {"DATABASE_DURABLE_POOL_MAX_SIZE": 0},
+        {"DATABASE_STATEMENT_TIMEOUT_MS": -1},
+        {"DATABASE_STATEMENT_TIMEOUT_MS": 2147483648},
+        {"DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": -1},
+    ):
+        with pytest.raises(ValidationError):
+            Settings.model_validate(invalid)

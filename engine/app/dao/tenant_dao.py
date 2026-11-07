@@ -15,6 +15,7 @@ from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_ten
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL
+from app.db.session import long_running_statement
 from app.records.tenant import TenantRecord
 
 __all__ = [
@@ -398,7 +399,8 @@ class TenantDAO(BaseDAO[TenantRecord]):
             for agent_id in sorted(agent_ids):
                 await db.execute("SELECT id FROM agents WHERE id=%(id)s FOR UPDATE", {"id": agent_id})
                 await revoke(agent_id, purge=True)
-            await execute_cleanup(db, TENANT_DELETE_CLEANUP_SQL, params)
+            async with long_running_statement(db):
+                await execute_cleanup(db, TENANT_DELETE_CLEANUP_SQL, params)
             await bump_user_sessions(user_ids)
             for agent_id in agent_ids:
                 memo_drop("agent", agent_id)

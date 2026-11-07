@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+from psycopg.conninfo import make_conninfo
+from psycopg.errors import QueryCanceled
 
 from app.api import background_tasks, tenants
+from app.config import get_settings
 from app.core.redis_cache import cache_key
 from app.core.security import get_current_user
-from app.db.errors import ForeignKeyViolationError
+from app.dao.agent_dao import agent_dao
+from app.db import session
+from app.db.errors import DbError, ForeignKeyViolationError
+from app.db.pool import EnginePool, close_pool, init_pool
 from app.db.session import bind_crud_connection, connection_ctx
 from app.services.admin_audit import write_admin_audit
 from deletion_content_pg import seed_deletion_content
@@ -231,3 +240,67 @@ async def test_delete_defers_snapshots_versions_and_acl_until_outer_request_comm
     assert len(deletion_pg.events) == 6
     await asyncio.gather(*tuple(background_tasks._tasks))
     assert deletion_pg.runtime_calls == [("remove", deletion_pg.agent_id), ("archive", deletion_pg.agent_id)]
+
+
+@pytest_asyncio.fixture
+async def low_limit_pool(deletion_pg: DeletionPostgres, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[EnginePool]:
+    monkeypatch.setenv("DATABASE_STATEMENT_TIMEOUT_MS", "200")
+    get_settings.cache_clear()
+    [row] = await deletion_pg.rows("SELECT current_schema() AS schema")
+    conninfo = make_conninfo(os.environ["MARACLAW_TEST_POSTGRES_DSN"], options=f"-csearch_path={row['schema']}")
+    pool = await init_pool(conninfo=conninfo, min_size=1, max_size=3)
+    monkeypatch.setattr(session, "get_pool", lambda: pool)
+    try:
+        yield pool
+    finally:
+        try:
+            await asyncio.gather(*tuple(background_tasks._tasks))
+        finally:
+            await close_pool()
+            get_settings.cache_clear()
+
+
+_SLOW_DELETE_TRIGGER = (
+    "CREATE TABLE slow_delete_hits (hit integer NOT NULL)",
+    (
+        "CREATE FUNCTION slow_delete() RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "BEGIN PERFORM pg_sleep(1); INSERT INTO slow_delete_hits VALUES (1); RETURN OLD; END $$"
+    ),
+    "CREATE TRIGGER slow_delete BEFORE DELETE ON agents FOR EACH ROW EXECUTE FUNCTION slow_delete()",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", ["tenant", "agent"])
+async def test_bulk_delete_outlasts_statement_limit_and_restores_it_inside_the_request(
+    deletion_pg: DeletionPostgres, low_limit_pool: EnginePool, bulk: str
+) -> None:
+    # Given a 200 ms statement limit and a trigger making each agent delete take 1 s, which the limit cancels.
+    async with deletion_pg.pool.connection() as raw:
+        for statement in _SLOW_DELETE_TRIGGER:
+            await raw.execute(statement)
+    with pytest.raises(QueryCanceled):
+        async with low_limit_pool.connection() as raw:
+            await raw.execute("DELETE FROM agents WHERE id = %s", (deletion_pg.agent_id,))
+    assert await deletion_pg.rows("SELECT hit FROM slow_delete_hits") == []
+    # When the bulk delete runs inside an outer request transaction.
+    async with connection_ctx() as db:
+        before = await db.fetchval("SHOW statement_timeout")
+        match bulk:
+            case "tenant":
+                await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
+            case "agent":
+                await agent_dao.delete_with_related(deletion_pg.agent_id)
+            case _:
+                pytest.fail(f"Unknown bulk delete: {bulk}")
+        after = await db.fetchval("SHOW statement_timeout")
+        with pytest.raises(DbError) as cancelled:
+            async with db.raw.transaction():
+                await db.execute("SELECT pg_sleep(1)")
+    # Then the slow delete finished, the limit applied before and after it, and later statements are still cancelled.
+    assert (before, after) == ("200ms", "200ms")
+    assert isinstance(cancelled.value.orig, QueryCanceled)
+    assert await deletion_pg.rows("SELECT hit FROM slow_delete_hits") == [{"hit": 1}]
+    assert await deletion_pg.rows("SELECT id FROM agents") == []
+    remaining = {row["id"] for row in await deletion_pg.rows("SELECT id FROM tenants")}
+    assert remaining == {deletion_pg.other_tenant_id} | ({deletion_pg.tenant_id} if bulk == "agent" else set())
