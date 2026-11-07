@@ -45,7 +45,7 @@ export function fixture() {
     },
   }
   const issueTicket: typeof issueChatTicket = async () => ({ ticket: `opaque-${++tickets}`, session_id: canonicalSession })
-  const handlers = { sessionStore: store, transport, issueTicket, onEvent: (event: ChatInbound) => events.push(event),
+  const handlers = { sessionStore: store, transport, issueTicket, random: () => 1, onEvent: (event: ChatInbound) => events.push(event),
     onClose: (code: number) => codes.push(code) }
   const connect = () => connectAgentChat('agent-a', 'thread-a', handlers)
   const socket = () => {

@@ -121,6 +121,30 @@ for (const failure of [new ApiError(503, 'unavailable'), new TypeError('offline'
   })
 }
 
+test('ticket retries use the jittered delay up to the cap', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  let requests = 0
+  const conn = connectAgentChat('agent-a', 'requested-thread', { ...f.handlers, random: () => 0,
+    issueTicket: async () => {
+      requests++
+      if (requests < 7) throw new ApiError(503, 'unavailable')
+      return { ticket: 'recovered', session_id: 'resolved-thread' }
+    },
+  })
+  await Promise.resolve()
+  for (const delay of [300, 600, 1200, 2400, 4000, 4000]) {
+    const before = requests
+    t.mock.timers.tick(delay - 1)
+    assert.equal(requests, before)
+    t.mock.timers.tick(1)
+    await Promise.resolve()
+    assert.equal(requests, before + 1)
+  }
+  assert.equal(new URL(f.urls[0] ?? '').searchParams.get('ticket'), 'recovered')
+  conn.close()
+})
+
 for (const outcome of ['success', 'error'] as const) {
   test(`a superseded issuance ${outcome} cannot replace the newer attempt`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { ChatEventType } from '../src/lib/chat/protocol.ts'
 import { createChatSubmissions } from '../src/lib/chat/submissions.ts'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
-import { ControlledSocket, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
+import { ControlledSocket, canonicalSession, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
 
 test('queued sends flush in order when the current socket opens', async () => {
   // Given
@@ -96,6 +96,54 @@ test('transient disconnect reconnects with pending sends when the owner remains 
   old.end(4001)
   assert.deepEqual(f.events, [])
   assert.equal(f.token(), 'token-a')
+  conn.close()
+})
+
+for (const [random, delay] of [[0, 300], [0.5, 450], [1, 600]] as const) {
+  test(`first reconnect waits ${delay}ms when the random source returns ${random}`, async (t) => {
+    // Given
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const f = fixture()
+    const conn = connectAgentChat('agent-a', 'thread-a', { ...f.handlers, random: () => random })
+    await Promise.resolve()
+    // When
+    f.socket().end(1006)
+    t.mock.timers.tick(delay - 1)
+    await Promise.resolve()
+    // Then
+    assert.equal(f.sockets.length, 1)
+    t.mock.timers.tick(1)
+    await Promise.resolve()
+    assert.equal(f.sockets.length, 2)
+    conn.close()
+  })
+}
+
+test('backoff keeps growing across opens that never reach CONNECTED and resets on CONNECTED', async (t) => {
+  // Given
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  const conn = connectAgentChat('agent-a', 'thread-a', f.handlers)
+  await Promise.resolve()
+  const reconnectAfter = async (delay: number) => {
+    const before = f.sockets.length
+    t.mock.timers.tick(delay - 1)
+    await Promise.resolve()
+    assert.equal(f.sockets.length, before)
+    t.mock.timers.tick(1)
+    await Promise.resolve()
+    assert.equal(f.sockets.length, before + 1)
+  }
+  // When / Then
+  f.socket().end(1006)
+  await reconnectAfter(600)
+  f.socket().open()
+  f.socket().end(1006)
+  await reconnectAfter(1200)
+  f.socket().open()
+  f.socket().frame(JSON.stringify({ type: 'connected', session_id: canonicalSession }))
+  f.socket().end(1006)
+  await reconnectAfter(600)
   conn.close()
 })
 
