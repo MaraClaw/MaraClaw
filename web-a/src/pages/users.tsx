@@ -8,9 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
+import { companyOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
-import { listCompanies } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { isGenesisAdmin, isPlatformAdminUser } from '@/lib/types/auth'
 import {
@@ -37,8 +37,7 @@ export function UsersPage() {
   const filterId = useId()
 
   const companies = useQuery({
-    queryKey: ['admin-companies'],
-    queryFn: ({ signal }) => listCompanies(undefined, signal),
+    ...companyOptions(),
     enabled: platformAdmin,
   })
 

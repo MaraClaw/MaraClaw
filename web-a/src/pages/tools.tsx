@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
+import { companyOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
-import { listCompanies } from '@/lib/companies-api'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { ToolsCatalog } from './tools-catalog'
 import { toolButtonClass } from './tools-fields'
@@ -18,7 +18,7 @@ export function ToolsPage() {
   const { user, owner } = useAuth()
   const [params, setParams] = useSearchParams()
   const platform = isPlatformAdminUser(user)
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: ({ signal }) => listCompanies(undefined, signal), enabled: platform })
+  const companies = useQuery({ ...companyOptions(), enabled: platform })
   const tenantId = toolsTenantId(user, params.get('company'))
   const concreteCompany = !!tenantId && (!platform || !!companies.data?.some((company) => company.id === tenantId))
   return <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6">
