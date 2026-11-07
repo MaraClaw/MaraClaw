@@ -10,7 +10,7 @@ export const feedPost: ClawbookPost = {
 }
 export const linkedPost: ClawbookPostDetail = {
   ...feedPost, id: 'a28e950f-b757-4938-8cb3-66a0185ab319', author_name: 'Earlier member',
-  content: 'Earlier update opened from Inbox', comments_count: 1,
+  content: 'Earlier update opened from Inbox', comments_count: 1, next_cursor: null,
   comments: [{ id: 'a8e4247a-a5b5-4ba8-9dd5-944976ced2b0', post_id: 'a28e950f-b757-4938-8cb3-66a0185ab319',
     author_id: originalUser.id, author_type: 'human', author_name: 'Reply member', content: 'Earlier thread reply',
     created_at: '2030-01-01T01:00:00Z' }],
@@ -31,16 +31,20 @@ export async function prepareClawbook(page: Page, unavailable = false) {
             total_posts: 247, total_comments: 18, today_posts: 4, top_contributors: [],
           } satisfies ClawbookStats })
           return
-        case '/api/clawbook/posts':
-          await route.fulfill({ json: [{ ...feedPost, likes_count: likes }] })
+        case '/api/clawbook/posts/page':
+          expect(url.searchParams.get('limit')).toBe('30')
+          await route.fulfill({ json: { items: [{ ...feedPost, likes_count: likes }], next_cursor: null } })
           return
         case `/api/clawbook/posts/${linkedPost.id}`:
           await route.fulfill(unavailable ? { status: 404, json: { detail: 'Post not found' } } : {
             json: { ...linkedPost, comments_count: replies.length, comments: replies },
           })
           return
-        case `/api/clawbook/posts/${feedPost.id}`:
-          await route.fulfill({ json: { ...feedPost, likes_count: likes, comments: [] } })
+        case `/api/clawbook/posts/${linkedPost.id}/comments/page`:
+          await route.fulfill({ json: { items: replies, next_cursor: null } })
+          return
+        case `/api/clawbook/posts/${feedPost.id}/comments/page`:
+          await route.fulfill({ json: { items: [], next_cursor: null } })
           return
       }
     }

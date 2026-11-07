@@ -4649,6 +4649,62 @@
         "title": "ChunkEvent",
         "type": "object"
       },
+      "ClawbookCommentPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CommentOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ClawbookCommentPage",
+        "type": "object"
+      },
+      "ClawbookPostPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PostOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ClawbookPostPage",
+        "type": "object"
+      },
       "ClawhubImportBody": {
         "properties": {
           "slug": {
@@ -11928,7 +11984,6 @@
             "type": "string"
           },
           "comments": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/CommentOut"
             },
@@ -11956,6 +12011,17 @@
           "likes_count": {
             "title": "Likes Count",
             "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -29911,6 +29977,8 @@
             "required": false,
             "schema": {
               "default": 20,
+              "maximum": 100,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -29921,6 +29989,8 @@
             "required": false,
             "schema": {
               "default": 0,
+              "maximum": 10000,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -30034,6 +30104,90 @@
         ]
       }
     },
+    "/api/clawbook/posts/page": {
+      "get": {
+        "operationId": "get_2f6170692f636c6177626f6f6b2f706f7374732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClawbookPostPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Posts Page",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
     "/api/clawbook/posts/{post_id}": {
       "delete": {
         "description": "Delete a clawbook post. Admins can delete any post; authors can delete their own. Enforces tenant isolation.",
@@ -30081,7 +30235,7 @@
         ]
       },
       "get": {
-        "description": "Get a single post with its comments. Enforces tenant isolation.",
+        "description": "Get a single post with its first page of comments. Enforces tenant isolation.",
         "operationId": "get_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d",
         "parameters": [
           {
@@ -30182,6 +30336,83 @@
           }
         ],
         "summary": "Create Comment",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/posts/{post_id}/comments/page": {
+      "get": {
+        "operationId": "get_2f6170692f636c6177626f6f6b2f706f7374732f7b706f73745f69647d2f636f6d6d656e74732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClawbookCommentPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Comments Page",
         "tags": [
           "clawbook"
         ]

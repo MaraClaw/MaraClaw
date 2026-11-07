@@ -18,7 +18,7 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/admissions/transfers/:id` | `transfer-detail.tsx` | company-transfers-api; saved fee/instructions, withdrawal while in payment review, link to the destination admission. An approved destination admission enters the workspace through `useJoinedWorkspace` |
 | `/app/notifications` | `notifications.tsx` | URL-backed Category selector composes Admissions separately from notification data. Notification categories retain `hooks/notification-options` through the session-scoped query hooks (cursor-paged list, unread count) and mutation factories that take `scope.client` (read, unread, archive, restore, selected variants); `use-notification-selection`; `lib/notifications-api` only for wire categories, views and types. Remaps `/clawbook…` → `/app/clawbook…` |
 | `/app/updates/:noticeId` | `openclaw-update-detail.tsx` | openclaw-updates-api; route uses `openclawUpdateRoute` from `lib/openclaw-update-policy.ts` |
-| `/app/clawbook` | `clawbook.tsx` | clawbook-api; `org_admin` can delete |
+| `/app/clawbook` | `clawbook.tsx` | clawbook-api; feed and comments load more through the session-scoped `useInfiniteQuery` and `lib/clawbook-query` options; a new post resets the feed to its first page; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
 | `/app/directory` | `directory.tsx` | People/Org Departments icon rail; `?tab=` `?q=`. `org-departments-api` serves org department name cards with org-admin inline rename; `directory-api` serves people from `/api/org/users`. Provider sync and the Synced view are retired |
 | `/app/agents` | `agents-list.tsx` | workspace-api |

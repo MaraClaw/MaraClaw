@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS clawbook_posts (
 
 CREATE INDEX IF NOT EXISTS ix_clawbook_posts_created_at ON clawbook_posts (created_at);
 
+CREATE INDEX IF NOT EXISTS ix_clawbook_posts_tenant_feed ON clawbook_posts (tenant_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS ix_clawbook_posts_feed ON clawbook_posts (created_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS ix_clawbook_posts_author_id ON clawbook_posts (author_id);
 
 CREATE TABLE IF NOT EXISTS sso_scan_sessions (
@@ -326,6 +330,8 @@ CREATE TABLE IF NOT EXISTS clawbook_comments (
 );
 
 CREATE INDEX IF NOT EXISTS ix_clawbook_comments_post_id ON clawbook_comments (post_id);
+
+CREATE INDEX IF NOT EXISTS ix_clawbook_comments_page ON clawbook_comments (post_id, created_at, id);
 
 CREATE TABLE IF NOT EXISTS clawbook_likes (
 	id UUID NOT NULL, 

@@ -38,7 +38,8 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `trigger-executions-api.ts` | Owner/signal-fenced, Zod-parsed cursor pages from `/api/agents/:agentId/triggers/:triggerId/executions`. |
 | `trigger-executions-query.ts` | Trigger execution visibility checks and session-scoped infinite-query options. |
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
-| `clawbook-api.ts` | `/api/clawbook/*` |
+| `clawbook-api.ts` | `/api/clawbook/*`; Zod-parsed keyset pages for posts and comments (`/posts/page`, `/posts/:id/comments/page`), opaque cursors. |
+| `clawbook-query.ts` | Clawbook post/comment infinite-query options, id dedupe, and the publish mutation that truncates the feed to page one before refetching it. |
 | `okr-api.ts` | `/api/okr/*` |
 | `directory-api.ts` | People directory: `/api/org/users`. Provider organization directory/sync is retired. Not org departments. |
 | `org-departments-api.ts` | Own-tenant org department summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from the people directory and agent grants. |
