@@ -246,6 +246,43 @@ async def test_config_connector_waits_for_save_and_commit(monkeypatch, existing,
     assert seen == [(True, 1)]
 
 
+@pytest.mark.asyncio
+async def test_delete_channel_stops_the_websocket_client_after_the_config_is_removed(monkeypatch):
+    # Given a creator deleting an existing Feishu channel inside the request transaction.
+    from app.services.feishu_ws import feishu_ws_manager
+
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(feishu_api, "check_agent_access", AsyncMock(return_value=(Mock(), None)))
+    monkeypatch.setattr(feishu_api, "is_agent_creator", lambda *_: True)
+    config = Mock(id=uuid.uuid4())
+    monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    order, stopped = [], asyncio.Event()
+
+    async def delete(**_kwargs):
+        order.append(("delete", raw.commits))
+        return True
+
+    async def stop(agent_id):
+        order.append(("stop", raw.commits, agent_id))
+        stopped.set()
+
+    monkeypatch.setattr(feishu_api.channel_config_dao, "delete", delete)
+    monkeypatch.setattr(feishu_ws_manager, "stop_client", stop)
+    token = session_module._conn_ctx.set(None)
+    # When the request transaction commits.
+    try:
+        async with session_module.connection_ctx():
+            await feishu_api.delete_channel_config(AGENT_ID, Mock())
+            await asyncio.sleep(0)
+            assert not stopped.is_set()
+        await asyncio.wait_for(stopped.wait(), 1)
+    finally:
+        session_module._conn_ctx.reset(token)
+    # Then the client is stopped only after the config removal committed.
+    assert order == [("delete", 0), ("stop", 1, AGENT_ID)]
+
+
 IMAGE_KEY = "img_v3_0123456789"
 IMAGE_NAME = f"image_{IMAGE_KEY[-8:]}.jpg"
 POST_KEYS = ["img_key_00000000", "img_key_00000001"]
