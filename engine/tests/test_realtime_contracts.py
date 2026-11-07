@@ -208,7 +208,8 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
     instance = router.RealtimeRouter()
     instance.instance_id = "local"
 
-    async def authorize(_socket: WebSocket, _agent: str, _session: str | None) -> bool:
+    async def authorize(_socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+        assert acl_version is None  # an ordinary session reads no ACL version
         events.append("authorize")
         return True
 
@@ -243,7 +244,10 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
         user_id="user",
     )
 
-    assert events == ["authorize", "local", "presence", "publish"]
+    # Presence runs alongside the local send; remote publication waits for both.
+    assert sorted(events) == ["authorize", "local", "presence", "publish"]
+    assert events.index("authorize") < events.index("local") < events.index("publish")
+    assert events.index("presence") < events.index("publish")
     assert len(frames) == 1
     assert [(channel, json_loads_object(payload)) for channel, payload in published] == [
         (

@@ -5,7 +5,7 @@ This package handles cross-process realtime routing. Local WebSocket connection 
 ## Routing Model
 
 - `RealtimeRouter` (`router.py`) uses Redis presence and Pub/Sub under the `realtime:ws` prefix. `contracts.py` holds the fixed envelope and presence shapes; websocket event payloads stay unconstrained JSON.
-- Messages are delivered locally first, then published to remote instance channels discovered from Redis presence records.
+- Messages go to the matching local sockets concurrently (`fanout.py`, at most `LOCAL_FANOUT_CONCURRENCY` in flight) while the Redis presence lookup runs alongside; remote instance channels are published after both finish. The event is serialized once per delivery (`encode_event_text`). The receiver (`deliver_pubsub_message`) uses the same fan-out, still one pub/sub message at a time in arrival order; never dispatch pub/sub messages as separate tasks, which would reorder chunks.
 - `INSTANCE_ID` is part of routing identity. Set stable ids for multi-worker deployments that need predictable audit/routing behavior.
 - Presence TTL is 180 seconds. Stale Redis connection ids are cleaned opportunistically during presence listing.
 
@@ -17,9 +17,9 @@ This package handles cross-process realtime routing. Local WebSocket connection 
 
 ## Shared Chat Delivery
 
-- `chat_authorization.py` `authorize_chat_delivery` runs for every local send. Ordinary sessions pass; a delivery targeting the agent's shared session needs the socket's `ChatTicketBinding` for that exact agent and session, then `chat_tickets.authorize` (fresh principal and `check_agent_access(..., fresh=True)`) and `authorized_session` reauthorize it. Any failure silently skips that socket.
+- `chat_authorization.py` `authorize_chat_delivery` runs for every local send. `read_shared_acl_version` reads the agent ACL version once per delivery, before any socket authorizes and only when a target is the shared session, and the caller passes it as `acl_version`; ordinary sessions do no ACL read. Ordinary sessions pass; a delivery targeting the agent's shared session needs the socket's `ChatTicketBinding` for that exact agent and session, then `chat_tickets.authorize` (fresh principal and `check_agent_access(..., fresh=True)`) and `authorized_session` reauthorize it. Any failure silently skips that socket.
 - The receiving side runs the same check: `api/websocket.py` `deliver_pubsub_message` calls `authorize_chat_delivery` for pub/sub deliveries. Keep both call sites; do not move authorization to the publisher.
-- `route_message(send_timeout=)` bounds only each `ws.send_json`; a timed-out socket is skipped like any failed send. Never put a deadline around `send_to_session` or `route_message` themselves: cancelling `authorize_chat_delivery` discards the positive decision it is about to cache, so every later chunk re-authorizes and is cancelled again, and cancelling routing skips remote instances.
+- `route_message(send_timeout=)` bounds only each `ws.send_text`; a timed-out socket is skipped like any failed send. The receiver applies the same bound (`CHUNK_SEND_TIMEOUT_SECONDS`) to chunk events only. Never put a deadline around `send_to_session` or `route_message` themselves: cancelling `authorize_chat_delivery` discards the positive decision it is about to cache, so every later chunk re-authorizes and is cancelled again, and cancelling routing skips remote instances.
 
 ## Editing Rules
 

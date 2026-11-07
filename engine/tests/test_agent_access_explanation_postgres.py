@@ -1,6 +1,7 @@
 import os
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, replace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -12,11 +13,11 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
 from app.api import agents
-from app.core import access_cache, row_memo
-from app.core.domain.agents import AgentStatus
+from app.core import access_cache, permissions, row_memo
+from app.core.domain.agents import AgentAccessReason, AgentStatus, PermissionGrantScope
 from app.core.domain.users import UserRole
-from app.dao import agent_dao
-from app.db.connection import DbConnection
+from app.dao import agent_dao, agent_permission_dao
+from app.db.connection import DbConnection, Params
 from app.db.pool import close_pool, init_pool
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
@@ -243,3 +244,152 @@ async def test_update_explicit_dump_preserves_administrator_reason(access_api: A
 
     assert response.status_code == 200
     assert response.json()["access_reason"] == "administrator"
+
+
+async def _insert_agent(
+    api: AccessAPI, mode: str, *, level: str = "use", tenant_id: UUID | None = None, creator_id: UUID | None = None
+) -> AgentRecord:
+    return await agent_dao.create(
+        obj_in={
+            "id": uuid4(),
+            "name": f"{mode} agent",
+            "creator_id": creator_id or api.agent.creator_id,
+            "tenant_id": tenant_id or api.viewer.tenant_id,
+            "access_mode": mode,
+            "company_access_level": level,
+        }
+    )
+
+
+async def _grant(api: AccessAPI, agent: AgentRecord, scope: str, subject: UUID | None, level: str = "use") -> None:
+    await api.db.execute(
+        "INSERT INTO agent_permissions (id, agent_id, scope_type, scope_id, access_level) "
+        "VALUES (%(id)s, %(agent)s, %(scope)s, %(subject)s, %(level)s)",
+        {"id": uuid4(), "agent": agent.id, "scope": scope, "subject": subject, "level": level},
+    )
+
+
+async def _seed_every_outcome(api: AccessAPI) -> list[AgentRecord]:
+    viewer = api.viewer
+    stranger, foreign_tenant, empty_department = uuid4(), uuid4(), uuid4()
+    await api.db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other', 'other-access')", {"id": foreign_tenant}
+    )
+    await api.db.execute(
+        "INSERT INTO local_departments (id, tenant_id, name) VALUES (%(id)s, %(tenant)s, 'Nobody')",
+        {"id": empty_department, "tenant": viewer.tenant_id},
+    )
+    agents_ = [api.agent]
+    agents_.append(await _insert_agent(api, "private", creator_id=viewer.id))
+    agents_.append(await _insert_agent(api, "private"))
+    agents_.append(await _insert_agent(api, "company", level="manage"))
+    agents_.append(await _insert_agent(api, "company", level="use"))
+    default = await _insert_agent(api, "company", level="")
+    agents_.append(default)
+    legacy = await _insert_agent(api, "company", level="")
+    await _grant(api, legacy, "company", None, "manage")
+    agents_.append(legacy)
+    for level in ("manage", "use"):
+        direct = await _insert_agent(api, "custom")
+        await _grant(api, direct, "user", viewer.id, level)
+        await _grant(api, direct, "department", api.department_ids[0])
+        agents_.append(direct)
+    via_department = await _insert_agent(api, "custom")
+    await _grant(api, via_department, "user", stranger, "manage")
+    await _grant(api, via_department, "department", api.department_ids[1])
+    agents_.append(via_department)
+    denied = await _insert_agent(api, "custom")
+    await _grant(api, denied, "user", stranger, "manage")
+    await _grant(api, denied, "department", empty_department)
+    agents_.extend([denied, await _insert_agent(api, "custom")])
+    agents_.append(await _insert_agent(api, "custom", tenant_id=foreign_tenant, creator_id=viewer.id))
+    return agents_
+
+
+@pytest.mark.parametrize("role", [UserRole.MEMBER, UserRole.ORG_ADMIN])
+@pytest.mark.parametrize("active", [True, False])
+async def test_batch_decisions_match_single_agent_decisions(
+    access_api: AccessAPI, role: UserRole, active: bool
+) -> None:
+    # Given every access outcome, with an optionally deactivated viewer.
+    api = access_api
+    catalog = await _seed_every_outcome(api)
+    await api.db.execute(
+        "UPDATE users SET is_active = %(active)s WHERE id = %(id)s", {"active": active, "id": api.viewer.id}
+    )
+    viewer = replace(api.viewer, role=role)
+    # When resolving the catalog one agent at a time and in one batch.
+    single = {agent.id: await permissions.compute_agent_access_decision(viewer, agent) for agent in catalog}
+    batch = await permissions.compute_agent_access_decisions(viewer, catalog)
+    # Then every level and reason matches, and the catalog exercised each reason or a denial.
+    assert batch == single
+    reasons = {decision.reason if decision else None for decision in batch.values()}
+    if role == UserRole.MEMBER:
+        assert reasons == {
+            AgentAccessReason.CREATOR,
+            AgentAccessReason.COMPANY,
+            AgentAccessReason.DIRECT,
+            None,
+            *([AgentAccessReason.DEPARTMENT] if active else []),
+        }
+    else:
+        assert reasons == {AgentAccessReason.CREATOR, AgentAccessReason.ADMINISTRATOR, None}
+
+
+async def test_decision_rows_cover_only_company_and_viewer_rows(access_api: AccessAPI) -> None:
+    # Given grants for the viewer, other users, departments and company sharing.
+    api = access_api
+    catalog = await _seed_every_outcome(api)
+    # When fetching decision rows for the whole catalog.
+    rows = await agent_permission_dao.list_decision_rows([agent.id for agent in catalog], api.viewer.id)
+    # Then only company rows and the viewer's own user rows come back, grouped under their agent.
+    flat = [row for group in rows.values() for row in group]
+    assert {row.scope_type for row in flat} == {PermissionGrantScope.COMPANY, PermissionGrantScope.USER}
+    assert all(row.scope_type == PermissionGrantScope.COMPANY or row.scope_id == api.viewer.id for row in flat)
+    assert all(row.agent_id == agent_id for agent_id, group in rows.items() for row in group)
+
+
+async def _list_with_query_count(
+    api: AccessAPI, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], list[dict[str, object]]]:
+    seen: list[str] = []
+    with monkeypatch.context() as spying:
+        for operation in ("execute", "fetchone", "fetchall", "fetchval"):
+            original: Callable[..., Awaitable[object]] = getattr(DbConnection, operation)
+
+            async def spy(
+                self: DbConnection,
+                query: str,
+                params: Params = None,
+                *,
+                _original: Callable[..., Awaitable[object]] = original,
+            ) -> object:
+                seen.append(query)
+                return await _original(self, query, params)
+
+            spying.setattr(DbConnection, operation, spy)
+        response = await api.client.get("/api/agents/?limit=500")
+    assert response.status_code == 200
+    return seen, cast("list[dict[str, object]]", response.json())
+
+
+async def test_list_query_count_does_not_grow_with_the_catalog(
+    access_api: AccessAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a viewer who reaches a few agents only through a department.
+    api = access_api
+    for _ in range(2):
+        await _grant(api, await _insert_agent(api, "custom"), "department", api.department_ids[0])
+    few, listed_few = await _list_with_query_count(api, monkeypatch)
+    # When ten more department and direct agents join the catalog.
+    for index in range(10):
+        agent = await _insert_agent(api, "custom")
+        await _grant(api, agent, "department", api.department_ids[index % 2])
+        if index % 3 == 0:
+            await _grant(api, agent, "user", api.viewer.id)
+    many, listed_many = await _list_with_query_count(api, monkeypatch)
+    # Then the list issues the same statements, none of them per agent.
+    assert (len(listed_few), len(listed_many)) == (3, 13)
+    assert len(many) == len(few)
+    assert {row["access_reason"] for row in listed_many} == {"direct", "department"}
+    assert sum("agent_id = ANY" in query and "FROM agent_permissions" in query for query in many) == 1

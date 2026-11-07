@@ -11,13 +11,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
-from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.core.domain.agents import AgentAccessDecision, AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.approvals import ApprovalAction, ApprovalStatus
 from app.core.json_types import int_from_row, json_as_int, object_mapping_from, uuid_from_row
 from app.core.logging import logger
 from app.core.permissions import (
     check_agent_access,
     compute_agent_access_decision,
+    compute_agent_access_decisions,
     is_agent_creator,
     list_visible_agents,
 )
@@ -172,12 +173,15 @@ async def _build_unread_count_by_agent(
     return {str(uuid_from_row(row["agent_id"])): int_from_row(row["cnt"]) for row in rows}
 
 
-async def _serialize_agent_out(agent: AgentRecord, viewer: UserRecord, unread_count: int = 0) -> AgentOut:
-    decision = await compute_agent_access_decision(viewer, agent)
+def _build_agent_out(agent: AgentRecord, decision: AgentAccessDecision | None, unread_count: int = 0) -> AgentOut:
     model = AgentOut.model_validate(agent)
     model.access_reason = decision.reason if decision is not None else None
     model.unread_count = unread_count
     return model
+
+
+async def _serialize_agent_out(agent: AgentRecord, viewer: UserRecord, unread_count: int = 0) -> AgentOut:
+    return _build_agent_out(agent, await compute_agent_access_decision(viewer, agent), unread_count)
 
 
 async def _agent_to_out(agent: AgentRecord, viewer: UserRecord) -> AgentOut:
@@ -234,9 +238,10 @@ async def list_agents(
     from app.services.onboarding import onboarded_agent_ids
 
     onboarded = await onboarded_agent_ids(current_user.id, [a.id for a in agents])
+    decisions = await compute_agent_access_decisions(current_user, agents)
     out: list[AgentOut] = []
     for a in agents:
-        model = await _serialize_agent_out(a, current_user, unread_by_agent.get(str(a.id), 0))
+        model = _build_agent_out(a, decisions[a.id], unread_by_agent.get(str(a.id), 0))
         model.onboarded_for_me = a.id in onboarded
         out.append(model)
     return out

@@ -83,6 +83,36 @@ def test_adapter_missing_steps_are_not_invented_and_need_no_engine_clock_anchor(
     }
 
 
+def test_chunk_publication_count_and_slowest_are_integer_milliseconds_without_text(lines) -> None:
+    timeline = TurnTimeline(uuid4(), uuid4(), CREATED)
+    timeline.mark("claimed", at(5))
+    for seconds in (0.25, 1.75, 0.5):
+        timeline.chunk_published(seconds)
+    timeline.emit("terminal")
+    ((_, payload),) = lines
+    assert (payload["chunks_published"], payload["slowest_chunk_ms"]) == (3, 1750)
+    assert all(isinstance(value, (str, int)) for value in payload.values())
+
+
+def test_turn_without_published_chunks_keeps_the_line_unchanged(lines) -> None:
+    timeline = TurnTimeline(uuid4(), uuid4(), CREATED)
+    timeline.mark("claimed", at(5))
+    timeline.emit("terminal")
+    ((_, payload),) = lines
+    assert "chunks_published" not in payload
+    assert "slowest_chunk_ms" not in payload
+
+
+def test_unmeasurable_chunk_duration_is_still_counted_and_never_raises(lines) -> None:
+    timeline = TurnTimeline(uuid4(), uuid4(), CREATED)
+    timeline.mark("claimed", at(5))
+    timeline.chunk_published(float("nan"))
+    timeline.chunk_published(0.5)
+    timeline.emit("terminal")
+    ((_, payload),) = lines
+    assert (payload["chunks_published"], payload["slowest_chunk_ms"]) == (2, 500)
+
+
 def test_logging_failure_never_reaches_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(*_args: object) -> None:
         raise RuntimeError("log sink down")

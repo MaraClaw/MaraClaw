@@ -155,6 +155,35 @@ async def compute_agent_access_decision(user: _UserLike, agent: _AgentLike) -> A
     return early
 
 
+async def compute_agent_access_decisions(
+    user: _UserLike, agents: Sequence[_AgentLike]
+) -> dict[uuid.UUID, AgentAccessDecision | None]:
+    """Batch form of ``compute_agent_access_decision`` with a fixed number of queries."""
+    decisions: dict[uuid.UUID, AgentAccessDecision | None] = {}
+    unresolved: dict[uuid.UUID, _AgentLike] = {}
+    for agent in agents:
+        early = _access_without_permissions(user, agent)
+        if isinstance(early, _NeedPerms):
+            unresolved[agent.id] = agent
+        else:
+            decisions[agent.id] = early
+    if not unresolved:
+        return decisions
+
+    permissions = await agent_permission_dao.list_decision_rows(list(unresolved), user.id)
+    department_candidates: list[uuid.UUID] = []
+    for agent_id, agent in unresolved.items():
+        direct = _access_from_permissions(user, agent, permissions.get(agent_id, ()))
+        decisions[agent_id] = direct
+        if direct is None and agent.access_mode == "custom":
+            department_candidates.append(agent_id)
+    if department_candidates:
+        granted = await org_department_dao.accessible_agent_ids(user.id, department_candidates)
+        for agent_id in granted:
+            decisions[agent_id] = AgentAccessDecision(PermissionAccessLevel.USE, AgentAccessReason.DEPARTMENT)
+    return decisions
+
+
 async def get_agent_access_level_for_user_id(
     user_id: uuid.UUID | None,
     agent: _AgentLike,

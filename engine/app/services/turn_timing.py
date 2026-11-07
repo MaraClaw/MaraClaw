@@ -47,6 +47,8 @@ class TurnTimeline:
     created_at: datetime | None
     marks: dict[TurnMark, datetime] = field(default_factory=dict)
     adapter_timing: AdapterTiming | None = field(default=None, init=False)
+    chunks_published: int = field(default=0, init=False)
+    slowest_chunk_ms: int = field(default=0, init=False)
     emitted: bool = field(default=False, init=False)
 
     @classmethod
@@ -63,6 +65,12 @@ class TurnTimeline:
         """Keep dispatcher-relative durations separate: its process starts after the engine's exec mark."""
         if timing is not None:
             self.adapter_timing = timing
+
+    def chunk_published(self, seconds: float) -> None:
+        """Count one chunk publication, failed or not, and keep the slowest in whole milliseconds."""
+        with suppress(Exception):
+            self.chunks_published += 1
+            self.slowest_chunk_ms = max(self.slowest_chunk_ms, int(seconds * 1000))
 
     def emit(self, outcome: TurnOutcomeKind) -> None:
         """Log the single timing line. Without ``created_at`` the earliest mark is the origin."""
@@ -91,6 +99,8 @@ class TurnTimeline:
                         if value is not None
                     }
                 )
+            if self.chunks_published:
+                fields.update(chunks_published=self.chunks_published, slowest_chunk_ms=self.slowest_chunk_ms)
             logger.info("[TurnTiming] {}", json.dumps(fields, separators=(",", ":")))
 
 

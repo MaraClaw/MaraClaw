@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
-from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery
+from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, read_shared_acl_version
 from app.services.realtime_runtime.contracts import (
     LocalDeliverer,
     RealtimeEnvelope,
@@ -25,6 +25,7 @@ from app.services.realtime_runtime.contracts import (
     ReceivedEnvelope,
     presence_adapter,
 )
+from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.subscription import AcknowledgedPubSub
 
 settings = get_settings()
@@ -151,39 +152,26 @@ class RealtimeRouter:
         user_id: str | None = None,
         send_timeout: float | None = None,
     ) -> None:
-        """Deliver locally, then route to remote instances.
+        """Deliver locally while the presence lookup runs, then route to remote instances.
 
-        ``send_timeout`` bounds only ``ws.send_json``, the one wait a client controls. Authorization and Redis
-        presence are never cancelled by it: aborting authorization discards the positive decision it would cache,
-        and aborting routing skips remote instances. A stalled socket is skipped like any other failed send.
+        Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
+        for a shared session, the ACL version is read once before any socket authorizes. ``send_timeout`` bounds
+        only ``ws.send_text``, the one wait a client controls. Authorization and Redis presence are never cancelled
+        by it: aborting authorization discards the positive decision it would cache, and aborting routing skips
+        remote instances. A stalled socket is skipped like any other failed send.
         """
-        local_sent = 0
-        for ws, local_session_id, local_user_id in list(local_connections):
-            if session_id is not None and local_session_id != session_id:
-                continue
-            if user_id is not None and local_user_id != user_id:
-                continue
-            try:
-                if not await authorize_chat_delivery(ws, agent_id, local_session_id):
-                    continue
-                async with asyncio.timeout(send_timeout):
-                    await ws.send_json(message)
-                local_sent += 1
-            except Exception as exc:
-                logger.warning(f"[Realtime] Failed to send local websocket message: {exc!r}")
-
-        remote_targets: dict[str, int] = {}
-        for record in await self._list_presence(agent_id):
-            if record.get("instance_id") == self.instance_id:
-                continue
-            if session_id is not None and record.get("session_id") != session_id:
-                continue
-            if user_id is not None and record.get("user_id") != user_id:
-                continue
-            target_instance = record.get("instance_id")
-            if target_instance not in (None, ""):
-                remote_targets[target_instance] = remote_targets.get(target_instance, 0) + 1
-
+        targets = [
+            (ws, local_session_id)
+            for ws, local_session_id, local_user_id in list(local_connections)
+            if (session_id is None or local_session_id == session_id) and (user_id is None or local_user_id == user_id)
+        ]
+        presence = asyncio.create_task(self._remote_targets(agent_id, session_id, user_id), name="realtime-presence")
+        try:
+            local_sent = await self._deliver_local(agent_id, message, targets, send_timeout)
+            remote_targets = await presence
+        finally:
+            if not presence.done():
+                _ = presence.cancel()
         if not remote_targets:
             return
 
@@ -203,6 +191,46 @@ class RealtimeRouter:
         logger.debug(
             f"[Realtime] Routed agent={agent_id} local={local_sent} remote_instances={list(remote_targets.keys())}"
         )
+
+    @staticmethod
+    async def _deliver_local(
+        agent_id: str,
+        message: dict[str, object],
+        targets: list[tuple[WebSocket, str | None]],
+        send_timeout: float | None,
+    ) -> int:
+        if not targets:
+            return 0
+        text = encode_event_text(message)
+        acl_version = await read_shared_acl_version(agent_id, (target_session for _, target_session in targets))
+
+        async def deliver(target: tuple[WebSocket, str | None]) -> bool:
+            ws, target_session = target
+            try:
+                if not await authorize_chat_delivery(ws, agent_id, target_session, acl_version=acl_version):
+                    return False
+                async with asyncio.timeout(send_timeout):
+                    await ws.send_text(text)
+            except Exception as exc:
+                logger.warning(f"[Realtime] Failed to send local websocket message: {exc!r}")
+                return False
+            return True
+
+        return await fan_out(targets, deliver)
+
+    async def _remote_targets(self, agent_id: str, session_id: str | None, user_id: str | None) -> dict[str, int]:
+        remote_targets: dict[str, int] = {}
+        for record in await self._list_presence(agent_id):
+            if record.get("instance_id") == self.instance_id:
+                continue
+            if session_id is not None and record.get("session_id") != session_id:
+                continue
+            if user_id is not None and record.get("user_id") != user_id:
+                continue
+            target_instance = record.get("instance_id")
+            if target_instance not in (None, ""):
+                remote_targets[target_instance] = remote_targets.get(target_instance, 0) + 1
+        return remote_targets
 
     async def start(self, deliver_local: LocalDeliverer) -> None:
         if self._started:
