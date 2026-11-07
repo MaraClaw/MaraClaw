@@ -2,7 +2,6 @@ import uuid
 from base64 import b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from datetime import datetime
-from hashlib import sha256
 from typing import Any, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -35,6 +34,7 @@ from app.services.admin_provisioning import (
 from app.services.organization_plans import tier_for_tenant
 from app.services.quota_guard import agent_limit_for_tier
 from app.services.tenant_provisioning import AdminEmailTakenError
+from app.services.user_page_filters import UserPageEligibility, user_page_digest, user_page_filter
 from app.services.user_roster_export import export_user_roster
 
 
@@ -202,13 +202,17 @@ async def list_users_page(
     search: str = "",
     cursor: str | None = Query(default=None, max_length=1024),
     limit: int = Query(default=50, ge=1, le=100),
+    eligible_for: UserPageEligibility | None = Query(
+        default=None, description="Keep only users the named operation can accept."
+    ),
+    exclude_user_id: uuid.UUID | None = Query(default=None, description="Omit this user from the page."),
     current_user: UserRecord = Depends(get_current_user),
 ) -> UsersPageOut:
     """Page company users, with admins first and null creation times last per group."""
     tenant_uuid = _company_roster_tenant(tenant_id, current_user)
 
     normalized_search = search.strip()
-    search_digest = sha256(normalized_search.encode()).hexdigest()
+    search_digest = user_page_digest(normalized_search, eligible_for, exclude_user_id)
     after = None
     if cursor is not None:
         try:
@@ -220,7 +224,13 @@ async def list_users_page(
             raise HTTPException(status_code=400, detail="Cursor does not match tenant or search")
         after = UserPagePosition(position.role_rank, position.created_at, position.user_id)
 
-    rows = await user_dao.list_for_tenant_page(tenant_uuid, search=normalized_search, after=after, limit=limit)
+    page_filter = user_page_filter(eligible_for, exclude_user_id)
+    if page_filter is None:
+        rows = await user_dao.list_for_tenant_page(tenant_uuid, search=normalized_search, after=after, limit=limit)
+    else:
+        rows = await user_dao.list_for_tenant_page(
+            tenant_uuid, search=normalized_search, after=after, limit=limit, filters=page_filter
+        )
     page = rows[:limit]
     counts = await agent_dao.count_active_for_creators([user.id for user in page])
     next_cursor = None

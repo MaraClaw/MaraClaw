@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useId, useRef, useState } from 'react'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { agentTransferOptions, transferSourceOptions, transferTargetsOptions } from '@/hooks/agent-transfer-options'
 import { useAuth } from '@/hooks/use-auth'
@@ -14,22 +15,30 @@ import { type AdminUser } from '@/lib/users-api'
 function TransferForm({ scope, sourceName }: { readonly scope: TransferScope; readonly sourceName: string }) {
   const recipientId = useId()
   const submitting = useRef(false)
-  const [recipient, setRecipient] = useState('')
+  const [recipient, setRecipient] = useState<AdminUser | null>(null)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selected, setSelected] = useState<readonly string[]>([])
   const [validation, setValidation] = useState('')
   const source = useQuery(transferSourceOptions(scope.sourceUserId, true))
-  const targets = useQuery(transferTargetsOptions(scope, true))
+  const targets = useInfiniteQuery(transferTargetsOptions(scope, debouncedSearch, true))
+  const members = targets.data?.pages.flatMap((page) => page.items) ?? []
+  const options = recipient && !members.some((member) => member.id === recipient.id) ? [recipient, ...members] : members
   const transfer = useSessionMutation(agentTransferOptions(useQueryClient()))
   const { user } = useAuth()
   const sourceEligible = source.data && source.data.id === scope.sourceUserId && canTransferMemberAgents(user, source.data)
   const agents = sourceEligible ? transferableAgents(source.data) : []
-  const ready = source.isSuccess && targets.isSuccess && !source.isFetching && !targets.isFetching && sourceEligible && !transfer.isPending && !transfer.isSuccess
+  const ready = source.isSuccess && !source.isFetching && sourceEligible && !transfer.isPending && !transfer.isSuccess
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedSearch(search), 300)
+    return () => window.clearTimeout(timeout)
+  }, [search])
 
   function submit() {
     if (!ready || submitting.current) return
-    const target = targets.data?.find((member) => member.id === recipient)
-    const parsed = agentTransferSchema.safeParse({ from_user_id: scope.sourceUserId, to_user_id: recipient, agent_ids: selected })
-    if (!parsed.success || !target || selected.some((id) => !agents.some((agent) => agent.id === id))) {
+    const parsed = agentTransferSchema.safeParse({ from_user_id: scope.sourceUserId, to_user_id: recipient?.id, agent_ids: selected })
+    if (!parsed.success || !recipient || selected.some((id) => !agents.some((agent) => agent.id === id))) {
       setValidation('Choose an active recipient in this organization and between 1 and 100 available agents.')
       return
     }
@@ -40,10 +49,10 @@ function TransferForm({ scope, sourceName }: { readonly scope: TransferScope; re
 
   return <div className="flex flex-col gap-5">
     <Dialog.Description className="text-sm leading-relaxed text-muted-foreground">Transfer agents owned by {sourceName} to an active member in this organization. This does not activate or deactivate either member. Pending deletion requests for transferred agents will be cancelled.</Dialog.Description>
-    {source.isPending || targets.isPending ? <p role="status" className="text-sm">Loading agents and all eligible recipients...</p> : null}
-    {source.isError || targets.isError ? <div className="flex flex-col items-start gap-3">
+    {source.isPending ? <p role="status" className="text-sm">Loading agents...</p> : null}
+    {source.isError ? <div className="flex flex-col items-start gap-3">
       <p role="alert" className="text-sm">Unable to load transfer options. Check your connection and try again.</p>
-      <Button variant="outline" disabled={source.isFetching || targets.isFetching} onClick={() => { setSelected([]); void source.refetch(); void targets.refetch() }}>Reload transfer options</Button>
+      <Button variant="outline" disabled={source.isFetching} onClick={() => { setSelected([]); void source.refetch() }}>Reload transfer options</Button>
     </div> : null}
     {source.isSuccess && !sourceEligible ? <p role="alert" className="text-sm">This member is no longer in your organization or is not eligible. Close this dialog and refresh Users.</p> : null}
     {sourceEligible ? <>
@@ -58,19 +67,26 @@ function TransferForm({ scope, sourceName }: { readonly scope: TransferScope; re
           </label>)}
         </div>}
       </fieldset>
-      <div className="flex flex-col gap-2"><label htmlFor={recipientId} className="text-sm font-medium">Transfer to</label>
-        <Select id={recipientId} name="to_user_id" value={recipient} disabled={!ready} onChange={(event) => { setRecipient(event.target.value); setValidation('') }} aria-describedby={`${recipientId}-hint`}>
+      <div className="flex flex-col gap-2">
+        <label htmlFor={`${recipientId}-search`} className="text-sm font-medium">Search recipients</label>
+        <Input id={`${recipientId}-search`} type="search" value={search} disabled={transfer.isPending || transfer.isSuccess} placeholder="Name or email" onChange={(event) => setSearch(event.target.value)} />
+        <label htmlFor={recipientId} className="text-sm font-medium">Transfer to</label>
+        <Select id={recipientId} name="to_user_id" value={recipient?.id ?? ''} disabled={!ready} onChange={(event) => { setRecipient(options.find((member) => member.id === event.target.value) ?? null); setValidation('') }} aria-describedby={`${recipientId}-hint`}>
           <option value="">Choose a member</option>
-          {(targets.data ?? []).map((member) => <option key={member.id} value={member.id}>{member.display_name ?? member.email ?? member.id}{member.email && member.display_name ? ` (${member.email})` : ''}</option>)}
+          {options.map((member) => <option key={member.id} value={member.id}>{member.display_name ?? member.email ?? member.id}{member.email && member.display_name ? ` (${member.email})` : ''}</option>)}
         </Select>
         <p id={`${recipientId}-hint`} className="text-xs text-muted-foreground">Active members and agent admins only. Organization admins and members of other organizations are excluded.</p>
-        {targets.isSuccess && targets.data.length === 0 ? <p className="text-sm text-muted-foreground">No eligible recipients. Activate or add another member before transferring agents.</p> : null}
+        {targets.isFetching || search !== debouncedSearch ? <p role="status" className="text-sm">Loading recipients...</p> : null}
+        {targets.isError ? <p role="alert" className="text-sm text-destructive">Unable to load recipients. Check your connection and try again.</p> : null}
+        {targets.isError && !targets.isFetchNextPageError ? <Button type="button" variant="outline" disabled={targets.isFetching} onClick={() => { void targets.refetch() }}>Reload recipients</Button> : null}
+        {targets.hasNextPage ? <Button type="button" variant="outline" disabled={targets.isFetching || search !== debouncedSearch || transfer.isPending || transfer.isSuccess} onClick={() => { void targets.fetchNextPage() }}>Load more recipients</Button> : null}
+        {targets.isSuccess && members.length === 0 ? <p className="text-sm text-muted-foreground">{debouncedSearch ? 'No matching recipients. Try another name or email.' : 'No eligible recipients. Activate or add another member before transferring agents.'}</p> : null}
       </div>
     </> : null}
     <p role="alert" className="text-sm text-destructive">{validation || (transfer.isError ? agentLifecycleError(transfer.error) : '')}</p>
     <p role="status" className="text-sm">{transfer.isSuccess ? `${transfer.data.transferred.length} agents transferred. ${transfer.data.cancelled_deletion_request_ids.length} pending deletion requests cancelled.` : ''}</p>
     <div className="flex flex-wrap gap-3">
-      {transfer.isSuccess ? null : <Button type="button" disabled={!ready || agents.length === 0 || targets.data?.length === 0} onClick={submit}>{transfer.isPending ? 'Transferring...' : 'Transfer selected agents'}</Button>}
+      {transfer.isSuccess ? null : <Button type="button" disabled={!ready || agents.length === 0 || !recipient || selected.length === 0} onClick={submit}>{transfer.isPending ? 'Transferring...' : 'Transfer selected agents'}</Button>}
       <Dialog.Close asChild><Button type="button" variant="outline" disabled={transfer.isPending}>{transfer.isSuccess ? 'Close' : 'Cancel'}</Button></Dialog.Close>
     </div>
   </div>

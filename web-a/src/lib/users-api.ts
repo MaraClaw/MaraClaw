@@ -100,11 +100,15 @@ export type UsersPageRequest = {
   readonly tenantId: string
   readonly search: string
   readonly cursor: string | null
+  readonly eligibleFor?: 'agent_transfer'
+  readonly excludeUserId?: string
 }
 
 export async function listUsersPage(input: UsersPageRequest, signal?: AbortSignal): Promise<UsersPage> {
   const params = new URLSearchParams({ tenant_id: input.tenantId, search: input.search, limit: '50' })
   if (input.cursor !== null) params.set('cursor', input.cursor)
+  if (input.eligibleFor !== undefined) params.set('eligible_for', input.eligibleFor)
+  if (input.excludeUserId !== undefined) params.set('exclude_user_id', input.excludeUserId)
   return apiRequest(`/api/users/page?${params}`, { schema: usersPageSchema, signal })
 }
 

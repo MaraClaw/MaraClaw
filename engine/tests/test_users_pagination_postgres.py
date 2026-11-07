@@ -261,3 +261,107 @@ async def test_joins_identity_when_search_match_lies_beyond_first_page(
     page = users_api.UsersPageOut.model_validate_json(response.content)
     assert [(item.id.int, item.email) for item in page.items] == [(50, "Target@example.com")]
     assert page.next_cursor is None
+
+
+async def _eligibility_directory(database: DbConnection) -> None:
+    def identified(number: int, role: UserRole, created_at: datetime | None, name: str) -> UserRecord:
+        return UserRecord(
+            id=UUID(int=number),
+            tenant_id=TENANT,
+            role=role,
+            created_at=created_at,
+            display_name=name,
+            identity=IdentityRecord(id=UUID(int=number), email=f"{name}@example.com"),
+        )
+
+    rows = [
+        identified(10, UserRole.ORG_ADMIN, NOW, "admin"),
+        identified(11, UserRole.PLATFORM_ADMIN, NOW, "platform"),
+        identified(20, UserRole.MEMBER, NOW, "alpha"),
+        identified(21, UserRole.AGENT_ADMIN, NOW, "bravo"),
+        identified(22, UserRole.MEMBER, None, "charlie"),
+        identified(23, UserRole.MEMBER, NOW, "inactive-membership"),
+        identified(24, UserRole.AGENT_ADMIN, NOW, "inactive-identity"),
+        identified(25, UserRole.MEMBER, NOW, "source"),
+        UserRecord(id=UUID(int=26), tenant_id=TENANT, role=UserRole.MEMBER, created_at=NOW, display_name="no-identity"),
+        identified(30, UserRole.MEMBER, NOW, "foreign"),
+    ]
+    for row in rows:
+        await _insert(database, row)
+    await database.execute(
+        "UPDATE users SET tenant_id = %(foreign)s WHERE id = %(id)s", {"foreign": FOREIGN, "id": UUID(int=30)}
+    )
+    await database.execute("UPDATE users SET is_active = false WHERE id = %(id)s", {"id": UUID(int=23)})
+    await database.execute("UPDATE identities SET is_active = false WHERE id = %(id)s", {"id": UUID(int=24)})
+
+
+async def _exhaust(client: httpx.AsyncClient, params: dict[str, str]) -> list[int]:
+    ids: list[int] = []
+    cursor = None
+    for _page in range(12):
+        response = await client.get(
+            "/api/users/page", params={**params, **({} if cursor is None else {"cursor": cursor})}
+        )
+        assert response.status_code == 200
+        page = users_api.UsersPageOut.model_validate_json(response.content)
+        ids.extend(item.id.int for item in page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            return ids
+    raise AssertionError("cursor chain did not terminate")
+
+
+@pytest.mark.parametrize("limit", ["1", "2", "100"])
+async def test_lists_only_transferable_users_when_admins_inactive_and_identityless_rows_exist(
+    client: httpx.AsyncClient, database: DbConnection, limit: str
+):
+    await _eligibility_directory(database)
+    ids = await _exhaust(
+        client, {"eligible_for": "agent_transfer", "exclude_user_id": str(UUID(int=25)), "limit": limit}
+    )
+    assert ids == [20, 21, 22]
+    unfiltered = await _exhaust(client, {"limit": "100"})
+    assert {23, 24, 25, 26, 10, 11} <= set(unfiltered)
+
+
+async def test_orders_eligible_users_like_the_unfiltered_page(client: httpx.AsyncClient, database: DbConnection):
+    await _eligibility_directory(database)
+    filtered = await _exhaust(client, {"eligible_for": "agent_transfer", "limit": "2"})
+    unfiltered = await _exhaust(client, {"limit": "100"})
+    assert filtered == [uid for uid in unfiltered if uid in {20, 21, 22, 25}]
+    assert 25 in filtered
+    assert not {10, 11, 23, 24, 26, 30} & set(filtered)
+
+
+async def test_excludes_source_without_eligibility_when_only_exclusion_is_requested(
+    client: httpx.AsyncClient, database: DbConnection
+):
+    await _eligibility_directory(database)
+    ids = await _exhaust(client, {"exclude_user_id": str(UUID(int=10)), "limit": "100"})
+    assert 10 not in ids
+    assert {11, 23, 24, 25, 26} <= set(ids)
+
+
+async def test_filters_before_search_when_eligible_user_matches_beyond_first_page(
+    client: httpx.AsyncClient, database: DbConnection
+):
+    await _eligibility_directory(database)
+    ids = await _exhaust(client, {"eligible_for": "agent_transfer", "search": "EXAMPLE.com", "limit": "1"})
+    assert sorted(ids) == [20, 21, 22, 25]
+    ids = await _exhaust(client, {"eligible_for": "agent_transfer", "search": "inactive", "limit": "1"})
+    assert ids == []
+
+
+async def test_rejects_cursor_when_filters_change_between_pages(client: httpx.AsyncClient, database: DbConnection):
+    await _eligibility_directory(database)
+    params = {"eligible_for": "agent_transfer", "limit": "1"}
+    first = users_api.UsersPageOut.model_validate_json((await client.get("/api/users/page", params=params)).content)
+    assert first.next_cursor is not None
+    unfiltered = await client.get("/api/users/page", params={"limit": "1", "cursor": first.next_cursor})
+    assert unfiltered.status_code == 400
+    other = await client.get(
+        "/api/users/page", params={**params, "exclude_user_id": str(UUID(int=25)), "cursor": first.next_cursor}
+    )
+    assert other.status_code == 400
+    same = await client.get("/api/users/page", params={**params, "cursor": first.next_cursor})
+    assert same.status_code == 200

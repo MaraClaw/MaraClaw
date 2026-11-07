@@ -1,4 +1,4 @@
-import { queryOptions, type QueryClient } from '@tanstack/react-query'
+import { infiniteQueryOptions, queryOptions, type QueryClient } from '@tanstack/react-query'
 
 import { fetchAgentTransferTargets, fetchTransferSource, transferMemberAgents, type AgentTransfer, type TransferScope } from '../lib/agent-transfers-api.ts'
 import { ApiError } from '../lib/http.ts'
@@ -8,7 +8,7 @@ import { notificationKeys } from './notification-options.ts'
 export const agentTransferKeys = {
   all: ['admin-agent-transfers'] as const,
   source: (id: string) => ['admin-agent-transfers', 'source', id] as const,
-  targets: (scope: TransferScope) => ['admin-agent-transfers', 'targets', scope] as const,
+  targets: (scope: TransferScope, search = '') => ['admin-agent-transfers', 'targets', scope, search] as const,
 }
 
 export function transferSourceOptions(id: string, enabled: boolean) {
@@ -18,9 +18,11 @@ export function transferSourceOptions(id: string, enabled: boolean) {
   })
 }
 
-export function transferTargetsOptions(scope: TransferScope, enabled: boolean) {
-  return queryOptions({
-    queryKey: agentTransferKeys.targets(scope), queryFn: ({ signal }) => fetchAgentTransferTargets(scope, signal),
+export function transferTargetsOptions(scope: TransferScope, search: string, enabled: boolean) {
+  return infiniteQueryOptions({
+    queryKey: agentTransferKeys.targets(scope, search), initialPageParam: null,
+    queryFn: ({ pageParam, signal }: { readonly pageParam: string | null; readonly signal: AbortSignal }) => fetchAgentTransferTargets({ ...scope, search, cursor: pageParam }, signal),
+    getNextPageParam: (page) => page.next_cursor,
     enabled, gcTime: 0, staleTime: 0, retry: false,
   })
 }
