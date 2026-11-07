@@ -1,11 +1,12 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import TypeAdapter
 
+from app.core.json_types import uuid_from_row
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao as runs
@@ -293,3 +294,60 @@ async def test_live_cancel_fences_worker(
     inference.assert_not_awaited()
     assert await agent_schedule_dao.get(manual_schedule.id) == manual_schedule
     assert len(await agent_activity_log_dao.list_schedule_history(run.agent_id, run.schedule_id)) == 1
+
+
+async def accept_many(schedule: AgentScheduleRecord, count: int) -> list[UUID]:
+    ids: list[UUID] = []
+    for index in range(count):
+        accepted = await runs.accept(schedule.id, schedule.created_by, f"burst-{index}")
+        assert accepted is not None
+        ids.append(accepted.id)
+    return ids
+
+
+async def leased_runs() -> set[UUID]:
+    async with connection_ctx() as db:
+        rows = await db.fetchall("SELECT id FROM agent_schedule_manual_runs WHERE lease_token IS NOT NULL")
+    return {uuid_from_row(row["id"]) for row in rows}
+
+
+async def test_live_manual_claims_are_capped_ordered_and_disjoint_across_workers(
+    manual_schedule: AgentScheduleRecord,
+) -> None:
+    # Given 200 accepted manual runs.
+    accepted = await accept_many(manual_schedule, 200)
+    # When two workers claim ten at once, then a third ticks.
+    first, second = await asyncio.gather(
+        runs.claim_pending(datetime.now(UTC), 10), type(runs)().claim_pending(datetime.now(UTC), 10)
+    )
+    third = await runs.claim_pending(datetime.now(UTC), 10)
+    # Then each claim holds exactly ten distinct runs, and no row is leased twice.
+    claimed = [run.id for run in (*first, *second, *third)]
+    assert [len(first), len(second), len(third)] == [10, 10, 10]
+    assert len(set(claimed)) == 30
+    assert await leased_runs() == set(claimed)
+    assert set(claimed) <= set(accepted)
+
+
+async def test_live_manual_release_is_token_safe_and_only_for_unstarted_runs(
+    manual_schedule: AgentScheduleRecord,
+) -> None:
+    run = await accept_claim(manual_schedule)
+    assert run.lease_token is not None
+    assert not await runs.release_unstarted(run.id, uuid4())
+    assert await runs.get(run.id) is not None
+    assert await runs.start(run.id, run.lease_token, datetime.now(UTC))
+    assert not await runs.release_unstarted(run.id, run.lease_token)
+    other = await runs.accept(manual_schedule.id, manual_schedule.created_by, "other")
+    assert other is not None
+    (claimed,) = await runs.claim_pending(datetime.now(UTC), 1)
+    assert claimed.id == other.id
+    assert claimed.lease_token is not None
+    assert await runs.release_unstarted(claimed.id, claimed.lease_token)
+    released = await runs.get(claimed.id)
+    assert released is not None
+    assert released.lease_token is None
+    assert released.created_at == other.created_at
+    (again,) = await runs.claim_pending(datetime.now(UTC), 1)
+    assert again.id == claimed.id
+    assert again.lease_token != claimed.lease_token

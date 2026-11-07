@@ -69,8 +69,9 @@ async def test_tick_commits_claims_before_detached_launch_and_coalesces_downtime
     assert {claim.id for claim in launches} == {row.id for row in rows}
     assert all(pool.rows[claim.id] == claim for claim in launches)
     assert all(claim.next_run_at == NEXT and claim.run_count == 7 for claim in launches)
-    assert all(claim.pending_due_at == row.next_run_at for claim, row in zip(launches, rows, strict=True))
-    assert all(claim.pending_instruction == row.instruction for claim, row in zip(launches, rows, strict=True))
+    by_id = {row.id: row for row in rows}
+    assert all(claim.pending_due_at == by_id[claim.id].next_run_at for claim in launches)
+    assert all(claim.pending_instruction == by_id[claim.id].instruction for claim in launches)
     assert tick_traces == [first_trace] * 3
     assert first_trace is not None
     assert first_trace != "caller"
