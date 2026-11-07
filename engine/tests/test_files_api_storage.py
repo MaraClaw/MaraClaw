@@ -1,8 +1,11 @@
+import asyncio
+import base64
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import override
 
+import anyio
 import pytest
 from fastapi import HTTPException
 
@@ -13,6 +16,9 @@ from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
 from app.services.storage_runtime.base import ConditionalWriteResult, StorageBackend, StorageEntry, StorageVersion
 from app.services.storage_runtime.fallback import FallbackStorageBackend
+from materialize_fixtures import GatedObject, Pause, temp_contents, temp_files, temp_root
+
+__all__ = ["temp_root"]
 
 
 class _FakeDb:
@@ -404,3 +410,147 @@ async def test_unpaged_listing_still_returns_the_whole_folders_first_listing(
     listing = await files.list_files(agent_id, path="", current_user=make_tenant_user())
     # Then
     assert [item.name for item in listing] == ["enterprise_info", "z", "a.txt", "b.txt"]
+
+
+def preview_over_s3(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, name: str, data: bytes, *, pause: Pause = ""
+) -> GatedObject:
+    source = GatedObject(f"{agent_id}/{name}", data, pause=pause)
+    storage = source.backend(monkeypatch)
+    use_storage(monkeypatch, storage)
+    monkeypatch.setattr("app.services.storage_runtime.facade.get_storage_backend", lambda: storage)
+    return source
+
+
+async def preview(agent_id: uuid.UUID, name: str) -> dict[str, object]:
+    return dict(await files.preview_file(agent_id=agent_id, path=name, current_user=make_user()))
+
+
+async def test_s3_office_preview_parses_a_copy_that_is_gone_once_it_returns(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID
+):
+    # Given
+    source = preview_over_s3(monkeypatch, agent_id, "report.docx", b"docx-bytes")
+    copies_while_parsing: list[list[bytes]] = []
+
+    async def parse(data: bytes, filename: str, **_options: object) -> str:
+        copies_while_parsing.append(temp_contents(temp_root))
+        return "extracted"
+
+    monkeypatch.setattr(files, "convert_document_isolated_async", parse)
+    # When
+    result = await preview(agent_id, "report.docx")
+    # Then
+    assert result["text"] == "extracted"
+    assert copies_while_parsing == [[b"docx-bytes"]]
+    assert source.get_calls == 1
+    assert temp_files(temp_root) == []
+
+
+async def test_s3_office_preview_releases_its_copy_when_the_parser_raises(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID
+):
+    # Given
+    _ = preview_over_s3(monkeypatch, agent_id, "report.docx", b"docx-bytes")
+
+    async def parse(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("parser crashed")
+
+    monkeypatch.setattr(files, "convert_document_isolated_async", parse)
+    # When / Then
+    with pytest.raises(RuntimeError, match="parser crashed"):
+        _ = await preview(agent_id, "report.docx")
+    assert temp_files(temp_root) == []
+
+
+async def test_s3_spreadsheet_preview_releases_its_copy_when_extraction_raises(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID
+):
+    # Given
+    _ = preview_over_s3(monkeypatch, agent_id, "report.xlsx", b"xlsx-bytes")
+
+    async def extract(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        raise RuntimeError("extractor crashed")
+
+    monkeypatch.setattr(files, "extract_xlsx_sheets_isolated_async", extract)
+    # When
+    result = await preview(agent_id, "report.xlsx")
+    # Then
+    assert result["text"] == "Preview extraction failed: extractor crashed"
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("name", ["report.docx", "report.xlsx"])
+async def test_s3_preview_cancelled_while_parsing_releases_its_copy(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID, name: str
+):
+    # Given
+    _ = preview_over_s3(monkeypatch, agent_id, name, b"office-bytes")
+    parsing = asyncio.Event()
+
+    async def parse(*_args: object, **_kwargs: object) -> str:
+        parsing.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(files, "convert_document_isolated_async", parse)
+    monkeypatch.setattr(files, "extract_xlsx_sheets_isolated_async", parse)
+    task = asyncio.create_task(preview(agent_id, name))
+    await asyncio.wait_for(parsing.wait(), 5)
+    assert len(temp_files(temp_root)) == 1
+    # When
+    _ = task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Then
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("pause", ["get", "read"])
+async def test_s3_preview_cancelled_during_the_copy_leaves_no_file_behind(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID, pause: Pause
+):
+    # Given
+    source = preview_over_s3(monkeypatch, agent_id, "report.docx", b"x" * 200_000, pause=pause)
+    task = asyncio.create_task(preview(agent_id, "report.docx"))
+    try:
+        assert await anyio.to_thread.run_sync(source.blocked.wait, 10)
+        # When
+        _ = task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        source.release.set()
+    # Then: the blocked worker finishes its read, closes the body and removes its own copy
+    assert await anyio.to_thread.run_sync(source.closed.wait, 10)
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("name", ["report.docx", "report.pptx", "report.xlsx"])
+async def test_s3_office_preview_checks_the_size_before_downloading(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID, name: str
+):
+    # Given
+    source = preview_over_s3(monkeypatch, agent_id, name, b"small")
+    source.reported_size = files.MAX_INPUT_BYTES + 1
+    # When
+    result = await preview(agent_id, name)
+    # Then
+    assert str(result["text"]).startswith("Preview extraction failed")
+    assert source.get_calls == 0
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("size", [3, 3 * 1024 * 1024])
+async def test_s3_binary_preview_reports_the_metadata_size_without_a_full_read(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, size: int
+):
+    # Given
+    source = preview_over_s3(monkeypatch, agent_id, "blob.bin", b"x" * 3)
+    source.reported_size = size
+    # When
+    result = await preview(agent_id, "blob.bin")
+    # Then: a sample is read only when the whole object fits in one
+    assert result["size"] == size
+    assert result["base64_sample"] == (base64.b64encode(b"xxx").decode() if size == 3 else "")
+    assert source.get_calls == (1 if size == 3 else 0)

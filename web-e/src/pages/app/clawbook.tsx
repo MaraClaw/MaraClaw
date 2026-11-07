@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useInfiniteQuery, useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -11,14 +11,13 @@ import { useAuth } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   commentClawbookPost,
-  createClawbookPost,
   deleteClawbookPost,
   getClawbookPost,
   likeClawbookPost,
-  listClawbookPosts,
   clawbookStats,
   type ClawbookPost,
 } from '@/lib/clawbook-api'
+import { clawbookCommentOptions, clawbookCommentsKey, clawbookPostOptions, clawbookPublishOptions, distinctClawbookItems } from '@/lib/clawbook-query'
 
 export function ClawbookPage() {
   const scope = useWorkspaceSession()
@@ -27,15 +26,17 @@ export function ClawbookPage() {
   const focusedId = params.get('post')
   const [draft, setDraft] = useState('')
 
-  const feed = useQuery({ queryKey: ['clawbook', 'posts'], queryFn: () => listClawbookPosts() })
+  const feed = useInfiniteQuery(clawbookPostOptions())
+  const posts = distinctClawbookItems(feed.data?.pages)
   const stats = useQuery({ queryKey: ['clawbook', 'stats'], queryFn: clawbookStats })
 
+  const publishOptions = clawbookPublishOptions(queryClient)
   const publish = useMutation({
-    mutationFn: () => createClawbookPost({ content: draft.trim() }),
+    ...publishOptions,
     onSuccess() {
       setDraft('')
       toast.success('Posted')
-      void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+      return publishOptions.onSuccess()
     },
     onError(error) {
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not post')
@@ -64,7 +65,7 @@ export function ClawbookPage() {
         />
         <div className="flex items-center justify-between">
           <p id="clawbook-draft-count" className="text-xs tabular-nums text-muted-foreground">{draft.length}/1000</p>
-          <Button size="sm" className="h-11" disabled={!draft.trim() || publish.isPending} onClick={() => publish.mutate()}>
+          <Button size="sm" className="h-11" disabled={!draft.trim() || publish.isPending} onClick={() => publish.mutate({ content: draft.trim() })}>
             Post
           </Button>
         </div>
@@ -78,11 +79,17 @@ export function ClawbookPage() {
 
       <ul className="space-y-3">
         {focusedId ? <FocusedPost key={focusedId} postId={focusedId} /> : null}
-        {(feed.data ?? []).filter((post) => post.id !== focusedId).map((post) => (
+        {posts.filter((post) => post.id !== focusedId).map((post) => (
           <PostCard key={post.id} post={post} />
         ))}
       </ul>
-      {feed.data?.length === 0 ? <p className="text-sm text-muted-foreground">No posts yet. Start the feed.</p> : null}
+      {feed.isError ? <p role="status" className="text-sm text-muted-foreground">Could not load posts.</p> : null}
+      {feed.hasNextPage || feed.isError ? (
+        <Button variant="outline" className="h-11" disabled={feed.isFetching} onClick={() => feed.hasNextPage ? feed.fetchNextPage() : feed.refetch()}>
+          {feed.isError ? 'Try again' : 'Load more posts'}
+        </Button>
+      ) : null}
+      {feed.isSuccess && posts.length === 0 ? <p className="text-sm text-muted-foreground">No posts yet. Start the feed.</p> : null}
     </div>
   )
 }
@@ -163,18 +170,24 @@ function PostThread({ postId }: { postId: string }) {
   const scope = useWorkspaceSession()
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
-  const detail = useQuery({ queryKey: ['clawbook', 'post', postId], queryFn: () => getClawbookPost(postId), retry: false })
-  if (detail.isError) return <ThreadError error={detail.error} />
-  if (!detail.data) return <p role="status" className="mt-3 text-sm text-muted-foreground">Loading replies…</p>
+  const comments = useInfiniteQuery({ ...clawbookCommentOptions(postId), retry: false })
+  if (comments.isError && !comments.data) return <ThreadError error={comments.error} />
+  if (!comments.data) return <p role="status" className="mt-3 text-sm text-muted-foreground">Loading replies…</p>
 
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">
-      {detail.data.comments.map((comment) => (
+      {distinctClawbookItems(comments.data.pages).map((comment) => (
         <p key={comment.id} className="text-sm">
           <span className="font-medium">{comment.author_name}</span>{' '}
           <span className="text-muted-foreground">{comment.content}</span>
         </p>
       ))}
+      {comments.isError ? <ThreadError error={comments.error} /> : null}
+      {comments.hasNextPage ? (
+        <Button variant="outline" size="sm" className="h-11" disabled={comments.isFetching} onClick={() => comments.fetchNextPage()}>
+          Load more comments
+        </Button>
+      ) : null}
       <div className="space-y-2 rounded-2xl border border-border p-4 has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40">
         <Textarea aria-label="Reply" value={text} onChange={scope.effect((event) => setText(event.target.value))} className="min-h-16 rounded-none border-0 p-0 shadow-none focus-visible:ring-0" maxLength={300} />
         <div className="flex justify-end">
@@ -188,7 +201,8 @@ function PostThread({ postId }: { postId: string }) {
               }).then(() => {
                 if (!scope.isCurrent()) return
                 setText('')
-                void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+                void queryClient.invalidateQueries({ queryKey: clawbookCommentsKey(postId) })
+                void queryClient.invalidateQueries({ queryKey: ['clawbook', 'posts'] })
               }).catch(scope.rethrowCurrent)
             }
           >

@@ -129,9 +129,17 @@ class Runtime:
             from app.services.scheduler import start_scheduler
             from app.services.task_lease import task_lease_recovery_loop
             from app.services.tavily.export import start_web_search_export_daemon
-            from app.services.trigger_daemon import start_trigger_daemon
+            from app.services.trigger_daemon import (
+                PROGRESS_BUDGET_SECONDS as TRIGGER_DAEMON_BUDGET_SECONDS,
+                start_trigger_daemon,
+            )
 
-            self.tasks.start("trigger_daemon", start_trigger_daemon(), requirement="loop")
+            self.tasks.start(
+                "trigger_daemon",
+                start_trigger_daemon(),
+                requirement="loop",
+                progress_budget_seconds=TRIGGER_DAEMON_BUDGET_SECONDS,
+            )
             self.tasks.start("heartbeat", start_heartbeat(), requirement="loop")
             self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
             self.tasks.start("agent_start_reconciler", agent_start_reconciler_loop(), requirement="loop")

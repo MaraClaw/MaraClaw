@@ -4,8 +4,9 @@ import json
 
 import httpx
 
-from app.core.json_types import JsonObject, JsonValue, json_as_int, json_object_from_response
+from app.core.json_types import JsonObject, JsonValue, json_as_int, json_as_str_or, json_object_from_response
 from app.core.logging import logger
+from app.services.im_token_cache import ImTokenKey, ImTokenRefusedError, MintedToken, get_or_mint_im_token
 
 
 async def get_dingtalk_access_token(app_id: str, app_secret: str, *, strict: bool = False) -> JsonObject:
@@ -13,44 +14,34 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str, *, strict: boo
 
     API: https://open.dingtalk.com/document/orgapp/obtain-access_token
     """
-    from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
 
-    if app_id:
-        cached = await get_cached_im_token("dingtalk_oapi", app_id, secret=app_secret)
-        if cached not in (None, ""):
-            return {"access_token": cached, "expires_in": 7200}
+    async def mint() -> MintedToken:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://oapi.dingtalk.com/gettoken", params={"appkey": app_id, "appsecret": app_secret}
+            )
+        if resp.is_error:
+            raise ImTokenRefusedError(resp)
+        data = json_object_from_response(resp)
+        if data.get("errcode") != 0:
+            raise ImTokenRefusedError(resp)
+        return MintedToken(json_as_str_or(data.get("access_token"), ""), json_as_int(data.get("expires_in")))
 
-    url = "https://oapi.dingtalk.com/gettoken"
-    params = {
-        "appkey": app_id,
-        "appsecret": app_secret,
-    }
-
-    async with httpx.AsyncClient(timeout=10) as client:
+    try:
         try:
-            resp = await client.get(url, params=params)
+            token = await get_or_mint_im_token(ImTokenKey("dingtalk_oapi", app_id, app_secret), mint)
+        except ImTokenRefusedError as refused:
             if strict:
-                _ = resp.raise_for_status()
-            data = json_object_from_response(resp)
-
-            if data.get("errcode") == 0:
-                token = data.get("access_token")
-                if isinstance(token, str) and token and app_id:
-                    await set_cached_im_token(
-                        "dingtalk_oapi",
-                        app_id,
-                        token,
-                        secret=app_secret,
-                        ttl=refresh_ttl(json_as_int(data.get("expires_in"))),
-                    )
-                return {"access_token": token, "expires_in": data.get("expires_in")}
+                _ = refused.response.raise_for_status()
+            data = json_object_from_response(refused.response)
             logger.error(f"[DingTalk] Failed to get access_token: {data}")
             return {"errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
-        except Exception as e:
-            if strict:
-                raise
-            logger.error(f"[DingTalk] Network error getting access_token: {e}")
-            return {"errcode": -1, "errmsg": str(e)}
+    except Exception as e:
+        if strict:
+            raise
+        logger.error(f"[DingTalk] Network error getting access_token: {e}")
+        return {"errcode": -1, "errmsg": str(e)}
+    return {"access_token": token, "expires_in": 7200}
 
 
 async def send_dingtalk_v1_robot_oto_message(

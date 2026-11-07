@@ -30,6 +30,7 @@ from app.schemas.company_admission import AdmissionTenant, RequestSummary
 from app.schemas.schemas import TokenResponse
 from app.services import admin_provisioning as provisioning
 from app.services.admin_audit import write_admin_audit
+from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.tenant_provisioning import AdminEmailTakenError
 
 _NOW = datetime.now(UTC)
@@ -1246,11 +1247,15 @@ async def test_provisioning_noop_active(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_logo_missing(monkeypatch):
-    storage = SimpleNamespace(exists=AsyncMock(return_value=False))
+@pytest.mark.parametrize(
+    "failure", [FileNotFoundError("logo"), StorageReadLimitExceededError(1024 * 1024, 1024 * 1024 + 1)]
+)
+async def test_get_tenant_logo_missing_or_oversized_is_not_found(monkeypatch, failure):
+    storage = SimpleNamespace(read_bytes_bounded=AsyncMock(side_effect=failure))
     monkeypatch.setattr(tenants_api, "get_storage_backend", lambda: storage)
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as exc:
         await tenants_api.get_tenant_logo(uuid.uuid4())
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -1461,11 +1466,11 @@ async def test_logo_and_repair_error_branches(monkeypatch):
         await tenants_api.upload_tenant_logo(tenant.id, rect, org)
     assert exc.value.status_code == 400
 
-    storage = SimpleNamespace(exists=AsyncMock(return_value=True))
+    storage = SimpleNamespace(read_bytes_bounded=AsyncMock(return_value=b"logo-bytes"))
     monkeypatch.setattr(tenants_api, "get_storage_backend", lambda: storage)
-    monkeypatch.setattr(tenants_api, "ensure_local_path", AsyncMock(return_value="/tmp/logo.png"))
     logo = await tenants_api.get_tenant_logo(tenant.id)
-    assert logo.path == "/tmp/logo.png"
+    assert (logo.body, logo.media_type) == (b"logo-bytes", "image/png")
+    assert storage.read_bytes_bounded.await_args.args[1] == 1024 * 1024
 
     monkeypatch.setattr(tenants_api.user_dao, "get_with_identity", AsyncMock(return_value=_user(role="member")))
     monkeypatch.setattr(

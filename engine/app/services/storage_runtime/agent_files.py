@@ -10,11 +10,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.services.storage_runtime.facade import (
-    ensure_local_path,
-    get_storage_backend,
-    guess_content_type,
-)
+from app.services.storage_runtime.facade import get_storage_backend, guess_content_type
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -69,7 +65,11 @@ async def store_agent_upload(
     data: bytes,
     *,
     content_type: str | None = None,
-) -> tuple[str, str, Path]:
+) -> tuple[str, str, None]:
+    """Store an upload and return ``(key, workspace_path, None)``.
+
+    No caller reads a local path, so none is materialized; the third slot only keeps existing unpacking intact.
+    """
     key = agent_upload_key(agent_id, filename)
     storage = get_storage_backend()
     safe_name = Path(key).name
@@ -78,6 +78,4 @@ async def store_agent_upload(
         data,
         content_type=content_type or guess_content_type(safe_name),
     )
-    local_path = await ensure_local_path(key)
-    workspace_path = f"workspace/uploads/{safe_name}"
-    return key, workspace_path, local_path
+    return key, f"workspace/uploads/{safe_name}", None

@@ -209,9 +209,19 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return [AgentTriggerRecord.from_row(row) for row in rows]
 
-    async def list_enabled(self) -> list[AgentTriggerRecord]:
+    async def list_enabled_page(self, *, after: UUID | None, limit: int) -> list[AgentTriggerRecord]:
+        """Keyset page of enabled triggers in id order: those with ``id > after`` (from the lowest id when ``None``)."""
+        params: dict[str, object] = {"limit": limit}
+        keyset_sql = ""
+        if after is not None:
+            params["after"] = after
+            keyset_sql = " AND id > %(after)s"
         async with self.session() as db:
-            rows = await db.fetchall(f"SELECT {self._select_list()} FROM agent_triggers WHERE is_enabled IS TRUE")
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agent_triggers WHERE is_enabled IS TRUE{keyset_sql} "
+                "ORDER BY id LIMIT %(limit)s",
+                params,
+            )
             return [AgentTriggerRecord.from_row(row) for row in rows]
 
     async def find_webhook_by_token(self, token: str) -> AgentTriggerRecord | None:

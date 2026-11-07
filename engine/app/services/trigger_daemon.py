@@ -8,6 +8,7 @@ and distributed claim/invoke flow.
 import asyncio
 import contextvars
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
@@ -17,7 +18,7 @@ from app.core.logging import logger, new_trace_id
 from app.dao.agent_dao import agent_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.records.trigger import AgentTriggerRecord
-from app.runtime.tasks import AdmissionClosedError, TaskAdmission
+from app.runtime.tasks import AdmissionClosedError, TaskAdmission, loop_progress
 from app.services.trigger_runtime import (
     claim_ready_trigger_invocations,
     enqueue_due_trigger,
@@ -37,6 +38,11 @@ TICK_INTERVAL = 15  # seconds
 DEDUP_WINDOW = 30  # seconds - same agent won't be invoked twice within this window
 MIN_POLL_INTERVAL_MINUTES = 5  # minimum poll interval to prevent abuse
 EVALUATION_SETTLE_SECONDS = 5.0  # how long a tick waits for evaluations before it claims; slow ones finish on their own
+# An evaluation (a poll fetch is bounded by a 10-second client timeout) gives up its scanner slot after this long.
+# Only the evaluation: the OKR handlers and the enqueue send messages and write state, so they are never cancelled.
+EVALUATION_DEADLINE_SECONDS = 60.0
+# Readiness fails when no tick finished this long; a tick is TICK_INTERVAL plus the settle window and the claim phase.
+PROGRESS_BUDGET_SECONDS = 300.0
 
 # Safety: per-agent on_message fire rate limiter
 _ON_MSG_RATE_WINDOW = 3600  # 1 hour window
@@ -134,6 +140,19 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
 # ── Main Tick Loop ──────────────────────────────────────────────────
 
 
+async def _evaluate_within_deadline(trigger: AgentTriggerRecord, now: datetime, agent_timezone: str | None) -> bool:
+    """Whether the trigger is due; a hung evaluation is cancelled at the deadline and the trigger waits for its turn."""
+    deadline = asyncio.timeout(EVALUATION_DEADLINE_SECONDS)
+    try:
+        async with deadline:
+            return await _evaluate_trigger(trigger, now, agent_timezone)
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        logger.warning(f"Trigger '{trigger.name}' evaluation exceeded {EVALUATION_DEADLINE_SECONDS:g}s; abandoned")
+        return False
+
+
 async def _process_trigger(trigger: AgentTriggerRecord, now: datetime, agent_timezone: str | None) -> None:
     """Evaluate one trigger and enqueue it when due; the scanner isolates its failure from the other triggers."""
     _ = new_trace_id()
@@ -144,7 +163,7 @@ async def _process_trigger(trigger: AgentTriggerRecord, now: datetime, agent_tim
             _ = await agent_trigger_dao.update(db_obj=t, obj_in={"is_enabled": False})
         return
 
-    if not await _evaluate_trigger(trigger, now, agent_timezone):
+    if not await _evaluate_within_deadline(trigger, now, agent_timezone):
         return
     handled = await _handle_okr_report_trigger(trigger, now)
     if not handled:
@@ -179,14 +198,19 @@ async def _tick():
     # Evaluate and enqueue due triggers. Agent invocation happens only after
     # executions are claimed through the distributed execution queue.
     if _admission.accepting:
-        all_triggers = await agent_trigger_dao.list_enabled()
-        try:
-            zones = await cron_agent_timezones(all_triggers)
-        except Exception as e:
-            logger.warning(f"Failed to resolve cron timezones for the tick: {e}")
-            zones = {trigger.agent_id: "UTC" for trigger in all_triggers if trigger.type == "cron"}
+        zones: dict[uuid.UUID, str] = {}
+
+        async def read_page(after: uuid.UUID | None, limit: int) -> Sequence[AgentTriggerRecord]:
+            page = await agent_trigger_dao.list_enabled_page(after=after, limit=limit)
+            try:
+                zones.update(await cron_agent_timezones(page))
+            except Exception as e:
+                logger.warning(f"Failed to resolve cron timezones for the tick: {e}")
+                zones.update({trigger.agent_id: "UTC" for trigger in page if trigger.type == "cron"})
+            return page
+
         await _scanner.scan(
-            all_triggers,
+            read_page,
             lambda trigger: _process_trigger(trigger, now, zones.get(trigger.agent_id)),
             settle=EVALUATION_SETTLE_SECONDS,
         )
@@ -348,6 +372,7 @@ async def wake_agent_with_context(
 async def start_trigger_daemon():
     """Start the background trigger daemon loop. Called from FastAPI startup."""
     logger.info("⚡ Trigger Daemon started (15s tick)")
+    progress = loop_progress()
     _cleanup_counter = 0
     try:
         while True:
@@ -358,6 +383,8 @@ async def start_trigger_daemon():
                 import traceback
 
                 traceback.print_exc()
+            else:
+                progress.beat()
 
             # Prune the dedup and rate-limit caches every 4th tick (~60 seconds)
             _cleanup_counter += 1

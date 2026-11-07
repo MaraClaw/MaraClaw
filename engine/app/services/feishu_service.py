@@ -35,6 +35,7 @@ from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_da
 from app.records.user import UserRecord
 from app.services.channels.media_limits import read_capped
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
+from app.services.im_token_cache import ImTokenKey, ImTokenRefusedError, MintedToken, get_or_mint_im_token
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
@@ -47,10 +48,6 @@ def _json_object(value: object) -> JsonObject:
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
     return json_object_from_response(resp)
-
-
-def _app_access_token(resp: httpx.Response) -> str:
-    return json_as_str_or(_response_json_object(resp).get("app_access_token"), "")
 
 
 def _json_int(value: object) -> int | None:
@@ -129,6 +126,34 @@ FEISHU_OAUTH_ENDPOINT = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_
 FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 FEISHU_APP_ACCESS_ENDPOINT = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 FEISHU_SEND_MSG_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
+
+
+async def get_feishu_app_token(app_id: str | None, app_secret: str | None) -> str:
+    """Shared cached ``app_access_token``; raises ``ImTokenRefusedError`` when Feishu returns none."""
+    target_id, target_secret = app_id or "", app_secret or ""
+
+    async def mint() -> MintedToken:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                FEISHU_APP_ACCESS_ENDPOINT, json={"app_id": target_id, "app_secret": target_secret}
+            )
+        if resp.status_code >= 400:
+            raise ImTokenRefusedError(resp)
+        data = _response_json_object(resp)
+        token = json_as_str_or(data.get("app_access_token"), "")
+        if not token or data.get("code", 0) != 0:
+            raise ImTokenRefusedError(resp)
+        return MintedToken(token, _json_int(data.get("expire")))
+
+    return await get_or_mint_im_token(ImTokenKey("feishu", target_id, target_secret), mint)
+
+
+async def get_feishu_app_token_or_blank(app_id: str | None, app_secret: str | None) -> str:
+    """``get_feishu_app_token`` for callers that let the next Feishu call report a missing token."""
+    try:
+        return await get_feishu_app_token(app_id, app_secret)
+    except ImTokenRefusedError:
+        return ""
 
 
 class FeishuOAuthUser(TypedDict):
@@ -254,47 +279,11 @@ class FeishuService:
         return await self.get_tenant_access_token(self.app_id, self.app_secret)
 
     async def get_tenant_access_token(self, app_id: str | None = None, app_secret: str | None = None) -> str:
-        """Get or refresh the app-level access token (tenant_access_token)."""
-        target_app_id = app_id or self.app_id
-        target_app_secret = app_secret or self.app_secret
-
-        from app.services.im_token_cache import get_cached_im_token, refresh_ttl, set_cached_im_token
-
-        if target_app_id:
-            cached = await get_cached_im_token("feishu", target_app_id, secret=target_app_secret or "")
-            if cached not in (None, ""):
-                if app_id in (None, ""):
-                    self._app_access_token = cached
-                return cached
-
-        async with httpx.AsyncClient() as client:
-            typed_client: httpx.AsyncClient = client
-            resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": target_app_id,
-                    "app_secret": target_app_secret,
-                },
-            )
-            data = _response_json_object(resp)
-
-            token = json_as_str_or(data.get("tenant_access_token") or data.get("app_access_token"), "")
-            if app_id in (None, ""):  # only cache default app token
-                self._app_access_token = token
-            if token and target_app_id:
-                await set_cached_im_token(
-                    "feishu",
-                    target_app_id,
-                    token,
-                    secret=target_app_secret or "",
-                    ttl=refresh_ttl(_json_int(data.get("expire"))),
-                )
-            elif target_app_id:
-                from app.services.im_token_cache import drop_cached_im_token
-
-                await drop_cached_im_token("feishu", target_app_id, secret=target_app_secret or "")
-
-            return token
+        """Get the cached app-level access token ("" when Feishu refuses)."""
+        token = await get_feishu_app_token_or_blank(app_id or self.app_id, app_secret or self.app_secret)
+        if app_id in (None, ""):
+            self._app_access_token = token
+        return token
 
     async def exchange_code_for_user(self, code: str) -> FeishuOAuthUser:
         """Exchange OAuth authorization code for user info.
@@ -456,22 +445,16 @@ class FeishuService:
             receive_id_type: "open_id" or "chat_id"
         """
         # Get app access token for this specific agent's bot
+        try:
+            app_token = await get_feishu_app_token(app_id, app_secret)
+        except ImTokenRefusedError as refused:
+            if strict:
+                _ = refused.response.raise_for_status()
+                _ = self._parse_api_response(refused.response, stage="app_access_token")
+                raise RuntimeError("Feishu returned no app access token") from refused
+            app_token = ""
         async with httpx.AsyncClient() as client:
             typed_client: httpx.AsyncClient = client
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            app_token = _app_access_token(token_resp)
-            if strict:
-                _ = token_resp.raise_for_status()
-                token_data = self._parse_api_response(token_resp, stage="app_access_token")
-                if token_data.get("code") != 0 or not app_token:
-                    raise RuntimeError("Feishu returned no app access token")
-
             resp: httpx.Response = await typed_client.post(
                 f"{FEISHU_SEND_MSG_URL}?receive_id_type={receive_id_type}",
                 json={
@@ -496,14 +479,7 @@ class FeishuService:
         """Patch an existing message (e.g. updating an interactive card for streaming)."""
         async with httpx.AsyncClient() as client:
             typed_client: httpx.AsyncClient = client
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            app_token = _app_access_token(token_resp)
+            app_token = await get_feishu_app_token_or_blank(app_id, app_secret)
 
             resp: httpx.Response = await typed_client.patch(
                 f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}",
@@ -527,14 +503,7 @@ class FeishuService:
 
         async with httpx.AsyncClient() as client:
             typed_client: httpx.AsyncClient = client
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            app_token = _app_access_token(token_resp)
+            app_token = await get_feishu_app_token_or_blank(app_id, app_secret)
 
             body: JsonObject = {}
             if email not in (None, ""):
@@ -566,14 +535,7 @@ class FeishuService:
 
         async with httpx.AsyncClient() as client:
             typed_client: httpx.AsyncClient = client
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            app_token = _app_access_token(token_resp)
+            app_token = await get_feishu_app_token_or_blank(app_id, app_secret)
 
             body: JsonObject = {}
             if email not in (None, ""):
@@ -633,15 +595,11 @@ class FeishuService:
             max_bytes = IMAGE_UPLOAD_MAX_BYTES if resource_type == "image" else MAX_INPUT_BYTES
         async with httpx.AsyncClient(timeout=30) as client:
             typed_client: httpx.AsyncClient = client
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            _ = token_resp.raise_for_status()
-            app_token = _app_access_token(token_resp)
+            try:
+                app_token = await get_feishu_app_token(app_id, app_secret)
+            except ImTokenRefusedError as refused:
+                _ = refused.response.raise_for_status()
+                app_token = ""
             async with typed_client.stream(
                 "GET",
                 f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
@@ -669,14 +627,7 @@ class FeishuService:
         async with httpx.AsyncClient(timeout=60) as client:
             typed_client: httpx.AsyncClient = client
             # Get token
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_APP_ACCESS_ENDPOINT,
-                json={
-                    "app_id": app_id,
-                    "app_secret": app_secret,
-                },
-            )
-            app_token = _app_access_token(token_resp)
+            app_token = await get_feishu_app_token_or_blank(app_id, app_secret)
             headers = {"Authorization": f"Bearer {app_token}"}
 
             # Upload file

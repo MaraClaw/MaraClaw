@@ -42,7 +42,7 @@ from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.channels.llm_bridge import _load_agent_and_model
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note, too_large_reply
-from app.services.feishu_service import feishu_service
+from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
 from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
@@ -61,10 +61,6 @@ def _json_object(value: object) -> JsonObject:
 
 def _response_json_object(resp: httpx.Response) -> JsonObject:
     return json_object_from_response(resp)
-
-
-def _app_access_token(resp: httpx.Response) -> str:
-    return json_as_str_or(_response_json_object(resp).get("app_access_token"), "")
 
 
 def _avatar_url_from_user(user_info: JsonObject) -> str:
@@ -717,11 +713,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
             try:
                 async with httpx.AsyncClient() as _client:
                     typed_client: httpx.AsyncClient = _client
-                    _tok_resp: httpx.Response = await typed_client.post(
-                        "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
-                        json={"app_id": app_id, "app_secret": app_secret},
-                    )
-                    _app_token = _app_access_token(_tok_resp)
+                    _app_token = await get_feishu_app_token_or_blank(app_id, app_secret)
                     if _app_token:
                         _user_resp: httpx.Response = await typed_client.get(
                             f"https://open.feishu.cn/open-apis/contact/v3/users/{sender_open_id}",
@@ -1358,11 +1350,7 @@ async def _handle_feishu_file(
     try:
         async with httpx.AsyncClient() as _fc:
             typed_client: httpx.AsyncClient = _fc
-            _tr: httpx.Response = await typed_client.post(
-                "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
-                json={"app_id": app_id, "app_secret": app_secret},
-            )
-            _at = _app_access_token(_tr)
+            _at = await get_feishu_app_token_or_blank(app_id, app_secret)
             if _at:
                 _ur: httpx.Response = await typed_client.get(
                     f"https://open.feishu.cn/open-apis/contact/v3/users/{sender_open_id}",

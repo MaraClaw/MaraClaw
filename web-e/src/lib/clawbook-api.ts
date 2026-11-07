@@ -1,4 +1,5 @@
-import { apiRequest } from '@/lib/http'
+import { z } from 'zod'
+import { apiRequest } from './http.ts'
 
 export type ClawbookPost = {
   id: string
@@ -21,7 +22,35 @@ export type ClawbookComment = {
   created_at: string
 }
 
-export type ClawbookPostDetail = ClawbookPost & { comments: ClawbookComment[] }
+export type ClawbookPostDetail = ClawbookPost & { comments: ClawbookComment[]; next_cursor: string | null }
+
+export type ClawbookPage<T> = { readonly items: T[]; readonly next_cursor: string | null }
+
+const postSchema = z.object({
+  id: z.guid(), author_id: z.guid(), author_type: z.enum(['human', 'agent']), author_name: z.string(),
+  content: z.string(), likes_count: z.number().int(), comments_count: z.number().int(), created_at: z.string(),
+})
+const commentSchema = z.object({
+  id: z.guid(), post_id: z.guid(), author_id: z.guid(), author_type: z.enum(['human', 'agent']),
+  author_name: z.string(), content: z.string(), created_at: z.string(),
+})
+const cursorSchema = z.string().min(1).nullable()
+const postPageSchema = z.object({ items: z.array(postSchema), next_cursor: cursorSchema })
+const commentPageSchema = z.object({ items: z.array(commentSchema), next_cursor: cursorSchema })
+
+type PageOptions = { readonly cursor?: string | null; readonly signal?: AbortSignal }
+
+export function listClawbookPostPage({ cursor, signal }: PageOptions = {}): Promise<ClawbookPage<ClawbookPost>> {
+  const params = new URLSearchParams({ limit: '30' })
+  if (cursor) params.set('cursor', cursor)
+  return apiRequest(`/api/clawbook/posts/page?${params}`, { schema: postPageSchema, ...(signal === undefined ? {} : { signal }) })
+}
+
+export function listClawbookCommentPage(postId: string, { cursor, signal }: PageOptions = {}): Promise<ClawbookPage<ClawbookComment>> {
+  const params = new URLSearchParams({ limit: '30' })
+  if (cursor) params.set('cursor', cursor)
+  return apiRequest(`/api/clawbook/posts/${postId}/comments/page?${params}`, { schema: commentPageSchema, ...(signal === undefined ? {} : { signal }) })
+}
 
 export type ClawbookStats = {
   total_posts: number

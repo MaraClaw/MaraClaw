@@ -1,10 +1,13 @@
+import os
 from pathlib import Path
+from tempfile import mkstemp
 from typing import override
 
 import pytest
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    MaterializedFile,
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
@@ -17,6 +20,7 @@ from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 from app.services.storage_runtime.s3 import S3StorageBackend
+from materialize_fixtures import temp_files, temp_root
 from storage_walk_fixtures import (
     FILE_SIZE,
     ListOnlyBackend,
@@ -25,6 +29,8 @@ from storage_walk_fixtures import (
     s3_backend,
     shape,
 )
+
+__all__ = ["temp_root"]
 
 
 class MemoryStorageBackend(StorageBackend):
@@ -122,21 +128,66 @@ async def test_fallback_storage_writes_only_to_primary():
     assert "agent-id/focus.md" not in fallback.files
 
 
-async def test_s3_local_path_for_preserves_suffix_and_materialized_content(monkeypatch: pytest.MonkeyPatch):
-    backend = object.__new__(S3StorageBackend)
+def write_temp_copy(data: bytes) -> Path:
+    descriptor, name = mkstemp()
+    os.close(descriptor)
+    copy = Path(name)
+    _ = copy.write_bytes(data)
+    return copy
 
-    async def write_local_copy(key: str, path) -> None:
-        path.write_bytes(key.encode())
 
-    monkeypatch.setattr(backend, "write_local_copy", write_local_copy)
+class CopyingBackend(MemoryStorageBackend):
+    """Materializes an owned temp copy, the way S3 does."""
 
-    path = await backend.local_path_for("agent-id/report.txt")
-    assert path is not None
-    try:
-        assert path.suffix == ".txt"
-        assert path.read_bytes() == b"agent-id/report.txt"
-    finally:
-        path.unlink(missing_ok=True)
+    @override
+    async def materialize(self, key: str) -> MaterializedFile | None:
+        return MaterializedFile(write_temp_copy(self.files[key]), owned=True)
+
+
+@pytest.mark.parametrize("unpromoted_legacy", [False, True])
+async def test_fallback_materialize_never_removes_real_local_files(tmp_path: Path, temp_root: Path, unpromoted_legacy):
+    # Given
+    primary = LocalStorageBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await (legacy if unpromoted_legacy else primary).write_bytes("report.txt", b"real")
+    storage = FallbackStorageBackend(primary, legacy)
+    # When
+    handle = await storage.materialize("report.txt")
+    assert handle is not None
+    handle.close()
+    # Then
+    assert not handle.owned
+    assert handle.path == tmp_path / "primary" / "report.txt"
+    assert handle.path.read_bytes() == b"real"
+    assert (tmp_path / "legacy" / "report.txt").exists() == unpromoted_legacy
+    assert temp_files(temp_root) == []
+
+
+async def test_fallback_materialize_passes_on_the_ownership_of_the_primary_winner(
+    tmp_path: Path, temp_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given: an upload wins the primary key while the legacy file is being promoted
+    primary = CopyingBackend()
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes("report.txt", b"old")
+    original_read = legacy.read_bytes
+
+    async def raced_read(key: str) -> bytes:
+        data = await original_read(key)
+        await primary.write_bytes(key, b"winning upload")
+        return data
+
+    monkeypatch.setattr(legacy, "read_bytes", raced_read)
+    storage = FallbackStorageBackend(primary, legacy)
+    # When
+    handle = await storage.materialize("report.txt")
+    # Then: the winner's copy is owned and removed, the legacy file is untouched
+    assert handle is not None
+    assert handle.owned
+    assert handle.path.read_bytes() == b"winning upload"
+    handle.close()
+    assert temp_files(temp_root) == []
+    assert await original_read("report.txt") == b"old"
 
 
 @pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "local_path_for", "presign_download_url"])

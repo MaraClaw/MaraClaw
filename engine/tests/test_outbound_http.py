@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from typing import final
 from uuid import uuid4
 
@@ -88,12 +89,18 @@ class FeishuWire:
         self.sends: list[httpx.Response] = sends
         self.tokens: int = 0
         self.requests: list[httpx.Request] = []
+        self.refuse_tokens: bool = False
+        self.on_send: Callable[[], None] | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if "app_access_token" in request.url.path:
             self.tokens += 1
+            if self.refuse_tokens:
+                return httpx.Response(200, json={"code": 10003, "msg": "invalid param"})
             return httpx.Response(200, json={"code": 0, "app_access_token": f"token-{self.tokens}", "expire": 7200})
         self.requests.append(request)
+        if self.on_send is not None:
+            self.on_send()
         return self.sends.pop(0) if len(self.sends) > 1 else self.sends[0]
 
 
@@ -159,3 +166,44 @@ async def test_feishu_other_failure_is_not_retried_and_keeps_cached_token(monkey
     assert len(wire.requests) == 1
     assert wire.tokens == 1
     assert token_cache == {("feishu", "application", "live-secret"): "token-1"}
+
+
+async def test_concurrent_chunks_share_one_feishu_token_request(monkeypatch, token_cache):
+    wire = FeishuWire([sent_ok()])
+    transport(monkeypatch, wire)
+
+    await asyncio.gather(*(outbound_transport.send_chunk(configured("feishu"), chunk()) for _ in range(4)))
+
+    assert wire.tokens == 1
+    assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer token-1"] * 4
+
+
+async def test_refused_feishu_token_raises_typed_error_and_is_not_cached(monkeypatch, token_cache):
+    wire = FeishuWire([sent_ok()])
+    wire.refuse_tokens = True
+    transport(monkeypatch, wire)
+
+    with pytest.raises(ProviderDeliveryError) as failure:
+        await outbound_transport.send_chunk(configured("feishu"), chunk())
+
+    assert failure.value.code == "authentication_failed"
+    assert token_cache == {}
+    wire.refuse_tokens = False
+    await outbound_transport.send_chunk(configured("feishu"), chunk())
+    assert wire.tokens == 2
+    assert token_cache == {("feishu", "application", "live-secret"): "token-2"}
+
+
+async def test_feishu_rejection_keeps_a_token_a_peer_stored_meanwhile(monkeypatch, token_cache):
+    key = ("feishu", "application", "live-secret")
+    token_cache[key] = "stale"
+    rejection = httpx.Response(400, json={"code": 99991663, "msg": "Invalid access token"})
+    wire = FeishuWire([rejection, sent_ok()])
+    wire.on_send = lambda: token_cache.update({key: "peer"}) if len(wire.requests) == 1 else None
+    transport(monkeypatch, wire)
+
+    await outbound_transport.send_chunk(configured("feishu"), chunk())
+
+    assert wire.tokens == 0
+    assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer stale", "Bearer peer"]
+    assert token_cache == {key: "peer"}

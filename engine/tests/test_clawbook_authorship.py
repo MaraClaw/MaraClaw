@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.records.clawbook import ClawbookCommentRecord, ClawbookPostRecord
 from app.records.user import UserRecord
 from app.services import notification_service
+from app.services.clawbook_cursor import ClawbookCursor
 
 
 @pytest.fixture
@@ -221,3 +223,103 @@ async def test_agent_authorship_requires_an_agent_id(client, post, operation):
         json=None if operation == "like" else {"content": "hello", "author_type": "agent"},
     )
     assert response.status_code == 422
+
+
+async def test_feed_page_preserves_boundary_precision_and_uses_effective_tenant(client, actor, post, monkeypatch):
+    timestamp = datetime(2030, 1, 2, 3, 4, 5, 123456, tzinfo=timezone(timedelta(hours=7)))
+    boundary = replace(post, created_at=timestamp)
+    read = AsyncMock(side_effect=[[boundary, replace(post, id=uuid4())], []])
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_feed_page", read)
+
+    first = await client.get("/api/clawbook/posts/page", params={"limit": 1, "tenant_id": str(uuid4())})
+    assert first.status_code == 200
+    cursor = first.json()["next_cursor"]
+    assert [item["id"] for item in first.json()["items"]] == [str(post.id)]
+    second = await client.get("/api/clawbook/posts/page", params={"limit": 1, "cursor": cursor})
+
+    assert second.status_code == 200
+    assert second.json() == {"items": [], "next_cursor": None}
+    assert read.await_args_list[0].kwargs["tenant_id"] == actor.tenant_id
+    position = read.await_args_list[1].kwargs["before"]
+    assert (position.created_at, position.id) == (timestamp, post.id)
+    assert position.created_at.microsecond == 123456
+    assert position.created_at.utcoffset() == timedelta(hours=7)
+    assert read.await_args_list[0].kwargs["limit"] == 2
+
+
+@pytest.mark.parametrize("kind", ["malformed", "tenant", "scope", "naive", "version"])
+async def test_feed_rejects_invalid_or_foreign_cursors_before_reading(client, actor, post, monkeypatch, kind):
+    read = AsyncMock()
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_feed_page", read)
+    cursor = ClawbookCursor(tenant_id=actor.tenant_id, post_id=None, created_at=post.created_at, id=post.id)
+    raw = "%%%"
+    if kind == "tenant":
+        raw = cursor.model_copy(update={"tenant_id": uuid4()}).encode()
+    elif kind == "scope":
+        raw = cursor.model_copy(update={"post_id": post.id}).encode()
+    elif kind == "naive":
+        raw = cursor.model_copy(update={"created_at": post.created_at.replace(tzinfo=None)}).encode()
+    elif kind == "version":
+        raw = cursor.model_copy(update={"version": 2}).encode()
+
+    response = await client.get("/api/clawbook/posts/page", params={"cursor": raw})
+
+    assert response.status_code == 400
+    read.assert_not_awaited()
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1", "offset=10001"])
+async def test_legacy_feed_rejects_unbounded_parameters(client, query):
+    response = await client.get(f"/api/clawbook/posts?{query}")
+    assert response.status_code == 422
+
+
+async def test_legacy_feed_remains_a_list(client, post, monkeypatch):
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_feed", AsyncMock(return_value=[post]))
+    response = await client.get("/api/clawbook/posts")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+    assert response.json()[0]["id"] == str(post.id)
+
+
+async def test_detail_bounds_comments_and_continuation_is_bound_to_post(client, actor, post, monkeypatch):
+    comments = [
+        ClawbookCommentRecord(
+            id=uuid4(),
+            post_id=post.id,
+            author_id=actor.id,
+            author_type="human",
+            author_name="Member",
+            content=str(index),
+            created_at=post.created_at,
+        )
+        for index in range(31)
+    ]
+    read = AsyncMock(side_effect=[comments, [comments[-1]]])
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_comments_for_post", read)
+    detail = await client.get(f"/api/clawbook/posts/{post.id}")
+    assert detail.status_code == 200
+    assert len(detail.json()["comments"]) == 30
+    cursor = detail.json()["next_cursor"]
+
+    continuation = await client.get(f"/api/clawbook/posts/{post.id}/comments/page", params={"cursor": cursor})
+    assert continuation.status_code == 200
+    assert [item["id"] for item in continuation.json()["items"]] == [str(comments[-1].id)]
+    assert continuation.json()["next_cursor"] is None
+    assert read.await_args_list[0].kwargs == {"limit": 31, "visible_only": True, "after": None}
+    other_post = replace(post, id=uuid4())
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=other_post))
+    foreign = await client.get(f"/api/clawbook/posts/{other_post.id}/comments/page", params={"cursor": cursor})
+    assert foreign.status_code == 400
+
+
+async def test_comment_page_hides_foreign_tenant_posts(client, post, monkeypatch):
+    monkeypatch.setattr(
+        clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=replace(post, tenant_id=uuid4()))
+    )
+    read = AsyncMock()
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_comments_for_post", read)
+    response = await client.get(f"/api/clawbook/posts/{post.id}/comments/page")
+    assert response.status_code == 404
+    read.assert_not_awaited()

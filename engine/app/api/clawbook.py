@@ -3,10 +3,9 @@
 import re
 import uuid
 from datetime import datetime
-from typing import ClassVar, Literal, assert_never
+from typing import Literal, assert_never
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.auth import get_current_user
 from app.core.json_types import str_list_from_row
@@ -16,57 +15,23 @@ from app.core.permissions import check_agent_access
 from app.dao.agent_dao import agent_dao
 from app.dao.clawbook_dao import clawbook_comment_dao, clawbook_like_dao, clawbook_post_dao
 from app.dao.user_dao import user_dao
+from app.records.clawbook import ClawbookPostRecord
 from app.records.user import UserRecord
+from app.schemas.clawbook import (
+    ClawbookCommentPage,
+    ClawbookPostPage,
+    CommentCreate,
+    CommentOut,
+    PostCreate,
+    PostDetail,
+    PostOut,
+)
 from app.schemas.content_response_catalog import ClawbookLikeResponse, ClawbookStatsResponse, DeletedAcknowledgement
+from app.services.clawbook_pages import PageRequest, read_comment_page, read_post_page
 
 router = APIRouter(prefix="/api/clawbook", tags=["clawbook"])
 
-
-# ── Schemas ─────────────────────────────────────────
-
-
-class PostCreate(BaseModel):
-    content: str = Field(..., max_length=1000)
-    author_id: uuid.UUID | None = None
-    author_type: Literal["human", "agent"] = "human"
-    author_name: str | None = None
-    tenant_id: uuid.UUID | None = None
-
-
-class CommentCreate(BaseModel):
-    content: str = Field(..., max_length=300)
-    author_id: uuid.UUID | None = None
-    author_type: Literal["human", "agent"] = "human"
-    author_name: str | None = None
-
-
-class PostOut(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    author_id: uuid.UUID
-    author_type: str
-    author_name: str
-    content: str
-    likes_count: int
-    comments_count: int
-    created_at: datetime
-
-
-class CommentOut(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    post_id: uuid.UUID
-    author_id: uuid.UUID
-    author_type: str
-    author_name: str
-    content: str
-    created_at: datetime
-
-
-class PostDetail(PostOut):
-    comments: list[CommentOut] = []
+_PAGE_SIZE = 30
 
 
 # ── Helpers ─────────────────────────────────────────
@@ -134,6 +99,23 @@ def _effective_tenant_id(current_user: UserRecord, tenant_id: str | None = None)
     return effective
 
 
+async def _readable_post(post_id: uuid.UUID, current_user: UserRecord) -> ClawbookPostRecord:
+    """Load a post the caller may read; hidden, foreign-tenant and missing posts are all 404."""
+    effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    post = await clawbook_post_dao.get_post(post_id)
+    if not post:
+        raise HTTPException(404, "Post not found")
+    if (
+        effective_tenant_id not in (None, "")
+        and current_user.role != "platform_admin"
+        and str(post.tenant_id) != effective_tenant_id
+    ):
+        raise HTTPException(404, "Post not found")
+    if post.author_type == "agent" and await agent_dao.is_hidden_from_clawbook(post.author_id):
+        raise HTTPException(404, "Post not found")
+    return post
+
+
 async def _resolve_author(
     current_user: UserRecord, author_id: uuid.UUID | None, author_type: Literal["human", "agent"]
 ) -> tuple[uuid.UUID, str]:
@@ -165,8 +147,8 @@ async def _resolve_author(
 
 @router.get("/posts", response_model=None)
 async def list_posts(
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=10_000),
     since: str | None = None,
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
@@ -190,6 +172,18 @@ async def list_posts(
         offset=offset,
     )
     return [PostOut.model_validate(p) for p in posts]
+
+
+@router.get("/posts/page", response_model=ClawbookPostPage)
+async def list_posts_page(
+    limit: int = Query(_PAGE_SIZE, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    tenant_id: uuid.UUID | None = None,
+    current_user: UserRecord = Depends(get_current_user),
+) -> ClawbookPostPage:
+    effective = _effective_tenant_id(current_user, str(tenant_id) if tenant_id else None)
+    tenant = uuid.UUID(effective) if effective is not None else None
+    return await read_post_page(PageRequest(tenant_id=tenant, limit=limit, cursor=cursor))
 
 
 @router.get("/stats", response_model=None)
@@ -235,29 +229,21 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
 
 @router.get("/posts/{post_id}", response_model=PostDetail)
 async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> PostDetail:
-    """Get a single post with its comments. Enforces tenant isolation."""
-    effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    post = await clawbook_post_dao.get_post(post_id)
-    if not post:
-        raise HTTPException(404, "Post not found")
-    if (
-        effective_tenant_id not in (None, "")
-        and current_user.role != "platform_admin"
-        and str(post.tenant_id) != effective_tenant_id
-    ):
-        raise HTTPException(404, "Post not found")
-    if post.author_type == "agent" and await agent_dao.is_hidden_from_clawbook(post.author_id):
-        raise HTTPException(404, "Post not found")
+    """Get a single post with its first page of comments. Enforces tenant isolation."""
+    post = await _readable_post(post_id, current_user)
+    page = await read_comment_page(post_id, PageRequest(tenant_id=current_user.tenant_id, limit=_PAGE_SIZE))
+    return PostDetail.model_validate(post).model_copy(update={"comments": page.items, "next_cursor": page.next_cursor})
 
-    comments_raw = await clawbook_comment_dao.list_comments_for_post(post_id, limit=None)
-    agent_comment_ids = [c.author_id for c in comments_raw if c.author_type == "agent"]
-    private_or_system_comment_ids = await agent_dao.list_hidden_from_clawbook_ids(agent_comment_ids)
-    comments = [
-        CommentOut.model_validate(c)
-        for c in comments_raw
-        if not (c.author_type == "agent" and c.author_id in private_or_system_comment_ids)
-    ]
-    return PostDetail.model_validate(post).model_copy(update={"comments": comments})
+
+@router.get("/posts/{post_id}/comments/page", response_model=ClawbookCommentPage)
+async def list_comments_page(
+    post_id: uuid.UUID,
+    limit: int = Query(_PAGE_SIZE, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    current_user: UserRecord = Depends(get_current_user),
+) -> ClawbookCommentPage:
+    _ = await _readable_post(post_id, current_user)
+    return await read_comment_page(post_id, PageRequest(tenant_id=current_user.tenant_id, limit=limit, cursor=cursor))
 
 
 @router.delete("/posts/{post_id}", response_model=None)
@@ -304,6 +290,9 @@ async def create_comment(
     ):
         raise HTTPException(403, "No access to this post")
 
+    # Bumping the count first row-locks the post, so a concurrent delete either waits for this comment or wins and 404s.
+    if await clawbook_post_dao.increment_comments_count(post_id) is None:
+        raise HTTPException(404, "Post not found")
     comment = await clawbook_comment_dao.create_comment(
         {
             "post_id": post_id,
@@ -313,7 +302,6 @@ async def create_comment(
             "content": body.content[:300],
         }
     )
-    _ = await clawbook_post_dao.increment_comments_count(post_id)
 
     if post.author_id != author_id:
         try:

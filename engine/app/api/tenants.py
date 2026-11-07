@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
@@ -45,7 +45,8 @@ from app.services.admin_provisioning import (
     is_genesis_platform_admin,
 )
 from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
-from app.services.storage import ensure_local_path, get_storage_backend, normalize_storage_key
+from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.tenant_lifecycle import set_tenant_active, tenant_can_be_disabled
 from app.services.tenant_provisioning import (
     AdminEmailTakenError,
@@ -163,6 +164,9 @@ class TenantUpdate(BaseModel):
     sso_enabled: bool | None = None
     sso_domain: str | None = None
     a2a_async_enabled: bool | None = None
+
+
+_LOGO_MAX_BYTES = 1024 * 1024
 
 
 def _tenant_logo_key(tenant_id: uuid.UUID) -> str:
@@ -833,14 +837,13 @@ async def update_tenant(
 
 
 @router.get("/{tenant_id}/logo")
-async def get_tenant_logo(tenant_id: uuid.UUID) -> FileResponse:
+async def get_tenant_logo(tenant_id: uuid.UUID) -> Response:
     """Serve a tenant logo. Logos are public UI assets, addressed by UUID."""
-    storage = get_storage_backend()
-    key = _tenant_logo_key(tenant_id)
-    if not await storage.exists(key):
-        raise HTTPException(status_code=404, detail="Logo not found")
-    path = await ensure_local_path(key)
-    return FileResponse(path, media_type="image/png")
+    try:
+        data = await get_storage_backend().read_bytes_bounded(_tenant_logo_key(tenant_id), _LOGO_MAX_BYTES)
+    except (FileNotFoundError, StorageReadLimitExceededError) as exc:
+        raise HTTPException(status_code=404, detail="Logo not found") from exc
+    return Response(data, media_type="image/png")
 
 
 @router.post("/{tenant_id}/logo", response_model=TenantOut)
@@ -859,7 +862,7 @@ async def upload_tenant_logo(
         raise HTTPException(status_code=400, detail="Logo must be a PNG, JPEG, or WebP image")
 
     data = await file.read()
-    if len(data) > 1024 * 1024:
+    if len(data) > _LOGO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="Logo image must be 1 MB or smaller")
     try:
         image = Image.open(io.BytesIO(data))
@@ -872,7 +875,7 @@ async def upload_tenant_logo(
     output = io.BytesIO()
     image.convert("RGBA").save(output, format="PNG", optimize=True)
     png_data = output.getvalue()
-    if len(png_data) > 1024 * 1024:
+    if len(png_data) > _LOGO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="Logo image must be 1 MB or smaller after processing")
 
     storage = get_storage_backend()

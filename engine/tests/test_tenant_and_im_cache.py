@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
+import httpx
 import pytest
 from tests.test_redis_cache import FakeRedis
 
@@ -133,6 +135,120 @@ async def test_im_token_cache_isolates_secrets(fake_cache: FakeRedis) -> None:
     await im_token_cache.set_cached_im_token("wecom", "corp1", "tok-b", ttl=600, secret="secret-b")
     assert await im_token_cache.get_cached_im_token("wecom", "corp1", secret="secret-a") == "tok-a"
     assert await im_token_cache.get_cached_im_token("wecom", "corp1", secret="secret-b") == "tok-b"
+
+
+class Mint:
+    """A token mint over a MockTransport that parks every request until `gate` opens."""
+
+    def __init__(self) -> None:
+        self.calls: int = 0
+        self.status: int = 200
+        self.gate: asyncio.Event = asyncio.Event()
+        self.started: asyncio.Event = asyncio.Event()
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        self.started.set()
+        await self.gate.wait()
+        return httpx.Response(self.status, json={"token": f"tok-{self.calls}"})
+
+    async def __call__(self) -> im_token_cache.MintedToken:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(self.handle)) as client:
+            response = await client.get("https://idp.test/token")
+        if response.is_error:
+            raise im_token_cache.ImTokenRefusedError(response)
+        return im_token_cache.MintedToken(str(response.json()["token"]), 7200)
+
+
+KEY = im_token_cache.ImTokenKey("wecom", "corp1", "secret-a")
+STORED = ("wecom", "corp1", "secret-a")
+
+
+async def test_concurrent_misses_share_one_mint_per_key(fake_cache: FakeRedis) -> None:
+    mint = Mint()
+    callers = [asyncio.create_task(im_token_cache.get_or_mint_im_token(KEY, mint)) for _ in range(5)]
+    async with asyncio.timeout(5):
+        await mint.started.wait()
+    mint.gate.set()
+
+    assert await asyncio.gather(*callers) == ["tok-1"] * 5
+    assert mint.calls == 1
+    assert await im_token_cache.get_cached_im_token(*STORED[:2], secret=STORED[2]) == "tok-1"
+    assert await im_token_cache.get_or_mint_im_token(KEY, mint) == "tok-1"
+    assert mint.calls == 1
+    other = im_token_cache.ImTokenKey("wecom", "corp1", "secret-b")
+    assert await im_token_cache.get_or_mint_im_token(other, mint) == "tok-2"
+
+
+async def test_cancelled_leader_leaves_the_mint_running_for_waiters(fake_cache: FakeRedis) -> None:
+    mint = Mint()
+    leader = asyncio.create_task(im_token_cache.get_or_mint_im_token(KEY, mint))
+    waiters = [asyncio.create_task(im_token_cache.get_or_mint_im_token(KEY, mint)) for _ in range(2)]
+    async with asyncio.timeout(5):
+        await mint.started.wait()
+    _ = leader.cancel()
+    mint.gate.set()
+
+    assert await asyncio.gather(*waiters) == ["tok-1"] * 2
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+    assert mint.calls == 1
+    assert await im_token_cache.get_cached_im_token(*STORED[:2], secret=STORED[2]) == "tok-1"
+
+
+async def test_failed_mint_reaches_waiters_and_is_never_cached(fake_cache: FakeRedis) -> None:
+    mint = Mint()
+    mint.status = 503
+    callers = [asyncio.create_task(im_token_cache.get_or_mint_im_token(KEY, mint)) for _ in range(3)]
+    async with asyncio.timeout(5):
+        await mint.started.wait()
+    mint.gate.set()
+
+    failures = await asyncio.gather(*callers, return_exceptions=True)
+    assert all(isinstance(failure, im_token_cache.ImTokenRefusedError) for failure in failures)
+    assert failures[0] is failures[1] is failures[2]
+    assert mint.calls == 1
+    assert fake_cache.store == {}
+    mint.status = 200
+    assert await im_token_cache.get_or_mint_im_token(KEY, mint) == "tok-2"
+
+
+async def test_empty_mint_is_returned_but_not_cached(fake_cache: FakeRedis) -> None:
+    async def empty() -> im_token_cache.MintedToken:
+        return im_token_cache.MintedToken("")
+
+    assert await im_token_cache.get_or_mint_im_token(KEY, empty) == ""
+    assert fake_cache.store == {}
+
+
+async def test_redis_outage_falls_open_to_a_direct_mint(fake_cache: FakeRedis) -> None:
+    mint = Mint()
+    mint.gate.set()
+    fake_cache.fail = True
+
+    assert await im_token_cache.get_or_mint_im_token(KEY, mint) == "tok-1"
+    assert mint.calls == 1
+
+
+async def test_rejection_drop_only_removes_the_rejected_token(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def compare_and_delete(script: str, numkeys: int, key: str, expected: str) -> int:
+        if fake_cache.fail:
+            raise RuntimeError("redis down")
+        return int(fake_cache.store.get(key) == expected and fake_cache.store.pop(key) is not None)
+
+    monkeypatch.setattr(fake_cache, "eval", compare_and_delete, raising=False)
+    await im_token_cache.set_cached_im_token(*STORED[:2], "fresh", ttl=600, secret=STORED[2])
+
+    await im_token_cache.drop_rejected_im_token(KEY, "stale")
+    assert await im_token_cache.get_cached_im_token(*STORED[:2], secret=STORED[2]) == "fresh"
+    fake_cache.fail = True
+    await im_token_cache.drop_rejected_im_token(KEY, "fresh")
+    fake_cache.fail = False
+    assert await im_token_cache.get_cached_im_token(*STORED[:2], secret=STORED[2]) == "fresh"
+    await im_token_cache.drop_rejected_im_token(KEY, "fresh")
+    assert await im_token_cache.get_cached_im_token(*STORED[:2], secret=STORED[2]) is None
 
 
 @pytest.mark.asyncio

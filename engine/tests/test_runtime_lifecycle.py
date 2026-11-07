@@ -662,7 +662,7 @@ async def test_repeated_lifespans_reopen_producer_gates(monkeypatch: pytest.Monk
         assert producer_gates() == {"trigger": False, "heartbeat": False, "wake": False}
 
 
-async def test_worker_start_budgets_only_the_three_workers_through_the_injected_clock(
+async def test_worker_start_budgets_only_the_four_workers_through_the_injected_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given a worker runtime on a fake clock whose budgeted loops beat only when told to.
@@ -707,14 +707,13 @@ async def test_worker_start_budgets_only_the_three_workers_through_the_injected_
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == 3:
+            if len(beaten) == 4:
                 all_beaten.set()
             await asyncio.Event().wait()
 
         return run
 
     for module, attribute in (
-        (trigger_daemon, "start_trigger_daemon"),
         (heartbeat, "start_heartbeat"),
         (agent_setup, "start_agent_setup_worker"),
         (agent_start_reconciler, "agent_start_reconciler_loop"),
@@ -726,6 +725,7 @@ async def test_worker_start_budgets_only_the_three_workers_through_the_injected_
         (task_lease, "task_lease_recovery_loop"),
     ):
         monkeypatch.setattr(module, attribute, idle)
+    monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", budgeted("trigger_daemon"))
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", budgeted("broadcast_email"))
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", budgeted("openclaw_update"))
     monkeypatch.setattr(
@@ -748,7 +748,12 @@ async def test_worker_start_budgets_only_the_three_workers_through_the_injected_
     # When the worker starts and the clock passes every budget without a beat.
     await runtime.start(parse_process_roles("worker"))
     try:
-        assert set(runtime.tasks.progress) == {"broadcast_email", "organization_admission_email", "openclaw_update"}
+        assert set(runtime.tasks.progress) == {
+            "trigger_daemon",
+            "broadcast_email",
+            "organization_admission_email",
+            "openclaw_update",
+        }
         assert await runtime.readiness.check()
         now += 301
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.

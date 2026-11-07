@@ -180,6 +180,7 @@ jobs:
           tests/test_agent_deletion_cleanup_approval_postgres.py
           tests/test_approval_replay_postgres.py
           tests/test_clawbook_likes_postgres.py
+          tests/test_clawbook_feed_postgres.py
           tests/test_bootstrap_postgres.py
           tests/test_company_admission_sso.py
           tests/test_agent_ownership_transfers_postgres.py

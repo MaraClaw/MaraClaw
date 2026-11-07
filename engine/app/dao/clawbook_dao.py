@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar, Literal, final
+from typing import Any, ClassVar, Literal, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row
 from app.dao.analytics_projection_contracts import ClawbookStatsProjection
 from app.dao.base import BaseDAO
 from app.records.clawbook import ClawbookCommentRecord, ClawbookLikeRecord, ClawbookPostRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ClawbookPosition:
+    created_at: datetime
+    id: UUID
+
 
 _POST_COLUMNS = (
     "id",
@@ -101,7 +109,27 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM clawbook_posts{where_sql} "
-                "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s OFFSET %(offset)s",
+                params,
+            )
+            return [ClawbookPostRecord.from_row(row) for row in rows]
+
+    async def list_feed_page(
+        self, *, tenant_id: UUID | None, before: ClawbookPosition | None = None, limit: int = 31
+    ) -> Sequence[ClawbookPostRecord]:
+        """Read a stable newest-first page without scanning preceding pages."""
+        params: dict[str, UUID | datetime | int] = {"limit": limit}
+        clauses = [f"NOT {_PRIVATE_OR_SYSTEM_POST}"]
+        if tenant_id is not None:
+            clauses.append("tenant_id = %(tenant_id)s")
+            params["tenant_id"] = tenant_id
+        if before is not None:
+            clauses.append("(created_at, id) < (%(created_at)s, %(id)s)")
+            params.update(created_at=before.created_at, id=before.id)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM clawbook_posts WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
                 params,
             )
             return [ClawbookPostRecord.from_row(row) for row in rows]
@@ -162,6 +190,21 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
             )
             return ClawbookPostRecord.from_row(row) if row is not None else None
 
+    @override
+    async def delete(self, *, record_id: UUID) -> ClawbookPostRecord | None:
+        """Delete a post with its likes and comments (their foreign keys do not cascade).
+
+        The post row is locked first so likes, toggles and comments queue behind the delete instead of landing
+        between the child and parent deletes. Everything joins the caller's transaction, so a rollback restores all rows.
+        """
+        params = {"post_id": record_id}
+        async with self.session() as db:
+            if await db.fetchone("SELECT id FROM clawbook_posts WHERE id = %(post_id)s FOR UPDATE", params) is None:
+                return None
+            _ = await db.execute("DELETE FROM clawbook_likes WHERE post_id = %(post_id)s", params)
+            _ = await db.execute("DELETE FROM clawbook_comments WHERE post_id = %(post_id)s", params)
+            return await super().delete(record_id=record_id)
+
 
 @final
 class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
@@ -175,16 +218,26 @@ class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
         self,
         post_id: UUID,
         limit: int | None = 5,
+        *,
+        visible_only: bool = False,
+        after: ClawbookPosition | None = None,
     ) -> Sequence[ClawbookCommentRecord]:
         params: dict[str, Any] = {"post_id": post_id}
         limit_sql = ""
         if limit is not None:
             limit_sql = " LIMIT %(limit)s"
             params["limit"] = limit
+        clauses = ["post_id = %(post_id)s"]
+        if visible_only:
+            hidden = _HIDDEN_AGENT_EXISTS.format(author_col="clawbook_comments.author_id")
+            clauses.append(f"NOT (author_type = 'agent' AND {hidden})")
+        if after is not None:
+            clauses.append("(created_at, id) > (%(created_at)s, %(id)s)")
+            params.update(created_at=after.created_at, id=after.id)
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM clawbook_comments "
-                f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
+                f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC, id ASC{limit_sql}",
                 params,
             )
             return [ClawbookCommentRecord.from_row(row) for row in rows]

@@ -70,12 +70,17 @@ from app.services.file_storage_paths import (
 from app.services.focus_service import is_focus_file_path
 from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.storage import (
-    ensure_local_path,
     get_storage_backend,
     guess_content_type,
+    materialized_local_path,
     normalize_storage_key,
 )
-from app.services.storage_runtime.base import StorageBackend, StorageEntry, WriteCondition
+from app.services.storage_runtime.base import (
+    StorageBackend,
+    StorageEntry,
+    StorageReadLimitExceededError,
+    WriteCondition,
+)
 from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
@@ -87,6 +92,7 @@ from app.services.workspace_paths import WorkspacePathError, resolve_agent_visib
 
 settings = get_settings()
 router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
+_BINARY_SAMPLE_BYTES = 1024 * 1024
 
 
 async def _fresh_agent_authority(current_user: UserRecord, agent: AgentRecord) -> tuple[UserRecord, AgentRecord, str]:
@@ -583,6 +589,33 @@ async def _extract_document_text(target: Path, filename: str) -> str:
         return f"Preview extraction failed: {str(exc)[:200]}"
 
 
+async def _oversize_preview_text(storage: StorageBackend, key: str) -> str | None:
+    """Failure text for an object past the parser limit, decided from metadata before any copy is made."""
+    try:
+        _ = await storage.get_version_bounded(key, MAX_INPUT_BYTES)
+    except StorageReadLimitExceededError as exc:
+        error = DocumentTooLargeError("too large", size_bytes=exc.size_bytes)
+        return f"Preview extraction failed: {format_parse_failure(error)}"
+    return None
+
+
+async def _extract_stored_document_text(storage: StorageBackend, key: str, filename: str) -> str:
+    oversize = await _oversize_preview_text(storage, key)
+    if oversize is not None:
+        return oversize
+    async with materialized_local_path(key) as target:
+        return await _extract_document_text(target, filename)
+
+
+async def _binary_preview_parts(storage: StorageBackend, key: str) -> tuple[int, bytes]:
+    """Size from metadata and a sample read; an object past one sample is never read, so it has no sample."""
+    try:
+        size = (await storage.get_version_bounded(key, _BINARY_SAMPLE_BYTES)).size
+        return size, await storage.read_bytes_bounded(key, _BINARY_SAMPLE_BYTES)
+    except StorageReadLimitExceededError as exc:
+        return exc.size_bytes, b""
+
+
 def _sidecar_rel_options(office_rel: str, filename: str) -> list[str]:
     """Sidecar storage keys from the original filename, never a temp-file stem."""
     parent = str(Path(office_rel).parent).replace("\\", "/")
@@ -623,8 +656,8 @@ async def _persist_office_sidecar(
 ) -> str | None:
     """Parse in isolation and store `{stem}.md` under the real storage key.
 
-    Names come from ``filename``, not from ``ensure_local_path`` (S3 uses a
-    random NamedTemporaryFile stem).
+    Names come from ``filename``, not from a materialized copy (S3 uses a
+    random temp-file stem).
     """
     text = await _extract_office_markdown(content, filename)
     if text in (None, ""):
@@ -751,48 +784,36 @@ async def preview_file(
         }
     if kind == "xlsx":
         try:
-            target = await ensure_local_path(key)
-            try:
-                size = target.stat().st_size
-            except OSError as exc:
+            oversize = await _oversize_preview_text(storage, key)
+            if oversize is not None:
                 return {
                     "path": path,
                     "kind": kind,
                     "mime_type": mime_type,
-                    "text": f"Preview extraction failed: {str(exc)[:200]}",
+                    "text": oversize,
                     "download_url": download_url,
                 }
-            if size > MAX_INPUT_BYTES:
-                return {
-                    "path": path,
-                    "kind": kind,
-                    "mime_type": mime_type,
-                    "text": (
-                        "Preview extraction failed: "
-                        + format_parse_failure(DocumentTooLargeError("too large", size_bytes=size))
-                    ),
-                    "download_url": download_url,
-                }
-            data = target.read_bytes()
-            sheets: list[dict[str, object]] | None = None
-            sheets_error = ""
-            try:
-                sheets = await extract_xlsx_sheets_isolated_async(data, Path(path).name)
-            except DocumentParseError as exc:
-                sheets_error = f"Preview extraction failed: {format_parse_failure(exc)}"
-            companion_content, companion_rel = await _read_storage_companion(
-                storage,
-                lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
-                path,
-            )
-            if companion_content not in (None, ""):
-                text = _preview_text(companion_content)
-            elif sheets is not None and sheets:
-                text = sheets_preview_text(sheets, PREVIEW_MAX_CHARS)
-            else:
-                text = await _extract_document_text(target, Path(path).name)
-                if text.startswith("Preview extraction failed") and sheets_error:
-                    text = sheets_error
+            async with materialized_local_path(key) as target:
+                data = target.read_bytes()
+                sheets: list[dict[str, object]] | None = None
+                sheets_error = ""
+                try:
+                    sheets = await extract_xlsx_sheets_isolated_async(data, Path(path).name)
+                except DocumentParseError as exc:
+                    sheets_error = f"Preview extraction failed: {format_parse_failure(exc)}"
+                companion_content, companion_rel = await _read_storage_companion(
+                    storage,
+                    lambda rel: _visible_storage_key(agent_id, rel, current_user.tenant_id)[0],
+                    path,
+                )
+                if companion_content not in (None, ""):
+                    text = _preview_text(companion_content)
+                elif sheets is not None and sheets:
+                    text = sheets_preview_text(sheets, PREVIEW_MAX_CHARS)
+                else:
+                    text = await _extract_document_text(target, Path(path).name)
+                    if text.startswith("Preview extraction failed") and sheets_error:
+                        text = sheets_error
             payload: SpreadsheetFilePreview = {
                 "path": path,
                 "kind": kind,
@@ -822,8 +843,7 @@ async def preview_file(
         if companion_content not in (None, ""):
             extracted_text = _preview_text(companion_content)
         else:
-            target = await ensure_local_path(key)
-            extracted_text = await _extract_document_text(target, Path(path).name)
+            extracted_text = await _extract_stored_document_text(storage, key, Path(path).name)
         return {
             "path": path,
             "kind": kind,
@@ -835,14 +855,13 @@ async def preview_file(
             "download_url": download_url,
         }
 
-    raw = await storage.read_bytes(key)
-    encoded = base64.b64encode(raw[: 1024 * 1024]).decode("ascii")
+    size, sample = await _binary_preview_parts(storage, key)
     return {
         "path": path,
         "kind": kind,
         "mime_type": mime_type,
-        "size": len(raw),
-        "base64_sample": encoded,
+        "size": size,
+        "base64_sample": base64.b64encode(sample).decode("ascii"),
         "download_url": download_url,
     }
 

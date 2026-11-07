@@ -7,6 +7,8 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 - `app.runtime.lifecycle.Runtime.start()` starts `trigger_daemon.start_trigger_daemon()` only when `PROCESS_ROLE` includes `all` or `worker`.
 - Do not move trigger scheduling into ordinary API processes. Duplicate workers increase scheduling pressure even though DB claiming mitigates execution duplication.
 - `trigger_daemon.py` owns the 15-second trigger loop; the worker lifecycle separately owns the 60-second heartbeat loop.
+- `scan.py` (`TriggerScanner`) reads enabled triggers through `agent_trigger_dao.list_enabled_page` (id-ordered keyset pages, never larger than the free slots) and owns at most `MAX_CONCURRENT_EVALUATIONS` tasks. Its cursor persists across ticks and wraps after the last page, so a trigger deferred for capacity is read on a later tick and hung ones cannot starve high ids. A tick waits `EVALUATION_SETTLE_SECONDS` in total, not per page. `close()` cancels and awaits every owned task.
+- `trigger_daemon.EVALUATION_DEADLINE_SECONDS` bounds only `_evaluate_trigger` (`_evaluate_within_deadline`). Never widen it to `_process_trigger`: the OKR report/collection handlers send IM messages before `mark_trigger_fired`, and `enqueue_due_trigger` owns the poll baseline transaction, so cancelling them duplicates sends. A timed-out poll keeps its claimed checkpoint and waits for its next interval; a cron trigger catches up from `last_fired_at`. The daemon beats `loop_progress()` only after a tick finishes without raising (`PROGRESS_BUDGET_SECONDS`).
 
 ## Module Responsibilities
 
