@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { accept, chatPath, complete, firstMessage, firstSession, message, prepareChat, submitted } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
@@ -173,4 +173,71 @@ test('equal text remains two logical submissions and legacy equal text never con
   await expect.poll(() => socket.sent.length).toBe(2)
   expect(submitted(socket, 1).client_submission_id).not.toBe(envelope.client_submission_id)
   await expect(page.locator('article > [data-chat-content]').filter({ hasText: /^Same question$/ })).toHaveCount(3)
+})
+
+const lostTurn = '55555555-5555-4555-8555-555555555555'
+const chunk = (seq: number, content: string) => JSON.stringify({ type: 'chunk', turn_id: lostTurn, seq, content, replace: false })
+const messagesRefreshed = (page: Page) => page.waitForEvent('requestfinished', {
+  predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages/page`),
+})
+
+test('a DONE lost after a CHUNK releases the stale live turn once history ends in the reply', async ({ page }) => {
+  // Given
+  const question = message('lost-user', 'Question whose completion frame is lost', 'user')
+  const reply = message('lost-reply', 'Reply recovered from history')
+  const chat = await prepareChat(page)
+  await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })
+  await page.goto(chatPath())
+  const socket = await chat.socket()
+  await page.clock.pauseAt(new Date('2030-01-01T01:00:00Z'))
+  const composer = page.getByRole('textbox', { name: `Message ${originalAgent.name}` })
+  await composer.fill(question.content)
+  await composer.press('Enter')
+  await expect.poll(() => socket.sent.length).toBe(1)
+  const envelope = submitted(socket)
+  accept(socket, envelope.client_submission_id)
+  socket.route.send(chunk(0, 'Partial streamed text'))
+  await expect(page.getByText('Partial streamed text')).toBeVisible()
+  chat.setHistory([{ ...question, client_submission_id: envelope.client_submission_id }, reply])
+  const refreshed = messagesRefreshed(page)
+  // When the busy poll persists the reply but the DONE never arrives
+  await page.clock.runFor(5_000)
+  await refreshed
+  await page.clock.runFor(100)
+  await expect(page.getByText(reply.content, { exact: true })).toBeVisible()
+  // Then the live turn survives the quiet interval's start, and is released with its straggler ignored after it
+  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
+  await page.clock.runFor(20_000)
+  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'false')
+  await expect(page.getByText('Partial streamed text')).toHaveCount(0)
+  socket.route.send(chunk(1, 'Late straggler'))
+  socket.route.send(JSON.stringify({ type: 'info', content: 'Barrier' }))
+  await expect(page.getByText('Barrier')).toBeVisible()
+  await expect(page.getByText('Late straggler')).toHaveCount(0)
+  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'false')
+})
+
+test('a turn that keeps streaming is never released while history already ends in an assistant row', async ({ page }) => {
+  // Given a shared or trigger turn streaming after an earlier reply
+  const earlier = message('earlier-reply', 'Earlier reply already in history')
+  const chat = await prepareChat(page, [earlier])
+  await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })
+  await page.goto(chatPath())
+  const socket = await chat.socket()
+  await page.clock.pauseAt(new Date('2030-01-01T01:00:00Z'))
+  await expect(page.getByText(earlier.content, { exact: true })).toBeVisible()
+  socket.route.send(chunk(0, 'First streamed part'))
+  await expect(page.getByText('First streamed part')).toBeVisible()
+  // When more than the quiet interval passes in total, but a chunk arrives inside it
+  await page.clock.runFor(10_000)
+  socket.route.send(chunk(1, ' and the second part'))
+  await expect(page.getByText('First streamed part and the second part')).toBeVisible()
+  await page.clock.runFor(10_000)
+  // Then the live text is still there and the composer stays busy
+  await expect(page.getByText('First streamed part and the second part')).toBeVisible()
+  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
+  // And once the stream goes quiet it is released
+  await page.clock.runFor(10_000)
+  await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'false')
+  await expect(page.getByText('First streamed part and the second part')).toHaveCount(0)
 })

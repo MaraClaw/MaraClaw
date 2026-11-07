@@ -42,6 +42,9 @@ import {
 
 const FORWARDED_INFO = /forwarded to openclaw|waiting for response/i
 const THINKING_TIMEOUT_MS = 90_000
+// A live turn whose completion frame was lost is released once history ends in a reply and no chunk has arrived for this long.
+const LIVE_QUIET_MS = 15_000
+const LIVE_QUIET_CHECK_MS = 1_000
 
 function ThinkingStatus() {
   return (
@@ -78,6 +81,7 @@ export function AgentChatPage() {
   const [lines, setLines] = useState<Line[]>([])
   const [liveStore] = useState(createLiveStreamStore)
   const live = useSyncExternalStore(liveStore.subscribe, liveStore.hasLive)
+  const liveTurnId = useSyncExternalStore(liveStore.subscribe, () => liveStore.getSnapshot().turnId)
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
   const [slow, setSlow] = useState(false)
@@ -95,6 +99,8 @@ export function AgentChatPage() {
   const linesRef = useRef<Line[]>([])
   const rejectedTurnRef = useRef(false)
   const historyCountRef = useRef(0)
+  const historyTailRoleRef = useRef<string | undefined>(undefined)
+  const lastChunkAtRef = useRef(0)
   const historySessionRef = useRef<string | undefined>(undefined)
   const updateLines = useCallback((update: Line[] | ((previous: Line[]) => Line[])) => {
     const next = typeof update === 'function' ? update(linesRef.current) : update
@@ -206,6 +212,7 @@ export function AgentChatPage() {
     const switched = !firstLoad && historySessionRef.current !== activeId
     historySessionRef.current = activeId
     historyCountRef.current = historyQuery.data.length
+    historyTailRoleRef.current = historyQuery.data.at(-1)?.role
     submissions.reconcile(historyQuery.data)
     const retainedEntries = new Set(historyQuery.data.map((row) => row.entry_id))
     const local = switched ? [] : linesRef.current.filter((row) => !row.fromHistory || (row.entry_id !== undefined && retainedEntries.has(row.entry_id)))
@@ -238,6 +245,23 @@ export function AgentChatPage() {
     }, 5000)
     return () => window.clearInterval(timer)
   }, [busy, shared, activeId, agent.id, queryClient, owner, isCurrent, submissions])
+
+  useEffect(() => {
+    if (!isCurrent(owner) || liveTurnId === null) return
+    const timer = window.setInterval(() => {
+      if (!isCurrent() || !submissions.active || liveStore.getSnapshot().turnId !== liveTurnId) return
+      const rows = linesRef.current
+      if (historyTailRoleRef.current !== 'assistant' || rows.some((row) => row.pending)) return
+      if (rows.findLast((row) => row.role === 'user' || row.role === 'assistant')?.role !== 'assistant') return
+      if (Date.now() - lastChunkAtRef.current < LIVE_QUIET_MS) return
+      liveStore.clear(liveTurnId)
+      setThinking('')
+      setInfo(null)
+      setSlow(false)
+      setBusy(false)
+    }, LIVE_QUIET_CHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [liveTurnId, owner, isCurrent, submissions, liveStore])
 
   useEffect(() => {
     if (!isCurrent(owner) || !busy) return
@@ -309,7 +333,10 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.CHUNK: {
-          if (liveStore.chunk(event)) setBusy(true)
+          if (liveStore.chunk(event)) {
+            lastChunkAtRef.current = Date.now()
+            setBusy(true)
+          }
           return
         }
         case ChatEventType.THINKING: {
