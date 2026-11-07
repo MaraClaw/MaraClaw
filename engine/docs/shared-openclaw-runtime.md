@@ -41,8 +41,16 @@ Real parallelism is also bounded by OpenClaw's `agents.defaults.maxConcurrent`
 (default `max(8, CPUs x 4)`) and `OPENCLAW_GUEST_CPUS` (default 1.0).
 Guest resource limits apply only when creating a new or replacement guest.
 The required worker loop
-`openclaw_dispatch_reconciler` recovers only pending lane heads in keyset pages of
-50, with a one-second scan interval. Ordinary conversations use
+`openclaw_dispatch_reconciler` wakes pending lane heads in keyset pages of 50, with a
+one-second scan interval. A second, independent delivered-page cursor completes a
+delivered turn with a fixed interruption notice (through `settle_native_report`, so
+the next queue head wakes) only on exact guest evidence read by
+`openclaw_interrupted_inputs`: the live `session_nodes` restart-recovery tombstone for
+that run (status `done`, captured evidence once, no active recovery run) plus exactly
+one `session_pending_inputs` row for the run and `<message UUID>:user` key in state
+`interrupted` with no consumed event, under the claim's reply binding, which must
+still be current at settlement. Delivered input is never released or resubmitted;
+absent, ambiguous, malformed or unreadable evidence leaves it `delivered`. Ordinary conversations use
 `openclaw_native_claims.claim_ordinary_turn` under shared tenant/owner locks plus
 the exclusive agent lock and retain their own FIFO lanes; a delivered predecessor
 blocks its lane. Sharing tenant and owner lets claims and settlements of sibling
@@ -77,8 +85,11 @@ local Docker CLI. This is not an exactly-once execution guarantee.
 ## Guest session identity
 
 `openclaw_turns.runtime_session_key` returns
-`agent:main:hook:maraclaw:<conversation_id>` (message ID only when no conversation
-exists). Shared web and IM humans therefore select the same explicit guest key.
+`agent:main:hook:maraclaw:<reply_binding_id>` for newly claimed web/shared turns.
+The claim transaction creates or reuses this durable owner/tenant/session epoch
+before opening the native socket. Other conversations retain their conversation
+ID (message ID only when no conversation exists). Shared web and IM humans select
+the same epoch key until its authorization scope changes or history is cleared.
 
 The `hook:maraclaw` segment is an opaque, preserved transcript namespace, not a
 requirement to use the retired HTTP hook transport. Native `agent` requests pass
@@ -143,13 +154,62 @@ arrival order in the UI.
 publication milestones from message creation, without text or credentials. Raw
 `adapter_hello_ok`, `adapter_accepted` and `adapter_terminal` use the dispatcher's
 separate process-start origin, which excludes Docker/helper/Node startup. Never
-subtract those from engine marks. `scripts/latency_report.py` aggregates only
-intervals sharing one origin alongside `[RelayTiming]` delivery attempts.
+subtract those from engine marks. Web turns that streamed also report
+`chunks_published` (every `publish_chunk` call, failed ones included) and
+`slowest_chunk_ms`, the longest single publication; both are absent when none ran.
+`scripts/latency_report.py` aggregates only intervals sharing one origin alongside
+`[RelayTiming]` delivery attempts.
 
 `GET /api/gateway/poll` and `GET /api/gateway/setup-guide/{agent_id}` are removed.
 The independently authenticated `POST /api/gateway/report`, `/heartbeat` and
 `/send-message` APIs remain. Native terminal settlement does not require a
 model-generated HTTP report.
+
+## Delayed terminal assistant replies
+
+The required worker loop `openclaw_delayed_replies` reads the pinned OpenClaw
+2026.11.1 `agents/main/agent/openclaw-agent.sqlite` below the agent's mounted data
+root. It opens SQLite read-only against the live WAL; it does not copy only the
+main database, use `immutable`, extend the native socket lifetime or invoke a model.
+It pages groups of 20 agents, reading up to 100 transcript rows per binding over
+one contained connection per agent. Each sweep has a two-second budget checked
+between agent groups, with a two-second scan interval and per-query read deadline.
+Unchanged empty bindings skip authorization locks and cursor writes unless receipts
+are pending or the sixty-second backstop is due. Change hints cover both open
+database and WAL descriptors. A durable cursor for each physical session avoids
+replaying history and still sees later rows appended to an older physical session.
+
+Only independent assistant `stop`/`end_turn` messages are recovered. Any run UUID
+already present in that agent's gateway queue is excluded in every queue status.
+Native completion remains first-report-wins. Recovered messages use a deterministic
+UUID derived from binding and transcript event identity. Receipt, chat write and
+cursor commit atomically. Current and historical configured model references pass
+through `response_guard` redaction before persistence and publication.
+
+Canonical `MEDIA:` references may attach regular files below `media/` or
+`workspace/` only. Component-by-component nofollow opens reject symlinks and special
+files. Missing media stays on a durable receipt retry queue; bounded retries enrich
+the same assistant UUID once the file exists, without rescanning the transcript.
+Publication intent is durable too. `done` is sent after the chat commit, using the
+same UUID for enrichment and retries; a process crash between send and acknowledgement
+can repeat a transport event, so message UUID deduplication remains necessary.
+
+Persistence and publication reauthorize under shared tenant/user locks followed by
+agent, session and binding locks. Owner/tenant changes, including transfer away and
+back, revoke the epoch transactionally. Session scope changes or deletion and raw
+history deletion revoke it too; the clear DAO explicitly revokes even empty history.
+Clear or transfer committed between persistence and publication therefore suppresses
+the obsolete send. A new claim gets a fresh guest key, preventing old replies from
+entering the new epoch. Private web sends filter by the bound user; Shared sends use
+the existing session authorization for each connected viewer.
+
+These tables and triggers are **fresh-baseline only**; no existing-database upgrade
+is supplied. Historical unbound replies have no trustworthy dispatch ownership
+snapshot and are deliberately unrecoverable by this worker. The original missing
+reply incident therefore will not be recovered automatically. The first new bound
+claim also starts a fresh guest transcript key. Only locally mounted pinned guest
+SQLite storage is supported; other guest storage/schema layouts need a separate
+adapter. No historical ownership backfill or guest context migration is included.
 
 ## Focused verification
 
@@ -162,6 +222,8 @@ uv run pytest tests/test_openclaw_gateway_rpc.py tests/test_openclaw_shared_disp
 CHAT_SUBMISSION_TEST_DATABASE_URL='<isolated QA database>' uv run pytest \
   tests/test_shared_gateway_postgres.py tests/test_shared_gateway_surface.py \
   tests/test_openclaw_native_dispatch_postgres.py
+CHAT_SUBMISSION_TEST_DATABASE_URL='<isolated QA database>' uv run pytest \
+  tests/test_openclaw_delayed_replies.py tests/test_openclaw_delayed_replies_postgres.py
 ```
 
 PostgreSQL tests create and drop unique schemas and exercise competing claims,

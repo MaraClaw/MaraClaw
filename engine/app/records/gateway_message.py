@@ -29,6 +29,7 @@ class GatewayMessageRecord:
     created_at: datetime | None = None
     delivered_at: datetime | None = None
     completed_at: datetime | None = None
+    reply_binding_id: UUID | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> GatewayMessageRecord:
@@ -48,4 +49,5 @@ class GatewayMessageRecord:
             created_at=datetime_from_row(row.get("created_at")),
             delivered_at=datetime_from_row(row.get("delivered_at")),
             completed_at=datetime_from_row(row.get("completed_at")),
+            reply_binding_id=uuid_from_row_opt(row.get("reply_binding_id")),
         )

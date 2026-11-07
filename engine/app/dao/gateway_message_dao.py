@@ -28,6 +28,7 @@ _COLUMNS = (
     "created_at",
     "delivered_at",
     "completed_at",
+    "reply_binding_id",
 )
 
 
@@ -69,7 +70,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
             row = await db.fetchone(
                 "UPDATE gateway_messages g SET status = 'delivered', delivered_at = %(now)s, content = %(content)s, "
                 "selected_slot = %(slot)s, guest_model_ref = %(ref)s, complexity = %(complexity)s, "
-                "routing_reason = %(reason)s "
+                "routing_reason = %(reason)s, "
+                "reply_binding_id = bind_openclaw_reply(g.agent_id, g.conversation_id) "
                 "WHERE g.id = %(id)s AND g.agent_id = %(agent)s AND g.conversation_id = %(conversation)s "
                 "AND g.status = 'pending' AND NOT EXISTS (SELECT 1 FROM gateway_messages d "
                 "WHERE d.agent_id = g.agent_id AND d.conversation_id = g.conversation_id AND d.status = 'delivered') "
@@ -117,7 +119,8 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         """Claim an ordinary lane head after the caller has locked its agent row."""
         async with self.session() as db:
             row = await db.fetchone(
-                "UPDATE gateway_messages g SET status = 'delivered', delivered_at = clock_timestamp() "
+                "UPDATE gateway_messages g SET status = 'delivered', delivered_at = clock_timestamp(), "
+                "reply_binding_id = bind_openclaw_reply(g.agent_id, g.conversation_id) "
                 "WHERE g.id = %(id)s AND g.agent_id = %(agent)s AND g.status = 'pending' "
                 "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR ("
                 "NOT EXISTS (SELECT 1 FROM gateway_messages d WHERE d.agent_id = g.agent_id "
@@ -159,6 +162,30 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
         cursor = (last.created_at, last.id) if last is not None and last.created_at is not None else None
         return messages, cursor
 
+    async def delivered_dispatch_page(
+        self, limit: int, *, after: tuple[datetime, UUID] | None = None
+    ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
+        """Page delivered rows whose reply binding still belongs to the agent's current owner and tenant."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('g')} FROM gateway_messages g "
+                "JOIN agents a ON a.id = g.agent_id "
+                "JOIN openclaw_reply_bindings b ON b.id = g.reply_binding_id AND b.agent_id = g.agent_id "
+                "AND b.owner_id = a.creator_id AND b.tenant_id IS NOT DISTINCT FROM a.tenant_id "
+                "WHERE g.status = 'delivered' AND (%(after_time)s::timestamptz IS NULL "
+                "OR (g.created_at, g.id) > (%(after_time)s, %(after_id)s)) "
+                "ORDER BY g.created_at, g.id LIMIT %(limit)s",
+                {
+                    "after_time": after[0] if after else None,
+                    "after_id": after[1] if after else None,
+                    "limit": limit + 1,
+                },
+            )
+        messages = [self.record_factory(row) for row in rows[:limit]]
+        last = messages[-1] if len(rows) > limit else None
+        cursor = (last.created_at, last.id) if last is not None and last.created_at is not None else None
+        return messages, cursor
+
     async def release_delivery(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
         """Return a claimed row to pending, unless a newer claim or a report has moved it since."""
         async with self.session() as db:
@@ -172,15 +199,16 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
             return GatewayMessageRecord.from_row(row) if row is not None else None
 
     async def complete(
-        self, message_id: UUID, agent_id: UUID, *, result: str, now: datetime
+        self, message_id: UUID, agent_id: UUID, *, result: str, now: datetime, binding_id: UUID | None = None
     ) -> GatewayMessageRecord | None:
         """Record the first report for a row; ``None`` when it is unknown or already completed."""
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages SET status = 'completed', result = %(result)s, completed_at = %(now)s "
                 "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered') "
+                "AND (%(binding_id)s::uuid IS NULL OR reply_binding_id = %(binding_id)s) "
                 f"RETURNING {self._select_list()}",
-                {"id": message_id, "agent_id": agent_id, "result": result, "now": now},
+                {"id": message_id, "agent_id": agent_id, "result": result, "now": now, "binding_id": binding_id},
             )
             return GatewayMessageRecord.from_row(row) if row is not None else None
 

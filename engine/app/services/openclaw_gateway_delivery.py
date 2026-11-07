@@ -40,8 +40,13 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-async def settle_native_report(agent: AgentRecord, message_id: UUID, result: str) -> RecordedReport | None:
-    """Take scope locks before the Shared session lock and reject a stale execution owner."""
+async def settle_native_report(
+    agent: AgentRecord, message_id: UUID, result: str, *, binding_id: UUID | None = None
+) -> RecordedReport | None:
+    """Take scope locks before the Shared session lock and reject a stale execution owner.
+
+    ``binding_id`` additionally requires the row to still carry that reply binding: revocation nulls it.
+    """
     try:
         async with connection_ctx() as db:
             # Shared tenant/owner (see claim_ordinary_turn); the agent row stays exclusive.
@@ -55,6 +60,10 @@ async def settle_native_report(agent: AgentRecord, message_id: UUID, result: str
             candidate = await gateway_message_dao.get_for_agent(message_id, current.id)
             if candidate is None or candidate.status != "delivered":
                 return None
+            if binding_id is not None and candidate.reply_binding_id != binding_id:
+                return None
+            if binding_id is not None:
+                return await record_report(current, message_id, result, binding_id=binding_id)
             return await record_report(current, message_id, result)
     except HTTPException as error:
         if error.status_code in (404, 409):
@@ -63,7 +72,7 @@ async def settle_native_report(agent: AgentRecord, message_id: UUID, result: str
 
 
 async def record_report(
-    agent: AgentRecord, message_id: UUID, result: str, *, now: datetime | None = None
+    agent: AgentRecord, message_id: UUID, result: str, *, now: datetime | None = None, binding_id: UUID | None = None
 ) -> RecordedReport | None:
     """Commit the winning completion, chat, last-seen touch, and delivery intents."""
     at = now or _utcnow()
@@ -80,7 +89,12 @@ async def record_report(
             _ = await personal_burst_dispatch_dao.mark_completed(message_id)
         # Every durable and live destination reads this stored result, so concealment happens once, here.
         guard = await response_guard(agent, candidate.guest_model_ref if candidate is not None else None)
-        won = await gateway_message_dao.complete(message_id, agent.id, result=guard.redact(result), now=at)
+        if binding_id is None:
+            won = await gateway_message_dao.complete(message_id, agent.id, result=guard.redact(result), now=at)
+        else:
+            won = await gateway_message_dao.complete(
+                message_id, agent.id, result=guard.redact(result), now=at, binding_id=binding_id
+            )
         if won is None:
             return None
         answer = won.result or ""

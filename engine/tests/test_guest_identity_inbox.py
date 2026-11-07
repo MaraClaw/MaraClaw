@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +21,14 @@ async def test_exec_routes_to_label_proven_legacy_id(
 ) -> None:
     # Given a deployed short-name guest with a complete matching label.
     docker = Docker(Guest("legacy-id", "maraclaw-agent-deadbeef", str(FIRST)))
+    inspect = docker.container.inspect
+
+    def inspect_running(reference):
+        container = inspect(reference)
+        container.state = SimpleNamespace(running=True)
+        return container
+
+    monkeypatch.setattr(docker.container, "inspect", inspect_running)
     monkeypatch.setattr(agent_manager, "docker_client", docker)
     agent = AgentRecord(id=FIRST, name="Guest", creator_id=uuid4(), container_id=recorded)
     message = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
