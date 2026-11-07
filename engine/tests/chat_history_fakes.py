@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -28,10 +29,12 @@ class HistoryHarness:
         self.session = ChatSessionRecord(id=uuid4(), agent_id=self.agent.id, user_id=self.viewer.id)
         self.timestamp = datetime(2026, 10, 24, 12, 0, 0, 123456, tzinfo=UTC)
         self.rows = [self.message(index) for index in range(1, 6)]
-        self.revision = str(uuid4())
+        self.revision: str | None = str(uuid4())
+        self.snapshots: dict[str, dict[UUID, ChatMessageRecord]] = {}
         self.allowed = True
         self.visible = True
         self.page_reads = 0
+        self.after_reads = 0
         self.projections = 0
         self.revision_reads = 0
         self.read_marks: list[datetime] = []
@@ -61,8 +64,10 @@ class HistoryHarness:
             return self.session
         return None
 
-    async def current_revision(self, _session_id: UUID) -> str:
+    async def current_revision(self, _session_id: UUID) -> str | None:
         self.revision_reads += 1
+        if self.revision is not None:
+            self.snapshots[self.revision] = {row.id: replace(row) for row in self.rows}
         return self.revision
 
     async def page(self, *, conversation_id: str, limit: int, before: tuple[datetime, UUID] | None = None):
@@ -70,6 +75,31 @@ class HistoryHarness:
         rows = [row for row in self.rows if row.conversation_id == conversation_id]
         ordered = sorted(rows, key=self.position, reverse=True)
         return [row for row in ordered if before is None or self.position(row) < before][:limit]
+
+    async def after(self, *, conversation_id: str, after: tuple[datetime, UUID], limit: int):
+        self.after_reads += 1
+        rows = [row for row in self.rows if row.conversation_id == conversation_id and self.position(row) >= after]
+        return sorted(rows, key=self.position)[:limit]
+
+    async def changes(self, *, session_id: UUID, revision: str, since: str, limit: int):
+        previous = self.snapshots.get(since)
+        if previous is None or set(previous) - {row.id for row in self.rows}:
+            return None
+        changed = [row for row in self.rows if row != previous.get(row.id)]
+        return changed if len(changed) <= limit else None
+
+    def held(self, row: ChatMessageRecord, revision: str | None = None) -> dict[str, str]:
+        """Query parameters of a client whose newest held message is ``row`` at ``revision``."""
+        if self.revision is not None:
+            self.snapshots[self.revision] = {message.id: replace(message) for message in self.rows}
+        held_revision = revision or self.revision
+        if held_revision is None:
+            raise ValueError("Fixture requires a held revision")
+        return {
+            "revision": held_revision,
+            "after_created_at": self.position(row)[0].isoformat(),
+            "after_message_id": str(row.id),
+        }
 
     @staticmethod
     def position(row: ChatMessageRecord) -> tuple[datetime, UUID]:
@@ -99,6 +129,8 @@ async def history_http(
     monkeypatch.setattr(chat_session_dao, "update", harness.mark_read)
     monkeypatch.setattr(chat_message_dao, "history_revision", harness.current_revision)
     monkeypatch.setattr(chat_message_dao, "list_session_page", harness.page)
+    monkeypatch.setattr(chat_message_dao, "list_session_after", harness.after)
+    monkeypatch.setattr(chat_message_dao, "list_session_changes", harness.changes)
     monkeypatch.setattr(chat_message_dao, "sender_names", harness.names)
     monkeypatch.setattr(chat_history, "project_messages", harness.project)
     app = FastAPI()

@@ -499,6 +499,7 @@ async def test_broadcast_notification_queues_email_delivery(monkeypatch):
 
     monkeypatch.setattr("app.api.notification.connection_ctx", nullcontext)
     monkeypatch.setattr("app.api.notification.broadcast_email_dao.enqueue_many", enqueue)
+    monkeypatch.setattr("app.api.notification.broadcast_history_dao.publish", AsyncMock())
 
     async def fake_resolve_email_config_async(tenant_id):
         assert tenant_id == current_user.tenant_id

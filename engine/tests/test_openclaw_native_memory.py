@@ -76,8 +76,8 @@ def test_native_memory_search_and_custom_plugin_with_pinned_cli(
 ) -> None:
     # Given
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
-    monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(module.settings, "TAVILY_API_KEY", "")
     agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="Native memory proof")
     directory = tmp_path / str(agent.id)
     directory.mkdir()

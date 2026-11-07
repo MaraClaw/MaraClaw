@@ -9,7 +9,7 @@ export const replacementNotice: NotificationRow = { id: 'replacement', title: 'R
 const categoryTypes = {
   all: [], tool: [NotificationKind.AutonomyL2],
   approval: [NotificationKind.ApprovalPending, NotificationKind.ApprovalResolved, NotificationKind.CompanyAdmissionPending, NotificationKind.CompanyAdmissionResolved],
-  social: [NotificationKind.PlazaComment, NotificationKind.PlazaReply, NotificationKind.Mention, NotificationKind.Broadcast], broadcast: [NotificationKind.Broadcast],
+  social: [NotificationKind.ClawbookComment, NotificationKind.ClawbookReply, NotificationKind.Mention, NotificationKind.Broadcast], broadcast: [NotificationKind.Broadcast],
 } satisfies Record<NotificationCategory, readonly NotificationKind[]>
 
 export function notice(id: string, type: NotificationKind, is_read = false): NotificationRow {

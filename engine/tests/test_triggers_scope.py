@@ -289,7 +289,9 @@ async def test_merge_user_config_runs_in_sql_and_resets_the_baseline_on_source_c
     assert "SET config = CASE WHEN type = 'poll' AND ( config->'url' IS DISTINCT FROM" in sql
     assert "(config || %(user_config)s::jsonb)->'url'" in sql
     assert "COALESCE(config->'json_path', '\"$\"'::jsonb)" in sql
-    assert "THEN ((config || %(user_config)s::jsonb) - '_last_value') || jsonb_build_object(" in sql
+    assert (
+        "THEN ((config || %(user_config)s::jsonb) - '_last_value' - '_poll_checked_at') || jsonb_build_object(" in sql
+    )
     assert "'_poll_seq', COALESCE((config->>'_poll_seq')::bigint, 0) + 1" in sql
     assert "ELSE config || %(user_config)s::jsonb END WHERE id = %(trigger_id)s RETURNING id" in sql
     assert set(params) == {"trigger_id", "user_config"}

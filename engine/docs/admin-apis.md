@@ -129,7 +129,10 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
-| `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]` including `user_count`, `active_user_count`, `inactive_user_count`, `agent_count`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50. |
+| `GET` | `/api/admin/companies` | Query: `q?` (max 200) | `CompanyStats[]` (bare array, unpaged) including `user_count`, `active_user_count`, `inactive_user_count`, `agent_count`. Empty `q` lists newest-first. Non-empty `q` is prefix full-text search on `name` + `slug` (`mara` matches `MaraClaw`), ranked, limited to 50; input with no `[a-z0-9]` token (for example CJK only) matches nothing. Stats come from set-based queries (users and agents aggregated separately), not a per-company loop. |
+| `GET` | `/api/admin/companies/page` | Query: `q?` (max 200), `limit` (1..200, default 50), `cursor?` | `{ items: CompanyStats[], next_cursor: string \| null }` keyset-paged on `created_at DESC, id DESC`; the cursor is opaque and signed, decoded only after the platform-admin check (**400** malformed/forged). With `q` the result is the ranked top 50 with `next_cursor: null`; sending `cursor` with `q` is **400**. |
+| `GET` | `/api/admin/companies/options` | - | `CompanyOption[]`: every company newest-first, no stats (`id`, `name`, `slug`, `is_active`, `sso_enabled`, `sso_domain`, `is_system`, `is_default_end_user_org`, `created_at`, `can_disable`). For pickers. |
+| `GET` | `/api/admin/companies/{company_id}/stats` | - | One `CompanyStats`; **404** when the company does not exist. |
 | `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
 | `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/KABERs (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
@@ -142,9 +145,9 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/audit-logs/page` | Query: `tenant_id?`, `actor_id?`, `action?`, `start_at?`, `end_at?`, `limit=100`, `cursor?` | `{ items, next_cursor }`; deterministic older-event seek pagination. Page size clamped to 1-500. |
 | `GET` | `/api/admin/platform-settings` | - | `{ invitation_code_enabled, sso_custom_domain_redirect_enabled }` |
 | `PUT` | `/api/admin/platform-settings` | Same fields optional | Updated `PlatformSettingsOut` |
-| `GET` | `/api/admin/linkup-keys` | - | Stored Linkup key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_linkup.py`. |
-| `POST` | `/api/admin/linkup-keys` | `{ label, api_key }` | **201** add a key. Missing/blank `label` or `api_key` → **422**. Duplicate secret → **409**. Appends to the rotation cycle. |
-| `DELETE` | `/api/admin/linkup-keys/{key_id}` | - | Remove a key and retarget the cursor. **404** if missing. |
+| `GET` | `/api/admin/tavily-keys` | - | Stored Tavily key ring (id, label, fingerprint, status, position). Never returns ciphertext. **Router:** `app/api/admin_tavily.py`. |
+| `POST` | `/api/admin/tavily-keys` | `{ label, api_key }` | **201** add a key. Missing/blank `label` or `api_key` → **422**. Duplicate secret → **409**. Appends to the rotation cycle. |
+| `DELETE` | `/api/admin/tavily-keys/{key_id}` | - | Remove a key and retarget the cursor. **404** if missing. |
 | `GET` | `/api/admin/search-analytics/summary` | Query: `start?`, `end?`, `tenant_id?` | Platform-only. Omit `tenant_id` for **entire system**; pass it to scope one org. Adds `scope: system\|org`. Counts, kind mix, unique orgs/agents, unattributed. Default last 7 days, max 90. No raw queries. **Router:** `app/api/admin_search_analytics.py`. |
 | `GET` | `/api/admin/search-analytics/timeseries` | Query: `start?`, `end?`, `tenant_id?` | Daily volume + errors. Same system vs org rule. |
 | `GET` | `/api/admin/search-analytics/orgs` | Query: `start?`, `end?`, `limit=20` | Top tenants by search volume (system-wide upsell list). |
@@ -574,7 +577,8 @@ Agent-level tool assignment/config routes exist under `/api/tools/agents/...` bu
 | `POST` | `/api/notifications/read-all` | authenticated user | Query: `category?` | `{ ok: true }`; marks matching active notices read, including unloaded pages, without changing archived notices. |
 | `POST` | `/api/notifications/{id}/archive` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, preserving `is_read` and the first archive timestamp. Missing or foreign IDs return the same **404**. |
 | `POST` | `/api/notifications/{id}/restore` | authenticated user | - | `{ ok: true }`; owner-scoped and idempotent, clearing `archived_at` without changing `is_read`. Missing or foreign IDs return the same **404**. |
-| `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email requires that tenant's configured, enabled SMTP; no platform fallback. Fan-out to tenant users/agents |
+| `POST` | `/api/notifications/broadcast` | platform / org | `{ title(≤200), body(≤1000), send_email? }` | Requires tenant. Email requires that tenant's configured, enabled SMTP; no platform fallback. Fan-out to tenant users/agents. Each committed send, keyed or not and including zero recipients, also writes one `broadcast_history` row in the same transaction; replays, refusals and rollbacks write none. |
+| `GET` | `/api/notifications/broadcast/history` | platform / org | Query: `limit` (1..100, default 20), `cursor?` | `{ items: NotificationBroadcastHistoryItem[], next_cursor: string \| null }`, latest first (`published_at DESC, broadcast_id DESC`) for the caller's own tenant only. Item: `{ broadcast_id, sender_id (null once the sender is removed), sender_name, title, body, send_email, published_at, users_notified, agents_notified, emails_sent }`; `emails_sent` counts queued emails. Idempotency keys and fingerprints are never returned. Same role/tenant gate as sending (**403** / **400**); malformed, empty, oversize or foreign-type cursor is **400** `Invalid cursor`, `limit` out of range **422**. Only broadcasts committed after `broadcast_history` existed appear; earlier sends left no title/body to recover. |
 
 Archive state is independent of read state: restoring an unread notice adds it back to
 active unread counts. Category filters retain their existing overlapping membership
@@ -619,7 +623,7 @@ These are **not** dedicated admin routers; admins receive wider access:
 | Agent credentials | `/api/agents/{id}/credentials` (credentials router) | platform/org can manage without creator-only access |
 | Relationships | `/api/agents/{id}/relationships/*` | manage if admin or `manage` access |
 | Chat sessions | `/api/agents/{id}/sessions` (self-prefixed) | platform / org / agent_admin / creator |
-| Plaza | `/api/plaza/*` (self-prefixed) | platform cross-tenant; admins can delete posts |
+| Clawbook | `/api/clawbook/*` (self-prefixed) | platform cross-tenant; admins can delete posts |
 | gogcli | `/api/agents/{id}/gogcli/*` | platform / org (or agent `manage`) for keyring/auth |
 | Tool agent config | `/api/tools/agents/...` | only platform/org may set `allow_network` / proxy fields |
 | Quotas | `quota_guard` service | platform/org often bypass member limits |

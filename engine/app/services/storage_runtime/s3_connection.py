@@ -23,6 +23,7 @@ class S3ListArguments(TypedDict):
     Delimiter: NotRequired[str]
     MaxKeys: NotRequired[int]
     ContinuationToken: NotRequired[str]
+    StartAfter: NotRequired[str]
 
 
 class S3PutArguments(S3ObjectArguments):

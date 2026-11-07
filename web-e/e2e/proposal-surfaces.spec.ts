@@ -57,7 +57,7 @@ for (const width of [390, 1440, 1920]) {
         expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width)
         await page.screenshot({ path: testInfo.outputPath('admission-withdrawn.png') })
         await page.getByRole('link', { name: 'All admission requests' }).click()
-        await expect(page).toHaveURL('/app/admissions')
+        await expect(page).toHaveURL('/app/notifications?category=admissions')
         await expect(page.getByRole('listitem').getByText('Withdrawn', { exact: true })).toBeVisible()
         await page.screenshot({ path: testInfo.outputPath('admissions-list.png') })
       })

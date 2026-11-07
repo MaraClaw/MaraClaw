@@ -32,7 +32,7 @@ from app.schemas.operator_response_analytics import (
     SearchAnalyticsTrendingPassthrough,
     SearchAnalyticsTrendingQuery,
 )
-from app.services.linkup.export import analytics_bucket, analytics_prefix
+from app.services.tavily.export import analytics_bucket, analytics_prefix
 
 router = APIRouter(prefix="/admin/search-analytics", tags=["admin"])
 

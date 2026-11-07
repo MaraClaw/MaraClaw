@@ -31,10 +31,12 @@ from app.services.trigger_runtime.evaluator import (
     should_skip_non_workday as should_skip_non_workday_runtime,
 )
 from app.services.trigger_runtime.invoker import invoke_agent_for_triggers as invoke_agent_for_triggers_runtime
+from app.services.trigger_runtime.scan import TriggerScanner, cron_agent_timezones
 
 TICK_INTERVAL = 15  # seconds
 DEDUP_WINDOW = 30  # seconds - same agent won't be invoked twice within this window
 MIN_POLL_INTERVAL_MINUTES = 5  # minimum poll interval to prevent abuse
+EVALUATION_SETTLE_SECONDS = 5.0  # how long a tick waits for evaluations before it claims; slow ones finish on their own
 
 # Safety: per-agent on_message fire rate limiter
 _ON_MSG_RATE_WINDOW = 3600  # 1 hour window
@@ -48,6 +50,7 @@ _A2A_WAKE_CHAIN_TTL = 300
 _A2A_MAX_WAKE_DEPTH = 3
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 _admission = TaskAdmission("Trigger invocation", _BACKGROUND_TASKS)
+_scanner = TriggerScanner()
 
 
 def open_trigger_admission() -> None:
@@ -119,8 +122,8 @@ async def _handle_okr_collection_trigger(trigger: AgentTriggerRecord, now: datet
     return await handle_okr_collection_trigger_runtime(trigger, now)
 
 
-async def _evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
-    return await evaluate_trigger_runtime(trigger, now)
+async def _evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, agent_timezone: str | None = None) -> bool:
+    return await evaluate_trigger_runtime(trigger, now, agent_timezone=agent_timezone)
 
 
 async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]):
@@ -131,49 +134,62 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
 # ── Main Tick Loop ──────────────────────────────────────────────────
 
 
+async def _process_trigger(trigger: AgentTriggerRecord, now: datetime, agent_timezone: str | None) -> None:
+    """Evaluate one trigger and enqueue it when due; the scanner isolates its failure from the other triggers."""
+    _ = new_trace_id()
+    # Auto-disable expired triggers
+    if trigger.expires_at and now >= trigger.expires_at:
+        t = await agent_trigger_dao.get(trigger.id)
+        if t:
+            _ = await agent_trigger_dao.update(db_obj=t, obj_in={"is_enabled": False})
+        return
+
+    if not await _evaluate_trigger(trigger, now, agent_timezone):
+        return
+    handled = await _handle_okr_report_trigger(trigger, now)
+    if not handled:
+        handled = await _handle_okr_collection_trigger(trigger, now)
+    if handled:
+        return
+    # Fix 3: Rate limit on_message triggers per agent
+    if trigger.type == "on_message":
+        agent_fires = _on_msg_fire_log.get(trigger.agent_id, [])
+        cutoff = now - timedelta(seconds=_ON_MSG_RATE_WINDOW)
+        recent = [t for t in agent_fires if t > cutoff]
+        if len(recent) >= _ON_MSG_RATE_LIMIT:
+            logger.warning(
+                f"[A2A Safety] Agent {trigger.agent_id} hit "
+                f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
+                f"Auto-disabling trigger '{trigger.name}'."
+            )
+            t_obj = await agent_trigger_dao.get(trigger.id)
+            if t_obj:
+                _ = await agent_trigger_dao.update(db_obj=t_obj, obj_in={"is_enabled": False})
+            return
+        recent.append(now)
+        _on_msg_fire_log[trigger.agent_id] = recent
+    await enqueue_due_trigger(trigger, now)
+
+
 async def _tick():
-    """One daemon tick: evaluate all triggers, group by agent, invoke."""
+    """One daemon tick: evaluate triggers concurrently, claim queued executions, group by agent, invoke."""
     _ = new_trace_id()
     now = datetime.now(UTC)
 
-    all_triggers = await agent_trigger_dao.list_enabled()
-
     # Evaluate and enqueue due triggers. Agent invocation happens only after
     # executions are claimed through the distributed execution queue.
-    for trigger in all_triggers:
-        # Auto-disable expired triggers
-        if trigger.expires_at and now >= trigger.expires_at:
-            t = await agent_trigger_dao.get(trigger.id)
-            if t:
-                _ = await agent_trigger_dao.update(db_obj=t, obj_in={"is_enabled": False})
-            continue
-
+    if _admission.accepting:
+        all_triggers = await agent_trigger_dao.list_enabled()
         try:
-            if await _evaluate_trigger(trigger, now):
-                handled = await _handle_okr_report_trigger(trigger, now)
-                if not handled:
-                    handled = await _handle_okr_collection_trigger(trigger, now)
-                if not handled:
-                    # Fix 3: Rate limit on_message triggers per agent
-                    if trigger.type == "on_message":
-                        agent_fires = _on_msg_fire_log.get(trigger.agent_id, [])
-                        cutoff = now - timedelta(seconds=_ON_MSG_RATE_WINDOW)
-                        recent = [t for t in agent_fires if t > cutoff]
-                        if len(recent) >= _ON_MSG_RATE_LIMIT:
-                            logger.warning(
-                                f"[A2A Safety] Agent {trigger.agent_id} hit "
-                                f"on_message rate limit ({_ON_MSG_RATE_LIMIT}/hr). "
-                                f"Auto-disabling trigger '{trigger.name}'."
-                            )
-                            t_obj = await agent_trigger_dao.get(trigger.id)
-                            if t_obj:
-                                _ = await agent_trigger_dao.update(db_obj=t_obj, obj_in={"is_enabled": False})
-                            continue
-                        recent.append(now)
-                        _on_msg_fire_log[trigger.agent_id] = recent
-                    await enqueue_due_trigger(trigger, now)
+            zones = await cron_agent_timezones(all_triggers)
         except Exception as e:
-            logger.warning(f"Error evaluating trigger {trigger.name}: {e}")
+            logger.warning(f"Failed to resolve cron timezones for the tick: {e}")
+            zones = {trigger.agent_id: "UTC" for trigger in all_triggers if trigger.type == "cron"}
+        await _scanner.scan(
+            all_triggers,
+            lambda trigger: _process_trigger(trigger, now, zones.get(trigger.agent_id)),
+            settle=EVALUATION_SETTLE_SECONDS,
+        )
 
     await _claim_and_invoke(now)
 
@@ -331,27 +347,24 @@ async def wake_agent_with_context(
 
 async def start_trigger_daemon():
     """Start the background trigger daemon loop. Called from FastAPI startup."""
-    logger.info("⚡ Trigger Daemon started (15s tick, heartbeat every ~60s)")
-    _heartbeat_counter = 0
-    while True:
-        try:
-            await _tick()
-        except Exception as e:
-            logger.error(f"Trigger Daemon error: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-        # Run heartbeat check every 4th tick (~60 seconds)
-        _heartbeat_counter += 1
-        if _heartbeat_counter >= 4:
-            _heartbeat_counter = 0
-            _cleanup_stale_invoke_cache()
+    logger.info("⚡ Trigger Daemon started (15s tick)")
+    _cleanup_counter = 0
+    try:
+        while True:
             try:
-                from app.services.heartbeat import _heartbeat_tick
-
-                await _heartbeat_tick()
+                await _tick()
             except Exception as e:
-                logger.error(f"Heartbeat tick error: {e}")
+                logger.error(f"Trigger Daemon error: {e}")
+                import traceback
 
-        await asyncio.sleep(TICK_INTERVAL)
+                traceback.print_exc()
+
+            # Prune the dedup and rate-limit caches every 4th tick (~60 seconds)
+            _cleanup_counter += 1
+            if _cleanup_counter >= 4:
+                _cleanup_counter = 0
+                _cleanup_stale_invoke_cache()
+
+            await asyncio.sleep(TICK_INTERVAL)
+    finally:
+        await _scanner.close()

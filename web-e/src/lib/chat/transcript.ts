@@ -11,10 +11,25 @@ export type ChatLine = ChatMessage & {
   readonly rejectionNotice?: string
 }
 
-function sameUserLine(saved: ChatLine, pending: ChatLine): boolean {
-  if (saved.role !== 'user') return false
-  return Boolean((saved.client_submission_id && saved.client_submission_id === pending.client_submission_id)
-    || (saved.message_id && saved.message_id === pending.message_id))
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false
+  if (Array.isArray(left) !== Array.isArray(right)) return false
+  const leftEntries = Object.entries(left)
+  const rightEntries = new Map(Object.entries(right))
+  return leftEntries.length === rightEntries.size
+    && leftEntries.every(([key, value]) => rightEntries.has(key) && sameValue(value, rightEntries.get(key)))
+}
+
+type MatchQueue = { readonly indices: number[]; next: number }
+function firstUnused(queue: MatchQueue | undefined, used: ReadonlySet<number>): number {
+  if (!queue) return Infinity
+  while (queue.next < queue.indices.length && used.has(queue.indices[queue.next] ?? Infinity)) queue.next++
+  return queue.indices[queue.next] ?? Infinity
+}
+
+function legacyKey(row: ChatMessage): string {
+  return JSON.stringify([row.message_id, row.role, row.content])
 }
 
 export function acceptSubmission(local: readonly ChatLine[], receipt: ChatTurnAcceptance): ChatLine[] {
@@ -24,27 +39,53 @@ export function acceptSubmission(local: readonly ChatLine[], receipt: ChatTurnAc
 
 export function mergeServerHistory(server: readonly ChatMessage[], local: readonly ChatLine[]): ChatLine[] {
   const parents = new Set(server.flatMap((row) => row.message_id ? [row.message_id] : []))
+  const previousEntries = new Map(local.filter((row) => row.entry_id).map((row) => [row.entry_id, row]))
+  const previousLegacy = new Map<string, { readonly rows: ChatLine[]; next: number }>()
+  for (const row of local) {
+    if (row.entry_id) continue
+    const key = legacyKey(row)
+    const queue = previousLegacy.get(key) ?? { rows: [], next: 0 }
+    queue.rows.push(row)
+    previousLegacy.set(key, queue)
+  }
+  const submissions = new Map<string, MatchQueue>()
+  const messages = new Map<string, MatchQueue>()
+  const contents = new Map<string, Set<string>>()
+  for (const [index, row] of server.entries()) {
+    const roleContents = contents.get(row.role) ?? new Set<string>()
+    roleContents.add(row.content)
+    contents.set(row.role, roleContents)
+    if (row.role !== 'user') continue
+    for (const [lookup, id] of [[submissions, row.client_submission_id], [messages, row.message_id]] as const) {
+      if (!id) continue
+      const queue = lookup.get(id) ?? { indices: [], next: 0 }
+      queue.indices.push(index)
+      lookup.set(id, queue)
+    }
+  }
   const entries = new Set<string>()
   const authoritative: ChatLine[] = []
   for (const row of server) {
     if (row.entry_id && entries.has(row.entry_id)) continue
     if (row.entry_id) entries.add(row.entry_id)
-    authoritative.push({ ...row, fromHistory: true })
+    const next: ChatLine = { ...row, fromHistory: true }
+    const legacy = row.entry_id ? undefined : previousLegacy.get(legacyKey(row))
+    const previous = row.entry_id ? previousEntries.get(row.entry_id) : legacy?.rows[legacy.next++]
+    authoritative.push(previous && sameValue(previous, next) ? previous : next)
   }
-  const serverUsers = server.filter((row) => row.role === 'user')
   const used = new Set<number>()
   const pending: ChatLine[] = []
   const older: ChatLine[] = []
   const live: ChatLine[] = []
   for (const row of local) {
     if (row.role === 'user' && (row.client_submission_id || row.pending)) {
-      const match = serverUsers.findIndex((saved, index) => !used.has(index) && sameUserLine(saved, row))
-      if (match >= 0) used.add(match)
+      const match = Math.min(firstUnused(submissions.get(row.client_submission_id ?? ''), used), firstUnused(messages.get(row.message_id ?? ''), used))
+      if (match !== Infinity) used.add(match)
       else (row.fromHistory ? older : pending).push(row)
     } else if (row.message_id) {
       if (!parents.has(row.message_id)) (row.fromHistory ? older : live).push(row)
     } else if (!row.pending && (row.role === 'assistant' || row.role === 'tool') &&
-      !server.some((saved) => saved.role === row.role && saved.content === row.content)) {
+      !contents.get(row.role)?.has(row.content)) {
       live.push(row)
     }
   }

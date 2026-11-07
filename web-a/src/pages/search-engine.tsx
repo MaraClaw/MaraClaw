@@ -16,9 +16,9 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
-import { createLinkupKey, deleteLinkupKey, listLinkupKeys, type LinkupKey } from '@/lib/linkup-keys-api'
+import { createTavilyKey, deleteTavilyKey, listTavilyKeys, type TavilyKey } from '@/lib/tavily-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
-import { linkupKeyPresentation } from '@/lib/linkup-key-presentation'
+import { tavilyKeyPresentation } from '@/lib/tavily-key-presentation'
 import { SearchEngineAnalytics } from '@/pages/search-engine-analytics'
 
 const sections = [
@@ -30,7 +30,7 @@ type SearchEngineTab = (typeof sections)[number]['id']
 
 const schema = z.object({
   label: z.string().trim().min(1, 'Enter a label').max(200, 'Label is too long'),
-  api_key: z.string().trim().min(1, 'Enter a Linkup API key').max(512, 'Key is too long'),
+  api_key: z.string().trim().min(1, 'Enter a Tavily API key').max(512, 'Key is too long'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -68,8 +68,8 @@ export function SearchEnginePage() {
   }
 
   const keys = useQuery({
-    queryKey: ['admin-linkup-keys'],
-    queryFn: ({ signal }) => listLinkupKeys(signal),
+    queryKey: ['admin-tavily-keys'],
+    queryFn: ({ signal }) => listTavilyKeys(signal),
   })
 
   const {
@@ -83,11 +83,11 @@ export function SearchEnginePage() {
   })
 
   const remove = useMutation({
-    mutationFn: deleteLinkupKey,
+    mutationFn: deleteTavilyKey,
     onSuccess: (removed) => {
       setPendingRemoveId(null)
-      void queryClient.invalidateQueries({ queryKey: ['admin-linkup-keys'] })
-      toast.success(`Removed ${removed.label || 'Linkup key'}`)
+      void queryClient.invalidateQueries({ queryKey: ['admin-tavily-keys'] })
+      toast.success(`Removed ${removed.label || 'Tavily key'}`)
     },
     onError: (error) => {
       toast.error(error instanceof ApiError ? error.message : 'Could not remove key')
@@ -97,19 +97,19 @@ export function SearchEnginePage() {
   async function onSubmit(values: FormValues) {
     setFormError(null)
     try {
-      const created = await createLinkupKey({
+      const created = await createTavilyKey({
         label: values.label.trim(),
         api_key: values.api_key.trim(),
       })
       if (!isCurrent()) return
       reset()
-      void queryClient.invalidateQueries({ queryKey: ['admin-linkup-keys'] })
-      toast.success(`Added ${created.label || 'Linkup key'}`)
+      void queryClient.invalidateQueries({ queryKey: ['admin-tavily-keys'] })
+      toast.success(`Added ${created.label || 'Tavily key'}`)
     } catch (error) {
       if (!isCurrent()) return
       if (error instanceof ApiError) {
         if (error.status === 409) {
-          setFormError(formatApiDetail(error.detail) ?? 'This Linkup API key is already stored.')
+          setFormError(formatApiDetail(error.detail) ?? 'This Tavily API key is already stored.')
           return
         }
         if (error.status === 403) {
@@ -155,8 +155,8 @@ export function SearchEnginePage() {
         <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
         <p className="mt-2 text-muted-foreground">
           {tab === 'analytics'
-            ? 'System-wide and per-company search activity from billed Linkup calls.'
-            : 'Linkup keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
+            ? 'System-wide and per-company search activity from Tavily calls.'
+            : 'Tavily keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
         </p>
       </div>
       <SectionRail
@@ -196,7 +196,7 @@ export function SearchEnginePage() {
       >
       <Card>
         <CardHeader>
-          <CardTitle>Add Linkup key</CardTitle>
+          <CardTitle>Add Tavily key</CardTitle>
           <CardDescription>
             The secret is stored encrypted. The list shows a fingerprint only - you cannot read the
             key back after saving.
@@ -223,6 +223,7 @@ export function SearchEnginePage() {
               <PasswordField
                 id={`${formId}-key`}
                 label="API key"
+                placeholder="tvly-..."
                 autoComplete="off"
                 hideLeadingIcon
                 error={errors.api_key?.message}
@@ -252,7 +253,7 @@ export function SearchEnginePage() {
       ) : null}
 
       {!keys.isLoading && (keys.data ?? []).length === 0 ? (
-        <p className="text-sm text-muted-foreground">No Linkup keys yet. Add one to enable search.</p>
+        <p className="text-sm text-muted-foreground">No Tavily keys yet. Add one to enable search.</p>
       ) : null}
 
       <div className="grid gap-4">
@@ -286,7 +287,7 @@ function KeyCard({
   onCancelRemove,
   onConfirmRemove,
 }: {
-  item: LinkupKey
+  item: TavilyKey
   lastKey: boolean
   pendingRemove: boolean
   removing: boolean
@@ -295,7 +296,7 @@ function KeyCard({
   onConfirmRemove: () => void
 }) {
   const [, refreshClock] = useState(0)
-  const presentation = linkupKeyPresentation(item, Date.now())
+  const presentation = tavilyKeyPresentation(item, Date.now())
   useEffect(() => {
     if (presentation.cooldownUntil === null) return
     const deadline = Date.parse(presentation.cooldownUntil)
@@ -337,8 +338,8 @@ function KeyCard({
           <div className="flex flex-col gap-2">
             <p className="text-sm text-muted-foreground" role="status">
               {lastKey
-                ? 'This is the last key. Search will stop until you add another. In-flight research on this key will fail.'
-                : 'Agents will fail over to the next key. In-flight research on this key will fail.'}
+                ? 'This is the last key. Search will stop until you add another. In-flight requests on this key will fail.'
+                : 'Agents will fail over to the next key. In-flight requests on this key will fail.'}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="destructive" size="sm" disabled={removing} onClick={onConfirmRemove}>

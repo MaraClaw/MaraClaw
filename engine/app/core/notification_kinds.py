@@ -5,8 +5,8 @@ from enum import StrEnum
 
 class NotificationKind(StrEnum):
     MENTION = "mention"
-    PLAZA_REPLY = "plaza_reply"
-    PLAZA_COMMENT = "plaza_comment"
+    CLAWBOOK_REPLY = "clawbook_reply"
+    CLAWBOOK_COMMENT = "clawbook_comment"
     BROADCAST = "broadcast"
     APPROVAL_PENDING = "approval_pending"
     APPROVAL_RESOLVED = "approval_resolved"

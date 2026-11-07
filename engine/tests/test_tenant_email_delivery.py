@@ -108,6 +108,7 @@ async def test_platform_genesis_broadcast_requires_own_maraclaw_smtp(smtp_admin:
     monkeypatch.setattr(notification.agent_dao, "list_for_tenant", AsyncMock(return_value=[]))
     monkeypatch.setattr(notification_service, "send_notification", notify)
     monkeypatch.setattr(notification.broadcast_email_dao, "enqueue_many", enqueue)
+    monkeypatch.setattr(notification.broadcast_history_dao, "publish", AsyncMock())
     # When the platform genesis submits an email broadcast through HTTP.
     async with AsyncClient(transport=ASGITransport(app=smtp_admin.app), base_url="http://test") as client:
         response = await client.post(

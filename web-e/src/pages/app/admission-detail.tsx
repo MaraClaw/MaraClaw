@@ -72,7 +72,7 @@ function AdmissionDetail({ id }: { readonly id: string }) {
 
   return (
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-      <Button asChild variant="outline"><Link to="/app/admissions"><ArrowLeft aria-hidden="true" className="size-4" />All admission requests</Link></Button>
+      <Button asChild variant="outline"><Link to="/app/notifications?category=admissions"><ArrowLeft aria-hidden="true" className="size-4" />All admission requests</Link></Button>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">{request?.target_tenant.name ?? 'Admission request'}</h1>
         <Button className="h-auto min-h-11 whitespace-normal" variant="outline" disabled={query.isFetching || opening || withdraw.isPending} onClick={scope.effect(() => { void query.refetch() })}>Refresh status</Button>
@@ -97,7 +97,7 @@ function AdmissionDetail({ id }: { readonly id: string }) {
           </section>
           {request.transfer ? <section aria-label="Transfer choice" className="space-y-2 rounded-xl border border-border p-4 text-sm">
             <h2 className="font-medium">{request.transfer.choice === 'paid' ? 'Paid · Keep agents and integrations' : 'Free · Delete agents and integrations'}</h2>
-            {request.transfer.choice === 'paid' ? <p>Saved fee: {formatMoney(request.transfer.fee_amount_minor, request.transfer.currency)} ({request.transfer.currency}). New paid transfers join automatically after payment approval.</p> : <p>Deletion takes effect when the transfer completes. Agents expire and become unavailable; integrations, credentials, permissions, relationships, schedules, triggers and public pages are deleted. Historical chats, tasks, audit and activity records, accounting, Plaza content, revisions, files and memory remain retained in the source organization, inaccessible to you after the transfer.</p>}
+            {request.transfer.choice === 'paid' ? <p>Saved fee: {formatMoney(request.transfer.fee_amount_minor, request.transfer.currency)} ({request.transfer.currency}). New paid transfers join automatically after payment approval.</p> : <p>Deletion takes effect when the transfer completes. Agents expire and become unavailable; integrations, credentials, permissions, relationships, schedules, triggers and public pages are deleted. Historical chats, tasks, audit and activity records, accounting, Clawbook content, revisions, files and memory remain retained in the source organization, inaccessible to you after the transfer.</p>}
             <Link className="inline-flex min-h-11 items-center font-medium text-primary hover:underline" to={`/app/admissions/transfers/${encodeURIComponent(request.transfer.transfer_request_id)}`}>View saved transfer policy</Link>
           </section> : null}
           <dl className="grid gap-4 rounded-xl border border-border p-4 text-sm sm:grid-cols-2">

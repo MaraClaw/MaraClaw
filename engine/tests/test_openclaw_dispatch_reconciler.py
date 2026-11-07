@@ -26,6 +26,11 @@ class Pacing:
         await self.go.get()
 
 
+@pytest.fixture(autouse=True)
+def no_delivered_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(module.gateway_message_dao, "delivered_dispatch_page", AsyncMock(return_value=([], None)))
+
+
 @pytest.fixture
 def pacing(monkeypatch: pytest.MonkeyPatch) -> Pacing:
     value = Pacing()

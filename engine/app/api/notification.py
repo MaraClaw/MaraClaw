@@ -12,22 +12,27 @@ from app.core.notification_kinds import NotificationKind
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
+from app.dao.broadcast_history_dao import broadcast_history_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction
 from app.records.broadcast_email import BroadcastEmailStatus, NewBroadcastEmail
+from app.records.broadcast_history import NewBroadcastHistory
 from app.records.broadcast_submission import BroadcastSubmissionRecord
 from app.records.user import UserRecord
 from app.schemas.notification_responses import (
+    BroadcastHistoryCursor,
     NotificationBroadcastEmailCancellationResponse,
     NotificationBroadcastEmailStatusResponse,
+    NotificationBroadcastHistoryPageResponse,
     NotificationBroadcastResponse,
     NotificationCursor,
     NotificationPageResponse,
     NotificationReadResponse,
     NotificationResponse,
     NotificationUnreadCountResponse,
+    broadcast_history_item,
     notification_response,
 )
 
@@ -44,8 +49,8 @@ CATEGORY_TYPE_MAP: dict[str, list[NotificationKind]] = {
         NotificationKind.ORGANIZATION_ADMISSION_PENDING,
     ],
     "social": [
-        NotificationKind.PLAZA_COMMENT,
-        NotificationKind.PLAZA_REPLY,
+        NotificationKind.CLAWBOOK_COMMENT,
+        NotificationKind.CLAWBOOK_REPLY,
         NotificationKind.MENTION,
         NotificationKind.BROADCAST,
     ],
@@ -250,6 +255,30 @@ def _email_status_response(status: BroadcastEmailStatus) -> NotificationBroadcas
     }
 
 
+@router.get("/notifications/broadcast/history")
+async def list_broadcast_history(
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> NotificationBroadcastHistoryPageResponse:
+    """Latest-first history of the caller's own tenant; the tenant never comes from the request."""
+    tenant_id = _broadcast_tenant(current_user)
+    position = BroadcastHistoryCursor.decode(cursor) if cursor is not None else None
+    records = await broadcast_history_dao.list_page(
+        tenant_id,
+        limit=limit,
+        before=(position.published_at, position.broadcast_id) if position is not None else None,
+    )
+    items = records[:limit]
+    next_cursor = None
+    if len(records) > limit:
+        last = items[-1]
+        next_cursor = BroadcastHistoryCursor.model_validate(
+            {"version": 1, "published_at": last.published_at, "broadcast_id": last.broadcast_id}
+        ).encode()
+    return {"items": [broadcast_history_item(item) for item in items], "next_cursor": next_cursor}
+
+
 @router.get("/notifications/broadcast/{broadcast_id}/email-status")
 async def broadcast_email_status(
     broadcast_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
@@ -394,6 +423,20 @@ async def broadcast_notification(
                     if user.email not in (None, "")
                 ]
             )
+        await broadcast_history_dao.publish(
+            NewBroadcastHistory(
+                broadcast_id=broadcast_id,
+                tenant_id=tenant_id,
+                sender_id=current_user.id,
+                sender_name=sender_name,
+                title=req.title,
+                body=req.body,
+                send_email=req.send_email,
+                users_notified=count_users,
+                agents_notified=count_agents,
+                emails_sent=count_emails,
+            )
+        )
         if submission_id is not None:
             await broadcast_submission_dao.record_counts(
                 submission_id, users=count_users, agents=count_agents, emails=count_emails

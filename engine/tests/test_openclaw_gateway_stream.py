@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -20,6 +20,7 @@ from app.services import (
 )
 from app.services.shared_chat import shared_session_id
 from app.services.turn_timing import TurnTimeline
+from test_openclaw_gateway_coalescing import IngestProbe, delta_line
 from test_openclaw_gateway_rpc import _Turn, wire_terminal
 
 REF = "openrouter/nvidia/nemotron-3.5-super-vl:free"
@@ -85,7 +86,11 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
     monkeypatch.setattr(rpc, "_policy", streaming.EXEC_POLICY)
     monkeypatch.setattr(
         "app.services.agent_manager.agent_manager.docker_client",
-        SimpleNamespace(container=SimpleNamespace(execute=execute)),
+        SimpleNamespace(
+            container=SimpleNamespace(
+                execute=execute, inspect=lambda _: SimpleNamespace(state=SimpleNamespace(running=True))
+            )
+        ),
     )
 
     outcome = await asyncio.wait_for(rpc.execute_gateway_turn(turn.agent, turn.message, timing=timeline), 5)
@@ -297,7 +302,11 @@ async def test_configured_model_id_split_across_deltas_never_reaches_the_socket(
     monkeypatch.setattr(rpc, "_policy", streaming.EXEC_POLICY)
     monkeypatch.setattr(
         "app.services.agent_manager.agent_manager.docker_client",
-        SimpleNamespace(container=SimpleNamespace(execute=execute)),
+        SimpleNamespace(
+            container=SimpleNamespace(
+                execute=execute, inspect=lambda _: SimpleNamespace(state=SimpleNamespace(running=True))
+            )
+        ),
     )
 
     assert isinstance(await asyncio.wait_for(turn.run(), 5), rpc.TerminalOutcome)
@@ -329,3 +338,63 @@ async def test_dropped_delta_withholds_appends_until_a_snapshot_resynchronizes(m
 
     # All four were queued before the first publication, so the snapshot supersedes the append and the "!" joins it.
     assert events == [(4, f"snapshot {BRAND} end !", True)]
+
+
+async def test_chunk_timing_counts_failed_publications_and_keeps_the_slowest(monkeypatch):
+    message = GatewayMessageRecord(uuid4(), uuid4(), "hello", conversation_id=str(uuid4()))
+    timeline = TurnTimeline(message.id, message.agent_id, None)
+    relay = streaming.DeltaRelay(message, timeline)
+    probe = IngestProbe(monkeypatch, relay)
+    now = 100.0
+    in_flight, release = asyncio.Event(), asyncio.Event()
+    sends = 0
+
+    async def send(_agent_id, _conversation_id, _event, *, user_id, send_timeout=None):
+        nonlocal now, sends
+        sends += 1
+        if sends == 1:
+            now += 0.25
+            in_flight.set()
+            await release.wait()
+            return
+        now += 0.75
+        raise RuntimeError("socket closed")
+
+    monkeypatch.setattr(manager, "send_to_session", send)
+    monkeypatch.setattr(streaming, "monotonic", lambda: now)
+    consumer = asyncio.create_task(relay.publish())
+    try:
+        relay.offer(delta_line(message, 0, "first "))
+        await asyncio.wait_for(in_flight.wait(), 5)
+        relay.offer(delta_line(message, 1, "second"))
+        await probe.ingested(1)
+
+        release.set()
+        await asyncio.wait_for(relay.drain(consumer), 5)
+        await consumer
+    finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer
+
+    assert sends == 2
+    assert (timeline.chunks_published, timeline.slowest_chunk_ms) == (2, 750)
+
+
+async def test_chunk_timing_counts_a_publication_that_raised(monkeypatch):
+    message = GatewayMessageRecord(uuid4(), uuid4(), "hello", conversation_id=str(uuid4()))
+    timeline = TurnTimeline(message.id, message.agent_id, None)
+    relay = streaming.DeltaRelay(message, timeline)
+
+    async def broken(_message, _delta):
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(delivery, "publish_chunk", broken)
+    relay.offer(delta_line(message, 0, "x"))
+    await asyncio.sleep(0)  # let the loop run the scheduled queue put before completion is signalled
+    relay.finish()
+
+    with pytest.raises(ExceptionGroup):
+        await asyncio.wait_for(relay.publish(), 5)
+
+    assert timeline.chunks_published == 1

@@ -119,7 +119,7 @@ try {
     // Given / When: Settings is still allowed during mandatory password change.
     await expect(page).toHaveURL(`${base}settings`)
     // Then
-    await expect(page.getByRole('region', { name: 'Transfer fee and instructions' }).getByRole('link', { name: 'Account' })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Transfer fee and instructions' }).getByRole('link', { name: 'Change your password' })).toBeVisible()
     await expect(page.getByLabel('Fee amount', { exact: true })).toHaveCount(0)
     assert.equal(state.requests.length, 0)
   })

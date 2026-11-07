@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 const ICON_NAMES = [
   'agents',
-  'plaza',
+  'clawbook',
   'okr',
   'directory',
   'inbox',

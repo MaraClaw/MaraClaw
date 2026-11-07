@@ -50,7 +50,7 @@ async def test_actual_start_registers_required_role_evidence(
         trigger_daemon,
     )
     from app.services.channels import whatsapp_personal_supervisor
-    from app.services.linkup import export
+    from app.services.tavily import export
 
     runtime = lifecycle.Runtime()
     subscriber = SimpleNamespace(ready=False)

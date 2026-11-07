@@ -196,7 +196,12 @@ class DeltaRelay:
 
         while True:
             while (delta := self.pending.take()) is not None:
-                await publish_chunk(self.message, delta)
+                started = monotonic()
+                try:
+                    await publish_chunk(self.message, delta)
+                finally:
+                    if self.timing is not None:
+                        self.timing.chunk_published(monotonic() - started)
             if self.closed:
                 return
             self.wake.clear()  # no await since `take` saw nothing, so no merge can slip in before the wait

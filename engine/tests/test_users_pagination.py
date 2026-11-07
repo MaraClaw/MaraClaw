@@ -14,13 +14,16 @@ from app.api import users as users_api
 from app.core import security
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
-from app.dao.user_dao import UserPagePosition
+from app.dao.user_dao import UserPageFilter, UserPagePosition
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
+from app.services.user_page_filters import user_page_digest
 
 TENANT = UUID(int=100)
 FOREIGN = UUID(int=200)
+SOURCE = UUID(int=300)
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
+ELIGIBLE_ROLES = ("agent_admin", "member")
 
 
 def _actor(role: str = "org_admin", tenant_id: UUID | None = TENANT) -> UserRecord:
@@ -280,3 +283,124 @@ async def test_password_change_gate_when_page_uses_real_auth_dependency(
         response = await client.get("/api/users/page", headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 403
     page_query.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({"eligible_for": "agent_transfer"}, UserPageFilter(eligible_roles=ELIGIBLE_ROLES)),
+        ({"exclude_user_id": str(SOURCE)}, UserPageFilter(exclude_user_id=SOURCE)),
+        (
+            {"eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE)},
+            UserPageFilter(eligible_roles=ELIGIBLE_ROLES, exclude_user_id=SOURCE),
+        ),
+    ],
+)
+async def test_forwards_filters_when_eligibility_or_exclusion_is_requested(
+    page_query: AsyncMock, params: dict[str, str], expected: UserPageFilter
+):
+    response = await _request(_actor(), {**params, "search": " Bob "})
+    assert response.status_code == 200
+    page_query.assert_awaited_once_with(TENANT, search="Bob", after=None, limit=50, filters=expected)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"eligible_for": "unknown"},
+        {"eligible_for": ""},
+        {"exclude_user_id": "not-a-uuid"},
+        {"exclude_user_id": ""},
+    ],
+)
+async def test_rejects_filters_when_values_are_invalid(page_query: AsyncMock, params: dict[str, str]):
+    response = await _request(_actor(), params)
+    assert response.status_code == 422
+    page_query.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"eligible_for": "agent_transfer"},
+        {"exclude_user_id": str(SOURCE)},
+        {"eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE)},
+    ],
+)
+async def test_rejects_unfiltered_cursor_when_filters_are_added(page_query: AsyncMock, params: dict[str, str]):
+    response = await _request(_actor(), {"cursor": _cursor(), **params})
+    assert response.status_code == 400
+    page_query.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"eligible_for": "agent_transfer"},
+        {"exclude_user_id": str(SOURCE)},
+        {"exclude_user_id": str(UUID(int=301))},
+        {"eligible_for": "agent_transfer", "exclude_user_id": str(UUID(int=301))},
+        {"search": "other", "eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE)},
+    ],
+)
+async def test_rejects_filtered_cursor_when_filters_or_search_change(page_query: AsyncMock, params: dict[str, str]):
+    digest = user_page_digest("", users_api.UserPageEligibility.AGENT_TRANSFER, SOURCE)
+    response = await _request(_actor(), {"cursor": _cursor(search_digest=digest), **params})
+    assert response.status_code == 400
+    page_query.assert_not_awaited()
+
+
+async def test_continues_when_filtered_cursor_matches_filters(page_query: AsyncMock):
+    digest = user_page_digest("bob", users_api.UserPageEligibility.AGENT_TRANSFER, SOURCE)
+    params = {"search": "bob", "eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE), "limit": 1}
+    response = await _request(_actor(), {"cursor": _cursor(search_digest=digest), **params})
+    assert response.status_code == 200
+    page_query.assert_awaited_once_with(
+        TENANT,
+        search="bob",
+        after=UserPagePosition(0, NOW, UUID(int=10)),
+        limit=1,
+        filters=UserPageFilter(eligible_roles=ELIGIBLE_ROLES, exclude_user_id=SOURCE),
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "scope"),
+    [
+        ({}, "bob"),
+        (
+            {"eligible_for": "agent_transfer"},
+            json.dumps({"eligible_for": "agent_transfer", "search": "bob"}, separators=(",", ":")),
+        ),
+        (
+            {"exclude_user_id": str(SOURCE)},
+            json.dumps({"exclude_user_id": str(SOURCE), "search": "bob"}, separators=(",", ":")),
+        ),
+        (
+            {"eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE)},
+            json.dumps(
+                {"eligible_for": "agent_transfer", "exclude_user_id": str(SOURCE), "search": "bob"},
+                separators=(",", ":"),
+            ),
+        ),
+    ],
+)
+async def test_binds_next_cursor_to_scope_when_page_has_lookahead(
+    page_query: AsyncMock, params: dict[str, str], scope: str
+):
+    page_query.return_value = [UserRecord(id=UUID(int=10)), UserRecord(id=UUID(int=11))]
+    response = await _request(_actor(), {**params, "search": "bob", "limit": 1})
+    assert response.status_code == 200
+    token = users_api.UsersPageOut.model_validate_json(response.content).next_cursor
+    assert isinstance(token, str)
+    position = users_api._UsersPageCursor.model_validate_json(urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+    assert position.search_digest == sha256(scope.encode()).hexdigest()
+
+
+async def test_keeps_search_digest_when_filters_are_absent():
+    assert user_page_digest("", None, None) == sha256(b"").hexdigest()
+    assert user_page_digest("bob", None, None) == sha256(b"bob").hexdigest()
+    filtered = user_page_digest("bob", users_api.UserPageEligibility.AGENT_TRANSFER, None)
+    assert filtered != user_page_digest("bob", None, None)
+    assert filtered != user_page_digest("bob", None, SOURCE)

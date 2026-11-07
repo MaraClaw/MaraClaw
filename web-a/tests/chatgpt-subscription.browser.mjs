@@ -67,7 +67,7 @@ async function api(state, request, response) {
       assert.equal(request.method, 'GET')
       switch (path) {
         case '/api/auth/me': body = { ...admin, ...(state.platform ? { role: 'platform_admin', is_platform_admin: true } : {}) }; break
-        case '/api/admin/companies': body = companies; break
+        case '/api/admin/companies/options': body = companies; break
         case '/api/notifications/unread-count': body = { unread_count: 0 }; break
         case '/api/enterprise/llm-models': case '/api/enterprise/llm-providers': case '/api/admin/search-analytics/orgs': body = []; break
         case '/api/admin/search-analytics/summary': body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }; break

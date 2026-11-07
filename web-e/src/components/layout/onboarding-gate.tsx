@@ -1,10 +1,11 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { getOnboardingStatus, listAgents, wasOnboardingSkipped } from '@/lib/workspace-api'
 
-export function OnboardingGate() {
+export function OnboardingGate({ children }: { readonly children?: ReactNode }) {
   const scope = useWorkspaceSession()
   const location = useLocation()
   const agents = useQuery({ queryKey: ['agents'], queryFn: listAgents })
@@ -26,5 +27,5 @@ export function OnboardingGate() {
     return <Navigate to="/app/onboarding" replace />
   }
 
-  return <Outlet />
+  return children ?? <Outlet />
 }

@@ -8,10 +8,15 @@ import pytest
 from fastapi import HTTPException, WebSocket
 from starlette.types import Message
 
+from app.api.websocket import ConnectionManager
 from app.core import access_cache
 from app.services import chat_tickets
 from app.services.realtime_runtime import chat_authorization
-from app.services.realtime_runtime.chat_authorization import DELIVERY_AUTHORIZATION_TTL_SECONDS, authorize_chat_delivery
+from app.services.realtime_runtime.chat_authorization import (
+    DELIVERY_AUTHORIZATION_TTL_SECONDS,
+    authorize_chat_delivery,
+    read_shared_acl_version,
+)
 from app.services.realtime_runtime.router import RealtimeRouter
 from app.services.shared_chat import shared_session_id
 
@@ -143,9 +148,37 @@ async def test_non_shared_target_is_allowed_without_any_work(env: Env) -> None:
     env.authorize.assert_not_awaited()
 
 
+async def test_supplied_acl_version_replaces_the_per_socket_read(env: Env) -> None:
+    socket, agent_id, session_id = shared_socket()
+
+    assert await authorize_chat_delivery(socket, agent_id, session_id, acl_version="1")
+    assert await authorize_chat_delivery(socket, agent_id, session_id, acl_version="1")
+    env.authorize.assert_awaited_once()
+
+    # A bumped version re-authorizes on the very next event; a negative result is still never cached.
+    env.revoke()
+    assert not await authorize_chat_delivery(socket, agent_id, session_id, acl_version="2")
+    assert not await authorize_chat_delivery(socket, agent_id, session_id, acl_version="2")
+    assert env.authorize.await_count == 3
+    env.read_version.assert_not_awaited()
+
+
+async def test_delivery_acl_version_is_read_once_and_only_for_a_shared_target(env: Env) -> None:
+    _, agent_id, session_id = shared_socket()
+    env.version = "9"
+
+    assert await read_shared_acl_version(agent_id, [None, str(uuid4()), session_id, session_id]) == "9"
+    env.read_version.assert_awaited_once()
+
+    env.read_version.reset_mock()
+    assert await read_shared_acl_version(agent_id, [None, str(uuid4())]) is None
+    env.read_version.assert_not_awaited()
+
+
+@pytest.mark.parametrize("remote", [False, True])
 @pytest.mark.parametrize("bumped", [True, False])
 async def test_revoked_viewer_stops_receiving_after_acl_bump(
-    monkeypatch: pytest.MonkeyPatch, env: Env, bumped: bool
+    monkeypatch: pytest.MonkeyPatch, env: Env, bumped: bool, remote: bool
 ) -> None:
     frames: list[Message] = []
     socket, agent_id, session_id = shared_socket(frames)
@@ -158,9 +191,14 @@ async def test_revoked_viewer_stops_receiving_after_acl_bump(
     ]
 
     async def send() -> None:
-        await instance.route_message(
-            agent_id=agent_id, session_id=session_id, message={"type": "done"}, local_connections=connections
-        )
+        if remote:
+            manager = ConnectionManager()
+            manager.active_connections[agent_id] = connections
+            await manager.deliver_pubsub_message(agent_id=agent_id, session_id=session_id, payload={"type": "done"})
+        else:
+            await instance.route_message(
+                agent_id=agent_id, session_id=session_id, message={"type": "done"}, local_connections=connections
+            )
 
     await send()
     assert len(frames) == 1

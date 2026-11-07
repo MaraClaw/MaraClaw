@@ -25,7 +25,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `workspace-api.ts` | Facade plus leftovers. Defines session create/rename/delete, files, skills, tools, relationships, approvals, metrics and revisions. Re-exports `agents-api.ts` (agents, permissions), `agent-work-api.ts` (tasks, focus, triggers), `onboarding-api.ts` (incl. `ONBOARDING_SKIP_KEY`), `channels-api.ts` (`CHANNEL_FIELDS`/`CHANNELS`) and `schedules-api.ts`; notifications live in `notifications-api.ts`. `mintFileDownloadTicket` uses Bearer-authenticated POST; `fileTicketUrl` builds a relative, same-origin redemption URL (does **not** use `apiUrl`). |
 | `notifications-api.ts` | Zod-parsed notification pages and unread counts; single, all and selected read/unread/archive/restore requests under `/api/notifications`. Defines `unreadNotificationCount`. |
 | `chat-sessions-api.ts`, `chat-sessions-query.ts` | Generated-schema parsing of `GET /api/agents/:id/sessions/page` (`scope`, `limit` 50, opaque `cursor`; the shared session leads the first page only) and the single-session lookup `GET /api/agents/:id/sessions/:sessionId`. Keys: chat `['sessions', agentId, scope]` (infinite, `mine` or `all`), Take Control `['sessions', agentId, 'control', 'mine']` (first page only), URL-opened lookup `['sessions', agentId, 'item', sessionId]`; `distinctSessions` drops ids a later page repeats. |
-| `chat-history-api.ts`, `chat-history-query.ts` | Zod-parsed `GET /api/agents/:id/sessions/:id/messages/page` (50 rows, cursor; `has_more` must match `next_cursor`). The latest window bridges back to the previous newest entry; earlier pages are cached per cursor and prepended; a cursor that fails to advance throws `ChatHistoryCursorError`. Merge rules: `chat/history.ts`. `workspace-api.listSessionMessages` (`limit=200`, no cursor) is unused. |
+| `chat-history-api.ts`, `chat-history-query.ts` | Zod-parsed `GET /api/agents/:id/sessions/:id/messages/page` (50 rows, cursor; `has_more` must match `next_cursor`). Latest polls send the held revision and message boundary for unchanged, bounded delta, or reset replies. Deltas retain the earlier-page cursor; resets replace the retained range. Earlier pages are cached per revision/cursor and prepended; a cursor that fails to advance throws `ChatHistoryCursorError`. Merge rules: `chat/history.ts`. `workspace-api.listSessionMessages` (`limit=200`, no cursor) is unused. |
 | `activity-api.ts` | Manager activity pages from `/api/agents/:id/activity/page` (limit 1-200, cursor, `action_type`, `no-store`). |
 | `agent-lifecycle-api.ts`, `agent-lifecycle-policy.ts`, `agent-setup-api.ts`, `agent-deletion-api.ts` | Lifecycle status and optional-MCP retry, setup status/retry, expiry and deletion-request policy, and `/api/agent-deletion-requests`. |
 | `agent-skills-api.ts` | `listInstalledAgentSkills`: skills under the agent's `skills/` folder (`SKILL.md`/`skill.md` entry point or flat `*.md`), owner- and signal-fenced. |
@@ -38,7 +38,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `trigger-executions-api.ts` | Owner/signal-fenced, Zod-parsed cursor pages from `/api/agents/:agentId/triggers/:triggerId/executions`. |
 | `trigger-executions-query.ts` | Trigger execution visibility checks and session-scoped infinite-query options. |
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
-| `plaza-api.ts` | `/api/plaza/*` |
+| `clawbook-api.ts` | `/api/clawbook/*` |
 | `okr-api.ts` | `/api/okr/*` |
 | `directory-api.ts` | People directory: `/api/org/users`. Provider organization directory/sync is retired. Not org departments. |
 | `org-departments-api.ts` | Own-tenant org department summaries via `/api/departments/options`; org-admin name-only `PATCH /api/departments/:id`. Zod-parsed, separate from the people directory and agent grants. |
@@ -55,7 +55,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 
 - Join, transfer, admission or tenant switch: `invitations-api.ts`, `company-transfers-api.ts`, `company-admissions-api.ts`, `auth-api.ts`, then `types/*`.
 - Agent files, sessions, skills, tools or channels: the `workspace-api.ts` facade, or the concrete `agents-api.ts` / `agent-work-api.ts` / `channels-api.ts` it re-exports.
-- Take Control, vault, published pages: `control-api.ts`. Plaza, OKR, directory: their own `*-api.ts`.
+- Take Control, vault, published pages: `control-api.ts`. Clawbook, OKR, directory: their own `*-api.ts`.
 - Chat socket: `chat/ws-client.ts`. Chat history, skill mentions, transcripts: `chat-history-*.ts` and the `chat/` guide.
 
 ## CONVENTIONS
@@ -69,7 +69,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 
 ## ANTI-PATTERNS
 
-- Adding a new domain into `workspace-api.ts` (Plaza/OKR/control/directory/agent-departments already split).
+- Adding a new domain into `workspace-api.ts` (Clawbook/OKR/control/directory/agent-departments already split).
 - Using `directory-api.ts` for org department grants, or `agent-departments-api.ts` for the people directory.
 - `fetch()` in pages; wrapping chat WS in Query.
 - Using `apiUrl` for `fileTicketUrl`, caching/reusing ticket URLs, or fetching download bodies through `apiRequest` (native browser navigation follows S3 redirects).

@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -7,13 +8,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useSessionCurrent } from '@/hooks/use-auth'
+import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import {
   attemptAfterFailure, broadcastDraftSchema, broadcastFailureMessage, reviewBroadcast, sendBroadcast,
   type BroadcastDraft, type BroadcastResult, type BroadcastSubmission,
 } from '@/lib/broadcast-api'
 import { BroadcastEmailProgress } from './broadcast-email-progress'
+import { BroadcastHistory } from './broadcast-history'
 
 const emptyDraft = { title: '', body: '', send_email: false }
 const buttonMotion = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
@@ -21,6 +23,9 @@ const audience = 'Active users in your current organization, except you, plus al
 
 export function BroadcastPage() {
   const id = useId()
+  const client = useQueryClient()
+  const { user, owner } = useAuth()
+  const [historyRevision, setHistoryRevision] = useState(0)
   const isSessionCurrent = useSessionCurrent()
   const active = useRef(false)
   const submitting = useRef(false)
@@ -46,6 +51,8 @@ export function BroadcastPage() {
     retry: false,
     onSuccess: (data) => {
       if (!active.current || !isSessionCurrent()) return
+      void client.invalidateQueries({ queryKey: ['admin-broadcast-history', user?.tenant_id], refetchType: 'none' })
+      setHistoryRevision((value) => value + 1)
       attempt.current = null
       focusRequested.current = 'success'
       setSnapshot(null)
@@ -182,6 +189,7 @@ export function BroadcastPage() {
           </CardContent>
         </Card>
       )}
+      <BroadcastHistory key={`${owner.generation}:${user?.tenant_id}:${historyRevision}`} />
     </div>
   )
 }

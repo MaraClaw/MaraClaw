@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,7 +11,7 @@ from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import transaction
 from app.records.chat import ChatSessionRecord
 from app.services import chat_history
-from app.services.chat_history import HistoryCursor, get_history_page, parse_cursor
+from app.services.chat_history import HeldHistory, HistoryCursor, get_history_page, get_history_refresh, parse_cursor
 
 pytest_plugins = ["tests.test_chat_submission_postgres", "tests.test_redis_cache"]
 
@@ -86,7 +86,8 @@ async def test_real_keyset_preserves_ties_precision_and_exhaustion(history_db: H
     ]
     assert last["has_more"] is False
     assert last["next_cursor"] is None
-    assert exhausted == {"items": [], "next_cursor": None, "has_more": False}
+    assert (exhausted["items"], exhausted["next_cursor"], exhausted["has_more"]) == ([], None, False)
+    assert exhausted["revision"] is not None
 
 
 @pytest.mark.parametrize("mutation", ["insert", "update", "delete", "reassign"])
@@ -143,7 +144,7 @@ async def test_committed_mutations_invalidate_already_cached_older_pages(history
         case "delete":
             assert [item["message_id"] for item in fresh["items"]] == [str(UUID(int=1)), str(UUID(int=2))]
         case "reassign":
-            assert fresh == {"items": [], "next_cursor": None, "has_more": False}
+            assert (fresh["items"], fresh["next_cursor"], fresh["has_more"]) == ([], None, False)
             assert [item["message_id"] for item in destination_page["items"]] == [str(UUID(int=4)), str(UUID(int=5))]
 
 
@@ -232,3 +233,145 @@ async def test_rollback_cached_fingerprint_is_never_reused(history_db: HistoryDa
         fresh = await get_history_page(h.session, 2, None, agent_id=h.db.agent.id)
     # Then neither rollback nor revision reuse can expose uncommitted content.
     assert fresh["items"][-1]["content"] == "committed"
+
+
+async def test_late_commit_with_older_created_at_arrives_in_a_delta_that_a_boundary_keyset_alone_would_miss(
+    history_db: HistoryDatabase,
+):
+    # Given a writer whose transaction starts first, then a later transaction that inserts and commits the boundary row.
+    h = history_db
+    insert = (
+        "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id, created_at) "
+        "VALUES (%(id)s, %(agent)s, %(user)s, 'assistant', %(content)s, %(session)s, %(time)s)"
+    )
+
+    def row(index: int, content: str) -> dict[str, object]:
+        return {
+            "id": UUID(int=index),
+            "agent": h.db.agent.id,
+            "user": h.db.user.id,
+            "content": content,
+            "session": str(h.session.id),
+            "time": h.timestamp + timedelta(days=1) if index == 100 else h.timestamp - timedelta(days=365),
+        }
+
+    async with transaction(h.db.second):
+        await h.db.second.execute("SELECT 1")  # Fixes this writer's transaction-start created_at.
+        async with transaction(h.db.first):
+            await h.db.first.execute(insert, row(100, "boundary"))
+        async with transaction(h.db.first):
+            seen = await get_history_page(h.session, 50, None, agent_id=h.db.agent.id)
+        # When the earlier-starting writer inserts and commits after the client already holds the boundary.
+        await h.db.second.execute(insert, row(101, "late"))
+    held = HeldHistory(revision=str(seen["revision"]), created_at=h.timestamp, message_id=UUID(int=100))
+    async with transaction(h.db.first):
+        stamps = {
+            row["content"]: row["created_at"]
+            for row in await h.db.first.fetchall(
+                "SELECT content, created_at FROM chat_messages WHERE content IN ('boundary', 'late')"
+            )
+        }
+        held = held.model_copy(update={"created_at": stamps["boundary"]})
+        keyset = await chat_message_dao.list_session_after(
+            conversation_id=str(h.session.id), after=(held.created_at, held.message_id), limit=10
+        )
+        refresh = await get_history_refresh(h.session, 2, held, agent_id=h.db.agent.id)
+    # Then the late row sorts before the boundary, a plain after-boundary read cannot see it, and the delta does.
+    assert isinstance(stamps["late"], datetime)
+    assert isinstance(stamps["boundary"], datetime)
+    assert stamps["late"] < stamps["boundary"]
+    assert [message.id for message in keyset] == [UUID(int=100)]
+    assert refresh["kind"] == "delta"
+    assert [item["content"] for item in refresh["items"]] == ["late", "boundary"]
+    assert refresh["revision"] != held.revision
+
+
+async def test_revision_decides_unchanged_and_boundary_state_decides_delta_or_reset(history_db: HistoryDatabase):
+    # Given the newest fixture message as the client's boundary at the current revision.
+    h = history_db
+    async with transaction(h.db.first):
+        page = await get_history_page(h.session, 50, None, agent_id=h.db.agent.id)
+        held = HeldHistory(revision=str(page["revision"]), created_at=h.timestamp, message_id=UUID(int=5))
+        same = await get_history_refresh(h.session, 50, held, agent_id=h.db.agent.id)
+    # When a writer commits a new row, then the boundary row is deleted.
+    async with transaction(h.db.second):
+        await h.db.second.execute(
+            "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id, created_at) "
+            "VALUES (%(id)s, %(agent)s, %(user)s, 'assistant', 'six', %(session)s, %(time)s)",
+            {
+                "id": UUID(int=6),
+                "agent": h.db.agent.id,
+                "user": h.db.user.id,
+                "session": str(h.session.id),
+                "time": h.timestamp,
+            },
+        )
+    async with transaction(h.db.first):
+        delta = await get_history_refresh(h.session, 50, held, agent_id=h.db.agent.id)
+        gap = await get_history_refresh(h.session, 1, held, agent_id=h.db.agent.id)
+    async with transaction(h.db.second):
+        await h.db.second.execute("DELETE FROM chat_messages WHERE id = %(id)s", {"id": UUID(int=5)})
+    async with transaction(h.db.first):
+        gone = await get_history_refresh(h.session, 50, held, agent_id=h.db.agent.id)
+    # Then each poll returns the response its state calls for, the revision always read before the rows.
+    assert same == {"kind": "unchanged", "revision": held.revision}
+    assert delta["kind"] == "delta"
+    assert [item["message_id"] for item in delta["items"]] == [str(UUID(int=index)) for index in (5, 6)]
+    assert gap["kind"] == "reset"
+    assert [item["message_id"] for item in gap["page"]["items"]] == [str(UUID(int=6))]
+    assert gone["kind"] == "reset"
+    assert gone["page"]["revision"] not in (None, held.revision)
+
+
+async def test_old_message_update_is_delivered_with_its_complete_new_projection(history_db: HistoryDatabase):
+    h = history_db
+    async with transaction(h.db.first):
+        page = await get_history_page(h.session, 2, None, agent_id=h.db.agent.id)
+        held = HeldHistory(revision=str(page["revision"]), created_at=h.timestamp, message_id=UUID(int=5))
+    async with transaction(h.db.second):
+        await h.db.second.execute(
+            "UPDATE chat_messages SET content = %(content)s WHERE id = %(id)s",
+            {"id": UUID(int=1), "content": 'Before\n```tool_code\nlookup\n```\n```json\n{"q":"x"}\n```\nAfter'},
+        )
+    async with transaction(h.db.first):
+        refresh = await get_history_refresh(h.session, 2, held, agent_id=h.db.agent.id)
+    assert refresh["kind"] == "delta"
+    assert [entry["entry_id"] for entry in refresh["items"]] == [
+        *(f"{UUID(int=1)}:{index}" for index in range(3)),
+        str(UUID(int=5)),
+    ]
+
+
+async def test_commit_between_revision_and_rows_is_still_discoverable_next_poll(
+    history_db: HistoryDatabase, monkeypatch
+):
+    h = history_db
+    async with transaction(h.db.first):
+        page = await get_history_page(h.session, 2, None, agent_id=h.db.agent.id)
+    held = HeldHistory(revision=str(page["revision"]), created_at=h.timestamp, message_id=UUID(int=5))
+    async with transaction(h.db.second):
+        await h.db.second.execute(
+            "UPDATE chat_messages SET content = 'first edit' WHERE id = %(id)s", {"id": UUID(int=5)}
+        )
+        before_rows = await chat_message_dao.history_revision(h.session.id)
+    original = chat_message_dao.list_session_changes
+
+    async def racing_changes(**kwargs):
+        async with transaction(h.db.second):
+            await h.db.second.execute(
+                "UPDATE chat_messages SET content = 'late edit' WHERE id = %(id)s", {"id": UUID(int=1)}
+            )
+        return await original(**kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(chat_message_dao, "list_session_changes", racing_changes)
+        async with transaction(h.db.first):
+            refresh = await get_history_refresh(h.session, 2, held, agent_id=h.db.agent.id)
+    assert refresh["kind"] == "delta"
+    assert refresh["revision"] == before_rows
+    async with transaction(h.db.first):
+        next_poll = await get_history_refresh(
+            h.session, 2, held.model_copy(update={"revision": refresh["revision"]}), agent_id=h.db.agent.id
+        )
+    assert next_poll["kind"] == "delta"
+    assert [entry["content"] for entry in next_poll["items"]] == ["late edit", "first edit"]

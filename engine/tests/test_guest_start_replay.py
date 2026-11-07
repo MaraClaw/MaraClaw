@@ -78,7 +78,7 @@ async def test_legacy_state_mount_requires_explicit_replacement_without_mutation
     assert (agent.container_id, agent.container_port) == ("old", 18888)
     assert docker.guests["old"].state.status == status
     assert docker.runs == docker.removed == docker.starts == docker.probes == []
-    manager._prepare_linkup_proxy_token.assert_not_awaited()
+    manager._prepare_tavily_proxy_token.assert_not_awaited()
 
 
 @pytest.mark.parametrize("status", ["running", "exited"])
@@ -86,7 +86,7 @@ async def test_existing_guest_registers_before_reuse(env, status):
     manager, docker, agent = env
     docker.guests["old"].state.status = status
     await manager.start_container(agent)
-    manager._prepare_linkup_proxy_token.assert_awaited_once_with(agent.id)
+    manager._prepare_tavily_proxy_token.assert_awaited_once_with(agent.id)
     assert docker.runs == docker.removed == []
 
 
@@ -94,7 +94,7 @@ async def test_existing_guest_registers_before_reuse(env, status):
 async def test_existing_guest_is_not_reused_when_registration_fails(env, status):
     manager, docker, agent = env
     docker.guests["old"].state.status = status
-    manager._prepare_linkup_proxy_token.side_effect = RuntimeError("registration failed")
+    manager._prepare_tavily_proxy_token.side_effect = RuntimeError("registration failed")
     with pytest.raises(RuntimeError, match="registration failed"):
         await manager.start_container(agent)
     assert docker.starts == docker.probes == docker.runs == docker.removed == []

@@ -574,8 +574,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return {uuid_from_row(row["creator_id"]): int_from_row(row["count"]) for row in rows}
 
-    async def is_hidden_from_plaza(self, agent_id: UUID) -> bool:
-        """True when agent is system or not company-public (excluded from plaza feed)."""
+    async def is_hidden_from_clawbook(self, agent_id: UUID) -> bool:
+        """True when agent is system or not company-public (excluded from clawbook feed)."""
         async with self.session() as db:
             value = await db.fetchval(
                 "SELECT 1 FROM agents WHERE id = %(id)s "
@@ -584,7 +584,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return value is not None
 
-    async def list_hidden_from_plaza_ids(self, agent_ids: Sequence[UUID]) -> set[UUID]:
+    async def list_hidden_from_clawbook_ids(self, agent_ids: Sequence[UUID]) -> set[UUID]:
         if not agent_ids:
             return set()
         async with self.session() as db:
@@ -1160,6 +1160,21 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
                 {"agent_id": agent_id},
             )
             return [AgentPermissionRecord.from_row(row) for row in rows]
+
+    async def list_decision_rows(
+        self, agent_ids: Sequence[UUID], user_id: UUID
+    ) -> dict[UUID, list[AgentPermissionRecord]]:
+        """Company rows and the viewer's own user rows, grouped by agent (all a decision reads)."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agent_permissions WHERE agent_id = ANY(%(ids)s) "
+                "AND (scope_type = 'company' OR (scope_type = 'user' AND scope_id = %(user_id)s))",
+                {"ids": list(agent_ids), "user_id": user_id},
+            )
+        grouped: dict[UUID, list[AgentPermissionRecord]] = {}
+        for record in map(AgentPermissionRecord.from_row, rows):
+            grouped.setdefault(record.agent_id, []).append(record)
+        return grouped
 
     async def list_user_scope_ids(self, agent_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:

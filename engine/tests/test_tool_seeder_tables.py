@@ -41,7 +41,7 @@ SEEDED_ONLY_SAMPLE_NAMES = {
     "agentbay_command_exec",
     "convert_html_to_pdf",
     "get_okr",
-    "plaza_create_post",
+    "clawbook_create_post",
     "vercel_deploy",
 }
 
@@ -210,9 +210,9 @@ BUILTIN_TOOL_NAME_ORDER = [
     "send_file_to_agent",
     "read_webpage",
     "search_x",
-    "plaza_get_new_posts",
-    "plaza_create_post",
-    "plaza_add_comment",
+    "clawbook_get_new_posts",
+    "clawbook_create_post",
+    "clawbook_add_comment",
     "execute_code",
     "execute_code_e2b",
     "upload_image",

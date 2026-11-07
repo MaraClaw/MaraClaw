@@ -32,8 +32,8 @@ class Guest:
 @pytest.fixture
 def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
-    monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(module.settings, "TAVILY_API_KEY", "")
     for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
         monkeypatch.setattr(module.settings, name, "")
     monkeypatch.setattr(module, "_guest_config_fingerprints", {})
@@ -147,7 +147,7 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
                 "auth": {"profiles": {"stale": {"provider": "openai", "mode": "oauth"}}},
                 "tools": {"deny": [], "web": {"search": {"enabled": True}}},
                 "gateway": {"mode": "remote"},
-                "skills": {"entries": {"linkup-search": {"enabled": False, "env": {"LINKUP_API_KEY": "stale"}}}},
+                "skills": {"entries": {"tavily-search": {"enabled": False, "env": {"TAVILY_API_KEY": "stale"}}}},
                 "plugins": {
                     "enabled": False,
                     "slots": {"memory": "stale"},

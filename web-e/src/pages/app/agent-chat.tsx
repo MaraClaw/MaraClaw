@@ -1,11 +1,12 @@
+import * as Dialog from '@radix-ui/react-dialog'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MonitorPlay, Send } from 'lucide-react'
+import { Info, Loader2, MonitorPlay, Paperclip, Send, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
-import { ChatMarkdown } from '@/components/chat/markdown'
-import { ChatMessageContent } from '@/components/chat/message-content'
+import { LiveReply } from '@/components/chat/live-reply'
+import { ChatTranscript } from '@/components/chat/transcript'
 import { HistoryControl } from '@/components/chat/history-control'
 import { SessionList } from '@/components/chat/session-list'
 import { SkillMentionInput } from '@/components/chat/skill-mention-input'
@@ -22,7 +23,7 @@ import { authSession } from '@/lib/auth-session'
 import { getSession, listSessionsPage, SESSION_PAGE_SIZE, type SessionListScope } from '@/lib/chat-sessions-api'
 import { chatSessionKey, chatSessionsKey, distinctSessions } from '@/lib/chat-sessions-query'
 import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
-import { applyLiveChunk, clearLiveStream, createLiveStream } from '@/lib/chat/live-stream'
+import { createLiveStreamStore } from '@/lib/chat/live-stream'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
@@ -38,7 +39,6 @@ import {
   uploadChatFile,
   type AgentOut,
 } from '@/lib/workspace-api'
-import { cn } from '@/lib/utils'
 
 const FORWARDED_INFO = /forwarded to openclaw|waiting for response/i
 const THINKING_TIMEOUT_MS = 90_000
@@ -76,7 +76,8 @@ export function AgentChatPage() {
   }, [])
   const [draft, setDraft] = useState('')
   const [lines, setLines] = useState<Line[]>([])
-  const [live, setLive] = useState('')
+  const [liveStore] = useState(createLiveStreamStore)
+  const live = useSyncExternalStore(liveStore.subscribe, liveStore.hasLive)
   const [thinking, setThinking] = useState('')
   const [busy, setBusy] = useState(false)
   const [slow, setSlow] = useState(false)
@@ -88,9 +89,9 @@ export function AgentChatPage() {
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
   const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
-  const liveRef = useRef(createLiveStream())
   const threadRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const linesRef = useRef<Line[]>([])
   const rejectedTurnRef = useRef(false)
   const historyCountRef = useRef(0)
@@ -161,8 +162,7 @@ export function AgentChatPage() {
       updateLines([])
       historyCountRef.current = 0
       rejectedTurnRef.current = false
-      liveRef.current = createLiveStream()
-      setLive('')
+      liveStore.reset()
       setThinking('')
       setInfo(null)
       setLivePreview(null)
@@ -181,7 +181,7 @@ export function AgentChatPage() {
         if (!mountedRef.current || submissionScopeRef.current !== submissions) submissions.retire()
       })
     }
-  }, [activeId, owner, submissions, sessionId, updateLines])
+  }, [activeId, owner, submissions, sessionId, updateLines, liveStore])
 
   useEffect(() => {
     if (!isCurrent() || !submissions.active || !sharedSessionQuery.error || activeId || sessionId) return
@@ -207,26 +207,28 @@ export function AgentChatPage() {
     historySessionRef.current = activeId
     historyCountRef.current = historyQuery.data.length
     submissions.reconcile(historyQuery.data)
-    const next = mergeServerHistory(historyQuery.data, switched ? [] : linesRef.current)
+    const retainedEntries = new Set(historyQuery.data.map((row) => row.entry_id))
+    const local = switched ? [] : linesRef.current.filter((row) => !row.fromHistory || (row.entry_id !== undefined && retainedEntries.has(row.entry_id)))
+    const next = mergeServerHistory(historyQuery.data, local)
     updateLines(next)
     if (switched || !writable) {
       rejectedTurnRef.current = false
-      liveRef.current = switched ? createLiveStream() : clearLiveStream(liveRef.current)
-      setLive('')
+      if (switched) liveStore.reset()
+      else liveStore.clear()
       setThinking('')
       setInfo(null)
       setBusy(false)
       setSlow(false)
       return
     }
-    if (liveRef.current.turnId === null && !next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
+    if (liveStore.getSnapshot().turnId === null && !next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
       setThinking('')
     } else if (!rejectedTurnRef.current && next.at(-1)?.role === 'user' && next.at(-1)?.delivery !== 'rejected') {
       setBusy(true)
     }
-  }, [historyQuery.data, activeId, writable, owner, isCurrent, updateLines, submissions])
+  }, [historyQuery.data, activeId, writable, owner, isCurrent, updateLines, submissions, liveStore])
 
   useEffect(() => {
     if (!isCurrent(owner) || (!busy && !shared) || !activeId) return
@@ -307,11 +309,7 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.CHUNK: {
-          const next = applyLiveChunk(liveRef.current, event)
-          if (next === liveRef.current) return
-          liveRef.current = next
-          setLive(next.text)
-          setBusy(true)
+          if (liveStore.chunk(event)) setBusy(true)
           return
         }
         case ChatEventType.THINKING: {
@@ -364,8 +362,7 @@ export function AgentChatPage() {
           }
           updateLines(recovery.lines)
           rejectedTurnRef.current = true
-          liveRef.current = clearLiveStream(liveRef.current)
-          setLive('')
+          liveStore.clear()
           setThinking('')
           setInfo(null)
           setBusy(false)
@@ -380,8 +377,9 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.DONE: {
-          const unrelated = event.turn_id != null && liveRef.current.turnId !== null && event.turn_id !== liveRef.current.turnId
-          const content = textContent || (unrelated ? '' : liveRef.current.text)
+          const currentLive = liveStore.getSnapshot()
+          const unrelated = event.turn_id != null && currentLive.turnId !== null && event.turn_id !== currentLive.turnId
+          const content = textContent || (unrelated ? '' : currentLive.text)
           const role = event.role ?? 'assistant'
           if (content || event.attachments?.length) {
             updateLines((prev) => {
@@ -394,8 +392,7 @@ export function AgentChatPage() {
               })
             })
           }
-          liveRef.current = clearLiveStream(liveRef.current, event.turn_id)
-          setLive(liveRef.current.text)
+          liveStore.clear(event.turn_id)
           if (!unrelated) {
             setThinking('')
             setBusy(false)
@@ -439,9 +436,8 @@ export function AgentChatPage() {
       if (sendRef.current === conn.send) sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions])
+  }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions, liveStore])
 
-  const visible = useMemo(() => lines, [lines])
   const currentTurn = lines.findLast((line) => line.role === 'user' || line.role === 'assistant')
   const accepted = currentTurn?.role === 'user' && (currentTurn.delivery === 'accepted'
     || (currentTurn.fromHistory && Boolean(currentTurn.message_id)))
@@ -457,7 +453,7 @@ export function AgentChatPage() {
     const content = buildSkillMentionContent(draft, installedSkillsQuery.data ?? [])
     const submission = Object.freeze({ client_submission_id: crypto.randomUUID(), ...content })
     const pendingLine: Line = { role: 'user', content: content.display_content ?? content.content, composerText: draft, pending: true,
-      client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' }
+      client_submission_id: submission.client_submission_id, submission, delivery: 'unknown', created_at: new Date().toISOString() }
     setSlow(false)
     setRetryStartedAt(null)
     if (!activeId) {
@@ -505,7 +501,7 @@ export function AgentChatPage() {
       updateLines((prev) => isCurrent() ? [
         ...prev,
         { role: 'user', content: uploaded.filename, file_name: uploaded.filename, attachments: submission.attachments, pending: true,
-          client_submission_id: submission.client_submission_id, submission, delivery: 'unknown' },
+          client_submission_id: submission.client_submission_id, submission, delivery: 'unknown', created_at: new Date().toISOString() },
       ] : prev)
       rejectedTurnRef.current = false
       setBusy(true)
@@ -518,7 +514,7 @@ export function AgentChatPage() {
     }
   }
 
-  function retry(line: Line) {
+  const retry = useCallback((line: Line) => {
     if (!isCurrent() || !writable || !submissions.active || !line.submission || line.delivery === 'accepted'
       || line.retryable === false || !sendRef.current) return
     updateLines((previous) => previous.map((row) => row === line ? { ...row, delivery: 'unknown', pending: true } : row))
@@ -528,7 +524,7 @@ export function AgentChatPage() {
     setRetryStartedAt(Date.now())
     setInfo(null)
     sendRef.current(line.submission)
-  }
+  }, [isCurrent, writable, submissions, updateLines])
 
   return (
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
@@ -552,7 +548,7 @@ export function AgentChatPage() {
         <div
           ref={threadRef}
           onScroll={threadScroll.onScroll}
-          className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4 [overflow-anchor:none]"
+          className="chat-thread min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain p-4 [overflow-anchor:none]"
           aria-busy={busy}
         >
           <SessionList agentId={agent.id} sessions={loadedSessions} activeId={activeId} hasMore={Boolean(sessionsQuery.hasNextPage)}
@@ -566,37 +562,9 @@ export function AgentChatPage() {
             <p>Could not open the shared conversation.</p>
             <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
           </div> : null}
-          {visible.map((line, index) => (
-            <article
-              key={line.entry_id ?? line.client_submission_id ?? `${line.created_at ?? 'row'}-${index}`}
-              data-chat-entry={line.entry_id ?? line.client_submission_id ?? line.message_id ?? `local-${index}`}
-              className={cn(
-                'max-w-2xl rounded-2xl px-3.5 py-2.5 text-sm whitespace-pre-wrap',
-                line.role === 'user' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',
-                line.role === 'tool' && 'bg-card text-muted-foreground',
-              )}
-            >
-              <ChatMessageContent agentId={agent.id} message={line} />
-              {line.delivery === 'rejected' || (line.delivery === 'unknown' && slow) ? (
-                <div className="mt-2 space-y-2">
-                  <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : 'Acceptance not confirmed.'}</p>
-                  {line.retryable !== false ? <Button type="button" size="sm" variant="outline" disabled={socketStopped} onClick={() => retry(line)}>
-                    Retry this message
-                  </Button> : null}
-                </div>
-              ) : null}
-            </article>
-          ))}
+          <ChatTranscript lines={lines} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
           {thinking ? <p className="text-xs text-muted-foreground italic">{thinking}</p> : null}
-          {live ? (
-            <article
-              className="max-w-2xl rounded-2xl bg-muted px-3.5 py-2.5 text-sm"
-              aria-live="polite"
-              aria-atomic="false"
-            >
-              <ChatMarkdown text={live} />
-            </article>
-          ) : null}
+          <LiveReply store={liveStore} onRender={threadScroll.updateScroll} />
           {busy && !live && !slow ? <ThinkingStatus /> : null}
           <p role="status" className="text-xs text-muted-foreground">
             {busy && !live && slow && accepted
@@ -622,30 +590,62 @@ export function AgentChatPage() {
             onSend={() => { void send() }}
             skillsQuery={installedSkillsQuery}
             isCurrent={isCurrent}
+            toolbar={<div className="flex items-center justify-between gap-2 p-2">
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  aria-label="Attach a file"
+                  aria-describedby="chat-upload-policy"
+                  disabled={busy || socketStopped || !uploadPolicy.isSuccess}
+                  onChange={(event) => {
+                    if (!isCurrent()) return
+                    const file = event.target.files?.[0]
+                    if (file) void onFile(file)
+                    event.target.value = ''
+                  }}
+                />
+                <Button type="button" variant="ghost" size="icon" className="size-11" title="Attach a file"
+                  disabled={busy || socketStopped || !uploadPolicy.isSuccess}
+                  onClick={() => fileInputRef.current?.click()}>
+                  <Paperclip className="size-5" aria-hidden />
+                  <span className="sr-only">Attach a file</span>
+                </Button>
+                <Dialog.Root modal={false}>
+                  <Dialog.Trigger asChild>
+                    <Button type="button" variant="ghost" size="icon" className="size-11" title="Attachment limits">
+                      <Info className="size-5" aria-hidden />
+                      <span className="sr-only">Attachment limits</span>
+                    </Button>
+                  </Dialog.Trigger>
+                  <Dialog.Content className="absolute bottom-full left-0 z-30 mb-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-border bg-popover p-3 text-sm text-popover-foreground shadow-elevated outline-none">
+                    <div className="flex items-center justify-between gap-2">
+                      <Dialog.Title className="font-medium">Attachment limits</Dialog.Title>
+                      <Dialog.Close asChild>
+                        <Button type="button" variant="ghost" size="icon" className="size-11" aria-label="Close attachment limits">
+                          <X className="size-4" aria-hidden />
+                        </Button>
+                      </Dialog.Close>
+                    </div>
+                    <Dialog.Description className="mt-1 select-text leading-relaxed">
+                      {uploadPolicy.isSuccess
+                        ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`
+                        : uploadPolicy.isError ? 'Could not load upload limits. Uploading is unavailable.' : 'Loading upload limits…'}
+                    </Dialog.Description>
+                  </Dialog.Content>
+                </Dialog.Root>
+              </div>
+              <Button type="submit" disabled={busy || socketStopped || !draft.trim()}>
+                {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" aria-hidden />}
+                Send
+              </Button>
+            </div>}
           />
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <input
-              type="file"
-              className="text-xs"
-              aria-label="Attach a file"
-              aria-describedby="chat-upload-policy"
-              disabled={busy || socketStopped || !uploadPolicy.isSuccess}
-              onChange={(event) => {
-                if (!isCurrent()) return
-                const file = event.target.files?.[0]
-                if (file) void onFile(file)
-                event.target.value = ''
-              }}
-            />
-            <Button type="submit" disabled={busy || socketStopped || !draft.trim()}>
-              {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" />}
-              Send
-            </Button>
-          </div>
-          <div id="chat-upload-policy" className="mt-2 text-xs text-muted-foreground">
+          <div id="chat-upload-policy" className={uploadPolicy.isSuccess ? 'sr-only' : 'mt-2 text-xs text-muted-foreground'}>
             {uploadPolicy.isError ? <div role="alert" className="space-y-2 text-destructive">
               <p>Could not load upload limits. Uploading is unavailable.</p>
-              <Button type="button" size="sm" variant="outline" disabled={uploadPolicy.isFetching}
+              <Button type="button" size="sm" variant="outline" className="h-11" disabled={uploadPolicy.isFetching}
                 onClick={() => { if (isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
             </div> : <p role="status">{uploadPolicy.isSuccess
               ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`

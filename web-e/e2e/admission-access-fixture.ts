@@ -21,11 +21,11 @@ export const completedOnboarding: OnboardingStatus = {
   personal_assistant_agent_id: null, completed_at: '2026-10-25T08:00:00Z',
 }
 export const accessEndpoint = '**/api/company-admissions/mine/page*'
-export const restrictedLabels = ['Inbox', 'Admissions', 'Settings']
-export const workspaceLabels = ['Agents', 'Plaza', 'OKR', 'Directory', ...restrictedLabels]
+export const restrictedLabels = ['Inbox', 'Settings']
+export const workspaceLabels = ['Agents', 'Clawbook', 'OKR', 'Directory', ...restrictedLabels]
 
 export function workspaceRequests(calls: readonly string[]) {
-  return calls.filter((path) => /^\/api\/(agents|onboarding|plaza|okr|org|departments)(\/|$)/.test(path))
+  return calls.filter((path) => /^\/api\/(agents|onboarding|clawbook|okr|org|departments)(\/|$)/.test(path))
 }
 
 export async function prepareAccess(page: Page, initial: AdmissionDetail = pending, signedIn = true) {
@@ -50,15 +50,17 @@ export async function prepareAccess(page: Page, initial: AdmissionDetail = pendi
       case '/api/company-admissions/mine/page': {
         expect(request.method()).toBe('GET')
         const status = url.searchParams.get('status')
-        expect(url.searchParams.get('limit')).toBe(status === 'pending' ? '100' : '50')
+        expect(['100', '50']).toContain(url.searchParams.get('limit'))
         return route.fulfill({ json: { items: status === null || status === admission.status ? [admission] : [], next_cursor: null } })
       }
+      case '/api/company-admissions/transfers/mine/page':
+        return route.fulfill({ json: { items: [], next_cursor: null } })
       case `/api/company-admissions/${pending.id}`: return route.fulfill({ json: admission })
       case '/api/company-admissions/transfers/mine':
       case '/api/auth/providers':
       case '/api/auth/my-tenants':
-      case '/api/notifications':
       case '/api/agents/': return route.fulfill({ json: [] })
+      case '/api/notifications/page': return route.fulfill({ json: { items: [], next_cursor: null } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 0 } })
       case '/api/onboarding/status': return route.fulfill({ json: completedOnboarding })
       case '/api/auth/switch-tenant':

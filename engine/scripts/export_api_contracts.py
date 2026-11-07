@@ -8,7 +8,13 @@ from fastapi.routing import APIRoute, iter_route_contexts
 from pydantic import JsonValue
 
 from scripts.api_contract_document import DOCUMENT_ADAPTER, assemble_contract, canonical_json, mapping
-from scripts.api_contract_registry import AUDITED_HTTP_MODULES, ENUM_TYPES, PUBLIC_SCHEMA_NAMES, explicit_schemas
+from scripts.api_contract_registry import (
+    AUDITED_HTTP_ENDPOINTS,
+    AUDITED_HTTP_MODULES,
+    ENUM_TYPES,
+    PUBLIC_SCHEMA_NAMES,
+    explicit_schemas,
+)
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "contracts" / "api-contract.json"
 
@@ -25,7 +31,7 @@ def export_contract(application: FastAPI) -> dict[str, JsonValue]:
         if isinstance(context.route, APIRoute)
         and context.route.include_in_schema
         and context.path_format is not None
-        and context.endpoint.__module__ in AUDITED_HTTP_MODULES
+        and (context.endpoint.__module__ in AUDITED_HTTP_MODULES or context.endpoint in AUDITED_HTTP_ENDPOINTS)
         for method in context.methods or ()
     ]
     document = assemble_contract(

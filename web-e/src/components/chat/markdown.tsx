@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -13,28 +15,32 @@ function renderInline(text: string): string {
     .replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a class="underline" href="$2" target="_blank" rel="noreferrer">$1</a>')
 }
 
-export function ChatMarkdown({ text }: { text: string }) {
-  const html = text
-    .split(/\n{2,}/)
-    .map((block) => {
-      const trimmed = block.trim()
-      if (trimmed.startsWith('```')) {
-        const body = trimmed.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '')
-        return `<pre class="overflow-x-auto rounded-lg bg-background/80 p-2 text-xs"><code>${escapeHtml(body)}</code></pre>`
-      }
-      if (trimmed.startsWith('# ')) return `<h3 class="font-semibold">${renderInline(trimmed.slice(2))}</h3>`
-      if (trimmed.startsWith('## ')) return `<h4 class="font-semibold">${renderInline(trimmed.slice(3))}</h4>`
-      if (/^[-*] /.test(trimmed)) {
-        const items = trimmed
-          .split('\n')
-          .filter((line) => /^[-*] /.test(line))
-          .map((line) => `<li>${renderInline(line.replace(/^[-*] /, ''))}</li>`)
-          .join('')
-        return `<ul class="list-disc space-y-0.5 pl-5">${items}</ul>`
-      }
-      return `<p>${renderInline(block).replaceAll('\n', '<br />')}</p>`
-    })
-    .join('')
+const MarkdownBlock = memo(function MarkdownBlock({ block }: { readonly block: string }) {
+  const trimmed = block.trim()
+  if (trimmed.startsWith('```')) {
+    const body = trimmed.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '')
+    return <pre className="overflow-x-auto rounded-lg bg-background/80 p-2 text-xs" dangerouslySetInnerHTML={{ __html: `<code>${escapeHtml(body)}</code>` }} />
+  }
+  if (trimmed.startsWith('# ')) return <h3 className="font-semibold" dangerouslySetInnerHTML={{ __html: renderInline(trimmed.slice(2)) }} />
+  if (trimmed.startsWith('## ')) return <h4 className="font-semibold" dangerouslySetInnerHTML={{ __html: renderInline(trimmed.slice(3)) }} />
+  if (/^[-*] /.test(trimmed)) {
+    const items = trimmed
+      .split('\n')
+      .filter((line) => /^[-*] /.test(line))
+      .map((line) => `<li>${renderInline(line.replace(/^[-*] /, ''))}</li>`)
+      .join('')
+    return <ul className="list-disc space-y-0.5 pl-5" dangerouslySetInnerHTML={{ __html: items }} />
+  }
+  return <p dangerouslySetInnerHTML={{ __html: renderInline(block).replaceAll('\n', '<br />') }} />
+})
 
-  return <div className="space-y-2 [&_a]:text-inherit" dangerouslySetInnerHTML={{ __html: html }} />
-}
+export const ChatMarkdown = memo(function ChatMarkdown({ text }: { readonly text: string }) {
+  let start = 0
+  return <div className="space-y-2 [&_a]:text-inherit">
+    {text.split(/\n{2,}/).map((block) => {
+      const key = start
+      start += block.length + 1
+      return <MarkdownBlock key={key} block={block} />
+    })}
+  </div>
+})

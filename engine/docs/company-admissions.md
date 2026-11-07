@@ -179,7 +179,7 @@ Paid approval preserves agent IDs, user-owned integration configurations and
 content. It moves operational agent/public-page tenant attribution, removes
 foreign-tenant model and source-only tool bindings and old organization grants,
 and stops runtime/automation. Historical chats, tasks, audit/activity, usage and
-Plaza attribution are not rewritten. Runtime configuration is regenerated using
+Clawbook attribution are not rewritten. Runtime configuration is regenerated using
 only destination models; source pool credentials are scrubbed before member
 access resumes.
 
@@ -192,7 +192,7 @@ request and holder, and prevents accidental generic agent deletion. Integrations
 permissions, relationships in both directions, schedules, triggers, public
 pages and credentials are removed. Task reminders and agent-derived user
 notification access are neutralized. Chats, tasks, audit/activity, accounting,
-Plaza, workspace revisions, files and memory remain retained with source
+Clawbook, workspace revisions, files and memory remain retained with source
 attribution; former-user IDs are not bulk-reassigned in historical rows.
 
 `company_transfer_runtime_cleanup` durably records pending container and

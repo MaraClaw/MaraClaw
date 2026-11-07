@@ -4,8 +4,9 @@ import asyncio
 import json
 import time
 from contextlib import suppress
+from types import SimpleNamespace
 from typing import override
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -21,7 +22,7 @@ from app.services import (
     openclaw_gateway_rpc as rpc,
     openclaw_gateway_stream as streaming,
 )
-from app.services.realtime_runtime import router as realtime
+from app.services.realtime_runtime import fanout, router as realtime
 from app.services.shared_chat import shared_session_id
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
 from test_openclaw_gateway_rpc import _Turn, wire_terminal
@@ -31,25 +32,55 @@ from test_websocket_session_query import MemoryPresence
 SLOW = 1.3
 
 
-class Link:
-    """A fake socket transport that records frames and can stall every text send."""
+class Gate:
+    """Holds every passer until opened; records how many are held at once."""
 
-    def __init__(self, *, stalled: bool = False) -> None:
+    def __init__(self, saturate_at: int = 1) -> None:
+        self.open = asyncio.Event()
+        self.saturated = asyncio.Event()
+        self.saturate_at = saturate_at
+        self.in_flight = 0
+        self.peak = 0
+
+    async def pass_through(self) -> None:
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        if self.in_flight >= self.saturate_at:
+            self.saturated.set()
+        try:
+            await self.open.wait()
+        finally:
+            self.in_flight -= 1
+
+
+class Link:
+    """A fake socket transport that records frames and can stall, gate or fail every text send."""
+
+    def __init__(self, *, stalled: bool = False, gate: Gate | None = None, fail: bool = False) -> None:
         self.frames: list[Message] = []
         self.stalled = stalled
+        self.gate = gate
+        self.fail = fail
         self.send_cancelled = False
+        self.sent = asyncio.Event()
         self.socket = WebSocket({"type": "websocket", "headers": []}, self._receive, self._send)
 
     async def _receive(self) -> Message:
         return {"type": "websocket.connect"}
 
     async def _send(self, message: Message) -> None:
-        if self.stalled and message["type"] == "websocket.send":
+        if message["type"] == "websocket.send":
+            if self.fail:
+                raise RuntimeError("socket closed")
             try:
-                await asyncio.Event().wait()
+                if self.stalled:
+                    await asyncio.Event().wait()
+                if self.gate is not None:
+                    await self.gate.pass_through()
             except asyncio.CancelledError:
                 self.send_cancelled = True
                 raise
+            self.sent.set()
         self.frames.append(message)
 
     def seqs(self) -> list[int]:
@@ -95,6 +126,7 @@ class Pipeline:
         self.revoked = False
         self.delay = 0.0
         self.hang = False
+        self.auth_gate: Gate | None = None
         self.entered = asyncio.Event()
         self.authorization_cancelled = False
         self.store = MemoryPresence(str(self.agent_id), {})
@@ -104,7 +136,8 @@ class Pipeline:
         monkeypatch.setattr(websocket, "realtime_router", router)
         monkeypatch.setattr(websocket.manager, "active_connections", {str(self.agent_id): []})
         monkeypatch.setattr(realtime, "get_redis", self._redis)
-        monkeypatch.setattr(access_cache, "read_acl_version", AsyncMock(side_effect=lambda _agent: self.version))
+        self.read_version = AsyncMock(side_effect=lambda _agent: self.version)
+        monkeypatch.setattr(access_cache, "read_acl_version", self.read_version)
         monkeypatch.setattr(chat_tickets, "authorize", self.authorize)
         monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
 
@@ -115,6 +148,8 @@ class Pipeline:
         self.entered.set()
         revoked = self.revoked  # read at the start, like the database snapshot a slow authorization works from
         try:
+            if self.auth_gate is not None:
+                await self.auth_gate.pass_through()
             await (asyncio.Event().wait() if self.hang else asyncio.sleep(self.delay))
         except asyncio.CancelledError:
             self.authorization_cancelled = True
@@ -123,8 +158,8 @@ class Pipeline:
             raise HTTPException(403, "Permission revoked")
         return object(), object(), "use"
 
-    async def connect(self, *, stalled: bool = False) -> Link:
-        link = Link(stalled=stalled)
+    async def connect(self, *, stalled: bool = False, gate: Gate | None = None, fail: bool = False) -> Link:
+        link = Link(stalled=stalled, gate=gate, fail=fail)
         await link.socket.accept()
         link.frames.clear()
         if self.shared:
@@ -183,19 +218,260 @@ async def test_slow_presence_read_still_routes_the_chunk_to_the_remote_instance(
 
 
 async def test_stalled_socket_is_bounded_and_does_not_block_other_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
     pipe = Pipeline(monkeypatch, shared=False)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
     remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
     pipe.store = MemoryPresence(str(pipe.agent_id), {"remote-connection": remote_record})
-    started = time.monotonic()
 
     await asyncio.wait_for(pipe.publish(0), 10)
 
-    assert time.monotonic() - started < 3
     assert healthy.seqs() == [0]
     assert stalled.send_cancelled
     assert len(pipe.store.published) == 1
+
+
+async def test_stalled_local_socket_delays_healthy_sockets_only_until_the_send_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)
+    pipe = Pipeline(monkeypatch, shared=False)
+    gate = Gate()
+    slow = await pipe.connect(gate=gate)
+    healthy = [await pipe.connect(), await pipe.connect()]
+    remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
+    pipe.store = MemoryPresence(str(pipe.agent_id), {"remote-connection": remote_record})
+
+    task = asyncio.create_task(pipe.publish(0))
+    await asyncio.wait_for(gate.saturated.wait(), 5)
+    for link in healthy:
+        await asyncio.wait_for(link.sent.wait(), 5)
+
+    assert not task.done()
+    assert not slow.frames
+    gate.open.set()
+    await asyncio.wait_for(task, 5)
+    assert [link.seqs() for link in (slow, *healthy)] == [[0], [0], [0]]
+    assert len(pipe.store.published) == 1
+
+
+async def test_presence_lookup_runs_alongside_the_local_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    store = GatedPresence(str(pipe.agent_id), {})
+    store.release.set()
+    pipe.store = store
+    gate = Gate()
+    gate.open = store.entered  # the local send cannot finish until the presence read has started
+    link = await pipe.connect(gate=gate)
+
+    await asyncio.wait_for(pipe.publish(0), 5)
+
+    assert link.seqs() == [0]
+
+
+async def test_one_failing_socket_stops_neither_the_others_nor_remote_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    broken = await pipe.connect(fail=True)
+    healthy = [await pipe.connect(), await pipe.connect()]
+    remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
+    pipe.store = MemoryPresence(str(pipe.agent_id), {"remote-connection": remote_record})
+    debug: list[str] = []
+    monkeypatch.setattr(realtime, "logger", SimpleNamespace(debug=debug.append, warning=lambda _message: None))
+
+    await asyncio.wait_for(pipe.publish(0), 5)
+
+    assert not broken.frames
+    assert [link.seqs() for link in healthy] == [[0], [0]]
+    assert len(pipe.store.published) == 1
+    assert "local=2" in debug[0]
+
+
+async def test_local_fanout_never_runs_more_sends_than_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    bound = fanout.LOCAL_FANOUT_CONCURRENCY
+    pipe = Pipeline(monkeypatch, shared=False)
+    gate = Gate(saturate_at=bound)
+    links = [await pipe.connect(gate=gate) for _ in range(bound + 4)]
+
+    task = asyncio.create_task(pipe.publish(0))
+    await asyncio.wait_for(gate.saturated.wait(), 5)
+    assert gate.in_flight == bound
+    gate.open.set()
+    await asyncio.wait_for(task, 5)
+
+    assert gate.peak == bound
+    assert [link.seqs() for link in links] == [[0]] * (bound + 4)
+
+
+async def test_cold_shared_authorization_is_bounded_and_reads_the_acl_version_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bound = fanout.LOCAL_FANOUT_CONCURRENCY
+    pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate(saturate_at=bound)
+    links = [await pipe.connect() for _ in range(bound + 4)]
+
+    task = asyncio.create_task(pipe.publish(0))
+    await asyncio.wait_for(pipe.auth_gate.saturated.wait(), 5)
+    assert pipe.auth_gate.in_flight == bound
+    pipe.auth_gate.open.set()
+    await asyncio.wait_for(task, 5)
+
+    assert pipe.auth_gate.peak == bound
+    assert [link.seqs() for link in links] == [[0]] * (bound + 4)
+    pipe.read_version.assert_awaited_once()
+
+
+async def test_ordinary_session_delivery_reads_no_acl_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    links = [await pipe.connect() for _ in range(3)]
+
+    await asyncio.wait_for(pipe.publish(0, 1), 5)
+
+    assert [link.seqs() for link in links] == [[0, 1]] * 3
+    pipe.read_version.assert_not_awaited()
+    pipe.authorize.assert_not_awaited()
+
+
+async def test_revocation_applies_to_the_next_event_for_every_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, shared=True)
+    links = [await pipe.connect(), await pipe.connect()]
+    await asyncio.wait_for(pipe.publish(0), 5)
+
+    pipe.version, pipe.revoked = "2", True
+    await asyncio.wait_for(pipe.publish(1, 2), 5)
+
+    assert [link.seqs() for link in links] == [[0], [0]]
+    # Negative decisions are never cached: both later events re-authorized both sockets.
+    assert pipe.authorize.await_count == 2 + 2 * 2
+
+
+async def test_each_event_serializes_once_for_all_local_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    links = [await pipe.connect() for _ in range(4)]
+    encode = Mock(wraps=fanout.encode_event_text)
+    monkeypatch.setattr(realtime, "encode_event_text", encode)
+
+    await asyncio.wait_for(pipe.publish(0), 5)
+
+    encode.assert_called_once()
+    assert len({str(link.frames[0]["text"]) for link in links}) == 1
+
+
+class Receiver:
+    """The receiving instance: its own ConnectionManager fed from the envelopes the publisher put on Redis."""
+
+    def __init__(self, pipe: Pipeline) -> None:
+        self.pipe = pipe
+        self.manager = websocket.ConnectionManager()
+        self.manager.active_connections[str(pipe.agent_id)] = []
+
+    async def connect(self, *, stalled: bool = False, gate: Gate | None = None) -> Link:
+        link = Link(stalled=stalled, gate=gate)
+        await link.socket.accept()
+        link.frames.clear()
+        self.manager.active_connections[str(self.pipe.agent_id)].append(
+            (link.socket, str(self.pipe.session_id), str(self.pipe.user_id))
+        )
+        return link
+
+    async def receive(self, start: int = 0) -> None:
+        for _channel, envelope in self.pipe.store.published[start:]:
+            await realtime.RealtimeRouter._deliver_message(envelope, self.manager.deliver_pubsub_message)
+
+
+def remote_presence(pipe: Pipeline) -> MemoryPresence:
+    record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
+    return MemoryPresence(str(pipe.agent_id), {"remote-connection": record})
+
+
+async def test_stalled_remote_socket_delays_healthy_receivers_only_until_the_send_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)
+    pipe = Pipeline(monkeypatch, shared=False)
+    pipe.store = remote_presence(pipe)
+    await asyncio.wait_for(pipe.publish(0), 5)
+    receiver = Receiver(pipe)
+    gate = Gate()
+    slow = await receiver.connect(gate=gate)
+    healthy = [await receiver.connect(), await receiver.connect()]
+
+    task = asyncio.create_task(receiver.receive())
+    await asyncio.wait_for(gate.saturated.wait(), 5)
+    for link in healthy:
+        await asyncio.wait_for(link.sent.wait(), 5)
+
+    assert not task.done()
+    gate.open.set()
+    await asyncio.wait_for(task, 5)
+    assert [link.seqs() for link in (slow, *healthy)] == [[0], [0], [0]]
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+@pytest.mark.parametrize("kind", ["chunk", "done"])
+async def test_only_chunk_events_get_a_receive_side_send_bound(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
+    pipe = Pipeline(monkeypatch, shared=False)
+    receiver = Receiver(pipe)
+    gate = Gate()
+    slow = await receiver.connect(gate=gate)
+    healthy = await receiver.connect()
+    payload: dict[str, object] = (
+        {"type": "chunk", "content": "x", "turn_id": str(uuid4()), "seq": 0, "replace": False}
+        if kind == "chunk"
+        else {"type": "done", "role": "assistant", "content": "x"}
+    )
+
+    task = asyncio.create_task(receiver.manager.deliver_pubsub_message(agent_id=str(pipe.agent_id), payload=payload))
+    if kind == "done":
+        await asyncio.wait_for(gate.saturated.wait(), 5)
+        gate.open.set()
+    await asyncio.wait_for(task, 5)
+
+    assert healthy.sent.is_set()
+    assert slow.send_cancelled is (kind == "chunk")
+    assert bool(slow.frames) is (kind == "done")
+
+
+async def test_receiver_serializes_each_event_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, shared=False)
+    pipe.store = remote_presence(pipe)
+    await asyncio.wait_for(pipe.publish(0), 5)
+    receiver = Receiver(pipe)
+    links = [await receiver.connect() for _ in range(4)]
+    encode = Mock(wraps=fanout.encode_event_text)
+    monkeypatch.setattr(websocket, "encode_event_text", encode)
+
+    await receiver.receive()
+
+    encode.assert_called_once()
+    assert [link.seqs() for link in links] == [[0]] * 4
+
+
+async def test_chunks_reach_local_and_remote_sockets_in_seq_order_despite_stalled_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
+    pipe = Pipeline(monkeypatch, shared=False)
+    pipe.store = remote_presence(pipe)
+    stalled = await pipe.connect(stalled=True)
+    healthy = await pipe.connect()
+    receiver = Receiver(pipe)
+    remote_stalled = await receiver.connect(stalled=True)
+    remote_healthy = await receiver.connect()
+
+    await asyncio.wait_for(pipe.publish(0, 1, 2, 3), 10)
+    await asyncio.wait_for(receiver.receive(), 10)
+
+    assert healthy.seqs() == remote_healthy.seqs() == [0, 1, 2, 3]
+    assert stalled.send_cancelled
+    assert remote_stalled.send_cancelled
+    assert not stalled.frames
+    assert not remote_stalled.frames
 
 
 async def test_revocation_during_slow_authorization_refuses_every_later_chunk(monkeypatch: pytest.MonkeyPatch) -> None:

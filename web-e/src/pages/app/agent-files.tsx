@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useInfiniteQuery, useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useReducer, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
+import { agentFilesQuery, loadedFiles } from '@/lib/agent-files-query'
 import { createFilePreview, reduceFilePreview } from '@/lib/file-download'
 import { ApiError, formatApiDetail, userFacingRequestError } from '@/lib/http'
 import { formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
@@ -15,7 +16,6 @@ import {
   deleteFileContent,
   fileTicketUrl,
   listFileRevisions,
-  listFiles,
   lockFile,
   mintFileDownloadTicket,
   readFileContent,
@@ -86,10 +86,8 @@ export function AgentFilesPage() {
     onError(error) { toast.error(userFacingRequestError(error, 'Upload failed')) },
   })
 
-  const listing = useQuery({
-    queryKey: ['files', agent.id, path],
-    queryFn: () => listFiles(agent.id, path),
-  })
+  const listing = useInfiniteQuery(agentFilesQuery(scope, agent.id, path))
+  const entries = loadedFiles(listing.data?.pages)
 
   const canManage = agent.access_level === 'manage'
   const revisions = useQuery({
@@ -171,10 +169,15 @@ export function AgentFilesPage() {
             ? `All files, including images: up to ${formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes)}.`
             : 'Loading upload limits…'}</p>}
         </div>
-        {listing.isLoading ? <Loader2 className="size-4 animate-spin" /> : null}
+        {listing.isPaused || listing.isPending || listing.isFetchingNextPage || (!listing.isError && entries.length === 0) ? <p role="status" className="mb-2 text-xs text-muted-foreground">
+          {listing.isPaused ? 'You are offline. Files will load when you reconnect.'
+            : listing.isPending ? 'Loading files...'
+            : listing.isFetchingNextPage ? 'Loading more files...'
+            : !listing.isError && entries.length === 0 ? 'This folder is empty. Upload a file or return to Root.' : ''}
+        </p> : null}
         <ul className="space-y-1">
-          {(listing.data ?? []).map((entry) => (
-            <li key={entry.path}>
+          {entries.map((entry) => (
+            <li key={`${entry.is_dir}:${entry.path}`}>
               <button
                 type="button"
                 className="w-full truncate rounded-lg px-2 py-1 text-left text-xs hover:bg-muted"
@@ -190,6 +193,20 @@ export function AgentFilesPage() {
             </li>
           ))}
         </ul>
+        {listing.isError ? <p role="alert" className="mt-3 text-xs text-destructive">
+          {listing.isFetchNextPageError ? 'Could not load more files. Your loaded files are still available.' : 'Could not load files. Try again.'}
+        </p> : null}
+        {listing.hasNextPage || listing.isError ? (
+          <Button type="button" size="sm" variant="outline" className="mt-3 min-h-11 w-full"
+            disabled={listing.isFetching || listing.isPaused}
+            onClick={() => {
+              if (listing.isFetching || !scope.isCurrent()) return
+              if (listing.isFetchNextPageError || !listing.isError) void listing.fetchNextPage()
+              else void listing.refetch()
+            }}>
+            {listing.isError ? 'Retry loading files' : 'Load more files'}
+          </Button>
+        ) : null}
       </aside>
       <section className="flex flex-col p-3">
         {selected ? (

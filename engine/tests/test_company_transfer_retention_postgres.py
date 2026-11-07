@@ -54,7 +54,7 @@ async def seed_retained_data(scenario: AdmissionScenario) -> UUID:
             "VALUES(gen_random_uuid(),%(agent)s,'retained','{}','pending')"
         ),
         (
-            "INSERT INTO plaza_posts(id,author_id,author_type,author_name,content,tenant_id,likes_count,comments_count) "
+            "INSERT INTO clawbook_posts(id,author_id,author_type,author_name,content,tenant_id,likes_count,comments_count) "
             "VALUES(gen_random_uuid(),%(agent)s,'agent','Retained','retained',%(tenant)s,0,0)"
         ),
         (
@@ -119,7 +119,7 @@ async def test_final_approval_retains_history_and_seals_or_migrates_agents(
     ):
         assert await scenario.db.fetchval(query, {"id": agent_id}) == 1
     assert (
-        await scenario.db.fetchval("SELECT tenant_id FROM plaza_posts WHERE author_id=%(id)s", {"id": agent_id})
+        await scenario.db.fetchval("SELECT tenant_id FROM clawbook_posts WHERE author_id=%(id)s", {"id": agent_id})
         == scenario.source_id
     )
     if choice == "free":

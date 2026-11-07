@@ -12,6 +12,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.services import openclaw_gateway_config, openclaw_gateway_rpc as rpc
 from app.services.agent_manager import agent_manager
 from guest_bootstrap_fakes import BOOTSTRAP_PENDING_EXIT, PENDING_STDERR
+from test_openclaw_gateway_rpc import running_client
 
 
 @pytest.mark.parametrize(
@@ -46,7 +47,7 @@ async def test_only_exact_guard_refusal_is_proven_not_submitted(monkeypatch, tmp
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_args: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
 
@@ -84,7 +85,7 @@ async def test_each_native_turn_has_private_isolated_payload_and_cleans_up(monke
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_args: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
 

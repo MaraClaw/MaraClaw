@@ -8,8 +8,8 @@ import {
 
 export const NotificationKind = {
   Mention: EngineNotificationKind.MENTION,
-  PlazaReply: EngineNotificationKind.PLAZA_REPLY,
-  PlazaComment: EngineNotificationKind.PLAZA_COMMENT,
+  ClawbookReply: EngineNotificationKind.CLAWBOOK_REPLY,
+  ClawbookComment: EngineNotificationKind.CLAWBOOK_COMMENT,
   Broadcast: EngineNotificationKind.BROADCAST,
   ApprovalPending: EngineNotificationKind.APPROVAL_PENDING,
   ApprovalResolved: EngineNotificationKind.APPROVAL_RESOLVED,

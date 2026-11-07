@@ -15,4 +15,4 @@ class ActivityAction(StrEnum):
     ERROR = "error"
     SCHEDULE_RUN = "schedule_run"
     HEARTBEAT = "heartbeat"
-    PLAZA_POST = "plaza_post"
+    CLAWBOOK_POST = "clawbook_post"

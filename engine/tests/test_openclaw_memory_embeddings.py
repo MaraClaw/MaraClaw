@@ -58,8 +58,8 @@ class Guest:
 def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
     agent: Any = SimpleNamespace(
         id=uuid.uuid4(),
@@ -86,7 +86,7 @@ def fake_token_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
     async def prepare(self: AgentManager, agent_id: uuid.UUID) -> None:
         return None
 
-    monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", prepare)
+    monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", prepare)
 
 
 def test_settings_read_exact_names_default_empty_and_ignore_other_spelling(

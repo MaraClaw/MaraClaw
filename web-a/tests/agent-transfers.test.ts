@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { MutationObserver, QueryClient } from '@tanstack/react-query'
+import { InfiniteQueryObserver, MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { agentDeletionKeys } from '../src/hooks/agent-deletion-options.ts'
-import { agentTransferKeys, agentTransferOptions } from '../src/hooks/agent-transfer-options.ts'
+import { agentTransferKeys, agentTransferOptions, transferTargetsOptions } from '../src/hooks/agent-transfer-options.ts'
 import { notificationKeys } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { agentTransferSchema, canTransferMemberAgents, fetchAgentTransferTargets, fetchTransferSource, transferableAgents, transferMemberAgents } from '../src/lib/agent-transfers-api.ts'
@@ -38,30 +38,97 @@ test('platform admins, foreign organizations, and org-admin sources never get th
   assert.equal(canTransferMemberAgents({ ...viewer, is_active: false }, sourceMember), false)
 })
 
-test('recipient loading follows all cursors and excludes foreign, inactive, source, and admin targets', async (t) => {
+test('recipient loading requests one server-filtered page with literal search and opaque cursor', async (t) => {
   // Given
   const controller = new AbortController()
-  let calls = 0
-  const fetch = t.mock.method(globalThis, 'fetch', async () => {
-    calls += 1
-    return Response.json(calls === 1 ? { items: [sourceMember, { ...targetMember, tenant_id: 'foreign' }, { ...targetMember, is_active: false }, { ...targetMember, role: 'org_admin' }], next_cursor: 'next+/=' }
-      : { items: [{ ...targetMember, role: 'agent_admin' }], next_cursor: null })
-  })
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [targetMember], next_cursor: 'next+/=' }))
   // When
-  const result = await fetchAgentTransferTargets(scope, controller.signal)
+  const result = await fetchAgentTransferTargets({ ...scope, search: ' %_Case+? ', cursor: 'cursor+/=' }, controller.signal)
   // Then
-  assert.deepEqual(result.map((member) => member.id), [targetId])
-  assert.deepEqual(fetch.mock.calls.map((call) => call.arguments[0]), [`/api/users/page?tenant_id=${tenantId}&search=&limit=50`, `/api/users/page?tenant_id=${tenantId}&search=&limit=50&cursor=next%2B%2F%3D`])
-  assert.ok(fetch.mock.calls.every((call) => call.arguments[1]?.signal === controller.signal))
+  assert.equal(fetch.mock.callCount(), 1)
+  const [url, init] = fetch.mock.calls[0]?.arguments ?? []
+  assert.deepEqual(Object.fromEntries(new URL(String(url), 'https://example.test').searchParams), {
+    tenant_id: tenantId, search: ' %_Case+? ', limit: '50', cursor: 'cursor+/=', eligible_for: 'agent_transfer', exclude_user_id: sourceId,
+  })
+  assert.equal(init?.signal, controller.signal)
+  assert.deepEqual(result, { items: [targetMember], next_cursor: 'next+/=' })
 })
 
-test('aborting recipient pagination stops before fetching another page', async (t) => {
+test('aborting a recipient page propagates cancellation without fetching another page', async (t) => {
   // Given
   const controller = new AbortController()
   const fetch = t.mock.method(globalThis, 'fetch', async () => { controller.abort(); return Response.json({ items: [], next_cursor: 'later' }) })
   // When / Then
-  await assert.rejects(fetchAgentTransferTargets(scope, controller.signal), (error) => error instanceof Error && error.name === 'AbortError')
+  await assert.rejects(fetchAgentTransferTargets({ ...scope, search: '', cursor: null }, controller.signal), (error) => error instanceof Error && error.name === 'AbortError')
   assert.equal(fetch.mock.callCount(), 1)
+})
+
+test('recipient infinite options expose the first page and request each next page only on demand', async (t) => {
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const cursors: (string | null)[] = []
+  t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => {
+    const cursor = new URL(String(url), 'https://example.test').searchParams.get('cursor')
+    cursors.push(cursor)
+    return Response.json({ items: [{ ...targetMember, id: cursor ? agentId : targetId }], next_cursor: cursor ? null : 'next+/=' })
+  })
+  const observer = new InfiniteQueryObserver(client, transferTargetsOptions(scope, '', true))
+  t.after(observer.subscribe(() => undefined))
+  const first = await observer.refetch()
+  assert.deepEqual(cursors, [null])
+  assert.deepEqual(first.data?.pages.flatMap((page) => page.items.map((member) => member.id)), [targetId])
+  assert.equal(observer.getCurrentResult().hasNextPage, true)
+  const next = await observer.fetchNextPage()
+  assert.deepEqual(cursors, [null, 'next+/='])
+  assert.deepEqual(next.data?.pages.flatMap((page) => page.items.map((member) => member.id)), [targetId, agentId])
+  assert.equal(next.hasNextPage, false)
+})
+
+test('changing recipient search discards previous pages and cursors', async (t) => {
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  client.setQueryData(transferTargetsOptions(scope, '', true).queryKey, { pages: [{ items: [targetMember], next_cursor: 'old' }], pageParams: [null] })
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+  const observer = new InfiniteQueryObserver(client, transferTargetsOptions(scope, 'other', true))
+  assert.equal(observer.getCurrentResult().data, undefined)
+  const result = await observer.refetch()
+  const request = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
+  assert.equal(request.searchParams.get('search'), 'other')
+  assert.equal(request.searchParams.has('cursor'), false)
+  assert.deepEqual(result.data?.pages, [{ items: [], next_cursor: null }])
+})
+
+test('a failed next recipient page preserves the first page and permits an explicit retry', async (t) => {
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls += 1
+    return calls === 2 ? Response.json({ detail: 'Unavailable' }, { status: 503 })
+      : Response.json({ items: calls === 1 ? [targetMember] : [], next_cursor: calls === 1 ? 'next' : null })
+  })
+  const observer = new InfiniteQueryObserver(client, transferTargetsOptions(scope, '', true))
+  t.after(observer.subscribe(() => undefined))
+  await observer.refetch()
+  const failed = await observer.fetchNextPage()
+  assert.equal(calls, 2)
+  assert.equal(failed.isFetchNextPageError, true)
+  assert.ok(failed.error instanceof ApiError && failed.error.status === 503)
+  assert.deepEqual(failed.data?.pages[0]?.items, [targetMember])
+  const retry = await observer.fetchNextPage()
+  assert.equal(calls, 3)
+  assert.equal(retry.isError, false)
+  assert.equal(retry.hasNextPage, false)
+})
+
+test('disabled recipient options do not request a page', (t) => {
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], next_cursor: null }))
+  const observer = new InfiniteQueryObserver(client, transferTargetsOptions(scope, '', false))
+  t.after(observer.subscribe(() => undefined))
+  assert.equal(observer.getCurrentResult().fetchStatus, 'idle')
+  assert.equal(fetch.mock.callCount(), 0)
 })
 
 test('source selection uses owned UserDetail agents and excludes system agents', async (t) => {

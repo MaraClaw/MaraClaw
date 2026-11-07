@@ -64,6 +64,24 @@ def fake_resources(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
     monkeypatch.setattr(lifecycle, "shutdown_logging", lambda: events.append("logging"))
 
 
+async def test_shutdown_closes_tavily_after_outbound_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = True
+
+    async def outbound() -> None:
+        events.append("outbound")
+
+    async def tavily() -> None:
+        events.append("tavily")
+
+    monkeypatch.setattr(lifecycle, "shutdown_outbound_client", outbound)
+    monkeypatch.setattr(lifecycle, "shutdown_tavily_client", tavily)
+    await runtime.stop()
+    assert events == ["database", "redis", "llm", "outbound", "tavily"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cleanup_failure", [False, True])
 async def test_owned_children_stop_before_resources_across_lifespans(
@@ -160,6 +178,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         audit_logger,
         broadcast_email_worker,
         gateway_report_relay,
+        heartbeat,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
         organization_admission_email_worker,
@@ -169,7 +188,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         trigger_daemon,
     )
     from app.services.channels import whatsapp_personal_supervisor
-    from app.services.linkup import export
+    from app.services.tavily import export
 
     events: list[str] = []
     roles = parse_process_roles(role)
@@ -251,6 +270,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(lifecycle.realtime_router, "start", realtime)
     monkeypatch.setattr(audit_logger, "write_audit_log", audit)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
+    monkeypatch.setattr(heartbeat, "start_heartbeat", loop)
     monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
     monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", reconcile_starts)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
@@ -323,6 +343,11 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         expected.append("realtime")
     assert events == [*expected, "database", "redis", "llm", "logging"]
     assert ("trigger_daemon" in names) == role_enabled(roles, "worker")
+    assert ("heartbeat" in names) == role_enabled(roles, "worker")
+    if role_enabled(roles, "worker"):
+        heartbeat_task, heartbeat_finite = runtime.tasks.required["heartbeat"]
+        assert not heartbeat_finite
+        assert heartbeat_task.done()
     assert ("agent_setup" in names) == role_enabled(roles, "worker")
     assert ("agent_start_reconciler" in names) == role_enabled(roles, "worker")
     assert start_reconciler_started.is_set() == role_enabled(roles, "worker")
@@ -453,6 +478,28 @@ async def test_setup_shutdown_drains_write_before_database_closes(monkeypatch) -
     release.set()
     await asyncio.wait_for(stop, 2)
     assert events[:3] == ["setup-write-finished", "setup-released", "database"]
+
+
+async def test_shutdown_closes_both_http_pools_after_producer_drains(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = True
+
+    async def drained() -> None:
+        events.append("drained")
+
+    async def outbound() -> None:
+        events.append("outbound")
+
+    async def tavily() -> None:
+        events.append("tavily")
+
+    monkeypatch.setattr(lifecycle, "drain_heartbeat_tasks", drained)
+    monkeypatch.setattr(lifecycle, "shutdown_outbound_client", outbound)
+    monkeypatch.setattr(lifecycle, "shutdown_tavily_client", tavily)
+    fake_resources(monkeypatch, events)
+    await runtime.stop()
+    assert events.index("drained") < events.index("outbound") < events.index("tavily")
 
 
 def fake_producer_drains(monkeypatch: pytest.MonkeyPatch, events: list[str], failing: str | None = None) -> None:

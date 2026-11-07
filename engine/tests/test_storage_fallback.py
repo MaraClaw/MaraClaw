@@ -10,11 +10,21 @@ from app.services.storage_runtime.base import (
     StorageEntry,
     StorageReadLimitExceededError,
     WriteCondition,
+    walk_order,
 )
 from app.services.storage_runtime.bounded import BoundedReader
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
+from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 from app.services.storage_runtime.s3 import S3StorageBackend
+from storage_walk_fixtures import (
+    FILE_SIZE,
+    ListOnlyBackend,
+    PagedS3Client,
+    build_tree_on_disk,
+    s3_backend,
+    shape,
+)
 
 
 class MemoryStorageBackend(StorageBackend):
@@ -351,3 +361,132 @@ async def test_bounded_fallback_primary_wins_when_legacy_is_missing_during_uploa
 
     assert not (tmp_path / "legacy").exists()
     assert (tmp_path / "primary/report.bin").stat().st_size == winner_size
+
+
+async def test_default_walk_over_a_list_only_backend_lists_one_directory_at_a_time(tmp_path):
+    # Given
+    build_tree_on_disk(tmp_path)
+    backend = ListOnlyBackend(LocalStorageBackend(str(tmp_path)))
+    # When
+    walk = backend.walk("w")
+    names = [(await anext(walk)).name for _ in range(4)]
+    await walk.aclose()
+    early_listings = list(backend.listed)
+    backend.listed.clear()
+    _ = [entry async for entry in backend.walk("w")]
+    # Then
+    assert names == ["B.txt", "a-b.txt", "a.txt", "a"]
+    assert early_listings == ["w"]
+    assert backend.listed == ["w", "w/a", "w/b", "w/b/deep", "w/empty"]
+
+
+async def test_fallback_walk_merges_primary_and_legacy_in_one_deterministic_order(tmp_path, monkeypatch):
+    # Given
+    legacy_root = tmp_path / "legacy"
+    for relative in ("w/a.txt", "w/b/old.txt", "w/.hidden/x"):
+        (legacy_root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (legacy_root / relative).write_bytes(b"x" * FILE_SIZE)
+    primary = s3_backend(PagedS3Client({"w/b/new.txt": FILE_SIZE, "w/c.txt": FILE_SIZE}), monkeypatch)
+    backend = FallbackStorageBackend(primary, LocalStorageBackend(str(legacy_root)))
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert shape(entries) == [
+        ("a.txt", "w/a.txt", False),
+        ("b", "w/b", True),
+        ("new.txt", "w/b/new.txt", False),
+        ("old.txt", "w/b/old.txt", False),
+        ("c.txt", "w/c.txt", False),
+    ]
+
+
+def merged_page_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[FallbackStorageBackend, PagedS3Client]:
+    """Primary and legacy overlap on a.txt and b.txt; legacy has a file "a" where the primary has a folder "a/"."""
+    legacy_root = tmp_path / "legacy"
+    for relative in ("w/a", "w/a.txt", "w/b.txt", "w/c.txt"):
+        (legacy_root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (legacy_root / relative).write_bytes(b"x" * 3)
+    client = PagedS3Client({"w/a.txt": 5, "w/a/new.txt": 5, "w/b.txt": 7, "w/d.txt": 5})
+    backend = FallbackStorageBackend(s3_backend(client, monkeypatch), LocalStorageBackend(str(legacy_root)))
+    return backend, client
+
+
+@pytest.mark.parametrize("limit", [2, 3, 4, 20])
+async def test_fallback_pages_merge_both_sides_without_duplicates_and_with_primary_winning(
+    tmp_path, monkeypatch, limit
+):
+    # Given
+    backend, _client = merged_page_fixture(tmp_path, monkeypatch)
+
+    async def forbidden(key: str) -> list[StorageEntry]:
+        raise AssertionError(f"full listing of {key}")
+
+    monkeypatch.setattr(backend.primary, "list_dir", forbidden)
+    monkeypatch.setattr(backend.fallback, "list_dir", forbidden)
+    # When
+    pages = []
+    after = ""
+    while True:
+        page = await backend.list_dir_page("w", limit=limit, after=after)
+        pages.append(page)
+        if not page.has_more:
+            break
+        after = walk_order(page.entries[-1])
+    # Then
+    entries = [entry for page in pages for entry in page.entries]
+    assert [(entry.name, entry.is_dir) for entry in entries] == [
+        ("a", False),
+        ("a.txt", False),
+        ("a", True),
+        ("b.txt", False),
+        ("c.txt", False),
+        ("d.txt", False),
+    ]
+    assert {entry.name: entry.size for entry in entries if not entry.is_dir and entry.name != "a"} == {
+        "a.txt": 5,
+        "b.txt": 7,
+        "c.txt": 3,
+        "d.txt": 5,
+    }
+    assert all(len(page.entries) <= limit for page in pages)
+    assert all(page.has_more for page in pages[:-1])
+    assert not pages[-1].has_more
+
+
+async def test_fallback_page_resumes_both_sides_after_the_cursor(tmp_path, monkeypatch):
+    # Given
+    backend, client = merged_page_fixture(tmp_path, monkeypatch)
+    scanned: list[tuple[str, int, str]] = []
+    legacy = backend.fallback
+    assert isinstance(legacy, LocalStorageBackend)
+    scan = legacy._scan_page
+
+    def spy(key: str, limit: int, after: str):
+        scanned.append((key, limit, after))
+        return scan(key, limit, after)
+
+    monkeypatch.setattr(legacy, "_scan_page", spy)
+    # When
+    page = await backend.list_dir_page("w", limit=2, after="a/")
+    # Then
+    assert [walk_order(entry) for entry in page.entries] == ["b.txt", "c.txt"]
+    assert page.has_more
+    assert scanned == [("w", 2, "a/")]
+    assert "w/a/" in str(client.list_calls[-1]["StartAfter"])
+
+
+async def test_fallback_page_reports_more_when_only_one_side_continues(tmp_path, monkeypatch):
+    # Given
+    backend, _client = merged_page_fixture(tmp_path, monkeypatch)
+    # When
+    page = await backend.list_dir_page("w", limit=3, after="a.txt")
+    # Then
+    assert [walk_order(entry) for entry in page.entries] == ["a/", "b.txt", "c.txt"]
+    assert page.has_more
+
+
+def test_managed_s3_backend_inherits_the_native_page_without_an_override():
+    assert "list_dir_page" not in vars(ManagedS3StorageBackend)
+    assert ManagedS3StorageBackend.list_dir_page is S3StorageBackend.list_dir_page

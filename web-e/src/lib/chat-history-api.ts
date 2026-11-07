@@ -40,9 +40,21 @@ const pageSchema = z.object({
   items: z.array(messageSchema).readonly(),
   next_cursor: z.string().min(1).nullable(),
   has_more: z.boolean(),
+  revision: z.string().min(1).nullable(),
 }).refine((page) => page.has_more === (page.next_cursor !== null), { message: 'Inconsistent history cursor' }).readonly()
+const refreshSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unchanged'), revision: z.string().min(1) }).readonly(),
+  z.object({ kind: z.literal('delta'), revision: z.string().min(1).nullable(), items: z.array(messageSchema).readonly() }).readonly(),
+  z.object({ kind: z.literal('reset'), page: pageSchema }).readonly(),
+])
 
 export type ChatHistoryPage = z.infer<typeof pageSchema>
+export type ChatHistoryRefresh = z.infer<typeof refreshSchema>
+export type HeldChatHistory = {
+  readonly revision: string
+  readonly created_at: string
+  readonly message_id: string
+}
 export type ChatHistoryTarget = { readonly agentId: string; readonly sessionId: string }
 type PageRequest = {
   readonly cursor?: string | null
@@ -57,5 +69,17 @@ export async function listChatHistoryPage(target: ChatHistoryTarget, request: Pa
   return apiRequest(
     `/api/agents/${encodeURIComponent(target.agentId)}/sessions/${encodeURIComponent(target.sessionId)}/messages/page?${params}`,
     { schema: pageSchema, owner, ...(request.signal === undefined ? {} : { signal: request.signal }) },
+  )
+}
+
+export async function refreshChatHistory(
+  target: ChatHistoryTarget, held: HeldChatHistory, request: Omit<PageRequest, 'cursor'> = {},
+): Promise<ChatHistoryRefresh> {
+  const params = new URLSearchParams({ limit: '50', revision: held.revision,
+    after_created_at: held.created_at, after_message_id: held.message_id })
+  return apiRequest(
+    `/api/agents/${encodeURIComponent(target.agentId)}/sessions/${encodeURIComponent(target.sessionId)}/messages/page?${params}`,
+    { schema: refreshSchema, owner: request.owner ?? authSession.capture(),
+      ...(request.signal === undefined ? {} : { signal: request.signal }) },
   )
 }

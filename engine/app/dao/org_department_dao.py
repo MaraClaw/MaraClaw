@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, final
 from uuid import UUID
@@ -236,6 +237,21 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
                     {"user": user_id, "agent": agent_id},
                 )
             )
+
+    async def accessible_agent_ids(self, user_id: UUID, agent_ids: Sequence[UUID]) -> set[UUID]:
+        """Batched ``has_agent_access``: the subset of ``agent_ids`` the user reaches through a department."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT DISTINCT a.id FROM users u JOIN local_department_memberships m "
+                "ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
+                "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
+                "JOIN agent_permissions p ON p.scope_type = 'department' AND p.scope_id = d.id "
+                "AND p.access_level = 'use' JOIN agents a ON a.id = p.agent_id AND a.tenant_id = u.tenant_id "
+                "WHERE u.id = %(user)s AND u.is_active IS TRUE AND a.id = ANY(%(ids)s) "
+                "AND a.access_mode = 'custom'",
+                {"user": user_id, "ids": list(agent_ids)},
+            )
+            return {uuid_from_row(row["id"]) for row in rows}
 
     async def accessible_user_ids(self, agent_id: UUID) -> set[UUID]:
         async with self.session() as db:

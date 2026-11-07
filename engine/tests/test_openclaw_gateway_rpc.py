@@ -5,19 +5,30 @@ import os
 from contextlib import asynccontextmanager
 from threading import Event
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from pywhales.exceptions import DockerException
+from pywhales import ClientNotFoundError
+from pywhales.client_config import ParsingError
+from pywhales.exceptions import DockerException, ObservationTimeout
 
 from app.config import get_settings
+from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services import openclaw_gateway_config, openclaw_gateway_rpc as rpc
+from app.records.user import UserRecord
+from app.services import onboarding_greeting, openclaw_gateway_config, openclaw_gateway_rpc as rpc
 from app.services.agent_manager import agent_manager
-from app.services.guest_identity import GuestOwnershipError, GuestResolutionCache
+from app.services.guest_identity import GuestIdentity, GuestOwnershipError, GuestResolutionCache
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
+from app.services.storage import LocalStorageBackend
 from app.services.turn_timing import AdapterTiming, TurnTimeline
+
+
+def running_client():
+    return SimpleNamespace(
+        container=SimpleNamespace(inspect=lambda _id: SimpleNamespace(state=SimpleNamespace(running=True)))
+    )
 
 
 def test_invalid_or_mismatched_wire_outcome_is_uncertain():
@@ -123,7 +134,7 @@ async def test_exec_started_is_marked_just_before_the_exec_thread_and_adapter_ti
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
     outcome = await rpc.execute_gateway_turn(agent, message, timing=timeline)
@@ -179,7 +190,7 @@ async def test_only_exact_bootstrap_refusal_is_not_admitted(monkeypatch, tmp_pat
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
     result = await rpc.execute_gateway_turn(agent, message)
@@ -215,7 +226,7 @@ async def test_unowned_or_changed_guest_is_never_submitted(monkeypatch, conditio
     monkeypatch.setattr(rpc, "assert_work_allowed", allowed)
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", inspect)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     result = await rpc.execute_gateway_turn(agent, message)
     code = "agent_changed" if condition == "changed" else "guest_unavailable"
     assert result == rpc.NotAdmittedOutcome(str(message.id), "not_submitted", code)
@@ -267,7 +278,7 @@ async def test_filesystem_failure_is_not_submitted_only_before_execute(monkeypat
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "uuid4", lambda: payload_id)
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", prepare)
     monkeypatch.setattr(rpc.os, "fdopen", fdopen)
@@ -334,7 +345,7 @@ async def test_repeated_cancellation_keeps_payload_and_exclusion_until_execute_e
     monkeypatch.setattr(rpc.agent_dao, "get", fresh)
     monkeypatch.setattr(rpc, "resolve_guest", lambda *_: SimpleNamespace(id="owned"))
     monkeypatch.setattr(rpc, "_execute", execute)
-    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(agent_manager, "docker_client", running_client())
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
     monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
     task = asyncio.create_task(rpc.execute_gateway_turn(agent, message))
@@ -401,12 +412,77 @@ class _Turn:
         monkeypatch.setattr(rpc, "resolve_guest", resolve)
         monkeypatch.setattr(rpc, "guest_resolutions", self.cache)
         monkeypatch.setattr(rpc, "_execute", execute)
-        monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace())
+        monkeypatch.setattr(agent_manager, "docker_client", running_client())
         monkeypatch.setattr(agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
         monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", lambda _directory: None)
+        self.storage = LocalStorageBackend(str(tmp_path / "storage"))
+        self.users: dict[UUID, UserRecord] = {}
+
+        async def lookup(user_id):
+            return self.users.get(user_id)
+
+        monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: self.storage)
+        monkeypatch.setattr(user_dao, "get", lookup)
 
     async def run(self):
         return await rpc.execute_gateway_turn(self.agent, self.message)
+
+
+@pytest.mark.parametrize("error", [ObservationTimeout(), ClientNotFoundError(), ParsingError()])
+async def test_resolution_failure_is_not_submitted(monkeypatch, tmp_path, error):
+    turn = _Turn(monkeypatch, tmp_path)
+
+    def resolve(*_args):
+        raise error
+
+    monkeypatch.setattr(rpc, "resolve_guest", resolve)
+    assert await turn.run() == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "guest_unavailable")
+    assert turn.executed == 0
+    assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("condition", ["stopped", "inspect_error", "exec_error"])
+async def test_fresh_guest_state_gates_execution(monkeypatch, tmp_path, streaming, cached, condition):
+    turn = _Turn(monkeypatch, tmp_path)
+    inspections = []
+    executed = []
+
+    async def streams(_message):
+        return streaming
+
+    async def guard(*_args):
+        return None
+
+    def inspect(reference):
+        inspections.append(reference)
+        if condition == "inspect_error":
+            raise DockerException(["docker", "inspect"], 1, stderr=b"unavailable")
+        return SimpleNamespace(state=SimpleNamespace(running=condition != "stopped"))
+
+    def execute(*_args):
+        executed.append(True)
+        raise DockerException(["docker", "exec"], 1, stderr=b"execution failed")
+
+    if cached:
+        turn.cache.put(turn.agent, GuestIdentity("owned", "owned", str(turn.agent.id), ()))
+    monkeypatch.setattr(rpc, "streams_to_web", streams)
+    monkeypatch.setattr(rpc, "response_guard", guard)
+    monkeypatch.setattr(rpc, "_execute", execute)
+    monkeypatch.setattr(rpc.DeltaRelay, "execute", execute)
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(inspect=inspect)))
+
+    outcome = await turn.run()
+    assert inspections == ["owned"]
+    if condition == "exec_error":
+        assert outcome == rpc.UncertainOutcome(turn.message_id, "unknown", None, "exec_failed")
+        assert executed == [True]
+    else:
+        assert outcome == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "guest_unavailable")
+        assert executed == []
+        assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
 
 
 @pytest.mark.asyncio
@@ -460,3 +536,68 @@ async def test_exec_failure_drops_the_cached_guest(monkeypatch, tmp_path):
     assert isinstance(await turn.run(), rpc.UncertainOutcome)
     assert isinstance(await turn.run(), rpc.UncertainOutcome)
     assert turn.resolutions == 2
+
+
+@pytest.mark.asyncio
+async def test_every_native_turn_rebuilds_identity_from_stored_records(monkeypatch, tmp_path):
+    turn = _Turn(monkeypatch, tmp_path)
+    turn.agent.name = "Mira Atlas"
+    first, second = (UserRecord(id=uuid4(), display_name=name) for name in ("Linh Tran", "Omar Haddad"))
+    creator = UserRecord(id=turn.agent.creator_id, display_name="Creator Quang")
+    turn.users = {user.id: user for user in (first, second, creator)}
+    await turn.storage.write_bytes(f"{turn.agent.id}/soul.md", b"# Personality\n\nSoul sentinel: dry-witted pilot.")
+    staged: list[dict[str, str]] = []
+
+    def execute(_container_id, payload_name, _cancel):
+        staged.append(json.loads((tmp_path / payload_name).read_text()))
+        return wire_terminal(turn.message_id)
+
+    monkeypatch.setattr(rpc, "_execute", execute)
+    for sender, content in ((first, "hi"), (second, "what is next?"), (None, "hello from a channel"), (first, "again")):
+        turn.message = GatewayMessageRecord(
+            id=uuid4(),
+            agent_id=turn.agent.id,
+            content=content,
+            sender_user_id=sender.id if sender else None,
+        )
+        turn.message_id = str(turn.message.id)
+        assert isinstance(await turn.run(), rpc.TerminalOutcome)
+
+    prompts = [payload["extraSystemPrompt"] for payload in staged]
+    assert [payload["message"] for payload in staged] == ["hi", "what is next?", "hello from a channel", "again"]
+    assert all(get_settings().APP_NAME in prompt and "Mira Atlas" in prompt for prompt in prompts)
+    assert all("Soul sentinel" in prompt for prompt in prompts)
+    for prompt, sender in zip(prompts, (first, second, None, first), strict=True):
+        named = {user.display_name for user in (first, second, creator) if user.display_name in prompt}
+        assert named == ({sender.display_name} if sender else set())
+        assert (str(sender.id) in prompt) if sender else all(str(user.id) not in prompt for user in turn.users.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [PermissionError("denied"), FileNotFoundError(), "symlink"])
+async def test_unreadable_or_absent_soul_still_stages_the_turn_with_known_names(monkeypatch, tmp_path, failure):
+    turn = _Turn(monkeypatch, tmp_path)
+    turn.agent.name = "Mira Atlas"
+    customer = UserRecord(id=uuid4(), display_name="Linh Tran")
+    turn.users = {customer.id: customer}
+    turn.message = GatewayMessageRecord(id=uuid4(), agent_id=turn.agent.id, content="hi", sender_user_id=customer.id)
+    turn.message_id = str(turn.message.id)
+    staged: dict[str, str] = {}
+
+    async def unreadable(_key, _max_bytes):
+        raise failure
+
+    def execute(_container_id, payload_name, _cancel):
+        staged.update(json.loads((tmp_path / payload_name).read_text()))
+        return wire_terminal(turn.message_id)
+
+    if failure == "symlink":
+        soul = tmp_path / "storage" / str(turn.agent.id) / "soul.md"
+        soul.parent.mkdir(parents=True, exist_ok=True)
+        soul.symlink_to(tmp_path / "missing-soul")
+    else:
+        monkeypatch.setattr(turn.storage, "read_bytes_bounded", unreadable)
+    monkeypatch.setattr(rpc, "_execute", execute)
+    assert isinstance(await turn.run(), rpc.TerminalOutcome)
+    assert "Mira Atlas" in staged["extraSystemPrompt"]
+    assert "Linh Tran" in staged["extraSystemPrompt"]

@@ -8,6 +8,7 @@ from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
+from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.connection import DbConnection
 from app.db.errors import CheckViolationError, ForeignKeyViolationError, UniqueViolationError
 from app.db.pool import EnginePool, close_pool, get_pool, init_pool
@@ -103,8 +104,7 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("local_department_memberships", "department_id"),
         ("admin_audit_logs", "changes"),
         ("tenant_email_domains", "domain"),
-        ("linkup_api_keys", "key_ciphertext"),
-        ("linkup_async_jobs", "upstream_job_id"),
+        ("tavily_api_keys", "key_ciphertext"),
         ("web_search_events", "export_state"),
         ("web_search_export_payloads", "raw_query"),
     }
@@ -158,7 +158,7 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "ix_web_search_events_occurred_tenant",
         "ix_web_search_events_tenant_occurred",
         "ix_web_search_events_hash_occurred",
-        "ix_linkup_api_keys_position",
+        "ix_tavily_api_keys_position",
     } <= {row["indexname"] for row in indexes}
     constraints = await schema_db.fetchall(
         "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
@@ -166,7 +166,7 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
     )
     assert {
         "ck_department_permission_use",
-        "ck_linkup_key_ring_state_singleton",
+        "ck_tavily_key_ring_state_singleton",
         "llm_models_tenant_id_fkey",
         "tenants_default_fallback_model_id_fkey",
         "tenants_default_secondary_model_id_fkey",
@@ -190,7 +190,7 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "AND conrelid = 'local_department_memberships'::regclass AND contype = 'p'"
     )
     assert membership_key == [{"definition": "PRIMARY KEY (user_id, department_id)"}]
-    assert await schema_db.fetchall("SELECT id FROM linkup_key_ring_state") == [{"id": 1}]
+    assert await schema_db.fetchall("SELECT id FROM tavily_key_ring_state") == [{"id": 1}]
     enums = await schema_db.fetchall(
         "SELECT t.typname FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid "
         "WHERE t.typnamespace = current_schema()::regnamespace AND e.enumlabel = 'google_chat'"
@@ -223,7 +223,7 @@ async def test_singleton_constraint_rejects_second_row(schema_db: DbConnection) 
     await bootstrap_db.main()
     # When a second singleton id is inserted, Then the database rejects it.
     with pytest.raises(CheckViolationError):
-        await schema_db.execute("INSERT INTO linkup_key_ring_state (id) VALUES (2)")
+        await schema_db.execute("INSERT INTO tavily_key_ring_state (id) VALUES (2)")
 
 
 @pytest.mark.parametrize("candidate", ["distinct", "duplicate", "other_tenant"])
@@ -441,3 +441,68 @@ async def test_legacy_approvals_without_execution_args_are_upgraded_in_place(sch
         }
     ]
     assert await schema_db.fetchall(_APPROVAL_COLUMNS) == fresh_columns
+
+
+_GATEWAY_COLUMNS = (
+    "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns "
+    "WHERE table_schema = current_schema() AND table_name = 'gateway_messages' ORDER BY column_name"
+)
+_GATEWAY_REPLY_FK = (
+    "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+    "WHERE conrelid = 'gateway_messages'::regclass AND contype = 'f' AND conkey = ARRAY["
+    "(SELECT attnum FROM pg_attribute WHERE attrelid = 'gateway_messages'::regclass AND attname = 'reply_binding_id')]"
+)
+
+
+async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_place(schema_db: DbConnection) -> None:
+    # Given a fresh schema recorded as the contract, then reverted to the pre-reply-binding table holding a pending row.
+    await bootstrap_db.main()
+    fresh_columns = await schema_db.fetchall(_GATEWAY_COLUMNS)
+    fresh_fk = await schema_db.fetchall(_GATEWAY_REPLY_FK)
+    assert [row["definition"] for row in fresh_fk] == [
+        "FOREIGN KEY (reply_binding_id) REFERENCES openclaw_reply_bindings(id) ON DELETE SET NULL"
+    ]
+    tenant_id, user_id, agent_id, session_id, legacy_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Legacy', 'Legacy', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO chat_sessions (id, agent_id, user_id, title) VALUES (%(session)s, %(agent)s, %(user)s, 'Legacy')",
+        {"session": session_id, "agent": agent_id, "user": user_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO gateway_messages (id, agent_id, conversation_id, content, status) "
+        "VALUES (%(id)s, %(agent)s, %(conversation)s, 'Keep me', 'pending')",
+        {"id": legacy_id, "agent": agent_id, "conversation": str(session_id)},
+    )
+    await schema_db.execute("ALTER TABLE gateway_messages DROP COLUMN reply_binding_id")
+    # When bootstrap upgrades it and then reruns.
+    await bootstrap_db.main()
+    await bootstrap_db.main()
+    # Then the row survives unbound and the column, type, nullability and foreign key match the fresh definition.
+    rows = await schema_db.fetchall("SELECT id, content, status, reply_binding_id FROM gateway_messages")
+    assert rows == [{"id": legacy_id, "content": "Keep me", "status": "pending", "reply_binding_id": None}]
+    assert await schema_db.fetchall(_GATEWAY_COLUMNS) == fresh_columns
+    assert await schema_db.fetchall(_GATEWAY_REPLY_FK) == fresh_fk
+    # And the gateway DAO can scan, claim (binding the reply) and create rows again.
+    _ = await bootstrap_db.init_pool()
+    pending, _cursor = await gateway_message_dao.pending_dispatch_page(50)
+    assert [message.id for message in pending] == [legacy_id]
+    claimed = await gateway_message_dao.claim_ordinary_head(legacy_id, agent_id)
+    assert claimed is not None
+    binding = await schema_db.fetchall(
+        "SELECT id FROM openclaw_reply_bindings WHERE session_id = %(s)s", {"s": session_id}
+    )
+    assert [claimed.reply_binding_id] == [row["id"] for row in binding]
+    created = await gateway_message_dao.create(obj_in={"agent_id": agent_id, "content": "New"})
+    assert (created.content, created.reply_binding_id) == ("New", None)

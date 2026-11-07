@@ -49,9 +49,8 @@ export function AdmissionsPage() {
   const page = query.isSuccess && !query.isFetching ? query.data : undefined
 
   return (
-    <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-display text-2xl font-semibold">Organization admissions</h1>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching} onClick={scope.effect(refresh)}>Refresh status</Button>
       </div>
       <p className="text-sm text-muted-foreground">Your organization admission history. New invitations join automatically; paid transfers join after payment approval. Historical pending and rejected requests remain here.</p>

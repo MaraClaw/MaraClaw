@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import ClassVar, final, override
 from uuid import UUID
@@ -91,13 +91,43 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return row is not None
 
+    async def claim_poll_checkpoint(
+        self, trigger_id: UUID, *, seen: str | None, expected_seq: int, claimed_at: datetime
+    ) -> bool:
+        """Record ``claimed_at`` as the poll checkpoint, only if the checkpoint is still ``seen`` and the trigger enabled.
+
+        The caller polls only after winning, so one replica requests the URL per interval and a failed poll waits
+        for the next interval too. Touches just ``_poll_checked_at``: ``_poll_seq``, ``_last_value`` and
+        ``last_fired_at`` keep their meaning. A stored value that is not a string counts as absent.
+        """
+        async with self.session() as db:
+            row = await db.fetchone(
+                """
+                UPDATE agent_triggers
+                SET config = config || jsonb_build_object('_poll_checked_at', %(claimed_at)s::text)
+                WHERE id = %(trigger_id)s
+                  AND is_enabled IS TRUE
+                  AND COALESCE((config->>'_poll_seq')::bigint, 0) = %(expected_seq)s
+                  AND CASE WHEN jsonb_typeof(config->'_poll_checked_at') = 'string'
+                           THEN config->>'_poll_checked_at' END IS NOT DISTINCT FROM %(seen)s::text
+                RETURNING id
+                """,
+                {
+                    "trigger_id": trigger_id,
+                    "seen": seen,
+                    "expected_seq": expected_seq,
+                    "claimed_at": claimed_at.astimezone(UTC).isoformat(),
+                },
+            )
+            return row is not None
+
     async def merge_user_config(self, trigger_id: UUID, user_config: Mapping[str, object]) -> bool:
         """Merge user-edited config keys into the row's current config inside the UPDATE statement.
 
         Internal underscore keys are never accepted from callers, and the merge keeps whatever internal keys the
         row holds now, so a concurrent baseline advance is not rolled back. Changing a poll trigger's ``url`` or
-        ``json_path`` drops ``_last_value`` and bumps ``_poll_seq``: the next poll re-establishes the baseline,
-        and an observation of the old source loses its conditional update.
+        ``json_path`` drops ``_last_value`` and the ``_poll_checked_at`` checkpoint and bumps ``_poll_seq``: the next
+        poll re-establishes the baseline, and an observation of the old source loses its conditional update.
         """
         internal = sorted(key for key in user_config if key.startswith("_"))
         if internal:
@@ -114,7 +144,7 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                         config->'url' IS DISTINCT FROM (config || %(user_config)s::jsonb)->'url'
                         OR COALESCE(config->'json_path', '"$"'::jsonb)
                             IS DISTINCT FROM COALESCE((config || %(user_config)s::jsonb)->'json_path', '"$"'::jsonb)
-                    ) THEN ((config || %(user_config)s::jsonb) - '_last_value')
+                    ) THEN ((config || %(user_config)s::jsonb) - '_last_value' - '_poll_checked_at')
                         || jsonb_build_object('_poll_seq', COALESCE((config->>'_poll_seq')::bigint, 0) + 1)
                     ELSE config || %(user_config)s::jsonb
                 END

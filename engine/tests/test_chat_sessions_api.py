@@ -19,6 +19,36 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.services.shared_chat import shared_session_id
 
+pytest_plugins = ["tests.chat_history_fakes"]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize(
+    ("source", "group", "owner", "expected"),
+    [
+        ("web", False, True, 1),
+        ("web", True, True, 0),
+        ("shared", False, True, 0),
+        ("agent", False, True, 0),
+        ("trigger", False, True, 0),
+        ("shared", False, False, 0),
+    ],
+)
+async def test_conditional_polls_preserve_read_marker_rules(history_http, changed, source, group, owner, expected):
+    h, client = history_http
+    h.session.source_channel, h.session.is_group = source, group
+    if not owner:
+        h.session.user_id = uuid.uuid4()
+        h.agent.creator_id = h.viewer.id
+    held = h.held(h.rows[-1])
+    if changed:
+        h.rows[-1].content = "edited"
+        h.revision = str(uuid.uuid4())
+    response = await client.get(h.url, params=held)
+    assert response.status_code == 200
+    assert response.json()["kind"] == ("delta" if changed else "unchanged")
+    assert len(h.read_marks) == expected
+
 
 @pytest.mark.parametrize("source", ["web", "agent", "shared"])
 @pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])

@@ -2,7 +2,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -38,7 +37,7 @@ export function TransferPolicySettings() {
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-5 [overflow-wrap:anywhere]">
         {mustChangePassword ? (
-          <p className="text-sm text-muted-foreground">Change your password on <Link className="text-primary underline underline-offset-4" to="/account">Account</Link> before viewing or updating this policy.</p>
+          <p className="text-sm text-muted-foreground"><a className="text-primary underline underline-offset-4" href="#change-password">Change your password</a> before viewing or updating this policy.</p>
         ) : (
           <>
             {policy.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer policy…</p> : null}

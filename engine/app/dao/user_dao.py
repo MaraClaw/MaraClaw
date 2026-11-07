@@ -77,6 +77,14 @@ class UserPagePosition:
 
 
 @dataclass(frozen=True, slots=True)
+class UserPageFilter:
+    """Optional page restrictions: eligible_roles requires a listed role, an active membership and an active identity."""
+
+    eligible_roles: tuple[str, ...] | None = None
+    exclude_user_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DirectoryPagePosition:
     display_name: str
     user_id: UUID
@@ -610,10 +618,19 @@ class UserDAO(BaseDAO[UserRecord]):
         search: str = "",
         after: UserPagePosition | None = None,
         limit: int = 50,
+        filters: UserPageFilter | None = None,
     ) -> Sequence[UserRecord]:
         """Fetch at most limit + 1 identity-backed rows, including one lookahead."""
         params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit + 1}
         clauses = ["u.tenant_id = %(tenant_id)s"]
+        if filters is not None and filters.eligible_roles is not None:
+            params["eligible_roles"] = list(filters.eligible_roles)
+            clauses.extend(
+                ["u.role::text = ANY(%(eligible_roles)s::text[])", "u.is_active IS TRUE", "i.is_active IS TRUE"]
+            )
+        if filters is not None and filters.exclude_user_id is not None:
+            params["exclude_user_id"] = filters.exclude_user_id
+            clauses.append("u.id <> %(exclude_user_id)s")
         if search:
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             params["search"] = f"%{escaped}%"

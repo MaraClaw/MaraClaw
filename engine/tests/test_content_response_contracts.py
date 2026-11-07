@@ -12,12 +12,12 @@ from pydantic import TypeAdapter, ValidationError
 from tests.transaction_pool_fakes import CountingPool
 from typing_extensions import TypeForm
 
-from app.api import files, pages, plaza, skills, upload
+from app.api import clawbook, files, pages, skills, upload
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.db import session as db_session
 from app.records.agent import AgentRecord
-from app.records.plaza import PlazaPostRecord
+from app.records.clawbook import ClawbookPostRecord
 from app.records.published_page import PublishedPageRecord
 from app.records.skill import SkillFileRecord, SkillRecord
 from app.records.user import UserRecord
@@ -51,7 +51,7 @@ def application(actor: UserRecord) -> FastAPI:
     ):
         app.include_router(router, prefix="/api")
     app.include_router(pages.public_router)
-    app.include_router(plaza.router)
+    app.include_router(clawbook.router)
     app.dependency_overrides[get_current_user] = lambda: actor
     return app
 
@@ -229,7 +229,7 @@ FIXED_CASES = [
         },
     ),
     (
-        catalog.PlazaStatsResponse,
+        catalog.ClawbookStatsResponse,
         {
             "total_posts": 1,
             "total_comments": 2,
@@ -237,7 +237,7 @@ FIXED_CASES = [
             "top_contributors": [{"name": "A", "type": "human", "posts": 1}],
         },
     ),
-    (catalog.PlazaLikeResponse, {"liked": False}),
+    (catalog.ClawbookLikeResponse, {"liked": False}),
 ]
 
 
@@ -576,10 +576,10 @@ async def test_public_page_remains_html_with_security_headers(
 
 
 @pytest.mark.parametrize("operation", ["stats", "delete", "like", "unlike", "feed"])
-async def test_plaza_transport_keeps_wrappers_and_existing_post_encoding(
+async def test_clawbook_transport_keeps_wrappers_and_existing_post_encoding(
     client: httpx.AsyncClient, actor: UserRecord, monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
-    post = PlazaPostRecord(
+    post = ClawbookPostRecord(
         id=uuid.uuid4(),
         author_id=actor.id,
         author_type="human",
@@ -594,21 +594,21 @@ async def test_plaza_transport_keeps_wrappers_and_existing_post_encoding(
         "today_posts": 1,
         "top_contributors": [{"name": "A", "type": "human", "posts": 1, "metadata": {"extra": True}}],
     }
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_stats", AsyncMock(return_value=stats))
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.plaza_post_dao, "delete", AsyncMock())
-    monkeypatch.setattr(plaza.plaza_post_dao, "list_feed", AsyncMock(return_value=[post]))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_stats", AsyncMock(return_value=stats))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "delete", AsyncMock())
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_feed", AsyncMock(return_value=[post]))
     toggle = AsyncMock(return_value=operation == "like")
-    monkeypatch.setattr(plaza.plaza_like_dao, "toggle", toggle)
+    monkeypatch.setattr(clawbook.clawbook_like_dao, "toggle", toggle)
 
     if operation == "stats":
-        response = await client.get("/api/plaza/stats")
+        response = await client.get("/api/clawbook/stats")
     elif operation == "delete":
-        response = await client.delete(f"/api/plaza/posts/{post.id}")
+        response = await client.delete(f"/api/clawbook/posts/{post.id}")
     elif operation == "feed":
-        response = await client.get("/api/plaza/posts")
+        response = await client.get("/api/clawbook/posts")
     else:
-        response = await client.post(f"/api/plaza/posts/{post.id}/like", params={"author_id": str(uuid.uuid4())})
+        response = await client.post(f"/api/clawbook/posts/{post.id}/like", params={"author_id": str(uuid.uuid4())})
 
     assert response.status_code == 200
     if operation == "stats":

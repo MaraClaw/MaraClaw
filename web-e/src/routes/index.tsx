@@ -2,7 +2,6 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/app-shell'
-import { AdmissionInboxGate } from '@/components/layout/admission-access-gate'
 import { OnboardingGate } from '@/components/layout/onboarding-gate'
 import { AgentLayout } from '@/components/layout/agent-layout'
 import { ProtectedRoute } from '@/routes/protected'
@@ -26,14 +25,13 @@ const AgentCredentialsPage = lazy(() => import('@/pages/app/agent-credentials').
 const AgentPagesPage = lazy(() => import('@/pages/app/agent-pages').then((module) => ({ default: module.AgentPagesPage })))
 const AgentPlaywrightPage = lazy(() => import('@/pages/app/agent-playwright').then((module) => ({ default: module.AgentPlaywrightPage })))
 const DirectoryPage = lazy(() => import('@/pages/app/directory').then((module) => ({ default: module.DirectoryPage })))
-const AdmissionsPage = lazy(() => import('@/pages/app/admissions').then((module) => ({ default: module.AdmissionsPage })))
 const AdmissionDetailPage = lazy(() => import('@/pages/app/admission-detail').then((module) => ({ default: module.AdmissionDetailPage })))
 const TransferDetailPage = lazy(() => import('@/pages/app/transfer-detail').then((module) => ({ default: module.TransferDetailPage })))
 const NotificationsPage = lazy(() => import('@/pages/app/notifications').then((module) => ({ default: module.NotificationsPage })))
 const OpenClawUpdateDetailPage = lazy(() => import('@/pages/app/openclaw-update-detail').then((module) => ({ default: module.OpenClawUpdateDetailPage })))
 const OkrPage = lazy(() => import('@/pages/app/okr').then((module) => ({ default: module.OkrPage })))
 const OnboardingPage = lazy(() => import('@/pages/app/onboarding').then((module) => ({ default: module.OnboardingPage })))
-const PlazaPage = lazy(() => import('@/pages/app/plaza').then((module) => ({ default: module.PlazaPage })))
+const ClawbookPage = lazy(() => import('@/pages/app/clawbook').then((module) => ({ default: module.ClawbookPage })))
 const SettingsPage = lazy(() => import('@/pages/app/settings').then((module) => ({ default: module.SettingsPage })))
 const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((module) => ({ default: module.ForgotPasswordPage })))
 const JoinOrgPage = lazy(() => import('@/pages/join-org').then((module) => ({ default: module.JoinOrgPage })))
@@ -64,17 +62,15 @@ export function AppRouter() {
             <Route element={<AppShell />}>
               <Route path="account" element={<Navigate to="/app/settings" replace />} />
               <Route path="settings" element={<SettingsPage />} />
-              <Route path="admissions" element={<AdmissionsPage />} />
+              <Route path="admissions" element={<Navigate to="/app/notifications?category=admissions" replace />} />
               <Route path="admissions/:id" element={<AdmissionDetailPage />} />
               <Route path="admissions/transfers/:id" element={<TransferDetailPage />} />
-              <Route element={<AdmissionInboxGate />}>
-                <Route path="notifications" element={<NotificationsPage />} />
-              </Route>
+              <Route path="notifications" element={<NotificationsPage />} />
               <Route element={<OnboardingGate />}>
                 <Route index element={<Navigate to="agents" replace />} />
                 <Route path="onboarding" element={<OnboardingPage />} />
                 <Route path={openclawUpdateRoute} element={<OpenClawUpdateDetailPage />} />
-                <Route path="plaza" element={<PlazaPage />} />
+                <Route path="clawbook" element={<ClawbookPage />} />
                 <Route path="okr" element={<OkrPage />} />
                 <Route path="directory" element={<DirectoryPage />} />
                 <Route path="agents" element={<AgentsListPage />} />

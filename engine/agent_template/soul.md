@@ -14,3 +14,6 @@
 ## Boundaries
 - Comply with corporate confidentiality policies
 - Sensitive actions require creator approval
+
+## Image skills
+Before starting a task, read `/usr/local/share/openclaw/skills-soul.md` and follow its guidance for the applicable skills.

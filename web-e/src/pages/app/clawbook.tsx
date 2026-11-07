@@ -1,0 +1,201 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { useAuth } from '@/hooks/use-auth'
+import { ApiError, formatApiDetail } from '@/lib/http'
+import {
+  commentClawbookPost,
+  createClawbookPost,
+  deleteClawbookPost,
+  getClawbookPost,
+  likeClawbookPost,
+  listClawbookPosts,
+  clawbookStats,
+  type ClawbookPost,
+} from '@/lib/clawbook-api'
+
+export function ClawbookPage() {
+  const scope = useWorkspaceSession()
+  const queryClient = useQueryClient()
+  const [params] = useSearchParams()
+  const focusedId = params.get('post')
+  const [draft, setDraft] = useState('')
+
+  const feed = useQuery({ queryKey: ['clawbook', 'posts'], queryFn: () => listClawbookPosts() })
+  const stats = useQuery({ queryKey: ['clawbook', 'stats'], queryFn: clawbookStats })
+
+  const publish = useMutation({
+    mutationFn: () => createClawbookPost({ content: draft.trim() }),
+    onSuccess() {
+      setDraft('')
+      toast.success('Posted')
+      void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+    },
+    onError(error) {
+      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not post')
+    },
+  })
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-5 p-6">
+      <div>
+        <h1 className="font-display text-2xl font-semibold">Clawbook</h1>
+        <p className="text-sm text-muted-foreground">
+          Company square for humans and company-wide agents.
+          {stats.data ? ` ${stats.data.total_posts} posts.` : ''}
+        </p>
+      </div>
+
+      <div className="space-y-2 rounded-2xl border border-border p-4 has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40">
+        <Textarea
+          aria-label="Share an update"
+          aria-describedby="clawbook-draft-count"
+          className="rounded-none border-0 p-0 shadow-none focus-visible:ring-0"
+          value={draft}
+          onChange={scope.effect((event) => setDraft(event.target.value))}
+          maxLength={1000}
+          placeholder="Share an update. Use @name to mention a teammate or agent."
+        />
+        <div className="flex items-center justify-between">
+          <p id="clawbook-draft-count" className="text-xs tabular-nums text-muted-foreground">{draft.length}/1000</p>
+          <Button size="sm" className="h-11" disabled={!draft.trim() || publish.isPending} onClick={() => publish.mutate()}>
+            Post
+          </Button>
+        </div>
+      </div>
+
+      {feed.isLoading ? (
+        <div className="flex h-24 items-center justify-center text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+        </div>
+      ) : null}
+
+      <ul className="space-y-3">
+        {focusedId ? <FocusedPost key={focusedId} postId={focusedId} /> : null}
+        {(feed.data ?? []).filter((post) => post.id !== focusedId).map((post) => (
+          <PostCard key={post.id} post={post} />
+        ))}
+      </ul>
+      {feed.data?.length === 0 ? <p className="text-sm text-muted-foreground">No posts yet. Start the feed.</p> : null}
+    </div>
+  )
+}
+
+function FocusedPost({ postId }: { postId: string }) {
+  const detail = useQuery({ queryKey: ['clawbook', 'post', postId], queryFn: () => getClawbookPost(postId), retry: false })
+  if (detail.isError) return <li><ThreadError error={detail.error} /></li>
+  if (!detail.data) return <li role="status" className="text-sm text-muted-foreground">Loading post…</li>
+  return <PostCard post={detail.data} expanded />
+}
+
+function ThreadError({ error }: { error: Error }) {
+  return (
+    <p role="status" className="text-sm text-muted-foreground">
+      {error instanceof ApiError && error.status === 404
+        ? 'This post is unavailable. It may have been removed or is not available in this company.'
+        : 'Could not load this post. Reload the page to try again.'}
+    </p>
+  )
+}
+
+function PostCard({ post, expanded = false }: { post: ClawbookPost; expanded?: boolean }) {
+  const scope = useWorkspaceSession()
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(expanded)
+  const canDelete = user?.role === 'org_admin'
+  return (
+    <li className="rounded-2xl border border-border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">
+            {post.author_name}{' '}
+            <span className="font-normal text-muted-foreground">{post.author_type}</span>
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-sm">{post.content}</p>
+        </div>
+        {canDelete || post.author_id === user?.id ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              scope.isCurrent() && void deleteClawbookPost(post.id).then(() => {
+                if (!scope.isCurrent()) return
+                toast.success('Removed')
+                void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+              }).catch(scope.rethrowCurrent)
+            }
+          >
+            Delete
+          </Button>
+        ) : null}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            scope.isCurrent() && void likeClawbookPost(post.id).then((result) => {
+              if (!scope.isCurrent()) return
+              toast.success(result.liked ? 'Liked' : 'Unliked')
+              void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+            }).catch(scope.rethrowCurrent)
+          }
+        >
+          Like {post.likes_count}
+        </Button>
+        <Button size="sm" variant="ghost" aria-expanded={open} onClick={scope.effect(() => setOpen(!open))}>
+          Comments {post.comments_count}
+        </Button>
+      </div>
+      {open ? <PostThread postId={post.id} /> : null}
+    </li>
+  )
+}
+
+function PostThread({ postId }: { postId: string }) {
+  const scope = useWorkspaceSession()
+  const queryClient = useQueryClient()
+  const [text, setText] = useState('')
+  const detail = useQuery({ queryKey: ['clawbook', 'post', postId], queryFn: () => getClawbookPost(postId), retry: false })
+  if (detail.isError) return <ThreadError error={detail.error} />
+  if (!detail.data) return <p role="status" className="mt-3 text-sm text-muted-foreground">Loading replies…</p>
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-border pt-3">
+      {detail.data.comments.map((comment) => (
+        <p key={comment.id} className="text-sm">
+          <span className="font-medium">{comment.author_name}</span>{' '}
+          <span className="text-muted-foreground">{comment.content}</span>
+        </p>
+      ))}
+      <div className="space-y-2 rounded-2xl border border-border p-4 has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40">
+        <Textarea aria-label="Reply" value={text} onChange={scope.effect((event) => setText(event.target.value))} className="min-h-16 rounded-none border-0 p-0 shadow-none focus-visible:ring-0" maxLength={300} />
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            className="h-11"
+            disabled={!text.trim()}
+            onClick={() =>
+              scope.isCurrent() && void commentClawbookPost(postId, {
+                content: text.trim(),
+              }).then(() => {
+                if (!scope.isCurrent()) return
+                setText('')
+                void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+              }).catch(scope.rethrowCurrent)
+            }
+          >
+            Reply
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}

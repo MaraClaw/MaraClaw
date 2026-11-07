@@ -1,17 +1,19 @@
 # Web search analytics and lakehouse landing
 
-Billed Linkup calls (`POST /v1/search|fetch|research|extract`) are captured in Postgres as `web_search_events` and, when enabled, drained to S3-compatible object storage for Spark / Databricks.
+Billed calls (`POST /api/tavily/v1/search|crawl`) are captured in Postgres as `web_search_events` and, when enabled, drained to S3-compatible object storage for Spark / Databricks.
 
-GET polls for async research/extract jobs are **not** counted.
+Search and crawl are synchronous. The fresh schema no longer creates the retired async job table or event job ID; existing databases are not migrated or modified.
+
+`depth` is `search_depth` or crawl `extract_depth`; `output_type` is crawl `format`. Crawl's singular `url` contributes only its host as `primary_domain`; normalized `instructions` are the query text, falling back to that host when absent. Raw staging, when enabled, contains instructions only, never the URL.
 
 ## What is stored
 
 | Place | Query text |
 |-------|------------|
-| `web_search_events` | Normalized query or **host only** (fetch/extract). HMAC-SHA256 hash. No raw string, no response body. |
+| `web_search_events` | Normalized query or crawl instructions; host only when crawl instructions are absent. HMAC-SHA256 hash. No raw string, URL-field path, or response body. |
 | `web_search_export_payloads` | Raw query only when `INCLUDE_RAW` **and** export is enabled **and** a bucket is set. Deleted in the same transaction as `exported`. |
 | PA APIs / web-a | Counts, orgs, and top-N `query_normalized`. Never `query_raw`. |
-| Logs | Path + status only. Do not log `q` / URL / body. |
+| Logs | Path + status only. Do not log `query` / `instructions` / `url` / body. |
 
 Hash key: `WEB_SEARCH_ANALYTICS_HASH_KEY`, falling back to `SECRET_KEY`.
 
@@ -21,11 +23,11 @@ Events have **no FK** to `agents` / `tenants`. Deleting a company does not wipe 
 
 ## Capture
 
-`app/services/linkup/analytics.py` runs **after** the upstream Linkup response, on a separate connection. A failed insert does not change the guest response.
+`app/services/tavily/analytics.py` runs **after** the upstream Tavily response, on a separate connection. A failed insert does not change the guest response.
 
 `WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED` (default true) stops inserts without dropping the table.
 
-The Linkup proxy is **not** bound to `_CRUD_DB` so a 60s search does not pin a pool slot.
+The Tavily proxy is **not** bound to `_CRUD_DB` so a 60s search does not pin a pool slot.
 
 ## Export (Spark / Databricks)
 
@@ -59,7 +61,7 @@ IAM: write-only on `web-search/`. Bucket not public. PUTs set `ServerSideEncrypt
 | Silver | `fact_web_search` (Delta / Iceberg) | 1 row / event | Types, `occurred_date`. Do not expect response bodies in v1. |
 | Gold | `gold_search_daily_org` | date × tenant × kind | Volume, error rate, quota rate, latency. |
 | Gold | `gold_search_trending` | date × (tenant?) × query_hash | Hits, distinct agents, distinct orgs. |
-| Gold | `gold_org_search_profile` | tenant | 7d/30d volume, WoW growth, deep-research share, quota hits. |
+| Gold | `gold_org_search_profile` | tenant | 7d/30d volume, WoW growth, quota hits. |
 
 Databricks Autoloader example:
 
@@ -77,11 +79,11 @@ Databricks Autoloader example:
 
 | Decision | Signal |
 |----------|--------|
-| Upsell capacity / higher plan | Org volume, quota `status_class`, deep `depth` share, research/extract mix |
-| Upsell extraction product | High `fetch`+`extract` vs `search` |
+| Upsell capacity / higher plan | Org volume, quota `status_class`, depth share, search/crawl mix |
+| Upsell crawling product | High `crawl` vs `search` |
 | Expansion | WoW/MoM event growth per tenant |
 | New vertical agent / dataset | Platform `query_normalized` / `primary_domain` clusters shared by many orgs |
-| Which Linkup SKU to buy | Kind mix + `output_type` + latency |
+| Which Tavily SKU to buy | Kind mix + `output_type` + latency |
 
 ## Product ACL
 

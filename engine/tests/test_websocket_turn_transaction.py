@@ -23,6 +23,7 @@ from app.records.user import UserRecord
 from app.services import (
     chat_submissions,
     chat_tickets,
+    onboarding_greeting,
     openclaw_enqueue,
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
@@ -31,6 +32,7 @@ from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired
 from app.services.shared_chat import shared_session_id
+from app.services.storage import LocalStorageBackend
 from test_db_session import _FakePool, _FakeRawConnection
 
 NOTICE_ID = uuid4()
@@ -57,6 +59,8 @@ class TurnState:
     submission_id: str = field(default_factory=lambda: str(uuid4()))
     session_exists: bool = True
     lookup_count: int = 0
+    onboarding: bool = False
+    gateway_contents: list[str] = field(default_factory=list)
 
 
 class TurnConnection(_FakeRawConnection):
@@ -80,8 +84,10 @@ class TurnConnection(_FakeRawConnection):
 
 
 @pytest.fixture
-async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState, TurnConnection]]:
+async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple[TurnState, TurnConnection]]:
     state = TurnState()
+    storage = LocalStorageBackend(str(tmp_path / "storage"))
+    monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: storage)
     state.session_id = str(shared_session_id(state.agent.id))
     raw = TurnConnection(state)
     queued: list[GatewayMessageRecord] = []
@@ -107,7 +113,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         state.pending.append("title" if kwargs.get("skip_insert") else "chat")
 
     async def prepare(**kwargs):
-        assert (session.get_connection() is None) == (kwargs["content"] == "Please begin the onboarding.")
+        assert (session.get_connection() is None) == state.onboarding
         state.prepared_history.extend(kwargs["history"])
         if state.gate is not None:
             raise state.gate
@@ -126,6 +132,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[TurnState
         assert session.get_connection() is not None
         state.pending.append("gateway")
         message = GatewayMessageRecord(id=uuid4(), agent_id=obj_in["agent_id"], content=obj_in["content"])
+        state.gateway_contents.append(message.content)
         if state.fail_enqueue:
             agent = AgentRecord(id=message.agent_id, name="Agent", creator_id=uuid4())
             routing._schedule_inbox_wake(agent, message.content, message.id)
@@ -225,6 +232,7 @@ async def drive_turn(
     denied: bool = False,
 ):
     user, agent = state.user, state.agent
+    state.onboarding = onboarding
     user.role = UserRole(role)
     received = 0
 
@@ -313,6 +321,28 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
     assert state.frames == expected
     assert len(handler.conversation) == 2
     assert state.prepared_history == [{"role": "assistant", "content": "prior"}]
+
+
+@pytest.mark.parametrize("soul", ["Voice sentinel: dry-witted pilot.\nRole sentinel: travel desk lead.", None])
+@pytest.mark.parametrize("display_name", ["Linh Tran", ""])
+async def test_onboarding_request_carries_names_and_soul_to_the_gateway_queue(
+    monkeypatch, tmp_path, turn, soul, display_name
+):
+    state, _raw = turn
+    state.agent.name = "Mira Atlas"
+    state.user.display_name = display_name
+    storage = LocalStorageBackend(str(tmp_path))
+    monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: storage)
+    if soul is not None:
+        await storage.write_text(f"{state.agent.id}/soul.md", f"# Personality\n\n{soul}\n")
+
+    _ = await drive_turn(monkeypatch, state, onboarding=True)
+
+    (content,) = state.gateway_contents
+    assert "Mira Atlas" in content
+    assert (display_name in content) if display_name else ("no display name" in content)
+    assert ("Voice sentinel" in content and "Role sentinel" in content) == (soul is not None)
+    assert state.committed == ["claim", "title", "gateway"]
 
 
 @pytest.mark.parametrize("onboarding", [False, True])

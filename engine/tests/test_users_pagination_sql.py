@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 
 from app.dao.agent_dao import agent_dao
-from app.dao.user_dao import UserPagePosition, user_dao
+from app.dao.user_dao import UserPageFilter, UserPagePosition, user_dao
 
 TENANT = UUID(int=100)
 
@@ -46,6 +46,47 @@ async def test_limits_sql_when_fetching_identity_backed_page(connection: _QueryC
     assert "CASE WHEN u.role IN ('member', 'agent_admin') THEN 1 ELSE 0 END ASC" in query
     assert "u.created_at ASC NULLS LAST, u.id ASC LIMIT %(limit)s" in query
     assert "OFFSET" not in query
+
+
+async def test_leaves_query_unchanged_when_filter_has_no_restrictions(connection: _QueryConnection):
+    await user_dao.list_for_tenant_page(TENANT, limit=100)
+    await user_dao.list_for_tenant_page(TENANT, limit=100, filters=UserPageFilter())
+    assert connection.queries[0] == connection.queries[1]
+    assert "IS TRUE" not in connection.queries[1][0]
+
+
+async def test_requires_role_membership_and_identity_when_eligible_roles_are_set(connection: _QueryConnection):
+    roles = ("agent_admin", "member")
+    await user_dao.list_for_tenant_page(TENANT, filters=UserPageFilter(eligible_roles=roles))
+    query, params = connection.queries[0]
+    assert params == {"tenant_id": TENANT, "limit": 51, "eligible_roles": ["agent_admin", "member"]}
+    assert (
+        "WHERE u.tenant_id = %(tenant_id)s AND u.role::text = ANY(%(eligible_roles)s::text[]) "
+        "AND u.is_active IS TRUE AND i.is_active IS TRUE ORDER BY"
+    ) in query
+    assert "LEFT JOIN identities i ON i.id = u.identity_id" in query
+    assert "exclude_user_id" not in query
+
+
+async def test_excludes_user_without_eligibility_when_only_exclusion_is_set(connection: _QueryConnection):
+    await user_dao.list_for_tenant_page(TENANT, filters=UserPageFilter(exclude_user_id=UUID(int=7)))
+    query, params = connection.queries[0]
+    assert params == {"tenant_id": TENANT, "limit": 51, "exclude_user_id": UUID(int=7)}
+    assert "WHERE u.tenant_id = %(tenant_id)s AND u.id <> %(exclude_user_id)s ORDER BY" in query
+    assert "IS TRUE" not in query
+
+
+async def test_combines_filters_with_search_and_keyset(connection: _QueryConnection):
+    filters = UserPageFilter(eligible_roles=("member",), exclude_user_id=UUID(int=7))
+    position = UserPagePosition(1, None, UUID(int=5))
+    await user_dao.list_for_tenant_page(TENANT, search="a", after=position, limit=1, filters=filters)
+    query, params = connection.queries[0]
+    assert params["eligible_roles"] == ["member"]
+    assert params["exclude_user_id"] == UUID(int=7)
+    assert params["search"] == "%a%"
+    assert params["user_id"] == UUID(int=5)
+    for fragment in ("= ANY(%(eligible_roles)s::text[])", "u.id <> %(exclude_user_id)s", "ILIKE %(search)s", "END > %"):
+        assert fragment in query
 
 
 @pytest.mark.parametrize("search", ["%", "_", "\\", "A%_\\' OR TRUE --"])

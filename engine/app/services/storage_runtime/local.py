@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast, override
@@ -16,8 +17,10 @@ from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
+    StoragePage,
     StorageReadLimitExceededError,
     StorageVersion,
+    checked_page_limit,
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import open_regular_file, read_bounded
@@ -36,45 +39,61 @@ class LocalStorageBackend(StorageBackend):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
         return full
 
+    async def _probe(self, key: str, probe: Callable[[Path], bool]) -> bool:
+        return await anyio.to_thread.run_sync(lambda: probe(self._full_path(key)), abandon_on_cancel=True)
+
     @override
     async def exists(self, key: str) -> bool:
-        return self._full_path(key).exists()
+        return await self._probe(key, Path.exists)
 
     @override
     async def is_file(self, key: str) -> bool:
-        return self._full_path(key).is_file()
+        return await self._probe(key, Path.is_file)
 
     @override
     async def is_dir(self, key: str) -> bool:
-        return self._full_path(key).is_dir()
+        return await self._probe(key, Path.is_dir)
 
     @override
     async def list_dir(self, key: str) -> list[StorageEntry]:
+        entries = await anyio.to_thread.run_sync(self._scan_directory, key, abandon_on_cancel=True)
+        return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name))
+
+    @override
+    async def list_dir_page(self, key: str, *, limit: int, after: str = "") -> StoragePage:
+        bounded = checked_page_limit(limit)
+        return await anyio.to_thread.run_sync(self._scan_page, key, bounded, after, abandon_on_cancel=True)
+
+    def _scan_page(self, key: str, limit: int, after: str) -> StoragePage:
+        """Order names by ``walk_order`` first and ``stat`` only the returned slice."""
         base = self._full_path(key)
-        if not base.exists() or not base.is_dir():
+        if not base.is_dir():
+            return StoragePage([], False)
+        names: list[tuple[str, os.DirEntry[str]]] = []
+        with os.scandir(base) as scanner:
+            for entry in scanner:
+                if entry.name == ".gitkeep" or entry.is_symlink():
+                    continue
+                order = f"{entry.name}/" if entry.is_dir(follow_symlinks=False) else entry.name
+                if order > after:
+                    names.append((order, entry))
+        names.sort(key=lambda item: item[0])
+        root = self.root.resolve()
+        entries = [built for _order, entry in names[:limit] if (built := _storage_entry(Path(entry.path), root))]
+        return StoragePage(entries, len(names) > limit)
+
+    def _scan_directory(self, key: str) -> list[StorageEntry]:
+        base = self._full_path(key)
+        if not base.is_dir():
             return []
+        root = self.root.resolve()
         entries: list[StorageEntry] = []
-        for entry in sorted(base.iterdir(), key=lambda item: (not item.is_dir(), item.name)):
+        for entry in base.iterdir():
             if entry.name == ".gitkeep" or entry.is_symlink():
                 continue
-            try:
-                stat = entry.stat(follow_symlinks=False)
-            except OSError:
-                continue
-            try:
-                rel = str(entry.resolve().relative_to(self.root.resolve()))
-            except OSError, ValueError:
-                continue
-            entries.append(
-                StorageEntry(
-                    name=entry.name,
-                    key=rel,
-                    is_dir=entry.is_dir(),
-                    size=stat.st_size if entry.is_file() else 0,
-                    modified_at=str(stat.st_mtime),
-                    version_id=_local_version_token(stat, None),
-                )
-            )
+            built = _storage_entry(entry, root)
+            if built is not None:
+                entries.append(built)
         return entries
 
     @override
@@ -199,6 +218,25 @@ class LocalStorageBackend(StorageBackend):
     @override
     async def local_path_for(self, key: str) -> Path | None:
         return self._full_path(key)
+
+
+def _storage_entry(entry: Path, root: Path) -> StorageEntry | None:
+    try:
+        stat = entry.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    try:
+        rel = str(entry.resolve().relative_to(root))
+    except OSError, ValueError:
+        return None
+    return StorageEntry(
+        name=entry.name,
+        key=rel,
+        is_dir=entry.is_dir(),
+        size=stat.st_size if entry.is_file() else 0,
+        modified_at=str(stat.st_mtime),
+        version_id=_local_version_token(stat, None),
+    )
 
 
 def _local_delete_tree(path: Path) -> None:

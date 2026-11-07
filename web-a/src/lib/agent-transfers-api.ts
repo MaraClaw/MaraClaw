@@ -22,14 +22,11 @@ export type AgentTransfer = z.infer<typeof agentTransferSchema>
 export type AgentTransferResult = z.infer<typeof resultSchema>
 export type AgentTransferSource = z.infer<typeof sourceSchema>
 export type TransferScope = { readonly tenantId: string; readonly sourceUserId: string }
+export type TransferTargetsPageRequest = TransferScope & { readonly search: string; readonly cursor: string | null }
 
 export function canTransferMemberAgents(viewer: UserOut | null | undefined, source: Pick<AdminUser, 'role' | 'tenant_id'>): boolean {
   return viewer?.role === 'org_admin' && viewer.is_active && !isPlatformAdminUser(viewer)
     && viewer.tenant_id != null && source.tenant_id === viewer.tenant_id && isEndUserRole(source.role)
-}
-
-export function isAgentTransferTarget(target: AdminUser, scope: TransferScope): boolean {
-  return target.tenant_id === scope.tenantId && target.id !== scope.sourceUserId && target.is_active && isEndUserRole(target.role)
 }
 
 export function transferableAgents(source: AgentTransferSource) {
@@ -40,16 +37,11 @@ export async function fetchTransferSource(userId: string, signal?: AbortSignal) 
   return sourceSchema.parse(await getUserDetail(userId, signal))
 }
 
-export async function fetchAgentTransferTargets(scope: TransferScope, signal?: AbortSignal): Promise<readonly AdminUser[]> {
-  const members: AdminUser[] = []
-  let cursor: string | null = null
-  do {
-    signal?.throwIfAborted()
-    const page = await listUsersPage({ tenantId: scope.tenantId, search: '', cursor }, signal)
-    members.push(...page.items.filter((target) => isAgentTransferTarget(target, scope)))
-    cursor = page.next_cursor
-  } while (cursor !== null)
-  return members
+export function fetchAgentTransferTargets(input: TransferTargetsPageRequest, signal?: AbortSignal) {
+  return listUsersPage({
+    tenantId: input.tenantId, search: input.search, cursor: input.cursor,
+    eligibleFor: 'agent_transfer', excludeUserId: input.sourceUserId,
+  }, signal)
 }
 
 export async function transferMemberAgents(input: AgentTransfer) {

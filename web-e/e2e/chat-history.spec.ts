@@ -2,7 +2,9 @@ import { expect, test, type Locator } from '@playwright/test'
 import { chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
-const rows = (count: number) => Array.from({ length: count }, (_, index) => message(`history-${index}`, `History entry ${index}`))
+const rows = (count: number) => Array.from({ length: count }, (_, index) => ({
+  ...message(`history-${index}`, `History entry ${index}`), created_at: new Date(Date.UTC(2029, 0, 1, 0, 0, index)).toISOString(),
+}))
 const threadSelector = 'main [aria-busy]'
 
 async function visibleEntry(thread: Locator) {
@@ -26,7 +28,7 @@ test('newest messages start at the bottom and one near-top load prepends without
   await page.goto(chatPath())
   await chat.socket()
   const thread = page.locator(threadSelector)
-  await expect(page.locator('article')).toHaveText(history.slice(100).map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(100).map((row) => row.content))
   await expect(page.getByText('History entry 149', { exact: true })).toBeInViewport()
   expect(await thread.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
   const release = chat.holdNextHistory()
@@ -41,7 +43,7 @@ test('newest messages start at the bottom and one near-top load prepends without
   const anchor = await visibleEntry(thread)
   await release()
   // Then
-  await expect(page.locator('article')).toHaveText(history.slice(50).map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(50).map((row) => row.content))
   const anchored = page.locator(`[data-chat-entry="${anchor.id}"]`)
   expect(Math.abs(await anchored.evaluate((element) => element.getBoundingClientRect().top) - anchor.top)).toBeLessThanOrEqual(1)
   expect(chat.requests()).toBe(before + 1)
@@ -86,14 +88,14 @@ test('keyboard earlier loading can retry a failure while the existing socket rem
   // When
   await activateEarlier(retry)
   // Then
-  await expect(page.locator('article')).toHaveText([...history.map((row) => row.content), 'Writable after history failure'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([...history.map((row) => row.content), 'Writable after history failure'])
   await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: /earlier messages/i })).toHaveCount(0)
   expect(attempts).toBe(2)
   expect(chat.sockets).toHaveLength(1)
 })
 
-test('a cached revisit keeps earlier pages and bridges a refresh gap larger than two pages', async ({ page }) => {
+for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earlier pages through a delta' : 'resets a gap beyond the refresh bound'}`, async ({ page }, testInfo) => {
   // Given
   const history = rows(125)
   const chat = await prepareChat(page, history)
@@ -105,23 +107,29 @@ test('a cached revisit keeps earlier pages and bridges a refresh gap larger than
   await page.goto(chatPath())
   await chat.socket()
   await activateEarlier(page.getByRole('button', { name: 'Load earlier messages', exact: true }))
-  await expect(page.locator('article')).toHaveText(history.slice(25).map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(25).map((row) => row.content))
   await navigateChat(page, chatPath(secondSession))
   await expect(page.getByText('Current second session', { exact: true })).toBeVisible()
-  const expanded = rows(270)
+  const expanded = rows(125 + gap)
   chat.setHistory(expanded)
   const release = chat.holdNextHistory()
   const before = cursors.length
   // When
   await navigateChat(page, chatPath())
-  await expect(page.locator('article')).toHaveText(history.slice(25).map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(25).map((row) => row.content))
   await expect.poll(() => cursors.length).toBe(before + 1)
   await release()
   // Then
-  await expect(page.locator('article')).toHaveText(expanded.slice(25).map((row) => row.content))
-  expect(cursors.slice(before)).toEqual([null, 'history-220', 'history-170'])
-  await expect(page.getByText('History entry 269', { exact: true })).toBeInViewport()
+  const start = gap === 20 ? 25 : expanded.length - 50
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(expanded.slice(start).map((row) => row.content))
+  expect(cursors.slice(before)).toEqual([null])
+  await expect(page.getByText(`History entry ${expanded.length - 1}`, { exact: true })).toBeInViewport()
   await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
+  await activateEarlier(page.getByRole('button', { name: 'Load earlier messages', exact: true }))
+  const earlierStart = Math.max(0, start - 50)
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(expanded.slice(earlierStart).map((row) => row.content))
+  expect(cursors.slice(before)).toEqual([null, `history-${start}`])
+  await page.screenshot({ path: testInfo.outputPath(`history-refresh-${gap}.png`), fullPage: true })
 })
 
 test('live completions preserve the reading position away from the bottom and follow when already at the bottom', async ({ page }) => {
@@ -168,7 +176,7 @@ test('a delayed earlier page cannot appear after switching sessions', async ({ p
     await release()
   }
   // Then
-  await expect(page.locator('article')).toHaveText(['Current second session'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['Current second session'])
   await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
   await expect(page.getByRole('alert')).toHaveCount(0)
 })

@@ -6,11 +6,11 @@
 
 Members work with digital employees through a browser workspace or configured messaging channels. Organization and platform administrators use a separate console to manage access, models, tools, and platform settings. The engine enforces tenant boundaries, persists work, and manages the OpenClaw guests that execute agent tasks.
 
-The diagrams below describe the current implementation and checked-in launcher defaults as of **2026-11-01**. Open an image to inspect it at full size. The [architecture documentation](docs/architectures/README.md) includes editable Mermaid sources, implementation references, and rendering instructions.
+The diagrams below describe the implementation and checked-in launcher defaults reviewed on **2026-11-01**, with the search provider updated to Tavily on **2026-11-07**. Open an image to inspect it at full size. The [architecture documentation](docs/architectures/README.md) includes editable Mermaid sources, implementation references, and rendering instructions.
 
 ### 1. People and external services
 
-MaraClaw connects members and administrators to the same platform. Configured integrations provide identity sign-in, email, messaging, model inference, and Linkup search. These integrations are optional capabilities; the diagram does not imply that every provider is enabled in a deployment.
+MaraClaw connects members and administrators to the same platform. Configured integrations provide identity sign-in, email, messaging, model inference, and Tavily search. These integrations are optional capabilities; the diagram does not imply that every provider is enabled in a deployment.
 
 ![MaraClaw system context: people, platform, and external integrations](docs/architectures/c4-context.svg)
 

@@ -76,7 +76,7 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
       if (isCurrent(owner)) { submitting.current = false; setBusy(false) }
     }
   }
-  if (pendingAdmission === true) return <Navigate to="/app/admissions" replace />
+  if (pendingAdmission === true) return <Navigate to="/app/notifications?category=admissions" replace />
   if (pendingAdmission === null) return error
     ? <p role="alert" className="p-6 text-sm text-destructive">{error}</p>
     : <p role="status" className="p-6 text-sm text-muted-foreground">Checking admission status…</p>

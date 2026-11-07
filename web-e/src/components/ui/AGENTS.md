@@ -18,7 +18,7 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 | `sheet.tsx` | `Sheet`, `SheetTrigger`, `SheetClose`, `SheetContent`, `SheetHeader`, `SheetTitle`, `SheetDescription` | Mobile nav (Dialog-based) |
 | `input.tsx` | `Input` | Auth + workspace forms |
 | `label.tsx` | `Label` | Auth + workspace forms |
-| `textarea.tsx` | `Textarea` | Chat composer, plaza, OKR, files, agent settings and forms |
+| `textarea.tsx` | `Textarea` | Chat composer, clawbook, OKR, files, agent settings and forms |
 | `password-field.tsx` | `PasswordField` | register, reset-password, settings |
 | `select.tsx` | `Select` | Native dropdowns; same radius as Input, custom chevron, `fit` hugs content; blurs only after a pointer pick |
 

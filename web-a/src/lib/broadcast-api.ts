@@ -4,6 +4,7 @@ import { ApiError, apiRequest } from './http.ts'
 import {
   BroadcastRequestSchema, NotificationBroadcastEmailCancellationResponseSchema,
   NotificationBroadcastEmailStatusResponseSchema, NotificationBroadcastResponseSchema,
+  NotificationBroadcastHistoryItemSchema, NotificationBroadcastHistoryPageResponseSchema,
 } from './engine-contracts.generated.ts'
 
 export const broadcastDraftSchema = BroadcastRequestSchema.strip().extend({
@@ -26,6 +27,24 @@ const broadcastResultSchema = NotificationBroadcastResponseSchema.strip().extend
 }).readonly()
 
 export type BroadcastResult = z.infer<typeof broadcastResultSchema>
+
+const broadcastHistoryItemSchema = NotificationBroadcastHistoryItemSchema.strip().extend({
+  broadcast_id: broadcastIdSchema,
+  published_at: z.iso.datetime({ offset: true }),
+  users_notified: z.number().int().nonnegative(),
+  agents_notified: z.number().int().nonnegative(),
+  emails_sent: z.number().int().nonnegative(),
+}).readonly()
+const broadcastHistoryPageSchema = NotificationBroadcastHistoryPageResponseSchema.strip().extend({
+  items: z.array(broadcastHistoryItemSchema).max(20).readonly(),
+  next_cursor: z.string().min(1).nullable(),
+}).readonly()
+
+export async function fetchBroadcastHistory(cursor: string | null, signal?: AbortSignal) {
+  const params = new URLSearchParams({ limit: '20' })
+  if (cursor !== null) params.set('cursor', cursor)
+  return apiRequest(`/api/notifications/broadcast/history?${params}`, { schema: broadcastHistoryPageSchema, signal })
+}
 
 /** A reviewed draft with the key that makes resending it safe. */
 export type BroadcastSubmission = Readonly<{ draft: BroadcastDraft; idempotencyKey: string }>

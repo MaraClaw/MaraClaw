@@ -6,7 +6,7 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 
 - `app.runtime.lifecycle.Runtime.start()` starts `trigger_daemon.start_trigger_daemon()` only when `PROCESS_ROLE` includes `all` or `worker`.
 - Do not move trigger scheduling into ordinary API processes. Duplicate workers increase scheduling pressure even though DB claiming mitigates execution duplication.
-- `trigger_daemon.py` owns the 15-second process loop and roughly every-fourth-tick heartbeat bridge.
+- `trigger_daemon.py` owns the 15-second trigger loop; the worker lifecycle separately owns the 60-second heartbeat loop.
 
 ## Module Responsibilities
 
@@ -39,11 +39,11 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 
 ## Event Identity
 
-- Poll state lives in trigger config JSON (no columns): `_last_value` baseline and monotonic `_poll_seq` (absent = 0). `_poll_observed` is in-memory only, set by `evaluate_trigger` for `enqueue_due_trigger`; never persist it.
+- Poll state lives in trigger config JSON (no columns): `_last_value` baseline, monotonic `_poll_seq` (absent = 0), and `_poll_checked_at` last claim time. `_poll_observed` is in-memory only, set by `evaluate_trigger` for `enqueue_due_trigger`; never persist it.
 - A poll change enqueues, then `agent_trigger_dao.advance_poll_baseline(expected_seq=...)` in the same `connection_ctx` transaction, after `try_enqueue`. Zero rows matched → `PollBaselineLostError` rolls the execution back; the loser never adopts its observation. Enqueue failure leaves the baseline, so the next poll re-sees the change.
 - First poll and non-entering `fire_on=match` values only advance the baseline (still conditional, never an execution). Match fires each time the value enters `match_value`.
 - Keys: poll `poll:{trigger}:{_poll_seq + 1}` (A-B-A-B → three runs); `on_message` `on_message:{trigger}:{_matched_message_id}`. Never hash values or message text.
-- Never write internal underscore keys through `BaseDAO.update` (whole-config replace rolls the baseline back). User edits go through `merge_user_config` (SQL-side merge; `url`/`json_path` change drops `_last_value` and bumps `_poll_seq`). The agent-facing trigger update tool still replaces config wholesale.
+- Never write internal underscore keys through `BaseDAO.update` (whole-config replace rolls the baseline back). User edits go through `merge_user_config` (SQL-side merge; `url`/`json_path` change drops `_last_value` and `_poll_checked_at` and bumps `_poll_seq`). The agent-facing trigger update tool still replaces config wholesale.
 - `from_agent_name` resolves only agents in the trigger agent's tenant.
 - A2A wake depth, TTL, and dedup guards live in `trigger_daemon.py`, not this package.
 - Webhook dedup depends on unique `(trigger_id, idempotency_key)` semantics.

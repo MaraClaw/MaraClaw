@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Mapping
+from contextlib import aclosing
 from io import BytesIO
 from threading import Event, Lock, get_ident
 from typing import TypedDict, Unpack, override
@@ -10,13 +12,16 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from botocore.stub import Stubber
 
 from app.services.storage_runtime.base import (
+    MAX_DIR_PAGE_LIMIT,
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageConditionalRaceError,
+    StorageDeleteFailedError,
     StorageReadLimitExceededError,
     WriteCondition,
 )
 from app.services.storage_runtime.s3 import S3StorageBackend
+from storage_walk_fixtures import EXPECTED_WALK, FILE_SIZE, PagedS3Client, s3_backend, shape, tree_client
 
 
 class BotocoreConfigOptions(TypedDict):
@@ -439,3 +444,292 @@ async def test_s3_bounded_read_preserves_provider_errors_except_missing_key(monk
 
     with pytest.raises(ClientError if code in {"AccessDenied", "NoSuchBucket"} else FileNotFoundError):
         await backend.read_bytes_bounded("report.bin", 8)
+
+
+@pytest.mark.parametrize("prefix", ["", "tenant"])
+async def test_s3_walk_is_one_flat_listing_in_key_order_with_synthesized_directories(monkeypatch, prefix):
+    # Given
+    client = tree_client(prefix)
+    backend = s3_backend(client, monkeypatch, prefix)
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert shape(entries) == list(EXPECTED_WALK)
+    assert {entry.size for entry in entries if not entry.is_dir} == {FILE_SIZE}
+    assert len(client.list_calls) == 1
+    assert "Delimiter" not in client.list_calls[0]
+
+
+async def test_s3_listing_and_walk_follow_every_page_past_one_thousand_entries(monkeypatch):
+    # Given
+    keys = {f"big/f{index:04d}.txt": 1 for index in range(2500)} | {"big/sub/x.txt": 1}
+    client = PagedS3Client(keys)
+    backend = s3_backend(client, monkeypatch)
+    # When
+    listed = await backend.list_dir("big")
+    listing_calls = len(client.list_calls)
+    client.list_calls.clear()
+    walked = [entry async for entry in backend.walk("big")]
+    # Then
+    assert (len(listed), listed[0].name, listing_calls) == (2501, "sub", 3)
+    assert [entry.name for entry in walked if entry.is_dir] == ["sub"]
+    assert len([entry for entry in walked if not entry.is_dir]) == 2501
+    assert len(client.list_calls) == 3
+
+
+async def test_s3_walk_jumps_past_a_hidden_subtree_instead_of_paging_through_it(monkeypatch):
+    # Given
+    keys = {"w/a.txt": 1, "w/z.txt": 1} | {f"w/.cache/{index:04d}": 1 for index in range(3500)}
+    client = PagedS3Client(keys)
+    backend = s3_backend(client, monkeypatch)
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert [entry.key for entry in entries] == ["w/a.txt", "w/z.txt"]
+    assert len(client.list_calls) == 2
+    assert client.list_calls[1].get("StartAfter") == "w/.cache0"
+    assert "ContinuationToken" not in client.list_calls[1]
+
+
+@pytest.mark.parametrize("page_size", [1, 1000])
+@pytest.mark.parametrize(
+    ("hidden_keys", "expected"),
+    [
+        (
+            ("w/visible/.env",),
+            [("visible", "w/visible", True), ("z.txt", "w/z.txt", False)],
+        ),
+        (
+            ("w/visible/.cache/secret",),
+            [("visible", "w/visible", True), ("z.txt", "w/z.txt", False)],
+        ),
+        (
+            ("w/a/b/.cache/deep/secret", "w/a/b/.env"),
+            [("a", "w/a", True), ("b", "w/a/b", True), ("z.txt", "w/z.txt", False)],
+        ),
+        (
+            ("w/v/.cache/secret", "w/v/b.txt"),
+            [("v", "w/v", True), ("b.txt", "w/v/b.txt", False), ("z.txt", "w/z.txt", False)],
+        ),
+        (
+            ("w/.top/secret", "w/v/.cache/secret", "w/v/w/.env", "w/v/w/x.txt"),
+            [
+                ("v", "w/v", True),
+                ("w", "w/v/w", True),
+                ("x.txt", "w/v/w/x.txt", False),
+                ("z.txt", "w/z.txt", False),
+            ],
+        ),
+    ],
+)
+async def test_s3_walk_yields_visible_ancestors_whose_only_descendants_are_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+    hidden_keys: tuple[str, ...],
+    expected: list[tuple[str, str, bool]],
+    page_size: int,
+):
+    # Given
+    keys = dict.fromkeys((*hidden_keys, "w/z.txt"), FILE_SIZE)
+    backend = s3_backend(PagedS3Client(keys, page_size=page_size), monkeypatch)
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert shape(entries) == expected
+
+
+async def test_s3_walk_yields_a_visible_ancestor_without_paging_its_hidden_subtree(monkeypatch):
+    # Given
+    keys = {"w/z.txt": 1} | {f"w/v/.cache/{index:04d}": 1 for index in range(3500)}
+    client = PagedS3Client(keys)
+    backend = s3_backend(client, monkeypatch)
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert shape(entries) == [("v", "w/v", True), ("z.txt", "w/z.txt", False)]
+    assert len(client.list_calls) == 2
+    assert client.list_calls[1].get("StartAfter") == "w/v/.cache0"
+
+
+async def test_s3_walk_treats_trailing_slash_markers_as_directories_not_files(monkeypatch):
+    # Given
+    keys = dict.fromkeys(("w/", "w/docs/", "w/empty/", "w/.trash/"), 0) | {"w/docs/a.txt": 1}
+    backend = s3_backend(PagedS3Client(keys), monkeypatch)
+    # When
+    entries = [entry async for entry in backend.walk("w")]
+    # Then
+    assert shape(entries) == [("docs", "w/docs", True), ("a.txt", "w/docs/a.txt", False), ("empty", "w/empty", True)]
+
+
+async def test_s3_walk_stops_requesting_pages_once_the_consumer_closes_it(monkeypatch):
+    # Given
+    client = PagedS3Client({f"w/f{index:04d}": 1 for index in range(5000)})
+    backend = s3_backend(client, monkeypatch)
+    # When
+    async with aclosing(backend.walk("w")) as walk:
+        first = await anext(walk)
+    # Then
+    assert first.key == "w/f0000"
+    assert len(client.list_calls) == 1
+
+
+async def test_s3_walk_cancelled_mid_listing_requests_no_further_pages(monkeypatch):
+    # Given
+    second_page_started, release, second_page_done = Event(), Event(), Event()
+
+    class StallingClient(PagedS3Client):
+        @override
+        def list_objects_v2(self, **kwargs: str | int) -> Mapping[str, object]:
+            stalled = len(self.list_calls) == 1
+            if stalled:
+                second_page_started.set()
+                assert release.wait(10)
+            response = super().list_objects_v2(**kwargs)
+            if stalled:
+                second_page_done.set()
+            return response
+
+    client = StallingClient({f"w/f{index:04d}": 1 for index in range(5000)})
+    backend = s3_backend(client, monkeypatch)
+
+    async def drain() -> None:
+        async for _entry in backend.walk("w"):
+            pass
+
+    task = asyncio.create_task(drain())
+    # When
+    assert await anyio.to_thread.run_sync(second_page_started.wait, 10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    assert await anyio.to_thread.run_sync(second_page_done.wait, 10)
+    # Then
+    assert len(client.list_calls) == 2
+
+
+async def test_s3_delete_tree_follows_every_listing_page(monkeypatch):
+    # Given
+    client = PagedS3Client({f"dir/f{index:04d}": 1 for index in range(2500)} | {"other/keep": 1})
+    backend = s3_backend(client, monkeypatch)
+    # When
+    await backend.delete_tree("dir")
+    # Then
+    assert [len(call) for call in client.delete_calls] == [1000, 1000, 500]
+    assert set(client.keys) == {"other/keep"}
+
+
+async def test_s3_delete_tree_raises_when_the_provider_refuses_objects(monkeypatch):
+    # Given
+    client = PagedS3Client({"dir/a": 1, "dir/b": 1}, refuse_deletes=frozenset({"dir/b"}))
+    backend = s3_backend(client, monkeypatch)
+    # When
+    with pytest.raises(StorageDeleteFailedError) as raised:
+        await backend.delete_tree("dir")
+    # Then
+    assert raised.value.failed == 1
+    assert set(client.keys) == {"dir/b"}
+
+
+def page_shape(page) -> list[tuple[str, bool]]:
+    return [(entry.name, entry.is_dir) for entry in page.entries]
+
+
+@pytest.mark.parametrize("prefix", ["", "tenant"])
+async def test_s3_page_sends_a_bounded_delimiter_listing_and_keeps_folders_in_key_order(monkeypatch, prefix):
+    # Given
+    client = tree_client(prefix)
+    backend = s3_backend(client, monkeypatch, prefix)
+    # When
+    page = await backend.list_dir_page("w", limit=4)
+    # Then
+    assert page_shape(page) == [(".env", False), (".hidden", True), ("B.txt", False), ("a-b.txt", False)]
+    assert page.has_more
+    assert len(client.list_calls) == 1
+    first = client.list_calls[0]
+    assert (first["Prefix"], first["Delimiter"], first["MaxKeys"]) == (f"{prefix}/w/".lstrip("/"), "/", 5)
+    assert "StartAfter" not in first
+    assert page.entries[0].key == "w/.env"
+
+
+async def test_s3_page_resumes_after_a_folder_without_repeating_it_or_losing_its_next_sibling(monkeypatch):
+    # Given
+    keys = dict.fromkeys(("w/a.txt", "w/a/inner.txt", "w/a/deep/more.txt", "w/a0", "w/b.txt"), 1)
+    client = PagedS3Client(keys)
+    backend = s3_backend(client, monkeypatch)
+    # When
+    first = await backend.list_dir_page("w", limit=2)
+    resumed = await backend.list_dir_page("w", limit=2, after="a/")
+    # Then
+    assert page_shape(first) == [("a.txt", False), ("a", True)]
+    assert first.has_more
+    assert page_shape(resumed) == [("a0", False), ("b.txt", False)]
+    assert not resumed.has_more
+    start_after = str(client.list_calls[1]["StartAfter"])
+    assert "w/a/inner.txt" < start_after < "w/a0"
+
+
+async def test_s3_page_drops_a_folder_the_provider_returns_again_after_the_resume_marker(monkeypatch):
+    # Given: a key sorting beyond the marker keeps the provider reporting the consumed folder
+    keys = dict.fromkeys(("w/a/inner.txt", "w/a/\U0010ffffz", "w/b.txt"), 1)
+    backend = s3_backend(PagedS3Client(keys), monkeypatch)
+    # When
+    page = await backend.list_dir_page("w", limit=5, after="a/")
+    # Then
+    assert page_shape(page) == [("b.txt", False)]
+
+
+async def test_s3_page_resumes_after_a_file_with_a_start_after_of_that_key(monkeypatch):
+    # Given
+    client = PagedS3Client(dict.fromkeys(("w/a", "w/a/inner.txt", "w/b"), 1))
+    backend = s3_backend(client, monkeypatch)
+    # When
+    page = await backend.list_dir_page("w", limit=5, after="a")
+    # Then
+    assert page_shape(page) == [("a", True), ("b", False)]
+    assert client.list_calls[0]["StartAfter"] == "w/a"
+
+
+async def test_s3_pages_walk_thousands_of_entries_one_bounded_request_per_page(monkeypatch):
+    # Given
+    client = PagedS3Client({f"big/f{index:04d}.txt": 1 for index in range(2500)} | {"big/sub/x.txt": 1})
+    backend = s3_backend(client, monkeypatch)
+    # When
+    names: list[str] = []
+    after = ""
+    while True:
+        page = await backend.list_dir_page("big", limit=200, after=after)
+        assert len(page.entries) <= 200
+        names.extend(entry.name for entry in page.entries)
+        if not page.has_more:
+            break
+        after = f"{page.entries[-1].name}/" if page.entries[-1].is_dir else page.entries[-1].name
+    # Then
+    assert names == [*sorted(f"f{index:04d}.txt" for index in range(2500)), "sub"]
+    assert len(client.list_calls) == 13
+    assert {call["MaxKeys"] for call in client.list_calls} == {201}
+    assert all("ContinuationToken" not in call for call in client.list_calls)
+
+
+async def test_s3_page_continues_past_a_directory_marker_that_takes_a_slot(monkeypatch):
+    # Given
+    client = PagedS3Client(dict.fromkeys(("w/", "w/a", "w/b"), 1))
+    backend = s3_backend(client, monkeypatch)
+    # When
+    page = await backend.list_dir_page("w", limit=1)
+    # Then
+    assert page_shape(page) == [("a", False)]
+    assert page.has_more
+    assert len(client.list_calls) == 2
+    assert "ContinuationToken" in client.list_calls[1]
+    assert "StartAfter" not in client.list_calls[1]
+
+
+@pytest.mark.parametrize("limit", [0, -1, MAX_DIR_PAGE_LIMIT + 1])
+async def test_s3_page_rejects_an_unbounded_limit_before_any_request(monkeypatch, limit):
+    # Given
+    client = PagedS3Client({"w/a": 1})
+    backend = s3_backend(client, monkeypatch)
+    # When / Then
+    with pytest.raises(ValueError, match="page limit"):
+        await backend.list_dir_page("w", limit=limit)
+    assert client.list_calls == []

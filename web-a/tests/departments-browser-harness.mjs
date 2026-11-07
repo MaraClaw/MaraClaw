@@ -67,7 +67,7 @@ export async function createHarness() {
         if (path === '/api/auth/me') body = user
         else if (path === '/api/tenants/me') body = { id: tenant, is_active: true, is_default_end_user_org: false }
         else if (path === '/api/auth/login') body = { access_token: 'synthetic-department-token', token_type: 'bearer', user }
-        else if (path === '/api/admin/companies') body = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
+        else if (path === '/api/admin/companies/options') body = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
         else if (path === '/api/admin/platform-admins') body = []
         else if (path === '/api/users/page') body = { items: [row('Member', selected)], next_cursor: null }
         else if (path === '/api/departments' && request.method() === 'POST') {

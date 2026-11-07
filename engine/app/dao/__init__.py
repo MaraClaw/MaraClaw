@@ -9,10 +9,12 @@ from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
+from app.dao.broadcast_history_dao import broadcast_history_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.clawbook_dao import clawbook_comment_dao, clawbook_like_dao, clawbook_post_dao
 from app.dao.company_admission_dao import company_admission_dao
 from app.dao.company_transfer_cleanup_dao import company_transfer_cleanup_dao
 from app.dao.company_transfer_dao import company_transfer_dao
@@ -24,7 +26,6 @@ from app.dao.gogcli_credential_dao import gogcli_credential_state_dao
 from app.dao.identity_dao import identity_dao
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.invitation_code_dao import invitation_code_dao
-from app.dao.linkup_api_key_dao import linkup_api_key_dao, linkup_async_job_dao
 from app.dao.llm_dao import llm_model_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.okr_dao import (
@@ -37,6 +38,7 @@ from app.dao.okr_dao import (
 )
 from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.onboarding_dao import user_tenant_onboarding_dao
+from app.dao.openclaw_reply_dao import openclaw_reply_dao
 from app.dao.org_department_dao import org_department_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.organization_admission_dao import organization_admission_dao
@@ -46,7 +48,6 @@ from app.dao.personal_burst_dao import personal_burst_dao
 from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.dao.personal_burst_input_dao import personal_burst_input_dao
 from app.dao.personal_busy_notice_dao import personal_busy_notice_dao
-from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
 from app.dao.published_page_dao import published_page_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
@@ -54,6 +55,7 @@ from app.dao.skill_dao import skill_dao, skill_file_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.system_setting_dao import system_setting_dao
 from app.dao.task_dao import task_dao, task_log_dao
+from app.dao.tavily_api_key_dao import tavily_api_key_dao
 from app.dao.template_dao import agent_template_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tenant_email_domain_dao import tenant_email_domain_dao
@@ -81,11 +83,15 @@ __all__ = [
     "approval_request_dao",
     "audit_log_dao",
     "broadcast_email_dao",
+    "broadcast_history_dao",
     "broadcast_submission_dao",
     "channel_config_dao",
     "channel_event_receipt_dao",
     "chat_message_dao",
     "chat_session_dao",
+    "clawbook_comment_dao",
+    "clawbook_like_dao",
+    "clawbook_post_dao",
     "company_admission_dao",
     "company_report_dao",
     "company_transfer_cleanup_dao",
@@ -97,8 +103,6 @@ __all__ = [
     "identity_dao",
     "identity_provider_dao",
     "invitation_code_dao",
-    "linkup_api_key_dao",
-    "linkup_async_job_dao",
     "llm_model_dao",
     "member_daily_report_dao",
     "notification_dao",
@@ -106,6 +110,7 @@ __all__ = [
     "okr_objective_dao",
     "okr_progress_log_dao",
     "okr_settings_dao",
+    "openclaw_reply_dao",
     "org_department_dao",
     "org_member_dao",
     "organization_admission_dao",
@@ -115,9 +120,6 @@ __all__ = [
     "personal_burst_dispatch_dao",
     "personal_burst_input_dao",
     "personal_busy_notice_dao",
-    "plaza_comment_dao",
-    "plaza_like_dao",
-    "plaza_post_dao",
     "published_page_dao",
     "schedule_manual_run_dao",
     "skill_dao",
@@ -126,6 +128,7 @@ __all__ = [
     "system_setting_dao",
     "task_dao",
     "task_log_dao",
+    "tavily_api_key_dao",
     "tenant_dao",
     "tenant_email_domain_dao",
     "tool_dao",

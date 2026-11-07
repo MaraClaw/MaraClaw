@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch):
     docker = Docker()
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
-    monkeypatch.setattr(manager, "_prepare_linkup_proxy_token", AsyncMock())
+    monkeypatch.setattr(manager, "_prepare_tavily_proxy_token", AsyncMock())
     agent = AgentRecord(
         id=uuid4(),
         name="guest",
@@ -131,7 +131,7 @@ async def test_token_persistence_failure_precedes_guest_mutation(env, monkeypatc
     async def fail(_agent_id):
         raise RuntimeError("persistence failed")
 
-    monkeypatch.setattr(manager, "_prepare_linkup_proxy_token", fail, raising=False)
+    monkeypatch.setattr(manager, "_prepare_tavily_proxy_token", fail, raising=False)
     materialize = AsyncMock()
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
     with pytest.raises(RuntimeError, match="persistence failed"):
@@ -144,16 +144,16 @@ async def test_no_docker_does_not_issue_token(env, monkeypatch):
     manager, _docker, agent = env
     monkeypatch.setattr(manager, "docker_client", None)
     assert await manager.replace_container(agent) is None
-    manager._prepare_linkup_proxy_token.assert_not_awaited()
+    manager._prepare_tavily_proxy_token.assert_not_awaited()
 
 
 async def test_disabled_proxy_does_not_issue_token(env, monkeypatch):
     manager, _docker, agent = env
-    monkeypatch.setattr(module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.delattr(manager, "_prepare_linkup_proxy_token")
+    monkeypatch.setattr(module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.delattr(manager, "_prepare_tavily_proxy_token")
     issue = AsyncMock()
-    monkeypatch.setattr("app.services.linkup.tokens.make_proxy_token", issue)
-    await manager._prepare_linkup_proxy_token(agent.id)
+    monkeypatch.setattr("app.services.tavily.tokens.make_proxy_token", issue)
+    await manager._prepare_tavily_proxy_token(agent.id)
     issue.assert_not_awaited()
 
 

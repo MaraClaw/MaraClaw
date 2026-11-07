@@ -25,7 +25,7 @@ test('busy polling still recovers a persisted reply without a completion frame',
   await refreshed
   await page.clock.runFor(100)
   // Then
-  await expect(page.locator('article')).toHaveText([old.content, question.content, reply.content])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([old.content, question.content, reply.content])
   await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'false')
 })
 
@@ -47,7 +47,7 @@ test('lost acceptance survives reconnect and socket effect recreation with the s
   accept(recreated, envelope.client_submission_id)
   chat.setHistory([{ ...message(firstMessage, envelope.content, 'user'), client_submission_id: envelope.client_submission_id }])
   complete(recreated.route, message('reply', 'One reply'))
-  await expect(page.locator('article')).toHaveText(['One logical question', 'One reply'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['One logical question', 'One reply'])
   recreated.route.close({ code: 1006 })
   const acceptedReconnect = await chat.socket(3)
   expect(acceptedReconnect.sent).toEqual([])
@@ -151,7 +151,7 @@ test('file rejection retries the exact uploaded envelope after effect recreation
   accept(recreated, envelope.client_submission_id)
   chat.setHistory([{ ...message(firstMessage, 'notes.txt', 'user'), file_name: 'notes.txt', client_submission_id: envelope.client_submission_id }])
   complete(recreated.route, message('file-reply', 'Read the notes'))
-  await expect(page.locator('article')).toHaveText(['notes.txt', 'Read the notes'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['notes.txt', 'Read the notes'])
 })
 
 test('equal text remains two logical submissions and legacy equal text never consumes an optimistic row', async ({ page }) => {
@@ -167,10 +167,10 @@ test('equal text remains two logical submissions and legacy equal text never con
   const envelope = submitted(socket)
   chat.setHistory([oldUser, oldReply, { ...message(firstMessage, 'Same question', 'user'), client_submission_id: envelope.client_submission_id }])
   complete(socket.route, message('new-reply', 'New answer'))
-  await expect(page.locator('article')).toHaveText(['Same question', 'Earlier answer', 'Same question', 'New answer'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['Same question', 'Earlier answer', 'Same question', 'New answer'])
   await composer.fill('Same question')
   await composer.press('Enter')
   await expect.poll(() => socket.sent.length).toBe(2)
   expect(submitted(socket, 1).client_submission_id).not.toBe(envelope.client_submission_id)
-  await expect(page.locator('article').filter({ hasText: /^Same question$/ })).toHaveCount(3)
+  await expect(page.locator('article > [data-chat-content]').filter({ hasText: /^Same question$/ })).toHaveCount(3)
 })

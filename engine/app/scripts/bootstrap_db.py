@@ -1,6 +1,7 @@
 """Initialize a fresh database from the authoritative, rerunnable baseline.
 
-The only supported legacy upgrade is the explicit ``tasks`` lease-column block in the baseline.
+The only supported legacy upgrades are the explicit guarded ``DO`` blocks in the baseline (``tasks`` lease columns,
+organization admission provisioning, ``approval_requests.execution_args``, ``gateway_messages.reply_binding_id``).
 Schema errors are fatal.
 """
 

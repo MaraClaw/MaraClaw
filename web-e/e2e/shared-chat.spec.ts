@@ -26,7 +26,7 @@ test('authorized archive links stay readable and read-only with a return to shar
   expect(chat.sockets).toEqual([])
   await page.getByRole('link', { name: 'Return to shared conversation', exact: true }).click()
   expect((await chat.socket()).session).toBe(firstSession)
-  await expect(page.locator('article')).toHaveText(['Shared current history'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['Shared current history'])
 })
 
 test('an unauthorized archive response never falls back to shared history or enables sending', async ({ page }) => {
@@ -66,7 +66,7 @@ test('an archive ending in a human turn does not pretend to await a new reply', 
     items: [message('archived-user', 'Last archived question', 'user')], next_cursor: null, has_more: false,
   } }))
   await page.goto(chatPath(archivedSession))
-  await expect(page.locator('article')).toHaveText(['Last archived question'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['Last archived question'])
   await expect(page.getByText('Thinking', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Accepted. Waiting for a reply.', { exact: true })).toHaveCount(0)
 })
@@ -78,7 +78,7 @@ test('idle shared history refresh picks up another human and IM turns without a 
   const socket = await chat.socket()
   chat.setHistory([message('other-human', 'Another member asked', 'user'), message('im-reply', 'Reply from a connected channel')])
   await page.clock.runFor(5000)
-  await expect(page.locator('article')).toHaveText(['Another member asked', 'Reply from a connected channel'])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(['Another member asked', 'Reply from a connected channel'])
   expect(socket.sent).toEqual([])
   complete(socket.route, message('im-reply', 'Reply from a connected channel'))
   await expect(page.locator('article')).toHaveCount(2)

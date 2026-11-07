@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, ClassVar, final, override
 from uuid import UUID, uuid4
@@ -98,6 +99,35 @@ class TaskDAO(BaseDAO[TaskRecord]):
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM tasks WHERE {where} ORDER BY created_at {order}",
+                params,
+            )
+            return [TaskRecord.from_row(row) for row in rows]
+
+    async def list_page_for_agent(
+        self,
+        agent_id: UUID,
+        *,
+        status: TaskStatus | None = None,
+        task_type: TaskType | None = None,
+        limit: int,
+        before: tuple[datetime, UUID] | None = None,
+    ) -> list[TaskRecord]:
+        """Newest-first keyset page after ``before``; returns up to ``limit + 1`` rows so the caller sees a next page."""
+        params: dict[str, Any] = {"agent_id": agent_id, "lookahead": limit + 1}
+        clauses = ["agent_id = %(agent_id)s"]
+        if status is not None:
+            clauses.append("status = %(status)s")
+            params["status"] = status.value
+        if task_type is not None:
+            clauses.append("type = %(type)s")
+            params["type"] = task_type.value
+        if before is not None:
+            clauses.append("(created_at, id) < (%(before_created_at)s, %(before_id)s)")
+            params.update(before_created_at=before[0], before_id=before[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM tasks WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC, id DESC LIMIT %(lookahead)s",
                 params,
             )
             return [TaskRecord.from_row(row) for row in rows]
@@ -283,6 +313,23 @@ class TaskLogDAO(BaseDAO[TaskLogRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM task_logs WHERE task_id = %(task_id)s ORDER BY created_at ASC",
                 {"task_id": task_id},
+            )
+            return [TaskLogRecord.from_row(row) for row in rows]
+
+    async def list_page_for_task(
+        self, task_id: UUID, *, limit: int, after: tuple[datetime, UUID] | None = None
+    ) -> list[TaskLogRecord]:
+        """Oldest-first keyset page after ``after``; returns up to ``limit + 1`` rows so the caller sees a next page."""
+        params: dict[str, Any] = {"task_id": task_id, "lookahead": limit + 1}
+        position_filter = ""
+        if after is not None:
+            position_filter = " AND (created_at, id) > (%(after_created_at)s, %(after_id)s)"
+            params.update(after_created_at=after[0], after_id=after[1])
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM task_logs WHERE task_id = %(task_id)s{position_filter} "
+                "ORDER BY created_at ASC, id ASC LIMIT %(lookahead)s",
+                params,
             )
             return [TaskLogRecord.from_row(row) for row in rows]
 

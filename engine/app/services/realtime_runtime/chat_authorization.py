@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -28,7 +28,20 @@ def is_shared_target(agent_id: str, session_id: str | None) -> bool:
         return False
 
 
-async def authorize_chat_delivery(websocket: WebSocket, agent_id: str, session_id: str | None) -> bool:
+async def read_shared_acl_version(agent_id: str, session_ids: Iterable[str | None]) -> str | None:
+    """Read the agent ACL version once for a delivery, and only if some target is the shared session.
+
+    Ordinary sessions never authorize against the ACL, so they gain no Redis read. Pass the result to
+    ``authorize_chat_delivery`` for every socket of the delivery, before any of them authorizes.
+    """
+    if not any(is_shared_target(agent_id, session_id) for session_id in set(session_ids)):
+        return None
+    return await access_cache.read_acl_version(UUID(agent_id))
+
+
+async def authorize_chat_delivery(
+    websocket: WebSocket, agent_id: str, session_id: str | None, acl_version: str | None = None
+) -> bool:
     """Decide whether a Shared-session event may be sent to this socket.
 
     A positive decision is remembered on the socket for ``DELIVERY_AUTHORIZATION_TTL_SECONDS`` and
@@ -37,6 +50,9 @@ async def authorize_chat_delivery(websocket: WebSocket, agent_id: str, session_i
     role/activation/membership and department changes) takes effect on the next event. Revocations
     that do not bump it (for example a session token generation change or an agent expiry) can
     keep delivering for up to that TTL. Negative results are never cached.
+
+    ``acl_version`` is the value ``read_shared_acl_version`` read once for the whole delivery; without it
+    the version is read here.
     """
     if not is_shared_target(agent_id, session_id):
         return True
@@ -46,7 +62,8 @@ async def authorize_chat_delivery(websocket: WebSocket, agent_id: str, session_i
     if str(binding.agent_id) != agent_id or str(binding.session_id) != session_id:
         return False
     # Read before authorizing: a bump landing during authorization must invalidate what we cache.
-    acl_version = await access_cache.read_acl_version(binding.agent_id)
+    if acl_version is None:
+        acl_version = await access_cache.read_acl_version(binding.agent_id)
     cached = getattr(websocket.state, "chat_delivery_authorization", None)
     if (
         isinstance(cached, _CachedAuthorization)

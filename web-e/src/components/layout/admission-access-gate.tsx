@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { OnboardingGate } from '@/components/layout/onboarding-gate'
@@ -24,7 +25,7 @@ export function AdmissionAccessGate() {
   return <Outlet />
 }
 
-export function AdmissionInboxGate() {
+export function AdmissionInboxGate({ children }: { readonly children: ReactNode }) {
   const { workspaceAllowed } = useAdmissionAccess()
-  return workspaceAllowed ? <OnboardingGate /> : <Outlet />
+  return workspaceAllowed ? <OnboardingGate>{children}</OnboardingGate> : children
 }

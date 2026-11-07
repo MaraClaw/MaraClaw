@@ -32,7 +32,7 @@ export async function prepareUploads(page: Page) {
 
 export async function openUploads(page: Page, surface: UploadSurface) {
   await page.goto(uploadPath(surface))
-  await expect(page.locator('input[type="file"]')).toBeVisible()
+  await expect(surface === 'chat' ? page.getByRole('button', { name: 'Attach a file', exact: true }) : page.locator('input[type="file"]')).toBeVisible()
 }
 
 export async function selectNativeUploadFile(page: Page, filePath: string) {

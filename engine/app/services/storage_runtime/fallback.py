@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from heapq import merge
 from pathlib import Path
 from typing import override
 
@@ -10,9 +11,11 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageConditionalRaceError,
     StorageEntry,
+    StoragePage,
     StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
+    walk_order,
 )
 
 
@@ -48,6 +51,20 @@ class FallbackStorageBackend(StorageBackend):
         for entry in await self.primary.list_dir(key):
             entries_by_key[entry.key] = entry
         return sorted(entries_by_key.values(), key=lambda entry: (not entry.is_dir, entry.name))
+
+    @override
+    async def list_dir_page(self, key: str, *, limit: int, after: str = "") -> StoragePage:
+        # Each side resumes after the same cursor, so the first ``limit`` merged children come from the first ``limit``
+        # of each side; a stable merge over (primary, legacy) lets the primary win an equal (key, is_dir).
+        primary = await self.primary.list_dir_page(key, limit=limit, after=after)
+        legacy = await self.fallback.list_dir_page(key, limit=limit, after=after)
+        merged: list[StorageEntry] = []
+        seen: set[tuple[str, bool]] = set()
+        for entry in merge(primary.entries, legacy.entries, key=walk_order):
+            if (entry.key, entry.is_dir) not in seen:
+                seen.add((entry.key, entry.is_dir))
+                merged.append(entry)
+        return StoragePage(merged[:limit], len(merged) > limit or primary.has_more or legacy.has_more)
 
     @override
     async def read_bytes(self, key: str) -> bytes:

@@ -4,7 +4,7 @@ import base64
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import ClassVar, Literal
+from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict
@@ -19,7 +19,15 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
-from app.services.chat_history import ChatMessagePage, get_history_page, parse_cursor
+from app.services.chat_history import (
+    ChatHistoryRefresh,
+    ChatMessagePage,
+    HeldHistoryQuery,
+    get_history_page,
+    get_history_refresh,
+    parse_cursor,
+    parse_held,
+)
 from app.services.chat_message_projection import ChatMessageEntry, project_messages
 from app.services.chat_session_access import can_access_chat_session, can_view_all_agent_chat_sessions
 from app.services.shared_chat import ensure_shared_session, is_shared_session, shared_session_id
@@ -445,14 +453,22 @@ async def _authorize_history(agent_id: uuid.UUID, session_id: uuid.UUID, current
 async def get_session_messages_page(
     agent_id: uuid.UUID,
     session_id: uuid.UUID,
+    held: Annotated[HeldHistoryQuery, Query()],
     limit: int = Query(50, ge=1, le=500, description="Maximum database rows; inline tool entries stay together"),
     cursor: str | None = Query(None, max_length=1024),
     current_user: UserRecord = Depends(get_current_user),
-) -> ChatMessagePage:
+) -> ChatMessagePage | ChatHistoryRefresh:
     session = await _authorize_history(agent_id, session_id, current_user)
     boundary = parse_cursor(cursor, agent_id, session_id)
+    refresh_from = parse_held(held)
+    if boundary is not None and refresh_from is not None:
+        raise HTTPException(400, "A history cursor cannot be combined with a refresh boundary")
     read_at = datetime.now(UTC)
-    page = await get_history_page(session, limit, boundary, agent_id=agent_id)
+    page = (
+        await get_history_page(session, limit, boundary, agent_id=agent_id)
+        if refresh_from is None
+        else await get_history_refresh(session, limit, refresh_from, agent_id=agent_id)
+    )
 
     if (
         boundary is None

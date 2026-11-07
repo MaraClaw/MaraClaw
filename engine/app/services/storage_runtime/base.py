@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,14 @@ class StorageEntry:
     etag: str = ""
     version_id: str = ""
     content_hash: str = ""
+
+
+@dataclass
+class StoragePage:
+    """One bounded slice of a directory in ``walk_order``; ``has_more`` means children sort after the last entry."""
+
+    entries: list[StorageEntry]
+    has_more: bool
 
 
 @dataclass
@@ -62,11 +71,49 @@ class StorageConditionalRaceError(RuntimeError):
         super().__init__(f"Conditional storage race persisted after {attempts} attempts: {key}")
 
 
+class StorageDeleteFailedError(RuntimeError):
+    def __init__(self, key: str, failed: int):
+        self.key: str = key
+        self.failed: int = failed
+        super().__init__(f"{failed} objects under {key or 'the storage root'} could not be deleted")
+
+
 class StorageReadLimitExceededError(ValueError):
     def __init__(self, max_bytes: int, size_bytes: int):
         self.max_bytes: int = max_bytes
         self.size_bytes: int = size_bytes
         super().__init__(f"Storage read exceeds {max_bytes} bytes (observed {size_bytes})")
+
+
+MAX_DIR_PAGE_LIMIT = 500
+
+
+def walk_order(entry: StorageEntry) -> str:
+    """Sibling sort key that makes a depth-first walk follow the byte order of full object keys."""
+    return f"{entry.name}/" if entry.is_dir else entry.name
+
+
+def checked_page_limit(limit: int) -> int:
+    if not 1 <= limit <= MAX_DIR_PAGE_LIMIT:
+        raise ValueError(f"Directory page limit must be between 1 and {MAX_DIR_PAGE_LIMIT}, got {limit}")
+    return limit
+
+
+async def walk_tree(list_dir: Callable[[str], Awaitable[list[StorageEntry]]], key: str) -> AsyncGenerator[StorageEntry]:
+    """Lazily walk ``key`` with one ``list_dir`` call per directory, in the order ``StorageBackend.walk`` documents."""
+    pending: list[Iterator[StorageEntry]] = [_walk_children(await list_dir(key))]
+    while pending:
+        entry = next(pending[-1], None)
+        if entry is None:
+            _ = pending.pop()
+            continue
+        yield entry
+        if entry.is_dir:
+            pending.append(_walk_children(await list_dir(entry.key)))
+
+
+def _walk_children(entries: list[StorageEntry]) -> Iterator[StorageEntry]:
+    return iter(sorted((entry for entry in entries if not entry.name.startswith(".")), key=walk_order))
 
 
 class StorageBackend:
@@ -81,6 +128,27 @@ class StorageBackend:
 
     async def list_dir(self, key: str) -> list[StorageEntry]:
         raise NotImplementedError
+
+    async def list_dir_page(self, key: str, *, limit: int, after: str = "") -> StoragePage:
+        """Return at most ``limit`` children of ``key`` sorting after ``after``, in ``walk_order``.
+
+        ``after`` is the ``walk_order`` of the last child already consumed (empty to start), so a folder ``a`` resumes
+        as ``"a/"`` and never repeats. Children are not filtered, hidden names included. Backends that implement only
+        ``list_dir`` inherit this default, which drains the whole listing; native backends bound the work to the page.
+        """
+        bounded = checked_page_limit(limit)
+        later = sorted((entry for entry in await self.list_dir(key) if walk_order(entry) > after), key=walk_order)
+        return StoragePage(later[:bounded], len(later) > bounded)
+
+    def walk(self, key: str) -> AsyncGenerator[StorageEntry]:
+        """Lazily yield every descendant of ``key``; callers that stop early should ``aclose()`` the generator.
+
+        Order is the byte order of full object keys (the order a flat S3 listing returns): siblings sort by
+        ``walk_order``, so a directory ``a`` falls between ``a-b`` and ``a0``, and each directory entry is yielded
+        immediately before its contents. Names starting with ``.`` are never yielded and their subtrees are never
+        entered. Backends that implement only ``list_dir`` inherit this walk, one listing per directory.
+        """
+        return walk_tree(self.list_dir, key)
 
     async def read_bytes(self, key: str) -> bytes:
         raise NotImplementedError

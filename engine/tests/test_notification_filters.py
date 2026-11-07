@@ -37,7 +37,7 @@ FILTERS: list[tuple[str | None, list[str] | None]] = [
             "organization_admission_pending",
         ],
     ),
-    ("social", ["plaza_comment", "plaza_reply", "mention", "broadcast"]),
+    ("social", ["clawbook_comment", "clawbook_reply", "mention", "broadcast"]),
     ("broadcast", ["broadcast"]),
 ]
 
@@ -50,8 +50,8 @@ def populated_db(notification_db: NotificationConnection) -> NotificationConnect
         NotificationKind.APPROVAL_RESOLVED,
         NotificationKind.COMPANY_ADMISSION_PENDING,
         NotificationKind.COMPANY_ADMISSION_RESOLVED,
-        NotificationKind.PLAZA_COMMENT,
-        NotificationKind.PLAZA_REPLY,
+        NotificationKind.CLAWBOOK_COMMENT,
+        NotificationKind.CLAWBOOK_REPLY,
         NotificationKind.MENTION,
         NotificationKind.SYSTEM,
         *([NotificationKind.BROADCAST] * 55),

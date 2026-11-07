@@ -29,7 +29,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord
-from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, poll_sequence
+from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, poll_checkpoint, poll_sequence
 
 MIN_POLL_INTERVAL_MINUTES = 5
 
@@ -246,7 +246,22 @@ def is_private_url(url: str) -> bool:
         return True
 
 
-async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
+def _poll_reference(trigger: AgentTriggerRecord, checkpoint: str | None) -> datetime | None:
+    """The later of the last firing (or creation) and the last claimed poll: the interval counts from it."""
+    reference = trigger.last_fired_at or trigger.created_at
+    if checkpoint is None:
+        return reference
+    try:
+        checked = datetime.fromisoformat(checkpoint)
+    except ValueError:
+        return reference
+    if checked.tzinfo is None:
+        checked = checked.replace(tzinfo=UTC)
+    return checked if reference is None else max(reference, checked)
+
+
+async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, *, agent_timezone: str | None = None) -> bool:
+    """Whether the trigger is due. ``agent_timezone`` is a timezone the caller resolved for the whole tick."""
     if not trigger.is_enabled:
         return False
     if trigger.expires_at and now >= trigger.expires_at:
@@ -271,6 +286,8 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
             configured_timezone = cfg.get("timezone")
             if isinstance(configured_timezone, str) and configured_timezone:
                 tz_name = configured_timezone
+            elif agent_timezone is not None:
+                tz_name = agent_timezone
             else:
                 from app.services.timezone_utils import get_agent_timezone
 
@@ -324,8 +341,14 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
         if configured_interval is None:
             return False
         interval_min = max(configured_interval, MIN_POLL_INTERVAL_MINUTES)
-        base = trigger.last_fired_at or trigger.created_at
+        checkpoint = poll_checkpoint(cfg)
+        base = _poll_reference(trigger, checkpoint)
         if base is None or (now - base) < timedelta(minutes=interval_min):
+            return False
+        # One winner per interval across replicas; a failed or unchanged poll waits for the next interval too.
+        if not await agent_trigger_dao.claim_poll_checkpoint(
+            trigger.id, seen=checkpoint, expected_seq=poll_sequence(cfg), claimed_at=now
+        ):
             return False
         observation = await poll_check(trigger)
         if observation is None:

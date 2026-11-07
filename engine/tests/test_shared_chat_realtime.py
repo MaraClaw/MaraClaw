@@ -9,6 +9,7 @@ from fastapi import HTTPException, WebSocket
 from starlette.types import Message
 
 from app.api.websocket import ConnectionManager, WebSocketConnection
+from app.core import access_cache
 from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
@@ -196,3 +197,38 @@ async def test_shared_redis_envelope_excludes_archive_presence_and_user_fallback
     assert channel == "realtime:ws:instance:shared-remote"
     assert json.loads(envelope)["session_id"] == session_id
     assert json.loads(envelope)["user_id"] is None
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("shared", [False, True])
+async def test_acl_version_is_read_once_per_delivery_and_only_for_the_shared_session(monkeypatch, remote, shared):
+    agent_id, user_id = uuid4(), uuid4()
+    session_id = str(shared_session_id(agent_id) if shared else uuid4())
+    frames: list[Message] = []
+    sockets = [socket_with_binding(agent_id, user_id, frames) for _ in range(5)]
+    for socket in sockets:
+        await socket.accept()
+    frames.clear()
+    read_version = AsyncMock(return_value="7")
+    authorize = AsyncMock(
+        return_value=(UserRecord(id=user_id), AgentRecord(id=agent_id, name="Agent", creator_id=uuid4()), "use")
+    )
+    monkeypatch.setattr(access_cache, "read_acl_version", read_version)
+    monkeypatch.setattr(chat_tickets, "authorize", authorize)
+    monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
+    connections: list[WebSocketConnection] = [(socket, session_id, str(user_id)) for socket in sockets]
+
+    if remote:
+        manager = ConnectionManager()
+        manager.active_connections[str(agent_id)] = connections
+        await manager.deliver_pubsub_message(agent_id=str(agent_id), session_id=session_id, payload={"type": "done"})
+    else:
+        router = RealtimeRouter()
+        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
+        await router.route_message(
+            agent_id=str(agent_id), session_id=session_id, message={"type": "done"}, local_connections=connections
+        )
+
+    assert len(frames) == len(sockets)
+    assert read_version.await_count == (1 if shared else 0)
+    assert authorize.await_count == (len(sockets) if shared else 0)

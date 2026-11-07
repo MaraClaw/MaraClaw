@@ -4,6 +4,7 @@ import { acceptSubmission, appendCompletion, mergeServerHistory } from '../src/l
 import type { ChatLine } from '../src/lib/chat/transcript.ts'
 import { recoverRejectedTurn } from '../src/lib/chat/turn-rejection.ts'
 import { canonicalMessage, canonicalSession, firstSubmission, secondSubmission } from './socket-fixture.ts'
+import { referenceMerge } from './transcript-reference-fixture.ts'
 
 const saved = (message_id: string, content = 'same', role = 'assistant'): ChatLine => ({
   message_id, entry_id: message_id, role, content,
@@ -127,4 +128,77 @@ test('history refresh still preserves unmatched pending lines for other turns af
   const refreshed = mergeServerHistory([], recovery.lines)
   // Then
   assert.deepEqual(refreshed.filter((row) => row.pending), [older])
+})
+
+test('unchanged authoritative rows retain identity across fresh history objects', () => {
+  const server = [{ ...saved('stable'), attachments: [{ path: 'report.pdf', name: 'Report.pdf' }] }]
+  const previous = mergeServerHistory(server, [])
+
+  const refreshed = mergeServerHistory(structuredClone(server), previous)
+
+  assert.equal(refreshed[0], previous[0])
+})
+
+test('legacy rows retain distinct identities independently of property insertion order', () => {
+  const first: ChatLine = { role: 'assistant', content: 'Legacy', attachments: [{ path: 'first.pdf', name: 'First.pdf' }] }
+  const second: ChatLine = { ...first, attachments: [{ path: 'second.pdf', name: 'Second.pdf' }] }
+  const previous = mergeServerHistory([first, second], [])
+  const refreshed = mergeServerHistory([
+    { attachments: [{ name: 'First.pdf', path: 'first.pdf' }], content: 'Legacy', role: 'assistant' },
+    { content: 'Legacy', role: 'assistant', attachments: [{ name: 'Second.pdf', path: 'second.pdf' }] },
+  ], previous)
+  assert.equal(refreshed[0], previous[0])
+  assert.equal(refreshed[1], previous[1])
+  assert.notEqual(refreshed[0], refreshed[1])
+})
+
+for (const change of [
+  { content: 'Updated content' },
+  { delivery: 'accepted' as const },
+  { attachments: [{ path: 'changed.pdf', name: 'Report.pdf' }] },
+  { attachments: [{ path: 'report.pdf', name: 'Renamed.pdf' }] },
+  { attachments: [] },
+  { attachments: [{ path: 'report.pdf', name: 'Report.pdf' }, { path: 'other.pdf', name: 'Other.pdf' }] },
+]) {
+  test(`authoritative changes ${JSON.stringify(change)} replace the old row`, () => {
+    const previous: ChatLine = { ...saved('changed'), fromHistory: true, attachments: [{ path: 'report.pdf', name: 'Report.pdf' }] }
+    const server: ChatLine = { ...previous, ...change }
+    const result = mergeServerHistory([server], [previous])
+    assert.notEqual(result[0], previous)
+    assert.deepEqual(result, referenceMerge([server], [previous]))
+  })
+}
+
+test('indexed matching is differential-equivalent for colliding identities and all row buckets', () => {
+  const variants: readonly ChatLine[] = [
+    { ...saved('m0', 'Question', 'user'), client_submission_id: 's0' },
+    { ...saved('m1', 'Same question', 'user'), client_submission_id: 's1' },
+    { ...saved('m0', 'Collision', 'user'), client_submission_id: 's1' },
+    { ...saved('m1', 'Duplicate entry', 'user'), entry_id: 'm0' },
+    saved('parent', 'Split one'), { ...saved('parent', 'Split two'), entry_id: 'parent:1' },
+    { role: 'tool', content: 'Legacy tool' }, { role: 'assistant', content: 'Legacy answer' },
+  ]
+  const local: readonly ChatLine[] = [
+    { ...saved('old', 'Older'), fromHistory: true },
+    { role: 'user', content: 'Pending', pending: true, client_submission_id: 's1', message_id: 'm0' },
+    { role: 'user', content: 'Repeated', pending: true, client_submission_id: 's1' },
+    { role: 'user', content: 'Receipt', pending: true, message_id: 'm1', delivery: 'accepted' },
+    { role: 'user', content: 'Report.pdf', client_submission_id: 'missing', delivery: 'rejected', attachments: [{ path: 'report.pdf', name: 'Report.pdf' }] },
+    { ...saved('parent', 'Live envelope') },
+    { role: 'tool', content: 'Legacy tool' }, { role: 'assistant', content: 'Legacy answer' },
+    { role: 'assistant', content: 'Other live' },
+  ]
+  for (let mask = 0; mask < 1 << variants.length; mask++) {
+    const server = variants.filter((_, index) => (mask & (1 << index)) !== 0)
+    for (const ordered of [server, server.toReversed()]) {
+      const actual = mergeServerHistory(ordered, local)
+      assert.deepEqual(actual, referenceMerge(ordered, local), `subset ${mask}`)
+      const refreshed = mergeServerHistory(structuredClone(ordered), actual)
+      assert.deepEqual(refreshed, referenceMerge(ordered, actual), `refresh ${mask}`)
+      for (const row of actual.filter((row) => !row.fromHistory)) assert.ok(local.includes(row))
+      for (const row of refreshed.filter((row) => row.entry_id && row.fromHistory)) {
+        assert.equal(row, actual.find((previous) => previous.entry_id === row.entry_id))
+      }
+    }
+  }
 })

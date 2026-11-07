@@ -675,6 +675,56 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             return [ChatMessageRecord.from_row(row) for row in rows]
 
+    async def list_session_after(
+        self, *, conversation_id: str, after: tuple[datetime, UUID], limit: int
+    ) -> Sequence[ChatMessageRecord]:
+        """Oldest-first keyset read of rows at or after a boundary, the boundary row included."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM chat_messages "
+                "WHERE conversation_id = %(conversation_id)s AND (created_at, id) >= (%(created_at)s, %(message_id)s) "
+                "ORDER BY created_at ASC, id ASC LIMIT %(limit)s",
+                {"conversation_id": conversation_id, "created_at": after[0], "message_id": after[1], "limit": limit},
+            )
+            return [ChatMessageRecord.from_row(row) for row in rows]
+
+    async def list_session_changes(
+        self, *, session_id: UUID, revision: str, since: str, limit: int
+    ) -> Sequence[ChatMessageRecord] | None:
+        """Bound the UUID predecessor walk; None means completeness requires a reset."""
+        try:
+            current, previous = UUID(revision), UUID(since)
+        except ValueError:
+            return None
+        async with self.session() as db:
+            changes = await db.fetchall(
+                "WITH RECURSIVE changes AS ("
+                "SELECT previous_revision, message_id, 1 AS depth FROM chat_history_changes "
+                "WHERE session_id = %(session)s AND revision = %(revision)s "
+                "UNION ALL SELECT c.previous_revision, c.message_id, p.depth + 1 "
+                "FROM changes p JOIN chat_history_changes c "
+                "ON c.session_id = %(session)s AND c.revision = p.previous_revision "
+                "WHERE p.previous_revision <> %(since)s AND p.depth < %(limit)s) "
+                "SELECT previous_revision, message_id FROM changes ORDER BY depth",
+                {"session": session_id, "revision": current, "since": previous, "limit": limit + 1},
+            )
+            if (
+                not changes
+                or len(changes) > limit
+                or changes[-1]["previous_revision"] != previous
+                or any(change["message_id"] is None for change in changes)
+            ):
+                return None
+            message_ids = list({change["message_id"] for change in changes})
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM chat_messages "
+                "WHERE conversation_id = %(session)s AND id = ANY(%(ids)s)",
+                {"session": str(session_id), "ids": message_ids},
+            )
+            if len(rows) != len(message_ids):
+                return None  # A deletion/reassignment raced the revision read.
+            return [ChatMessageRecord.from_row(row) for row in rows]
+
     async def list_for_session(
         self,
         *,
@@ -914,6 +964,14 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
 
     async def delete_for_conversation(self, conversation_id: str) -> None:
         async with self.session() as db:
+            await db.execute(
+                "SELECT id FROM chat_sessions WHERE id::text = %(conversation_id)s FOR UPDATE",
+                {"conversation_id": conversation_id},
+            )
+            await db.execute(
+                "DELETE FROM openclaw_reply_bindings WHERE session_id::text = %(conversation_id)s",
+                {"conversation_id": conversation_id},
+            )
             await db.execute(
                 "DELETE FROM chat_messages WHERE conversation_id = %(conversation_id)s",
                 {"conversation_id": conversation_id},

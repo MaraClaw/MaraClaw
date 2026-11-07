@@ -18,8 +18,8 @@ export async function runRetiredReceiptCases({ scenario, capture }) {
       const retired = operation === 'status' ? state.emailRequests.at(-1) : state.cancelRequests[0]
       assert.ok(retired)
       if (retirement === 'route') {
-        await page.getByRole('link', { name: 'Account', exact: true }).click()
-        await expect(page).toHaveURL(/\/account$/)
+    await page.getByRole('link', { name: 'Overview', exact: true }).click()
+    await expect(page).toHaveURL(/\/$/)
         await expect(page.getByLabel('Title', { exact: true })).toHaveCount(0)
         await page.getByRole('link', { name: 'Broadcast', exact: true }).click()
       } else {

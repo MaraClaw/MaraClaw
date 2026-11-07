@@ -14,11 +14,11 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 | `/app/onboarding` | `onboarding.tsx` | `hooks/onboarding-options` mutation (start, create personal assistant, complete); status via the workspace-api facade |
 | `/app/account` | → `/app/settings` | Legacy redirect |
 | `/app/settings` | `settings.tsx` | auth-api (profile, password, SSO bind, tenants/switch); `settings-timezone-card.tsx` for the timezone preference |
-| `/app/admissions`, `/app/admissions/:id` | `admissions.tsx`, `admission-detail.tsx` | company-admissions-api; cursor-paged applicant history (50 per page, status filter, reset on an invalid cursor); detail adds withdrawal and explicit approved workspace entry via auth-api switch/replacement. `transfer-requests.tsx` adds the latest 100 transfer requests above the list |
+| `/app/notifications?category=admissions`, `/app/admissions/:id` | `admissions.tsx`, `admission-detail.tsx` | Inbox composes applicant history with All statuses default (50 per page, status filter, reset on an invalid cursor); `/app/admissions` redirects here. Detail adds withdrawal and explicit approved workspace entry via auth-api switch/replacement. `transfer-requests.tsx` adds cursor-paged transfer requests above the list; detail return links target Inbox Admissions |
 | `/app/admissions/transfers/:id` | `transfer-detail.tsx` | company-transfers-api; saved fee/instructions, withdrawal while in payment review, link to the destination admission. An approved destination admission enters the workspace through `useJoinedWorkspace` |
-| `/app/notifications` | `notifications.tsx` | `hooks/notification-options` through the session-scoped query hooks (cursor-paged list, unread count) and mutation factories that take `scope.client` (read, unread, archive, restore, selected variants); `use-notification-selection`; `lib/notifications-api` only for categories, views and types. Remaps `/plaza…` → `/app/plaza…` |
+| `/app/notifications` | `notifications.tsx` | URL-backed Category selector composes Admissions separately from notification data. Notification categories retain `hooks/notification-options` through the session-scoped query hooks (cursor-paged list, unread count) and mutation factories that take `scope.client` (read, unread, archive, restore, selected variants); `use-notification-selection`; `lib/notifications-api` only for wire categories, views and types. Remaps `/clawbook…` → `/app/clawbook…` |
 | `/app/updates/:noticeId` | `openclaw-update-detail.tsx` | openclaw-updates-api; route uses `openclawUpdateRoute` from `lib/openclaw-update-policy.ts` |
-| `/app/plaza` | `plaza.tsx` | plaza-api; `org_admin` can delete |
+| `/app/clawbook` | `clawbook.tsx` | clawbook-api; `org_admin` can delete |
 | `/app/okr` | `okr.tsx` | okr-api; `org_admin` settings/outreach |
 | `/app/directory` | `directory.tsx` | People/Org Departments icon rail; `?tab=` `?q=`. `org-departments-api` serves org department name cards with org-admin inline rename; `directory-api` serves people from `/api/org/users`. Provider sync and the Synced view are retired |
 | `/app/agents` | `agents-list.tsx` | workspace-api |
@@ -40,16 +40,16 @@ Member `/app/*` screens. Gate: ProtectedRoute → AppShell (owns QueryClient, st
 - Chat events: `ChatInbound` + `onEvent` switch in `agent-chat.tsx`.
 - Chat upload submissions and history carry `attachments: [{path, name}]`; retain those references when replacing pending rows with authoritative history. Cards/renderers live in `components/chat/`, authenticated preview I/O in `lib/attachment-preview-api.ts`. Native downloads still mint fresh tickets; the Files tab is unchanged. Images, PDF and local DOCX/XLSX/PPTX previews are supported; legacy Office remains download-only.
 - Chat history is cursor-paged: the latest window is bridged to the previous newest entry, earlier pages prepend on demand, and `mergeServerHistory` keeps pending and live rows. Composer `@skill` mentions come from the installed-skills query and submit workspace-relative skill paths (`lib/chat/skill-mentions.ts`). Component and library details: `components/chat/` and `lib/chat/` guides.
-- Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, activity, start/stop); (2) `user.role` / `creator_id` (`org_admin` Plaza/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`. Company Grok and ChatGPT subscriptions are connected in web-a; members inherit them through the company pool. If chat fails with no model, the engine message points admins at Models.
+- Authz: (1) `agent.access_level` `use` vs `manage` (vault, tools, publish, activity, start/stop); (2) `user.role` / `creator_id` (`org_admin` Clawbook/OKR; creator delete/approvals). Do not surface LLM provider, model names, or model pickers here — that stays in `web-a` `/models`. Company Grok and ChatGPT subscriptions are connected in web-a; members inherit them through the company pool. If chat fails with no model, the engine message points admins at Models.
 - Permissions tab department grants: `components/agent-department-access.tsx` + `lib/agent-departments-api.ts` (query `['permission-departments', agentId]`). Custom list only; level is `use`, not `manage`. Saving Private or Whole company clears them. Admins create the departments on web-a Users.
 - Directory org departments: `components/org-departments.tsx` + `org-department-card.tsx`, cache key remains `['local-departments']`. Members read `/api/departments/options`; only `org_admin` can rename here. Rename refreshes department names and the `permissions` / `permission-departments` prefixes. Creation and membership stay in web-a Users; never use the privileged `GET /api/departments` for members.
 - Forms: most tabs are useState + sonner, not RHF. Motion wrappers are marketing-only.
-- Query keys invented in pages (`['agent', id]`, `['sessions', agent.id, scope]`, `['plaza', …]`) — keep consistent when sharing. Chat and Take Control deliberately do not share a sessions key (`lib/chat-sessions-query.ts`).
+- Query keys invented in pages (`['agent', id]`, `['sessions', agent.id, scope]`, `['clawbook', …]`) — keep consistent when sharing. Chat and Take Control deliberately do not share a sessions key (`lib/chat-sessions-query.ts`).
 
 ## ANTI-PATTERNS
 
 - Refetching the agent on a tab that already has outlet context.
-- Growing `workspace-api.ts` for Plaza/OKR/directory/control — add `lib/*-api.ts`.
+- Growing `workspace-api.ts` for Clawbook/OKR/directory/control — add `lib/*-api.ts`.
 - Tenant screen only in this folder — also wire route, rail, and icons.
 - Agent tab without `tabs[]` + nested route.
 - RHF or Reveal/Stagger on agent tabs.

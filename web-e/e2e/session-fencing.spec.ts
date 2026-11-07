@@ -141,12 +141,12 @@ test('equal-text persisted completions remain distinct and repeated UUIDs conver
   complete(socket.route, first)
   // Then
   await expect(page.locator('article')).toHaveCount(2)
-  await expect(page.locator('article')).toHaveText([first.content, second.content])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([first.content, second.content])
   chat.setHistory([first, second])
   socket.route.close({ code: 1011 })
   await chat.socket(1)
   await expect.poll(chat.requests).toBeGreaterThan(1)
-  await expect(page.locator('article')).toHaveText([first.content, second.content])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([first.content, second.content])
 })
 
 test('authoritative inline entries replace a whole live parent and reject its late completion', async ({ page }) => {
@@ -157,15 +157,15 @@ test('authoritative inline entries replace a whole live parent and reject its la
   await page.goto(chatPath())
   const socket = await chat.socket()
   complete(socket.route, whole)
-  await expect(page.locator('article')).toHaveText([whole.content])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([whole.content])
   chat.setHistory(split)
   // When
   socket.route.close({ code: 1011 })
   const current = await chat.socket(1)
-  await expect(page.locator('article')).toHaveText(split.map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(split.map((row) => row.content))
   complete(current.route, whole)
   // Then
-  await expect(page.locator('article')).toHaveText(split.map((row) => row.content))
+  await expect(page.locator('article > [data-chat-content]')).toHaveText(split.map((row) => row.content))
   await expect(page.getByText(whole.content, { exact: true })).toHaveCount(0)
 })
 
@@ -188,7 +188,7 @@ test('reconnect fetches missed history without dropping older parents or replayi
   socket.route.close({ code: 1011 })
   const current = await chat.socket(1)
   // Then
-  await expect(page.locator('article')).toHaveText([older.content, overlap.content, sent.content, missed.content])
+  await expect(page.locator('article > [data-chat-content]')).toHaveText([older.content, overlap.content, sent.content, missed.content])
   expect(current.sent).toEqual([])
   expect(envelope.content).toBe(sent.content)
 })
@@ -230,7 +230,7 @@ for (const boundary of ['session', 'owner'] as const) {
     complete(current.route, message('current-frame', 'Current live reply'))
     // Then
     await expect(page.getByText('Current live reply', { exact: true })).toBeVisible()
-    await expect(page.locator('article')).toHaveText(['Current second session', 'Current live reply'])
+    await expect(page.locator('article > [data-chat-content]')).toHaveText(['Current second session', 'Current live reply'])
     expect(first.session).toBe(firstSession)
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
   })

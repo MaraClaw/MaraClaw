@@ -179,7 +179,7 @@ async function syntheticApi(state, incoming, outgoing) {
     const request = { method: incoming.method, path, params: Object.fromEntries(url.searchParams), payload: body ? JSON.parse(body) : undefined }
     receipt.requests.push({ scenario: scenarioName, ...request })
     const tools = /^\/api\/tools(?:\/[^/]+)?$/u.test(path)
-    const ancillary = ['/api/auth/me', '/api/notifications/unread-count', '/api/admin/companies', '/api/admin/search-analytics/summary', '/api/admin/search-analytics/orgs']
+    const ancillary = ['/api/auth/me', '/api/notifications/unread-count', '/api/admin/companies/options', '/api/admin/search-analytics/summary', '/api/admin/search-analytics/orgs']
     assert.ok(tools || ancillary.includes(path), `Blocked unrecognized API ${path}`)
     if (!tools) assert.equal(request.method, 'GET', 'Only Tools mutations are allowed')
     else state.calls.push(request)
@@ -189,7 +189,7 @@ async function syntheticApi(state, incoming, outgoing) {
     switch (path) {
       case '/api/auth/me': response = { body: { ...admin, role: state.role, is_platform_admin: state.role === 'platform_admin' } }; break
       case '/api/notifications/unread-count': response = { body: { unread_count: 0 } }; break
-      case '/api/admin/companies': response = { body: companies }; break
+      case '/api/admin/companies/options': response = { body: companies }; break
       case '/api/admin/search-analytics/summary': response = { body: { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' } }; break
       case '/api/admin/search-analytics/orgs': response = { body: [] }; break
       default:

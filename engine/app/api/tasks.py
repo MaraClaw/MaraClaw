@@ -1,8 +1,10 @@
 """Task management API routes."""
 
 import uuid
+from collections.abc import Sequence
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.domain.tasks import TaskStatus, TaskType
 from app.core.permissions import check_agent_access
@@ -12,7 +14,17 @@ from app.dao.user_dao import user_dao
 from app.records.task import TaskRecord
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import TaskTriggerResponse
-from app.schemas.schemas import TaskCreate, TaskLogCreate, TaskLogOut, TaskOut, TaskUpdate
+from app.schemas.schemas import (
+    TaskCreate,
+    TaskLogCreate,
+    TaskLogOut,
+    TaskLogPage,
+    TaskLogPageCursor,
+    TaskOut,
+    TaskPage,
+    TaskPageCursor,
+    TaskUpdate,
+)
 
 router = APIRouter(prefix="/agents/{agent_id}/tasks", tags=["tasks"])
 
@@ -27,6 +39,18 @@ async def _enrich_task_out(task: TaskRecord) -> TaskOut:
     return out
 
 
+async def _task_outs(tasks: Sequence[TaskRecord]) -> list[TaskOut]:
+    """Convert records to TaskOut with creator labels resolved in one lookup."""
+    creator_ids = {t.created_by for t in tasks if t.created_by}
+    creator_map = await user_dao.labels_for_ids(list(creator_ids)) if creator_ids else {}
+    out_list: list[TaskOut] = []
+    for t in tasks:
+        t_out = TaskOut.model_validate(t)
+        t_out.creator_username = creator_map.get(t.created_by)
+        out_list.append(t_out)
+    return out_list
+
+
 @router.get("/", response_model=list[TaskOut])
 async def list_tasks(
     agent_id: uuid.UUID,
@@ -37,14 +61,43 @@ async def list_tasks(
     """List tasks for an agent."""
     _ = await check_agent_access(current_user, agent_id)
     tasks_list = await task_dao.list_for_agent(agent_id, status=status_filter, task_type=type_filter)
-    creator_ids = {t.created_by for t in tasks_list if t.created_by}
-    creator_map = await user_dao.labels_for_ids(list(creator_ids)) if creator_ids else {}
-    out_list: list[TaskOut] = []
-    for t in tasks_list:
-        t_out = TaskOut.model_validate(t)
-        t_out.creator_username = creator_map.get(t.created_by)
-        out_list.append(t_out)
-    return out_list
+    return await _task_outs(tasks_list)
+
+
+@router.get("/page", response_model=TaskPage)
+async def list_task_page(
+    agent_id: uuid.UUID,
+    status_filter: TaskStatus | None = None,
+    type_filter: TaskType | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+    current_user: UserRecord = Depends(get_current_user),
+) -> TaskPage:
+    """Newest-first page of an agent's tasks; the cursor is bound to the agent and the filters."""
+    _ = await check_agent_access(current_user, agent_id)
+    before = None
+    if cursor is not None:
+        try:
+            position = TaskPageCursor.decode(cursor, agent_id, status_filter, type_filter)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid cursor") from None
+        before = (position.created_at, position.id)
+    rows = await task_dao.list_page_for_agent(
+        agent_id, status=status_filter, task_type=type_filter, limit=limit, before=before
+    )
+    items = await _task_outs(rows[:limit])
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        next_cursor = TaskPageCursor(
+            version=1,
+            agent_id=agent_id,
+            status=status_filter,
+            type=type_filter,
+            created_at=last.created_at,
+            id=last.id,
+        ).encode()
+    return TaskPage(items=items, next_cursor=next_cursor)
 
 
 @router.post("/", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
@@ -83,6 +136,18 @@ async def create_task(
     return task_out
 
 
+@router.get("/{task_id}", response_model=TaskOut)
+async def get_task(
+    agent_id: uuid.UUID, task_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> TaskOut:
+    """Read one authorized task to reconcile a completed execution without replaying history."""
+    _ = await check_agent_access(current_user, agent_id)
+    task = await task_dao.get_for_agent(task_id, agent_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return (await _task_outs([task]))[0]
+
+
 @router.patch("/{task_id}", response_model=TaskOut)
 async def update_task(
     agent_id: uuid.UUID, task_id: uuid.UUID, data: TaskUpdate, current_user: UserRecord = Depends(get_current_user)
@@ -105,6 +170,36 @@ async def get_task_logs(
     _ = await check_agent_access(current_user, agent_id)
     logs = await task_log_dao.list_for_task(task_id)
     return [TaskLogOut.model_validate(log) for log in logs]
+
+
+@router.get("/{task_id}/logs/page", response_model=TaskLogPage)
+async def get_task_log_page(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+    current_user: UserRecord = Depends(get_current_user),
+) -> TaskLogPage:
+    """Oldest-first page of a task's progress logs; the cursor is bound to the agent and the task."""
+    _ = await check_agent_access(current_user, agent_id)
+    if await task_dao.get_for_agent(task_id, agent_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    after = None
+    if cursor is not None:
+        try:
+            position = TaskLogPageCursor.decode(cursor, agent_id, task_id)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid cursor") from None
+        after = (position.created_at, position.id)
+    rows = await task_log_dao.list_page_for_task(task_id, limit=limit, after=after)
+    items = [TaskLogOut.model_validate(row) for row in rows[:limit]]
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        next_cursor = TaskLogPageCursor(
+            version=1, agent_id=agent_id, task_id=task_id, created_at=last.created_at, id=last.id
+        ).encode()
+    return TaskLogPage(items=items, next_cursor=next_cursor)
 
 
 @router.post("/{task_id}/logs", response_model=TaskLogOut, status_code=status.HTTP_201_CREATED)

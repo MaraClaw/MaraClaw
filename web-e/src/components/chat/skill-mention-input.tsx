@@ -1,5 +1,5 @@
 import type { UseQueryResult } from '@tanstack/react-query'
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
 import { Textarea } from '@/components/ui/textarea'
 import type { InstalledAgentSkill } from '@/lib/agent-skills-api'
@@ -14,12 +14,13 @@ type SkillMentionInputProps = {
   readonly textareaRef: RefObject<HTMLTextAreaElement | null>
   readonly skillsQuery: UseQueryResult<readonly InstalledAgentSkill[]>
   readonly isCurrent: () => boolean
+  readonly toolbar?: ReactNode
 }
 
 // Both layers must have identical glyph metrics, wrapping, padding and scrollbar space.
 const composerTextClass = 'w-full whitespace-pre-wrap break-words rounded-xl border px-3.5 py-2.5 font-sans text-sm font-normal tracking-normal [scrollbar-gutter:stable]'
 
-export function SkillMentionInput({ agentName, value, onValueChange, onSend, textareaRef, skillsQuery, isCurrent }: SkillMentionInputProps) {
+export function SkillMentionInput({ agentName, value, onValueChange, onSend, textareaRef, skillsQuery, isCurrent, toolbar }: SkillMentionInputProps) {
   const id = useId()
   const [selection, setSelection] = useState({ start: value.length, end: value.length })
   const [focused, setFocused] = useState(false)
@@ -139,15 +140,16 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
             {skillsQuery.data?.length ? 'No matching installed skills.' : 'No skills installed for this agent.'}
           </p>}
     </section> : null}
+    <div className={cn(toolbar && 'rounded-xl border border-input shadow-xs has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40')}>
     <div className="relative">
       <div ref={backdropRef} aria-hidden="true" data-slot="skill-mention-backdrop"
-        className={cn(composerTextClass, 'pointer-events-none absolute inset-0 overflow-x-hidden overflow-y-auto border-transparent text-transparent')}>
+        className={cn(composerTextClass, 'pointer-events-none absolute inset-0 overflow-x-hidden overflow-y-auto border-transparent text-transparent', toolbar && 'border-0')}>
         {resolveSkillMentionSegments(value, skillsQuery.data ?? []).map((segment) => segment.skill
           ? <span key={segment.start} data-slot="skill-mention-chip" className="box-decoration-clone rounded-md bg-accent">{segment.text}</span>
           : segment.text)}{'\n'}
       </div>
       <Textarea ref={textareaRef} aria-label={`Message ${agentName}`} value={value} placeholder={`Message ${agentName}…`}
-      className={cn(composerTextClass, 'relative max-h-32 overflow-y-auto')} onScroll={syncBackdropScroll}
+      className={cn(composerTextClass, 'relative max-h-32 overflow-y-auto', toolbar && 'border-0 shadow-none focus-visible:ring-0')} onScroll={syncBackdropScroll}
       aria-controls={open ? `${id}-skills` : undefined} aria-describedby={`${id}-hint`} onKeyDown={onKeyDown}
       onChange={(event) => {
         if (!isCurrent()) return
@@ -160,6 +162,8 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       onCompositionStart={() => { composingRef.current = true; setComposing(true) }}
       onCompositionEnd={() => { composingRef.current = false; setComposing(false) }} />
+    </div>
+    {toolbar}
     </div>
     <p id={`${id}-hint`} className="mt-1.5 text-xs text-muted-foreground">Type @ to use an installed skill.{open ? ' ↑↓ to choose · Enter or Tab to insert · Esc to close' : ''}</p>
     <span role="status" className="sr-only">{open && current ? `${choices.length} installed skills. @${current.name}, ${activeIndex + 1} of ${choices.length}.` : ''}</span>

@@ -8,37 +8,36 @@ import { chatHistoryKey, chatLatestOptions, loadEarlierHistory } from '../src/li
 import type { ChatHistory } from '../src/lib/chat/history.ts'
 import { historyCursor, historyPage, historyRows, historyTarget } from './chat-history-fixture.ts'
 
-test('newest refresh bridges more than a page of arrivals without refetching loaded older pages', async (context) => {
+test('a long gap resets to one bounded latest page without bridging older pages', async (context) => {
   // Given
   const client = new QueryClient()
   context.after(() => client.clear())
   const scope = createSessionQueryScope(authSession, authSession.capture(), client)
   client.setQueryData(chatHistoryKey(historyTarget), historyPage(0, 100, historyCursor))
-  const requests: (string | null)[] = []
+  const requests: URLSearchParams[] = []
   context.mock.method(globalThis, 'fetch', async (path: string) => {
-    const cursor = new URL(path, 'https://fixture.test').searchParams.get('cursor')
-    requests.push(cursor)
-    return Response.json(cursor === null ? historyPage(200, 250, 'bridge-200')
-      : cursor === 'bridge-200' ? historyPage(150, 200, 'bridge-150')
-        : cursor === 'bridge-150' ? historyPage(100, 150, 'bridge-100') : historyPage(50, 100, 'unused-50'))
+    requests.push(new URL(path, 'https://fixture.test').searchParams)
+    return Response.json({ kind: 'reset', page: historyPage(200, 250, 'reset-200') })
   })
   // When
   await client.fetchQuery(chatLatestOptions(scope, historyTarget))
   // Then
-  assert.deepEqual(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.items, historyRows(0, 250))
-  assert.equal(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.next_cursor, historyCursor)
-  assert.deepEqual(requests, [null, 'bridge-200', 'bridge-150', 'bridge-100'])
+  assert.deepEqual(client.getQueryData(chatHistoryKey(historyTarget)), historyPage(200, 250, 'reset-200'))
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0]?.has('cursor'), false)
+  assert.equal(requests[0]?.get('revision'), 'revision-100')
+  assert.equal(requests[0]?.get('after_message_id'), historyRows(99, 100)[0]?.message_id)
+  assert.equal(requests[0]?.get('after_created_at'), historyRows(99, 100)[0]?.created_at)
 })
 
-test('a failed gap bridge leaves the complete previous range and cursor untouched', async (context) => {
+test('a failed conditional refresh leaves the complete previous range and cursor untouched', async (context) => {
   // Given
   const client = new QueryClient()
   context.after(() => client.clear())
   const scope = createSessionQueryScope(authSession, authSession.capture(), client)
   const retained = historyPage(0, 50, historyCursor)
   client.setQueryData(chatHistoryKey(historyTarget), retained)
-  context.mock.method(globalThis, 'fetch', async (path: string) => new URL(path, 'https://fixture.test').searchParams.has('cursor')
-    ? Response.json({}, { status: 503 }) : Response.json(historyPage(100, 150, 'gap')))
+  context.mock.method(globalThis, 'fetch', async () => Response.json({}, { status: 503 }))
   // When / Then
   await assert.rejects(client.fetchQuery(chatLatestOptions(scope, historyTarget)))
   assert.deepEqual(client.getQueryData(chatHistoryKey(historyTarget)), retained)
@@ -50,7 +49,9 @@ test('earlier errors are retryable and cannot poison newest readiness or refetch
   const scope = createSessionQueryScope(authSession, authSession.capture(), client)
   let olderRequests = 0
   context.mock.method(globalThis, 'fetch', async (path: string) => {
-    if (!new URL(path, 'https://fixture.test').searchParams.has('cursor')) return Response.json(historyPage(50, 100, historyCursor))
+    const params = new URL(path, 'https://fixture.test').searchParams
+    if (params.has('revision')) return Response.json({ kind: 'unchanged', revision: 'revision-100' })
+    if (!params.has('cursor')) return Response.json(historyPage(50, 100, historyCursor))
     olderRequests++
     return olderRequests === 1 ? Response.json({}, { status: 503 }) : Response.json(historyPage(0, 51))
   })
@@ -78,7 +79,7 @@ test('concurrent older loading and newest refresh retain both commits and the ol
   const requested = Promise.withResolvers<void>()
   const response = Promise.withResolvers<Response>()
   context.mock.method(globalThis, 'fetch', async (path: string) => {
-    if (!new URL(path, 'https://fixture.test').searchParams.has('cursor')) return Response.json(historyPage(75, 125, 'refresh-cursor'))
+    if (!new URL(path, 'https://fixture.test').searchParams.has('cursor')) return Response.json({ kind: 'delta', revision: 'revision-125', items: historyRows(99, 125) })
     requested.resolve()
     return response.promise
   })
@@ -91,6 +92,7 @@ test('concurrent older loading and newest refresh retain both commits and the ol
   // Then
   assert.deepEqual(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.items, historyRows(0, 125))
   assert.equal(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.next_cursor, null)
+  assert.equal(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.revision, 'revision-125')
 })
 
 test('a retired session view aborts its page without changing retained history or another session cache', async (context) => {

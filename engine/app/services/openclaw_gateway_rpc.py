@@ -24,8 +24,9 @@ from pydantic import (
     ValidatorFunctionWrapHandler,
     field_validator,
 )
-from pywhales import observation
-from pywhales.exceptions import DockerException
+from pywhales import ClientNotFoundError, observation
+from pywhales.client_config import ParsingError
+from pywhales.exceptions import DockerException, ObservationCancelled, ObservationLimitError, ObservationTimeout
 
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
@@ -33,6 +34,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.guest_bootstrap import BOOTSTRAP_PENDING_EXIT, BOOTSTRAP_PENDING_STDERR, guarded_argv
 from app.services.guest_identity import GuestOwnershipError, guest_resolutions, resolve_guest
+from app.services.onboarding_greeting import build_identity_context
 from app.services.openclaw_gateway_stream import EXEC_POLICY, DeltaRelay, streams_to_web
 from app.services.openclaw_turns import runtime_session_key
 from app.services.openclaw_update_exclusion import guest_write_section
@@ -182,19 +184,41 @@ async def execute_gateway_turn(
         if fresh is None or fresh.creator_id != agent.creator_id or fresh.tenant_id != agent.tenant_id:
             return NotAdmittedOutcome(message_id, "not_submitted", "agent_changed")
         guest = guest_resolutions.get(fresh)
-        if guest is None:
-            try:
+        try:
+            if guest is None:
 
                 def inspect():
                     with observation(_policy, deadline=monotonic() + 10):
                         return resolve_guest(client, fresh)
 
                 guest = await drain_on_cancel(asyncio.to_thread(inspect))
-            except DockerException, GuestOwnershipError:
-                return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
-            if guest is None:
-                return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
-            guest_resolutions.put(fresh, guest)
+                if guest is None:
+                    return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
+                guest_resolutions.put(fresh, guest)
+
+            def inspect_running() -> bool:
+                with observation(_policy, deadline=monotonic() + 10):
+                    state = client.container.inspect(guest.id).state
+                    return state is not None and state.running is True
+
+            running = await drain_on_cancel(asyncio.to_thread(inspect_running))
+        except (
+            ClientNotFoundError,
+            DockerException,
+            GuestOwnershipError,
+            ObservationCancelled,
+            ObservationLimitError,
+            ObservationTimeout,
+            OSError,
+            ParsingError,
+            ValidationError,
+        ):
+            guest_resolutions.drop(agent.id)
+            return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
+        if not running:
+            guest_resolutions.drop(agent.id)
+            return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
+        identity_context = await build_identity_context(fresh, message.sender_user_id)
         try:
             agent_dir = agent_manager._agent_dir(agent.id)
             prepare_native_gateway_files(agent_dir)
@@ -206,7 +230,7 @@ async def execute_gateway_turn(
                 "sessionKey": runtime_session_key(message),
                 "message": message.content,
                 "modelRef": message.guest_model_ref,
-                "extraSystemPrompt": identity_prompt(),
+                "extraSystemPrompt": f"{identity_prompt()}\n\n{identity_context}",
                 "timeoutSeconds": 900,
             }
             if stream_reply:

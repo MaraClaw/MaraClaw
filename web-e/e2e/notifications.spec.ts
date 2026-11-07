@@ -16,7 +16,7 @@ test('category switching during a request never displays another category’s la
   })
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
-  await expect(category.getByRole('option')).toHaveText(['All', 'Tools', 'Approvals', 'Social', 'Broadcasts'])
+  await expect(category.getByRole('option')).toHaveText(['All', 'Tools', 'Approvals', 'Social', 'Broadcasts', 'Admissions'])
   await category.focus()
   await expect(category).toBeFocused()
   // When
@@ -74,7 +74,7 @@ test('bulk read includes unread rows beyond the page and preserves unrelated bad
 
 test('broadcast bulk read refreshes both social and broadcast views', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [notice('Announcement', NotificationKind.Broadcast), notice('Comment', NotificationKind.PlazaComment), notice('Approval', NotificationKind.ApprovalResolved)])
+  await prepareNotifications(page, [notice('Announcement', NotificationKind.Broadcast), notice('Comment', NotificationKind.ClawbookComment), notice('Approval', NotificationKind.ApprovalResolved)])
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
   await category.selectOption('social')
@@ -123,10 +123,10 @@ test('failed bulk requests preserve unread rows and badge until a successful ret
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*1 unread$/ }).first()).toBeVisible()
 })
 
-test('notification links keep Plaza remapping and existing member destinations', async ({ page }) => {
+test('notification links keep Clawbook remapping and existing member destinations', async ({ page }) => {
   // Given
   await prepareNotifications(page, [
-    { ...notice('Plaza', NotificationKind.Mention), link: '/plaza?post=one#reply' },
+    { ...notice('Clawbook', NotificationKind.Mention), link: '/clawbook?post=one#reply' },
     { ...notice('Admission', NotificationKind.CompanyAdmissionResolved), link: '/app/admissions/request-a' },
     { ...notice('Agent', NotificationKind.AutonomyL2), link: '/app/agents/agent-a/chat' },
     { ...notice('Update', NotificationKind.OpenClawUpdate), link: '/app/updates/update-a' },
@@ -134,7 +134,7 @@ test('notification links keep Plaza remapping and existing member destinations',
   // When
   await page.goto(inboxPath)
   // Then
-  for (const [title, href] of [['Plaza', '/app/plaza?post=one#reply'], ['Admission', '/app/admissions/request-a'], ['Agent', '/app/agents/agent-a/chat'], ['Update', '/app/updates/update-a']]) {
+  for (const [title, href] of [['Clawbook', '/app/clawbook?post=one#reply'], ['Admission', '/app/admissions/request-a'], ['Agent', '/app/agents/agent-a/chat'], ['Update', '/app/updates/update-a']]) {
     await expect(page.getByRole('link', { name: `Open notification: ${title}`, exact: true })).toHaveAttribute('href', href)
   }
 })
@@ -164,7 +164,7 @@ test('late paginated rows cannot cross a retired session boundary', async ({ pag
 
 test('archive preserves unread state and links while Active bulk read excludes Archived', async ({ page }) => {
   // Given
-  await prepareNotifications(page, [{ ...notice('Announcement', NotificationKind.Broadcast), link: '/plaza?post=one' }, notice('Tool', NotificationKind.AutonomyL2)])
+  await prepareNotifications(page, [{ ...notice('Announcement', NotificationKind.Broadcast), link: '/clawbook?post=one' }, notice('Tool', NotificationKind.AutonomyL2)])
   await page.goto(inboxPath)
   const category = page.getByLabel('Category', { exact: true })
   await category.selectOption('broadcast')
@@ -176,7 +176,7 @@ test('archive preserves unread state and links while Active bulk read excludes A
   await page.getByRole('button', { name: 'Archived', exact: true }).click()
   await expect(category).toHaveValue('broadcast')
   await expect(page.getByRole('button', { name: 'Mark all read', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('link', { name: 'Open notification: Announcement', exact: true })).toHaveAttribute('href', '/app/plaza?post=one')
+  await expect(page.getByRole('link', { name: 'Open notification: Announcement', exact: true })).toHaveAttribute('href', '/app/clawbook?post=one')
   await expect(page.getByRole('button', { name: 'Mark as read: Announcement', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Active', exact: true }).click()
   await category.selectOption('all')
@@ -226,7 +226,7 @@ for (const width of [390, 1440, 1920]) {
         test(`backgrounds converge when marking ${readMode} read`, async ({ page }, testInfo) => {
           // Given mixed read states with the existing labels and destinations.
           await prepareNotifications(page, [
-            { ...notice('company-announcement', NotificationKind.Broadcast), title: 'Company announcement', body: 'Review the latest company news and upcoming team plans.', link: '/plaza?post=announcement' },
+            { ...notice('company-announcement', NotificationKind.Broadcast), title: 'Company announcement', body: 'Review the latest company news and upcoming team plans.', link: '/clawbook?post=announcement' },
             { ...notice('tool-request', NotificationKind.AutonomyL2), title: 'Tool request ready', body: 'Your requested tool is available for the next task.' },
             { ...notice('membership-approved', NotificationKind.CompanyAdmissionResolved, true), title: 'Membership approved', body: 'Your membership request has been approved.', link: '/app/admissions/request-a' },
           ])

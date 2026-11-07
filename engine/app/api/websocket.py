@@ -31,6 +31,8 @@ from app.services.chat_submissions import (
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
+from app.services.onboarding_greeting import build_greeting_request
+from app.services.openclaw_gateway_delivery import CHUNK_SEND_TIMEOUT_SECONDS
 from app.services.openclaw_routing import (
     GuestConfigWriteError,
     NoCompanyModelError,
@@ -44,7 +46,12 @@ from app.services.quota_guard import (
     check_agent_expired,
 )
 from app.services.realtime import realtime_router
-from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, is_shared_target
+from app.services.realtime_runtime.chat_authorization import (
+    authorize_chat_delivery,
+    is_shared_target,
+    read_shared_acl_version,
+)
+from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.router import PRESENCE_REFRESH_SECONDS
 from app.services.shared_chat import is_shared_session, require_writable_session
 
@@ -120,20 +127,41 @@ class ConnectionManager:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> None:
-        if agent_id not in self.active_connections:
+        """Deliver one received event to the matching local sockets before the subscriber takes the next one.
+
+        Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Chunks get the same per-socket send
+        bound the publisher uses, so a stalled receiver delays the subscriber loop by at most that bound.
+        """
+        targets = [
+            (ws, sid)
+            for ws, sid, uid in list(self.active_connections.get(agent_id, []))
+            if (session_id is None or sid == session_id) and (user_id is None or uid == user_id)
+        ]
+        if not targets:
             return
-        for ws, sid, uid in list(self.active_connections[agent_id]):
-            if session_id is not None and sid != session_id:
-                continue
-            if user_id is not None and uid != user_id:
-                continue
+        try:
+            text = encode_event_text(serialize_chat_server_event(payload))
+        except Exception as error:
+            report_exception(error, source="websocket", operation="pubsub-delivery")
+            logger.warning(f"[WS] Failed to encode message for connected clients: {error}")
+            return
+        acl_version = await read_shared_acl_version(agent_id, (sid for _, sid in targets))
+        send_timeout = CHUNK_SEND_TIMEOUT_SECONDS if payload.get("type") == ChatEventType.CHUNK else None
+
+        async def deliver(target: tuple[WebSocket, str | None]) -> bool:
+            ws, sid = target
             try:
-                if not await authorize_chat_delivery(ws, agent_id, sid):
-                    continue
-                await _send_chat_event(ws, payload)
+                if not await authorize_chat_delivery(ws, agent_id, sid, acl_version=acl_version):
+                    return False
+                async with asyncio.timeout(send_timeout):
+                    await ws.send_text(text)
             except Exception as error:
                 report_exception(error, source="websocket", operation="pubsub-delivery")
                 logger.warning(f"[WS] Failed to send message to connected client: {error}")
+                return False
+            return True
+
+        _ = await fan_out(targets, deliver)
 
     async def send_message(self, agent_id: str, message: RealtimeMessage):
         await realtime_router.route_message(
@@ -434,7 +462,11 @@ class WebSocketChatHandler:
                 continue
 
             try:
-                prepared = await prepare_openclaw_message(agent=self.agent, content=content, history=self.conversation)
+                prepared = await prepare_openclaw_message(
+                    agent=self.agent,
+                    content=await build_greeting_request(self.agent, self.user),
+                    history=self.conversation,
+                )
             except NoCompanyModelError as exc:
                 logger.warning("[WS] OpenClaw preparation blocked: {}", exc)
                 await _send_chat_event(

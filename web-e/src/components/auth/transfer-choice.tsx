@@ -54,7 +54,7 @@ export function TransferChoice({ quote, busy, error, onCancel, onConfirm }: {
               <span>I explicitly agree to delete my agents and integrations when I confirm this transfer. I understand this cannot be undone.</span>
             </label> : null}
           </fieldset>
-          <p className="text-sm text-muted-foreground">Historical chats, tasks, audit and activity records, accounting, Plaza content, revisions, files and memory remain attributed to the source organization. With a free transfer they are retained for compliance, not erased, and you lose access.</p>
+          <p className="text-sm text-muted-foreground">Historical chats, tasks, audit and activity records, accounting, Clawbook content, revisions, files and memory remain attributed to the source organization. With a free transfer they are retained for compliance, not erased, and you lose access.</p>
           {choice === 'paid' ? <div className="space-y-2 rounded-xl bg-muted/50 p-4 text-sm">
             <h2 className="font-medium">Payment instructions</h2>
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{quote.instructions || 'No payment instructions provided. Contact support before paying.'}</p>

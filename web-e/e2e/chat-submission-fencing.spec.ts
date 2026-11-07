@@ -155,7 +155,7 @@ for (const retireOwner of [false, true]) {
       socket.route.close({ code: 1006 })
       const reconnect = await chat.socket(1)
       await expect.poll(() => reconnect.sent).toEqual(socket.sent)
-      await expect(page.locator('article')).toHaveText(['Created once'])
+      await expect(page.locator('article > [data-chat-content]')).toHaveText(['Created once'])
     }
   })
 }

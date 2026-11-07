@@ -12,5 +12,5 @@ export function useAdmissionAccess() {
     retry: false,
     refetchInterval: (query) => query.state.data === true ? 30_000 : false,
   })
-  return { ...query, workspaceAllowed: query.isSuccess && query.data === false }
+  return { ...query, workspaceAllowed: tenantId !== null && query.isSuccess && query.data === false }
 }

@@ -12,6 +12,7 @@ from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
 from app.services.storage_runtime.base import ConditionalWriteResult, StorageBackend, StorageEntry, StorageVersion
+from app.services.storage_runtime.fallback import FallbackStorageBackend
 
 
 class _FakeDb:
@@ -215,3 +216,191 @@ async def test_agent_manager_materializes_s3_prefix_directory(monkeypatch, tmp_p
 
     assert (agent_dir / "soul.md").read_text(encoding="utf-8") == "# Soul\n"
     assert (agent_dir / "memory" / "memory.md").read_text(encoding="utf-8") == "# Memory\n"
+
+
+TENANT_ID = uuid.uuid4()
+
+
+def make_tenant_user() -> UserRecord:
+    return UserRecord(
+        id=uuid.uuid4(), display_name="Tenant User", role=UserRole.MEMBER, tenant_id=TENANT_ID, is_active=True
+    )
+
+
+async def read_pages(agent_id: uuid.UUID, user: UserRecord, *, path: str = "", limit: int) -> list[files.FileInfoPage]:
+    pages: list[files.FileInfoPage] = []
+    cursor: str | None = None
+    while True:
+        page = await files.list_files_page(agent_id, path=path, limit=limit, cursor=cursor, current_user=user)
+        pages.append(page)
+        cursor = page.next_cursor
+        if cursor is None:
+            return pages
+
+
+@pytest.fixture
+def agent_id(monkeypatch: pytest.MonkeyPatch) -> uuid.UUID:
+    monkeypatch.setattr(files, "check_agent_access", allow_access)
+    return uuid.uuid4()
+
+
+def use_storage(monkeypatch: pytest.MonkeyPatch, storage: StorageBackend) -> None:
+    monkeypatch.setattr(files, "get_storage_backend", lambda: storage)
+
+
+async def test_page_fills_past_hidden_entries_and_only_the_first_root_page_has_enterprise_info(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given: hidden names fall inside and at the edge of every page
+    names = (".gitkeep", "a1", "agenda.md", "b1", "focus.md", "g1", "g2", "Focus.MD", "h1")
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in names}))
+    # When
+    pages = await read_pages(agent_id, make_tenant_user(), limit=2)
+    # Then
+    assert [[item.name for item in page.items] for page in pages] == [
+        ["enterprise_info", "a1", "b1"],
+        ["g1", "g2"],
+        ["h1"],
+    ]
+    assert [page.next_cursor is None for page in pages] == [False, False, True]
+
+
+async def test_page_crosses_folder_boundaries_in_key_order_without_repeating_a_folder(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    use_storage(
+        monkeypatch,
+        PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in ("a.txt", "a/x", "a/y", "a0", "b/y/z", "c.txt")}),
+    )
+    # When
+    pages = await read_pages(agent_id, make_user(), limit=2)
+    # Then
+    rows = [[(item.name, item.is_dir, item.path) for item in page.items] for page in pages]
+    assert rows == [
+        [("a.txt", False, "a.txt"), ("a", True, "a")],
+        [("a0", False, "a0"), ("b", True, "b")],
+        [("c.txt", False, "c.txt")],
+    ]
+    assert pages[0].items[0].url == f"/api/agents/{agent_id}/files/download?path=a.txt"
+    assert pages[0].items[1].url is None
+
+
+async def test_page_lists_a_subfolder_with_paths_relative_to_the_agent(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/docs/{name}": b"x" for name in ("a.md", "b.md", "c.md")}))
+    # When
+    pages = await read_pages(agent_id, make_tenant_user(), path="docs", limit=2)
+    # Then
+    assert [[item.path for item in page.items] for page in pages] == [["docs/a.md", "docs/b.md"], ["docs/c.md"]]
+
+
+@pytest.mark.parametrize("path", ["", "/", "./", "docs/..", "//"])
+async def test_page_treats_every_spelling_of_the_root_as_the_root(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, path: str
+):
+    # Given
+    names = (".gitkeep", "agenda.md", "focus.md", "enterprise_info", "notes.md")
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in names}))
+    # When
+    page = await files.list_files_page(agent_id, path=path, limit=10, cursor=None, current_user=make_tenant_user())
+    # Then
+    assert [item.name for item in page.items] == ["enterprise_info", "notes.md"]
+    assert page.items[0].path == "enterprise_info"
+    assert page.next_cursor is None
+
+
+async def test_page_lists_enterprise_info_without_the_synthetic_row_or_root_filters(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    root = f"enterprise_info_{TENANT_ID}"
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{root}/{name}": b"x" for name in ("focus.md", "kb/a.md", "z.md")}))
+    # When
+    pages = await read_pages(agent_id, make_tenant_user(), path="enterprise_info", limit=2)
+    # Then
+    assert [[(item.name, item.path) for item in page.items] for page in pages] == [
+        [("focus.md", "enterprise_info/focus.md"), ("kb", "enterprise_info/kb")],
+        [("z.md", "enterprise_info/z.md")],
+    ]
+
+
+async def test_page_allows_an_empty_agent_root_and_a_user_without_a_tenant(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    use_storage(monkeypatch, PrefixOnlyStorage())
+
+    page = await files.list_files_page(agent_id, path="", limit=5, cursor=None, current_user=make_user())
+
+    assert (page.items, page.next_cursor) == ([], None)
+
+
+@pytest.mark.parametrize(("path", "status_code"), [("missing", 404), ("notes.md", 400)])
+async def test_page_rejects_a_missing_path_and_a_file_path(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, path: str, status_code: int
+):
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/notes.md": b"x"}))
+
+    with pytest.raises(HTTPException) as raised:
+        _ = await files.list_files_page(agent_id, path=path, limit=5, cursor=None, current_user=make_user())
+
+    assert raised.value.status_code == status_code
+
+
+async def test_page_cursor_is_refused_for_another_agent_another_path_or_tampering(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    other_agent = uuid.uuid4()
+    objects = {f"{agent_id}/{name}": b"x" for name in ("a", "b", "c", "docs/x")} | {f"{other_agent}/a": b"x"}
+    use_storage(monkeypatch, PrefixOnlyStorage(objects))
+    user = make_user()
+    first = await files.list_files_page(agent_id, path="", limit=1, cursor=None, current_user=user)
+    assert first.next_cursor is not None
+    attempts = [
+        (agent_id, "docs", first.next_cursor),
+        (other_agent, "", first.next_cursor),
+        (agent_id, "", first.next_cursor[:-2] + "AA"),
+        (agent_id, "", "not-a-cursor"),
+        (agent_id, "", ""),
+    ]
+    # When / Then
+    for target, path, cursor in attempts:
+        with pytest.raises(HTTPException) as raised:
+            _ = await files.list_files_page(target, path=path, limit=1, cursor=cursor, current_user=user)
+        assert (raised.value.status_code, raised.value.detail) == (400, "Invalid cursor")
+    resumed = await files.list_files_page(agent_id, path="/", limit=5, cursor=first.next_cursor, current_user=user)
+    assert [item.name for item in resumed.items] == ["b", "c", "docs"]
+
+
+async def test_page_resumes_through_the_fallback_merge_across_primary_and_legacy(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    primary = PrefixOnlyStorage({f"{agent_id}/{name}": b"new" for name in ("a.txt", "b/x", "d.txt", "focus.md")})
+    legacy = PrefixOnlyStorage({f"{agent_id}/{name}": b"old!" for name in ("a.txt", "b/y", "c.txt", ".gitkeep")})
+    use_storage(monkeypatch, FallbackStorageBackend(primary, legacy))
+    # When
+    pages = await read_pages(agent_id, make_user(), limit=2)
+    # Then
+    assert [[(item.name, item.is_dir) for item in page.items] for page in pages] == [
+        [("a.txt", False), ("b", True)],
+        [("c.txt", False), ("d.txt", False)],
+    ]
+    assert pages[0].items[0].size == len(b"new")
+
+
+async def test_unpaged_listing_still_returns_the_whole_folders_first_listing(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
+):
+    # Given
+    use_storage(
+        monkeypatch,
+        PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in ("a.txt", "z/x", ".gitkeep", "focus.md", "b.txt")}),
+    )
+    # When
+    listing = await files.list_files(agent_id, path="", current_user=make_tenant_user())
+    # Then
+    assert [item.name for item in listing] == ["enterprise_info", "z", "a.txt", "b.txt"]

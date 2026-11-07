@@ -89,7 +89,7 @@ async def test_final_disposition_stops_runtime_without_rewriting_history_ownersh
     assert not result.heartbeat_enabled
     deleted_tables = {sql.split()[2] for sql in statements if sql.startswith("DELETE FROM")}
     assert not deleted_tables.intersection(
-        {"agents", "chat_messages", "chat_sessions", "tasks", "audit_logs", "plaza_posts"}
+        {"agents", "chat_messages", "chat_sessions", "tasks", "audit_logs", "clawbook_posts"}
     )
     if choice == TransferChoice.FREE:
         assert result.creator_id != agent.creator_id

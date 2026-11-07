@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter
 from tests.analytics_response_fixtures import export_status_projection
 
-from app.api import admin_search_analytics, plaza
+from app.api import admin_search_analytics, clawbook
 from app.api.auth import get_current_user
 from app.core.json_types import JsonObject
 from app.dao.analytics_projection_contracts import SearchAnalyticsExportStatusProjection
@@ -36,7 +36,7 @@ async def test_export_status_keeps_complete_projection_identity_and_raw_timestam
     assert result["prefix"] == "web-search"
 
 
-async def test_plaza_stats_transport_keeps_opaque_contributor_labels_and_extensions(
+async def test_clawbook_stats_transport_keeps_opaque_contributor_labels_and_extensions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, object] = {
@@ -50,14 +50,14 @@ async def test_plaza_stats_transport_keeps_opaque_contributor_labels_and_extensi
         del tenant_id
         return payload
 
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_stats", stats)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_stats", stats)
     app = FastAPI()
-    app.include_router(plaza.router)
+    app.include_router(clawbook.router)
     actor = UserRecord(id=uuid4(), tenant_id=uuid4())
     monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: actor)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/plaza/stats")
+        response = await client.get("/api/clawbook/stats")
 
     assert response.status_code == 200
     assert TypeAdapter(JsonObject).validate_json(response.content) == payload

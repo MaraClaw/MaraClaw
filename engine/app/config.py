@@ -230,18 +230,18 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5174",
     ]
 
-    # Linkup API key: seeds the DB ring when empty; proxy uses the ring after that.
-    LINKUP_API_KEY: str = ""
+    # Tavily API key: seeds the DB ring when empty; proxy uses the ring after that.
+    TAVILY_API_KEY: str = ""
     # xAI key for Search X and Grok Imagine when the tool config api_key is empty.
     XAI_API_KEY: str = ""
-    # Guest skills call this base instead of https://api.linkup.so when the proxy is on.
-    LINKUP_PROXY_ENABLED: bool = True
-    LINKUP_PROXY_BASE_URL: str = ""
+    # Guest skills call this base instead of https://api.tavily.com when the proxy is on.
+    TAVILY_PROXY_ENABLED: bool = True
+    TAVILY_PROXY_BASE_URL: str = ""
     # Proxy bounds: request body ceiling, decoded upstream response ceiling, and one total deadline per call.
-    LINKUP_PROXY_MAX_REQUEST_BYTES: int = Field(default=1048576, gt=0, le=268435456)
-    LINKUP_PROXY_MAX_RESPONSE_BYTES: int = Field(default=10485760, gt=0, le=1073741824)
-    LINKUP_PROXY_DEADLINE_SECONDS: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
-    # Search analytics: capture billed Linkup POSTs; export is off until a bucket is set.
+    TAVILY_PROXY_MAX_REQUEST_BYTES: int = Field(default=1048576, gt=0, le=268435456)
+    TAVILY_PROXY_MAX_RESPONSE_BYTES: int = Field(default=10485760, gt=0, le=1073741824)
+    TAVILY_PROXY_DEADLINE_SECONDS: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
+    # Search analytics: capture billed Tavily POSTs; export is off until a bucket is set.
     WEB_SEARCH_ANALYTICS_CAPTURE_ENABLED: bool = True
     WEB_SEARCH_ANALYTICS_EXPORT_ENABLED: bool = False
     WEB_SEARCH_ANALYTICS_INCLUDE_RAW: bool = False

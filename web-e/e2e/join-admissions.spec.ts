@@ -17,7 +17,7 @@ test('join opens admissions when a tenantless initial application is pending', a
   // When
   await page.goto('/join')
   // Then
-  await expect(page).toHaveURL('/app/admissions')
+  await expect(page).toHaveURL('/app/notifications?category=admissions')
   await expect(page.getByRole('link', { name: `View request for ${pending.target_tenant.name}` })).toBeVisible()
   expect(calls.filter((path) => path.startsWith('/api/tenants/join'))).toEqual([])
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('source-token')

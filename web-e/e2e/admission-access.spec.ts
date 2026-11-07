@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { accessEndpoint, member, pending, prepareAccess, restrictedLabels, target, tokenKey, workspaceLabels, workspaceRequests } from './admission-access-fixture'
 
 for (const width of [390, 1440]) {
-  test(`persisted pending registration exposes only three destinations after reload at ${width}px`, async ({ page }, testInfo) => {
+  test(`persisted pending registration exposes only Inbox and Settings after reload at ${width}px`, async ({ page }, testInfo) => {
     // Given
     const { calls } = await prepareAccess(page, pending, false)
     await page.setViewportSize({ width, height: 900 })
@@ -20,20 +20,20 @@ for (const width of [390, 1440]) {
     await expect(page.getByText('Awaiting review', { exact: true })).toBeVisible()
     const nav = page.getByRole('navigation', { name: 'Workspace', exact: true })
     await expect(nav.getByRole('link')).toHaveText(restrictedLabels)
-    await expect(nav.getByRole('link')).toHaveCount(3)
+    await expect(nav.getByRole('link')).toHaveCount(2)
     await page.screenshot({ path: testInfo.outputPath(`restricted-${width}.png`), fullPage: true })
     if (width === 390) await expect(page.getByRole('link', { name: 'MaraClaw Workspace', exact: true })).toHaveAttribute('href', '/app/notifications')
     await nav.getByRole('link', { name: 'Inbox', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-    await nav.getByRole('link', { name: 'Admissions', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Organization admissions', exact: true })).toBeVisible()
+    await page.getByLabel('Category', { exact: true }).selectOption('admissions')
+    await expect(page.getByRole('list', { name: 'Admission requests' }).getByRole('listitem')).toHaveCount(1)
     await nav.getByRole('link', { name: 'Settings', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
     expect(workspaceRequests(calls)).toEqual([])
   })
 }
 
-for (const path of ['/app', '/app/agents', '/app/agents/one/settings', '/app/onboarding', '/app/plaza', '/app/okr', '/app/directory']) {
+for (const path of ['/app', '/app/agents', '/app/agents/one/settings', '/app/onboarding', '/app/clawbook', '/app/okr', '/app/directory']) {
   test(`pending non-transfer applicant cannot bypass access using ${path}`, async ({ page }) => {
     // Given
     const { calls } = await prepareAccess(page)
@@ -88,7 +88,7 @@ test('failed access checks fail closed and retry without mounting blocked querie
 
 for (const destination of [
   { path: '/app/notifications', heading: 'Inbox' },
-  { path: '/app/admissions', heading: 'Organization admissions' },
+  { path: '/app/admissions', heading: 'Inbox' },
   { path: '/app/account', heading: 'Settings' },
 ]) {
   test(`access-check failure leaves ${destination.path} available`, async ({ page }) => {
@@ -104,7 +104,7 @@ for (const destination of [
   })
 }
 
-test('approved target session replaces the pending cache and restores seven workspace destinations', async ({ page }) => {
+test('approved target session replaces the pending cache and restores workspace destinations', async ({ page }) => {
   // Given
   const fixture = await prepareAccess(page)
   await page.goto(`/app/admissions/${pending.id}`)

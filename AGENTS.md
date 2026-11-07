@@ -20,8 +20,8 @@ Three independently configured packages: FastAPI `engine/` plus two Vite apps, w
 | Directory | Role | Audience | Stack | Status |
 |-----------|------|----------|-------|--------|
 | **`engine/`** | Platform API, workers, connectors | Server | FastAPI, psycopg3, Redis, Python 3.14.10 | Mature |
-| **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Plaza, OKR, directory, admissions, notifications, Take Control, OpenClaw update notices) |
-| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, tools, broadcast, notifications, activity, admission approvals, OpenClaw updates, Linkup keys + search analytics |
+| **`web-e/`** | End-user web UI (landing + members) | Anonymous + members | React 19, Vite 8 :5173, RR, Query, RHF+Zod | Landing + auth + `/app` workspace (agents, chat, Clawbook, OKR, directory, admissions, notifications, Take Control, OpenClaw update notices) |
+| **`web-a/`** | Admin console | platform_admin / org_admin | React 19, Vite 8 :5174, RR, TanStack Query, RHF+Zod | Live: login, force-change, companies + domains, Users (org departments), models, tools, broadcast, notifications, activity, admission approvals, OpenClaw updates, Tavily keys + search analytics |
 
 **Rule:** one concern → one package. No admin screens in `web-e`, no marketing in `web-a`, no HTML marketing in `engine`.
 
@@ -53,13 +53,13 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Personal QR WhatsApp bridge | `engine` | `engine/connectors/whatsapp/AGENTS.md`; separate Node package and CI job |
 | Generated API contracts | `engine` + clients | `engine/contracts/README.md`; export in engine, generate/check validators in each frontend |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
-| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Linkup proxy is `linkup/`; bundled skills live in the sibling guest image project (not a function-calling tool) |
+| Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Tavily proxy is `tavily/`; bundled skills live in the sibling guest image project (not a function-calling tool) |
 | Inbound office parse (PDF/DOCX/XLSX/PPTX) | `engine` | `app/services/document_parser/` (`firecrawl-anydoc`). Not `document_conversion/` |
 | Landing copy / channels list | `web-e` | `web-e/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
-| Linkup keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
+| Tavily keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
-| Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Plaza, OKR, directory |
+| Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Clawbook, OKR, directory |
 | Org department directory | `engine` | `app/api/departments.py`. Org departments remain; provider organization sync is retired. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
 | CORS / API base URL | engine config + consuming app | `engine/.env.example` |
 | CI checks | `.github/workflows` | `engine-ci.yml`, `frontend-ci.yml` |
@@ -85,9 +85,9 @@ cd engine && ./start-from-docker.sh
 cd engine && uv run --extra dev pytest
 ```
 
-**`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels/schedules + Plaza/OKR/directory + admissions + notifications + OpenClaw update notices + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
+**`web-e/`** - end-user web UI: public landing plus member workspace. JWT `maraclaw-enduser-token`. Live: landing, register / login / verify / reset / SSO, org join/transfer, `/app` agents + live chat + files/tools/channels/schedules + Clawbook/OKR/directory + admissions + notifications + OpenClaw update notices + Take Control. Role/channel copy must match engine truth when it claims product facts. Brand source for the monorepo (`MaraClawLogo`, `public/maraclaw-mark.svg`). Guide: **`web-e/AGENTS.md`**. `cd web-e && npm run dev` (:5173, `/api`, `/ws`, and `/p` → engine).
 
-**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/account`; `/settings` stays open), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), Tools catalog/MCP/configuration (`/tools`), platform-admin Linkup keys + search analytics (`/search-engine`), broadcast (`/broadcast`), activity log, admission approvals, notifications, OpenClaw updates (`/openclaw-updates`). Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
+**`web-a/`** - operator console. JWT `maraclaw-admin-token`. Live: login, force-password-change (`must_change_password` → `/settings`; `/account` redirects there), companies + claimed email domains, Users (activate members, additional admins, org departments), org-admin LLM pool (`/models`), Tools catalog/MCP/configuration (`/tools`), platform-admin Tavily keys + search analytics (`/search-engine`), broadcast (`/broadcast`), activity log, admission approvals, notifications, OpenClaw updates (`/openclaw-updates`). Guide: **`web-a/AGENTS.md`**. Admin HTTP: `engine/docs/admin-apis.md`. `cd web-a && npm run dev` (:5174, `/api` → engine).
 
 ---
 
@@ -100,7 +100,7 @@ cd engine && uv run --extra dev pytest
 | Session / JWT / SSO | implement | `maraclaw-admin-token` | `maraclaw-enduser-token` |
 | Tenant isolation | enforce | select/manage | operate in membership |
 | Platform admin | genesis + RBAC | surface | hide (not a member login) |
-| First-login password change | `must_change_password` | force `/account`; `/settings` stays open | force `/app/settings`; `/app/account` redirects there |
+| First-login password change | `must_change_password` | force `/settings`; `/account` redirects there | force `/app/settings`; `/app/account` redirects there |
 
 Genesis PA: `PLATFORM_ADMIN_EMAIL` + `PLATFORM_ADMIN_PASSWORD` at bootstrap (fail-closed on empty DB). Open registration never becomes `platform_admin`. Genesis OA: platform admin via `POST /api/admin/companies` (or `POST /api/tenants/`). JWT may issue before password change; privileged REST/WS/files 403 until cleared. Details: `engine/docs/admin-apis.md`.
 

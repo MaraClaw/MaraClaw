@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pywhales.exceptions import NoSuchContainer
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module
@@ -17,12 +17,12 @@ from app.services.agent_manager import (
     XAI_OAUTH_PROFILE_ID,
     AgentManager,
 )
-from app.services.linkup.tokens import parse_proxy_token
+from app.services.tavily.tokens import parse_proxy_token
 
 
 @pytest.fixture(autouse=True)
 def fake_token_preparation(monkeypatch):
-    monkeypatch.setattr(AgentManager, "_prepare_linkup_proxy_token", AsyncMock())
+    monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", AsyncMock())
 
 
 @pytest.fixture(autouse=True)
@@ -140,8 +140,8 @@ def test_write_guest_config_adds_control_ui_origins_to_legacy_config_without_rot
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
     manager = AgentManager.__new__(AgentManager)
     agent = AgentRecord(id=uuid.uuid4(), name="Legacy Agent", creator_id=uuid.uuid4())
@@ -196,8 +196,8 @@ def test_write_guest_config_leaves_native_transport_files_to_the_turn_path(monke
 def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypatch):
     settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
     agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
@@ -248,8 +248,8 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
 def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
     agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), primary_model_id=None)
@@ -272,8 +272,8 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
     manager = AgentManager.__new__(AgentManager)
     agent = AgentRecord(id=uuid.uuid4(), name="Memory Agent", creator_id=uuid.uuid4())
@@ -310,8 +310,8 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
 def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> None:
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
     manager = AgentManager.__new__(AgentManager)
@@ -352,8 +352,8 @@ def test_write_guest_config_stores_xai_oauth_profile(monkeypatch, tmp_path) -> N
 def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monkeypatch):
     settings = GuestSettings(agent_manager_module.settings)
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     manager = AgentManager.__new__(AgentManager)
     agent: Any = SimpleNamespace(id=uuid.uuid4(), name="ChatGPT Agent", creator_id=uuid.uuid4(), primary_model_id=None)
@@ -385,8 +385,8 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
 def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -> None:
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_PROXY_ENABLED", False)
-    monkeypatch.setattr(agent_manager_module.settings, "LINKUP_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
     monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
     monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
     manager = AgentManager.__new__(AgentManager)
@@ -431,21 +431,22 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
 @pytest.mark.parametrize(
     ("enabled", "proxy_base", "expected_base"),
     [
-        (True, " https://proxy.example/linkup/// ", "https://proxy.example/linkup"),
-        (True, " ", "http://maraclaw-engine:8000/api/linkup"),
-        (False, "https://proxy.example/linkup", None),
+        (True, " https://proxy.example/tavily/// ", "https://proxy.example/tavily"),
+        (True, " ", "http://maraclaw-engine:8000/api/tavily"),
+        (False, "https://proxy.example/tavily", None),
     ],
 )
 async def test_start_container_writes_openclaw_config_at_state_root_and_passes_env(
     monkeypatch, tmp_path, enabled, proxy_base, expected_base
 ):
     # Given
+    monkeypatch.setattr(agent_manager_module, "settings", get_settings())
     monkeypatch.setattr(agent_manager_module.settings, "SECRET_KEY", "creation-test-secret")
     monkeypatch.setattr(agent_manager_module.settings, "OPENCLAW_ENGINE_BASE_URL", "http://maraclaw-engine:8000")
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
-    monkeypatch.setattr(settings, "LINKUP_PROXY_ENABLED", enabled)
-    monkeypatch.setattr(settings, "LINKUP_PROXY_BASE_URL", proxy_base)
-    monkeypatch.setattr(settings, "LINKUP_API_KEY", "lk_upstream_secret_must_not_leak")
+    monkeypatch.setattr(settings, "TAVILY_PROXY_ENABLED", enabled)
+    monkeypatch.setattr(settings, "TAVILY_PROXY_BASE_URL", proxy_base)
+    monkeypatch.setattr(settings, "TAVILY_API_KEY", "lk_upstream_secret_must_not_leak")
     monkeypatch.setattr(agent_manager_module, "settings", settings)
     agent_id = uuid.uuid4()
     agent_dir = tmp_path / str(agent_id)
@@ -509,18 +510,17 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert config["gateway"]["controlUi"] == {"allowedOrigins": CONTROL_UI_ORIGINS}
     assert run_kwargs["envs"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
     envs = run_kwargs["envs"]
-    assert "LINKUP_API_KEY" not in envs
     assert "lk_upstream_secret_must_not_leak" not in envs.values()
     if enabled:
-        assert envs["LINKUP_API_BASE"] == expected_base
-        assert parse_proxy_token(envs["LINKUP_PROXY_TOKEN"], secret="creation-test-secret") == agent_id
-        assert config["skills"]["entries"]["linkup-search"]["env"] == {
-            "LINKUP_API_BASE": envs["LINKUP_API_BASE"],
-            "LINKUP_PROXY_TOKEN": envs["LINKUP_PROXY_TOKEN"],
+        assert envs["TAVILY_API_BASE"] == expected_base
+        assert parse_proxy_token(envs["TAVILY_API_KEY"], secret="creation-test-secret") == agent_id
+        assert config["skills"]["entries"]["tavily-search"]["env"] == {
+            "TAVILY_API_BASE": envs["TAVILY_API_BASE"],
+            "TAVILY_API_KEY": envs["TAVILY_API_KEY"],
         }
     else:
-        assert "LINKUP_API_BASE" not in envs
-        assert "LINKUP_PROXY_TOKEN" not in envs
+        assert "TAVILY_API_BASE" not in envs
+        assert "TAVILY_API_KEY" not in envs
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
     assert run_kwargs["publish"] == [(f"127.0.0.1:{agent.container_port}", settings.OPENCLAW_GATEWAY_PORT)]
     assert run_kwargs["restart"] == "unless-stopped"

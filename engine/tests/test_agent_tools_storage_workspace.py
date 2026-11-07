@@ -1198,3 +1198,95 @@ def test_enterprise_root_search_find_and_listing_skip_symlinks_to_other_tenant(m
     assert listing == "📂 enterprise_info: 0 folder(s), 2 file(s)\n  📄 handbook-link.md (16B)\n  📄 handbook.md (16B)"
     assert search.startswith("🔍 Found 2+ match(es) in 2 file(s)")
     assert found.startswith("📂 Found 2 item(s) (0 dirs, 2 files) matching '*':")
+
+
+class CountingStorageBackend(MemoryStorageBackend):
+    def __init__(self, files: dict[str, bytes]):
+        super().__init__(files)
+        self.calls: list[tuple[str, str]] = []
+
+    @override
+    async def exists(self, key: str) -> bool:
+        self.calls.append(("exists", key))
+        return await super().exists(key)
+
+    @override
+    async def is_dir(self, key: str) -> bool:
+        self.calls.append(("is_dir", key))
+        return await super().is_dir(key)
+
+    @override
+    async def list_dir(self, key: str) -> list[StorageEntry]:
+        self.calls.append(("list_dir", key))
+        return await super().list_dir(key)
+
+    def listed(self) -> list[str]:
+        return [key for operation, key in self.calls if operation == "list_dir"]
+
+
+async def test_search_files_stops_listing_directories_once_it_holds_fifty_matches(monkeypatch):
+    # Given
+    agent_id = uuid.uuid4()
+    backend = CountingStorageBackend(
+        {f"{agent_id}/workspace/d{index:02d}/notes.txt": b"needle\n" * 3 for index in range(30)}
+    )
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    # When
+    result = await agent_tools._storage_search_files(agent_id, "needle", path="workspace")
+    # Then
+    assert "Found 50+ match(es) in 17 file(s)" in result
+    assert backend.listed() == [f"{agent_id}/workspace", *(f"{agent_id}/workspace/d{index:02d}" for index in range(17))]
+
+
+async def test_find_files_reports_the_exact_total_but_keeps_only_one_hundred_rows(monkeypatch):
+    # Given
+    agent_id = uuid.uuid4()
+    files = {f"{agent_id}/workspace/d{d}/f{f:03d}.md": b"x" for d in range(3) for f in range(50)}
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: MemoryStorageBackend(files))
+    # When
+    found = await agent_tools._storage_find_files(agent_id, "*.md", path="workspace")
+    # Then
+    header, *rows = found.splitlines()
+    assert header == "📂 Found 150 item(s) (0 dirs, 100 files) matching '*.md':"
+    assert len(rows) == 100
+
+
+async def test_list_dir_checks_the_directory_once_and_lists_each_child_once(monkeypatch):
+    # Given
+    agent_id = uuid.uuid4()
+    backend = CountingStorageBackend(
+        {f"{agent_id}/workspace/a/x.md": b"x", f"{agent_id}/workspace/b/y.md": b"y", f"{agent_id}/workspace/z.md": b"z"}
+    )
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    # When
+    listing = await agent_tools._storage_list_dir(agent_id, "workspace")
+    # Then
+    assert listing.startswith("📂 workspace: 2 folder(s), 1 file(s)")
+    assert [operation for operation, _key in backend.calls if operation != "list_dir"] == ["is_dir"]
+    assert backend.listed() == [f"{agent_id}/workspace", f"{agent_id}/workspace/a", f"{agent_id}/workspace/b"]
+
+
+async def test_search_files_cancelled_while_listing_requests_no_further_directories(monkeypatch):
+    # Given
+    agent_id = uuid.uuid4()
+    blocked = asyncio.Event()
+
+    class StallingBackend(CountingStorageBackend):
+        @override
+        async def list_dir(self, key: str) -> list[StorageEntry]:
+            if len(self.listed()) == 1:
+                self.calls.append(("list_dir", key))
+                blocked.set()
+                await asyncio.Event().wait()
+            return await super().list_dir(key)
+
+    backend = StallingBackend({f"{agent_id}/workspace/d{index}/notes.txt": b"x" for index in range(5)})
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    task = asyncio.create_task(agent_tools._storage_search_files(agent_id, "needle", path="workspace"))
+    # When
+    await asyncio.wait_for(blocked.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Then
+    assert backend.listed() == [f"{agent_id}/workspace", f"{agent_id}/workspace/d0"]

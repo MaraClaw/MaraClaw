@@ -41,7 +41,6 @@ const navItems: {
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
-  { to: '/account', label: 'Account', icon: 'account' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 
@@ -120,7 +119,7 @@ function NavItems({
         if (agentDeletionReviewOnly && !canReviewAgentDeletions(user)) return null
         if (paymentReviewOnly && !paymentAccess.canReview) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
-        const locked = mustChangePassword && to !== '/account' && to !== '/settings'
+        const locked = mustChangePassword && to !== '/settings'
         if (locked) {
           return (
             <span
@@ -202,7 +201,7 @@ export function AdminShell() {
           <NavItems unreadCount={unread.data?.unread_count} />
           {mustChangePassword ? (
             <p className="px-2 pt-2 text-center text-xs leading-relaxed text-muted-foreground">
-              Change your password on Account to unlock the rest of the console.
+              Change your password in Settings to unlock the rest of the console.
             </p>
           ) : null}
         </nav>

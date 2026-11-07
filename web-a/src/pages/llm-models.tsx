@@ -14,9 +14,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { Select } from '@/components/ui/select'
+import { companyOptions } from '@/hooks/company-options'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
-import { listCompanies } from '@/lib/companies-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
@@ -101,8 +101,7 @@ export function LlmModelsPage() {
   const tenantId = platformAdmin ? companyId : (user?.tenant_id ?? '')
 
   const companies = useQuery({
-    queryKey: ['admin-companies'],
-    queryFn: ({ signal }) => listCompanies(undefined, signal),
+    ...companyOptions(),
     enabled: platformAdmin,
   })
 

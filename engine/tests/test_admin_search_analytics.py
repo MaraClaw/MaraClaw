@@ -94,7 +94,7 @@ def test_routes_require_platform_admin() -> None:
 @pytest.mark.asyncio
 async def test_export_path_and_raw_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.records.web_search_event import WebSearchEventRecord
-    from app.services.linkup import export as export_mod
+    from app.services.tavily import export as export_mod
 
     event = WebSearchEventRecord(
         id=uuid4(),
@@ -175,7 +175,7 @@ async def test_export_path_and_raw_flag(monkeypatch: pytest.MonkeyPatch) -> None
 
 @pytest.mark.asyncio
 async def test_export_disabled_reclaims_exporting(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.linkup import export as export_mod
+    from app.services.tavily import export as export_mod
 
     class FakeDao:
         def __init__(self) -> None:

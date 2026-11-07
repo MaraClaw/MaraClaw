@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LogOut } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Link, Navigate, NavLink, useLocation } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { AdmissionAccessGate } from '@/components/layout/admission-access-gate'
@@ -20,11 +20,10 @@ import { cn } from '@/lib/utils'
 
 const nav: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/app/agents', label: 'Agents', icon: 'agents' },
-  { to: '/app/plaza', label: 'Plaza', icon: 'plaza' },
+  { to: '/app/clawbook', label: 'Clawbook', icon: 'clawbook' },
   { to: '/app/okr', label: 'OKR', icon: 'okr' },
   { to: '/app/directory', label: 'Directory', icon: 'directory' },
   { to: '/app/notifications', label: 'Inbox', icon: 'inbox' },
-  { to: '/app/admissions', label: 'Admissions', icon: 'admissions' },
   { to: '/app/settings', label: 'Settings', icon: 'settings' },
 ]
 
@@ -39,14 +38,18 @@ function WorkspaceNavLink({
   unread: number
   compact?: boolean
 }) {
+  const { pathname } = useLocation()
+  const path = pathname.toLowerCase()
+  const isActive = path === item.to || path.startsWith(`${item.to}/`) ||
+    (item.to === '/app/notifications' && (path === '/app/admissions' || path.startsWith('/app/admissions/')))
   const showUnread = item.to === '/app/notifications' && unread > 0
   const unreadLabel = unread > 99 ? '99+' : String(unread)
 
   return (
-    <NavLink
+    <Link
       to={item.to}
-      className={({ isActive }) =>
-        cn(
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(
           'relative flex touch-manipulation select-none flex-col items-center justify-center text-muted-foreground',
           'transition-[color,transform] duration-150 ease-out',
           'hover:text-foreground',
@@ -56,11 +59,8 @@ function WorkspaceNavLink({
           compact
             ? 'min-h-14 shrink-0 gap-1 rounded-lg px-3 py-2'
             : 'min-h-18 w-full gap-1.5 rounded-xl px-2 py-2.5',
-        )
-      }
+        )}
     >
-      {({ isActive }) => (
-        <>
           <span className="relative inline-flex">
             <NavIcon
               name={item.icon}
@@ -85,23 +85,13 @@ function WorkspaceNavLink({
             {item.label}
           </span>
           {showUnread ? <span className="sr-only">{`, ${unread} unread`}</span> : null}
-        </>
-      )}
-    </NavLink>
+    </Link>
   )
 }
 
 function AppShellFrame() {
   const { pathname } = useLocation()
   const mobileNav = useRef<HTMLElement>(null)
-  useLayoutEffect(() => {
-    const rail = mobileNav.current
-    const active = rail?.querySelector<HTMLAnchorElement>('[aria-current="page"]')
-    if (!rail || !active || !pathname.startsWith(active.pathname) || rail.clientWidth === 0) return
-    const bounds = rail.getBoundingClientRect()
-    const target = active.getBoundingClientRect()
-    rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
-  }, [pathname])
   const scope = useWorkspaceSession()
   const { user, logout } = useAuth()
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
@@ -113,6 +103,14 @@ function AppShellFrame() {
     (workspaceAllowed || isAdmissionAccessPath(item.to)) &&
     (organizationFeaturesAllowed || !organizationPaths.includes(item.to)),
   )
+  useLayoutEffect(() => {
+    const rail = mobileNav.current
+    const active = rail?.querySelector<HTMLAnchorElement>('[aria-current="page"]')
+    if (!rail || !active || rail.clientWidth === 0) return
+    const bounds = rail.getBoundingClientRect()
+    const target = active.getBoundingClientRect()
+    rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
+  })
   const organizationPath = organizationPaths.some((path) => pathname.toLowerCase() === path || pathname.toLowerCase().startsWith(`${path}/`))
 
   return (
