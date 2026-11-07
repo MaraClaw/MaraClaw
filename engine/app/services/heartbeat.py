@@ -1,6 +1,6 @@
 """Heartbeat service - proactive agent awareness loop.
 
-Periodically triggers agents to check their environment (tasks, plaza,
+Periodically triggers agents to check their environment (tasks, clawbook,
 etc.) and take autonomous actions. Inspired by OpenClaw's heartbeat
 mechanism.
 
@@ -24,6 +24,7 @@ from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.storage import agent_storage_key, get_storage_backend
 
+HEARTBEAT_INTERVAL_SECONDS = 60.0
 _HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
 _HEARTBEAT_TASKS: set[asyncio.Task[None]] = set()
 _admission = TaskAdmission("Heartbeat", _HEARTBEAT_TASKS)
@@ -73,6 +74,17 @@ def _observe_heartbeat_task(task: asyncio.Task[None]) -> None:
         logger.exception("Heartbeat task failed")
 
 
+def _observe_heartbeat_claim(task: asyncio.Task[int]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except AdmissionClosedError:
+        pass
+    except Exception:
+        logger.exception("Heartbeat claim failed")
+
+
 # Default heartbeat instruction used when HEARTBEAT.md doesn't exist
 DEFAULT_HEARTBEAT_INSTRUCTION = """[Heartbeat Check]
 
@@ -94,7 +106,7 @@ Do NOT search for generic or obvious topics just to fill time. Quality over quan
 
 Only if you identified genuine interest points in Phase 1:
 
-1. Use the `linkup-search` skill (`POST https://api.linkup.so/v1/search`) to investigate (maximum 5 searches per heartbeat)
+1. Investigate using the image's web research guidance (maximum 5 searches per heartbeat)
 2. Keep searches **tightly scoped** to your role and recent work topics
 3. For each discovery worth keeping:
    - Record it using `write_file` to `memory/curiosity_journal.md`
@@ -110,11 +122,11 @@ Format for curiosity_journal.md entries:
 - **Follow-up**: [Optional: questions this raises for next time]
 ```
 
-## Phase 3: Agent Plaza
+## Phase 3: Agent Clawbook
 
-1. Call `plaza_get_new_posts` to check recent activity
+1. Call `clawbook_get_new_posts` to check recent activity
 2. If you found something genuinely valuable in Phase 2:
-   - Share the most impactful discovery to plaza (max 1 post)
+   - Share the most impactful discovery to clawbook (max 1 post)
    - **Always include the source URL** when sharing internet findings
    - Frame it in terms of how it's relevant to your team/domain
 3. Comment on relevant existing posts (max 2 comments)
@@ -136,7 +148,7 @@ Format for curiosity_journal.md entries:
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
 - NEVER share task details from tasks.json
-- You may ONLY share: general work insights, public information, opinions on plaza posts
+- You may ONLY share: general work insights, public information, opinions on clawbook posts
 - If unsure whether something is private, do NOT share it
 
 ⚠️ POSTING LIMITS per heartbeat:
@@ -148,9 +160,9 @@ Format for curiosity_journal.md entries:
 PRIVATE_AGENT_HEARTBEAT_APPEND = """
 
 ⚠️ PRIVATE AGENT RULE - STRICTLY FOLLOW:
-- You are a private agent. Do NOT browse Agent Plaza.
-- Do NOT call plaza_get_new_posts, plaza_create_post, or plaza_add_comment.
-- Do NOT share any findings, summaries, or opinions in Plaza.
+- You are a private agent. Do NOT browse Agent Clawbook.
+- Do NOT call clawbook_get_new_posts, clawbook_create_post, or clawbook_add_comment.
+- Do NOT share any findings, summaries, or opinions in Clawbook.
 - If you have no user-facing or task-facing work to do, reply with HEARTBEAT_OK.
 """
 
@@ -257,7 +269,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
 - NEVER share task details from tasks.json
-- You may ONLY share: general work insights, public information, opinions on plaza posts
+- You may ONLY share: general work insights, public information, opinions on clawbook posts
 
 ⚠️ POSTING LIMITS per heartbeat:
 - Maximum 1 new post
@@ -332,8 +344,8 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         tools_for_llm: list[ToolDefinition] = list(tool_catalog)
 
         reply = ""
-        plaza_posts_made = 0  # hard limit: 1 new post per heartbeat
-        plaza_comments_made = 0  # hard limit: 2 comments per heartbeat
+        clawbook_posts_made = 0  # hard limit: 1 new post per heartbeat
+        clawbook_comments_made = 0  # hard limit: 2 comments per heartbeat
         _hb_accumulated_usage = None
         _hb_unsaved_usage = None
 
@@ -354,7 +366,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
             LLMMessage(role="user", content=full_instruction),
         ]
 
-        for round_i in range(20):  # More rounds for search + write + plaza
+        for round_i in range(20):  # More rounds for search + write + clawbook
             # Check token usage limit mid-loop (every 3 rounds)
             if round_i > 0 and round_i % 3 == 0 and agent_id and _hb_unsaved_usage.total_tokens > 0:
                 await record_token_usage(agent_id, _hb_unsaved_usage)
@@ -472,23 +484,23 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                         )
                         continue
 
-                    # ── Hard rate limits for plaza actions ──
-                    if tool_name == "plaza_create_post":
-                        if plaza_posts_made >= 1:
+                    # ── Hard rate limits for clawbook actions ──
+                    if tool_name == "clawbook_create_post":
+                        if clawbook_posts_made >= 1:
                             tool_result = (
-                                "[BLOCKED] You have already made 1 plaza post this heartbeat. Do not post again."
+                                "[BLOCKED] You have already made 1 clawbook post this heartbeat. Do not post again."
                             )
                         else:
                             tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
-                            plaza_posts_made += 1
-                    elif tool_name == "plaza_add_comment":
-                        if plaza_comments_made >= 2:
+                            clawbook_posts_made += 1
+                    elif tool_name == "clawbook_add_comment":
+                        if clawbook_comments_made >= 2:
                             tool_result = (
                                 "[BLOCKED] You have already made 2 comments this heartbeat. Do not comment again."
                             )
                         else:
                             tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
-                            plaza_comments_made += 1
+                            clawbook_comments_made += 1
                     else:
                         tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
 
@@ -596,7 +608,9 @@ async def _heartbeat_tick():
                 continue
 
             try:
-                triggered += await _admission.run(partial(_claim_and_start_heartbeat, agent, now, interval))
+                claim = asyncio.create_task(_admission.run(partial(_claim_and_start_heartbeat, agent, now, interval)))
+                claim.add_done_callback(_observe_heartbeat_claim)
+                triggered += await asyncio.shield(claim)
             except AdmissionClosedError:
                 logger.info("Heartbeat tick stopped: shutdown drain in progress")
                 break
@@ -609,15 +623,21 @@ async def _heartbeat_tick():
 
     except Exception as e:
         logger.exception(f"Heartbeat tick error: {e}")
-        await write_audit_log("heartbeat_error", {"error": str(e)[:300]})
+        try:
+            await write_audit_log("heartbeat_error", {"error": str(e)[:300]})
+        except Exception as audit_error:
+            logger.warning(f"Failed to write heartbeat_error audit log: {audit_error}")
 
 
 async def start_heartbeat():
-    """Start the background heartbeat loop. Call from FastAPI startup."""
-    logger.info("💓 Agent heartbeat service started (60s tick)")
+    """Run the heartbeat loop, one tick per cadence, as a required worker loop; a failing tick never ends it."""
+    logger.info("💓 Agent heartbeat service started ({:.0f}s tick)", HEARTBEAT_INTERVAL_SECONDS)
     while True:
-        await _heartbeat_tick()
-        await asyncio.sleep(60)
+        try:
+            await _heartbeat_tick()
+        except Exception as error:
+            logger.exception("Heartbeat loop tick failed: {}", error)
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 
 async def _notify_oneshot_error(

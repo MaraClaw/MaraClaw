@@ -328,3 +328,85 @@ async def test_reopened_gate_claims_again(tick: _TickHarness) -> None:
     assert tick.claims == 1
     tick.run_until.set()
     await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+
+
+async def test_loop_survives_failed_tick_and_waits_between_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks = 0
+    waits: list[float] = []
+    second_tick = asyncio.Event()
+    cadence_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def tick_once() -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks == 1:
+            raise RuntimeError("tick failure")
+        second_tick.set()
+
+    async def cadence(seconds: float) -> None:
+        waits.append(seconds)
+        cadence_entered.set()
+        await release.wait()
+        release.clear()
+
+    monkeypatch.setattr(heartbeat, "_heartbeat_tick", tick_once)
+    monkeypatch.setattr(heartbeat.asyncio, "sleep", cadence)
+    loop = asyncio.create_task(heartbeat.start_heartbeat())
+    try:
+        await asyncio.wait_for(cadence_entered.wait(), 1)
+        assert ticks == 1
+        release.set()
+        await asyncio.wait_for(second_tick.wait(), 1)
+        assert ticks == 2
+        assert waits[0] == heartbeat.HEARTBEAT_INTERVAL_SECONDS
+    finally:
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+
+async def test_cancelling_loop_preserves_admitted_claim_for_drain(tick: _TickHarness) -> None:
+    tick.block_claim = True
+    loop = asyncio.create_task(heartbeat.start_heartbeat())
+    await asyncio.wait_for(tick.in_claim.wait(), 1)
+    heartbeat.close_heartbeat_admission()
+    loop.cancel()
+    await asyncio.gather(loop, return_exceptions=True)
+    drain = asyncio.create_task(heartbeat.drain_heartbeat_tasks(grace_seconds=1))
+    tick.finish_claim.set()
+    tick.run_until.set()
+    await asyncio.wait_for(drain, 1)
+    assert not tick.claim_cancelled
+    assert tick.executed == [tick.agent_id]
+
+
+async def test_heartbeat_loop_recovers_from_tick_failure_once_per_cadence(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks: list[int] = []
+    waiting = asyncio.Event()
+    advance = asyncio.Event()
+    second_tick = asyncio.Event()
+
+    async def tick() -> None:
+        ticks.append(len(ticks) + 1)
+        if len(ticks) == 1:
+            raise RuntimeError("tick failed")
+        second_tick.set()
+
+    async def cadence(_seconds: float) -> None:
+        waiting.set()
+        await advance.wait()
+        advance.clear()
+
+    monkeypatch.setattr(heartbeat, "_heartbeat_tick", tick)
+    monkeypatch.setattr(heartbeat.asyncio, "sleep", cadence)
+    loop = asyncio.create_task(heartbeat.start_heartbeat())
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert ticks == [1]
+        assert not loop.done()
+        advance.set()
+        await asyncio.wait_for(second_tick.wait(), 1)
+        assert ticks == [1, 2]
+    finally:
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)

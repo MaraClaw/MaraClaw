@@ -14,6 +14,16 @@ POLL_OBSERVED_KEY = "_poll_observed"
 """In-memory only: the observed value `evaluate_trigger` hands to `enqueue_due_trigger`; never persisted."""
 
 
+POLL_CHECKPOINT_KEY = "_poll_checked_at"
+"""Persisted ISO time of the last claimed poll; written only by `claim_poll_checkpoint`, cleared on a source edit."""
+
+
+def poll_checkpoint(cfg: Mapping[str, object]) -> str | None:
+    """The stored checkpoint as the claim compares it: a string, or None when absent or not a string."""
+    value = cfg.get(POLL_CHECKPOINT_KEY)
+    return value if isinstance(value, str) else None
+
+
 def poll_sequence(cfg: Mapping[str, object]) -> int:
     """Stored per-trigger poll sequence; an absent or malformed value counts as 0 (legacy rows)."""
     value = cfg.get("_poll_seq")

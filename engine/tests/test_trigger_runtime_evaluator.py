@@ -1,4 +1,6 @@
+import asyncio
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any, Self, cast
@@ -15,7 +17,12 @@ from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime import evaluator
 from app.services.trigger_runtime.dispatch import runtime_execution_payload
 from app.services.trigger_runtime.evaluator import PollObservation, evaluate_trigger
-from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, build_scheduled_execution_key
+from app.services.trigger_runtime.keys import (
+    POLL_CHECKPOINT_KEY,
+    POLL_OBSERVED_KEY,
+    build_scheduled_execution_key,
+    poll_checkpoint,
+)
 
 NOW = datetime(2026, 11, 5, 12, tzinfo=UTC)
 
@@ -84,10 +91,28 @@ def _poll_trigger(config: dict[str, Any]) -> AgentTriggerRecord:
     )
 
 
+class _Checkpoints:
+    """The checkpoint column of one trigger row, claimed with the same compare-and-set as the conditional UPDATE."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, stored: str | None = None) -> None:
+        self.stored: str | None = stored
+        self.sequence: int | None = None
+        self.claims: list[bool] = []
+        monkeypatch.setattr(agent_trigger_dao, "claim_poll_checkpoint", self.claim)
+
+    async def claim(self, _trigger_id: uuid.UUID, *, seen: str | None, expected_seq: int, claimed_at: datetime) -> bool:
+        won = self.stored == seen and (self.sequence is None or self.sequence == expected_seq)
+        if won:
+            self.stored = claimed_at.isoformat()
+        self.claims.append(won)
+        return won
+
+
 async def test_baseline_only_observation_is_a_conditional_update_and_not_an_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given a first poll that only establishes the baseline
+    _ = _Checkpoints(monkeypatch)
     trigger = _poll_trigger({"_poll_seq": 3})
     advance = AsyncMock(return_value=True)
     monkeypatch.setattr(evaluator, "poll_check", AsyncMock(return_value=PollObservation("up", 3, fire=False)))
@@ -102,6 +127,7 @@ async def test_baseline_only_observation_is_a_conditional_update_and_not_an_exec
 
 async def test_firing_observation_is_handed_to_the_dispatcher_without_writing(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a change that fires
+    _ = _Checkpoints(monkeypatch)
     trigger = _poll_trigger({"_last_value": "up", "_poll_seq": 3})
     advance = AsyncMock()
     monkeypatch.setattr(evaluator, "poll_check", AsyncMock(return_value=PollObservation("down", 3, fire=True)))
@@ -116,6 +142,7 @@ async def test_firing_observation_is_handed_to_the_dispatcher_without_writing(mo
 
 
 async def test_unchanged_poll_is_not_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = _Checkpoints(monkeypatch)
     advance = AsyncMock()
     monkeypatch.setattr(evaluator, "poll_check", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_trigger_dao, "advance_poll_baseline", advance)
@@ -218,3 +245,147 @@ async def test_advance_poll_baseline_updates_only_internal_keys_conditionally(ma
         "AND COALESCE((config->>'_poll_seq')::bigint, 0) = %(expected_seq)s RETURNING id"
     )
     assert params == {"trigger_id": trigger_id, "expected_seq": 4, "value": "down"}
+
+
+async def test_unchanged_poll_waits_for_the_next_interval_instead_of_polling_every_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a trigger whose first interval passed and whose poll saw nothing new
+    checkpoints = _Checkpoints(monkeypatch)
+    poll = AsyncMock(return_value=None)
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    trigger = _poll_trigger({"interval_min": 10, "_last_value": "up"})
+    assert await evaluate_trigger(trigger, NOW) is False
+    # When later ticks arrive, as the next worker snapshot carries the checkpoint
+    trigger.config[POLL_CHECKPOINT_KEY] = checkpoints.stored
+    for seconds in (15, 30, 9 * 60 + 45):
+        assert await evaluate_trigger(trigger, NOW + timedelta(seconds=seconds)) is False
+    # Then no request was made until a full interval passed
+    assert poll.await_count == 1
+    assert await evaluate_trigger(trigger, NOW + timedelta(minutes=10)) is False
+    assert poll.await_count == 2
+    assert checkpoints.claims == [True, True]
+
+
+async def test_failed_poll_waits_for_the_next_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a poll request that fails after the claim
+    checkpoints = _Checkpoints(monkeypatch)
+    advance = AsyncMock()
+    monkeypatch.setattr(agent_trigger_dao, "advance_poll_baseline", advance)
+
+    async def unreachable(_url: str) -> str:
+        raise TimeoutError
+
+    monkeypatch.setattr(evaluator, "validate_public_url", unreachable)
+    trigger = _poll_trigger({"interval_min": 10, "_last_value": "up"})
+    # When it is evaluated, then again a tick later
+    assert await evaluate_trigger(trigger, NOW) is False
+    trigger.config[POLL_CHECKPOINT_KEY] = checkpoints.stored
+    assert await evaluate_trigger(trigger, NOW + timedelta(seconds=15)) is False
+    # Then the failure consumed the interval: one claim, no baseline write
+    assert checkpoints.claims == [True]
+    advance.assert_not_awaited()
+
+
+async def test_shortened_interval_applies_to_the_stored_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a poll claimed at NOW under an hour-long interval
+    checkpoints = _Checkpoints(monkeypatch)
+    poll = AsyncMock(return_value=None)
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    trigger = _poll_trigger({"interval_min": 60, "_last_value": "up"})
+    assert await evaluate_trigger(trigger, NOW) is False
+    trigger.config[POLL_CHECKPOINT_KEY] = checkpoints.stored
+    assert await evaluate_trigger(trigger, NOW + timedelta(minutes=6)) is False
+    assert poll.await_count == 1
+    # When the interval is shortened to the minimum
+    trigger.config["interval_min"] = 5
+    # Then the next poll is due 5 minutes after the checkpoint, not after the hour
+    assert await evaluate_trigger(trigger, NOW + timedelta(minutes=6)) is False
+    assert poll.await_count == 2
+
+
+async def test_interval_counts_from_a_later_firing_than_the_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a firing recorded after the last claimed poll
+    checkpoints = _Checkpoints(monkeypatch, stored=NOW.isoformat())
+    poll = AsyncMock(return_value=None)
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    trigger = _poll_trigger({POLL_CHECKPOINT_KEY: NOW.isoformat()})
+    trigger.last_fired_at = NOW + timedelta(minutes=4)
+    # When / Then the interval measures from the firing
+    assert await evaluate_trigger(trigger, NOW + timedelta(minutes=8)) is False
+    assert poll.await_count == 0
+    assert await evaluate_trigger(trigger, NOW + timedelta(minutes=9)) is False
+    assert poll.await_count == 1
+    assert checkpoints.claims == [True]
+
+
+async def test_url_edit_clears_the_checkpoint_so_the_next_tick_polls(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a recently polled trigger and a user edit that drops the checkpoint, as merge_user_config does
+    checkpoints = _Checkpoints(monkeypatch, stored=NOW.isoformat())
+    poll = AsyncMock(return_value=None)
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    trigger = _poll_trigger({POLL_CHECKPOINT_KEY: NOW.isoformat(), "_last_value": "up"})
+    trigger.created_at = NOW - timedelta(days=1)
+    soon = NOW + timedelta(seconds=15)
+    assert await evaluate_trigger(trigger, soon) is False
+    assert poll.await_count == 0
+    del trigger.config[POLL_CHECKPOINT_KEY]
+    checkpoints.stored = None
+    # When the next tick evaluates the edited trigger
+    assert await evaluate_trigger(trigger, soon) is False
+    # Then it polls at once
+    assert poll.await_count == 1
+
+
+async def test_two_racing_evaluations_make_one_request_per_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given two replicas that read the same trigger row and race to claim it
+    checkpoints = _Checkpoints(monkeypatch)
+    poll = AsyncMock(return_value=PollObservation("down", 0, fire=True))
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    first = _poll_trigger({"_last_value": "up"})
+    second = replace(first, config=dict(first.config))
+    # When both evaluate concurrently
+    results = await asyncio.gather(evaluate_trigger(first, NOW), evaluate_trigger(second, NOW))
+    # Then exactly one claim won, one request was made, and only the winner is due
+    assert sorted(checkpoints.claims) == [False, True]
+    assert poll.await_count == 1
+    assert sorted(results) == [False, True]
+
+
+async def test_stale_source_cannot_claim_after_config_edit(monkeypatch: pytest.MonkeyPatch) -> None:
+    checkpoints = _Checkpoints(monkeypatch)
+    stale = _poll_trigger({})
+    checkpoints.sequence = 1
+    poll = AsyncMock()
+    monkeypatch.setattr(evaluator, "poll_check", poll)
+    assert not await evaluate_trigger(stale, NOW)
+    poll.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stored", [None, "2026-11-05T12:00:00+00:00"])
+async def test_claim_poll_checkpoint_is_a_conditional_update_of_one_internal_key(stored: str | None) -> None:
+    # Given a connection whose conditional update matches
+    raw = _Raw(matches=True)
+    token = session_module._conn_ctx.set(DbConnection(cast("AsyncConnection[DictRow]", raw)))
+    trigger_id = uuid.uuid4()
+    try:
+        # When the checkpoint is claimed against the value the caller saw
+        won = await agent_trigger_dao.claim_poll_checkpoint(trigger_id, seen=stored, expected_seq=2, claimed_at=NOW)
+    finally:
+        session_module._conn_ctx.reset(token)
+    # Then only the checkpoint key is written, for an enabled row whose checkpoint is unchanged
+    assert won is True
+    [(sql, params)] = raw.executed
+    assert sql.startswith("UPDATE agent_triggers SET config = config || jsonb_build_object('_poll_checked_at', ")
+    assert "COALESCE((config->>'_poll_seq')::bigint, 0) = %(expected_seq)s" in sql
+    assert "'_last_value'" not in sql
+    assert "last_fired_at" not in sql
+    assert "AND is_enabled IS TRUE" in sql
+    assert "IS NOT DISTINCT FROM %(seen)s::text RETURNING id" in sql
+    assert params == {"trigger_id": trigger_id, "seen": stored, "expected_seq": 2, "claimed_at": NOW.isoformat()}
+
+
+def test_checkpoint_that_is_not_a_string_counts_as_absent() -> None:
+    assert poll_checkpoint({POLL_CHECKPOINT_KEY: 5}) is None
+    assert poll_checkpoint({}) is None
+    assert poll_checkpoint({POLL_CHECKPOINT_KEY: "x"}) == "x"

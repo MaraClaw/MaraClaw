@@ -29,6 +29,7 @@ from app.services.llm.client_cache import shutdown_llm_clients
 from app.services.openclaw_routing import close_wake_admission, drain_wake_tasks, open_wake_admission
 from app.services.realtime import realtime_router
 from app.services.scheduler_tasks import start_schedule_tasks, stop_schedule_tasks
+from app.services.tavily.http_client import shutdown_tavily_client
 from app.services.trigger_daemon import close_trigger_admission, drain_trigger_tasks, open_trigger_admission
 
 
@@ -111,15 +112,18 @@ class Runtime:
             from app.services.agent_start_reconciler import agent_start_reconciler_loop
             from app.services.broadcast_email_worker import start_broadcast_email_worker
             from app.services.gateway_report_relay import start_gateway_report_relay
-            from app.services.linkup.export import start_web_search_export_daemon
+            from app.services.heartbeat import start_heartbeat
+            from app.services.openclaw_delayed_replies import openclaw_delayed_reply_loop
             from app.services.openclaw_dispatch_reconciler import openclaw_dispatch_reconciler_loop
             from app.services.openclaw_update_worker import start_openclaw_update_worker
             from app.services.organization_admission_email_worker import start_organization_admission_email_worker
             from app.services.scheduler import start_scheduler
             from app.services.task_lease import task_lease_recovery_loop
+            from app.services.tavily.export import start_web_search_export_daemon
             from app.services.trigger_daemon import start_trigger_daemon
 
             self.tasks.start("trigger_daemon", start_trigger_daemon(), requirement="loop")
+            self.tasks.start("heartbeat", start_heartbeat(), requirement="loop")
             self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
             self.tasks.start("agent_start_reconciler", agent_start_reconciler_loop(), requirement="loop")
             self.tasks.start("broadcast_email", start_broadcast_email_worker(), requirement="loop")
@@ -131,6 +135,7 @@ class Runtime:
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
             self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
             self.tasks.start("openclaw_dispatch", openclaw_dispatch_reconciler_loop(), requirement="loop")
+            self.tasks.start("openclaw_delayed_replies", openclaw_delayed_reply_loop(), requirement="loop")
             self.tasks.start("task_lease_recovery", task_lease_recovery_loop(), requirement="loop")
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
@@ -185,6 +190,7 @@ class Runtime:
             await self._cleanup("redis", close_redis)
             await self._cleanup("LLM clients", shutdown_llm_clients)
             await self._cleanup("outbound HTTP client", shutdown_outbound_client)
+            await self._cleanup("Tavily HTTP client", shutdown_tavily_client)
         if self.logging_attempted:
             try:
                 shutdown_logging()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Self, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -23,7 +23,7 @@ from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime import evaluator
 from app.services.trigger_runtime.dispatch import enqueue_due_trigger
 from app.services.trigger_runtime.evaluator import evaluate_trigger
-from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY
+from app.services.trigger_runtime.keys import POLL_CHECKPOINT_KEY, POLL_OBSERVED_KEY
 
 NOW = datetime(2026, 11, 5, tzinfo=UTC)
 TRIGGER_LOCK = "SELECT 1 FROM agent_triggers WHERE id = %(trigger_id)s FOR KEY SHARE"
@@ -103,6 +103,13 @@ class _Cursor:
             raw.keys.append(str(params["idempotency_key"]))
             self.row = {"lease_owner": None, "last_error": None, **params}
             return
+        if sql.startswith("UPDATE agent_triggers SET config = config || jsonb_build_object('_poll_checked_at'"):
+            assert set(params) == {"trigger_id", "seen", "expected_seq", "claimed_at"}
+            if raw.checkpoint != params["seen"] or raw.config.get("_poll_seq", 0) != params["expected_seq"]:
+                return
+            raw.checkpoint = cast("str", params["claimed_at"])
+            self.row = {"id": params["trigger_id"]}
+            return
         if sql.startswith("UPDATE agent_triggers SET config = config || jsonb_build_object("):
             assert "'_last_value', %(value)s::text" in sql
             assert "'_poll_seq', %(expected_seq)s::bigint + 1" in sql
@@ -137,6 +144,7 @@ class _Raw:
         self.conflicts = 0
         self.keys: list[str] = []
         self.config: dict[str, object] = {}
+        self.checkpoint: str | None = None
         self.updates = 0
         self.duplicate = False
         self.missing: str | None = None
@@ -392,6 +400,7 @@ class _Source:
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.value = "A"
+        self.now = NOW
 
         async def validate(url: str) -> str:
             return url
@@ -406,8 +415,9 @@ class _Source:
         monkeypatch.setattr(evaluator, "public_http_client", client)
 
     async def tick(self, raw: _Raw, value: str, **options: object) -> None:
-        """One daemon tick: evaluate against the stored config, then enqueue when due."""
+        """One daemon tick, an hour after the last: evaluate against the stored config, then enqueue when due."""
         self.value = value
+        self.now += timedelta(hours=1)
         trigger = AgentTriggerRecord(
             id=cast("UUID", raw.data["trigger_id"]),
             agent_id=cast("UUID", raw.data["agent_id"]),
@@ -415,10 +425,16 @@ class _Source:
             type="poll",
             cooldown_seconds=0,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
-            config={"url": "https://status.example/api", "json_path": "$.status", **options, **raw.config},
+            config={
+                "url": "https://status.example/api",
+                "json_path": "$.status",
+                **options,
+                **raw.config,
+                **({POLL_CHECKPOINT_KEY: raw.checkpoint} if raw.checkpoint is not None else {}),
+            },
         )
-        if await evaluate_trigger(trigger, NOW):
-            await enqueue_due_trigger(trigger, NOW)
+        if await evaluate_trigger(trigger, self.now):
+            await enqueue_due_trigger(trigger, self.now)
 
 
 @pytest.mark.asyncio
