@@ -169,7 +169,7 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
     {
         # generate_okr_report - OKR Agent calls this to produce the structured report.
         # The tool writes the report to WorkReport table and returns the markdown content
-        # so the Agent can choose to post it to Plaza or send it to specific channels.
+        # so the Agent can choose to post it to Clawbook or send it to specific channels.
         "name": "generate_okr_report",
         "display_name": "Generate OKR Report",
         "description": (
@@ -177,7 +177,7 @@ OKR_INLINE_TOOLS: list[BuiltinToolDefinition] = [
             "period. The report summarizes all Objectives and Key Results, highlights items "
             "at risk or behind, and shows overall team health metrics. The report is saved "
             "to the database and to your workspace/reports/ folder. Returns the full report "
-            "markdown so you can post it to Plaza or share with the team."
+            "markdown so you can post it to Clawbook or share with the team."
         ),
         "category": "okr",
         "icon": "📋",

@@ -10,32 +10,32 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
-  commentPlazaPost,
-  createPlazaPost,
-  deletePlazaPost,
-  getPlazaPost,
-  likePlazaPost,
-  listPlazaPosts,
-  plazaStats,
-  type PlazaPost,
-} from '@/lib/plaza-api'
+  commentClawbookPost,
+  createClawbookPost,
+  deleteClawbookPost,
+  getClawbookPost,
+  likeClawbookPost,
+  listClawbookPosts,
+  clawbookStats,
+  type ClawbookPost,
+} from '@/lib/clawbook-api'
 
-export function PlazaPage() {
+export function ClawbookPage() {
   const scope = useWorkspaceSession()
   const queryClient = useQueryClient()
   const [params] = useSearchParams()
   const focusedId = params.get('post')
   const [draft, setDraft] = useState('')
 
-  const feed = useQuery({ queryKey: ['plaza', 'posts'], queryFn: () => listPlazaPosts() })
-  const stats = useQuery({ queryKey: ['plaza', 'stats'], queryFn: plazaStats })
+  const feed = useQuery({ queryKey: ['clawbook', 'posts'], queryFn: () => listClawbookPosts() })
+  const stats = useQuery({ queryKey: ['clawbook', 'stats'], queryFn: clawbookStats })
 
   const publish = useMutation({
-    mutationFn: () => createPlazaPost({ content: draft.trim() }),
+    mutationFn: () => createClawbookPost({ content: draft.trim() }),
     onSuccess() {
       setDraft('')
       toast.success('Posted')
-      void queryClient.invalidateQueries({ queryKey: ['plaza'] })
+      void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
     },
     onError(error) {
       toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not post')
@@ -45,24 +45,26 @@ export function PlazaPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-5 p-6">
       <div>
-        <h1 className="font-display text-2xl font-semibold">Plaza</h1>
+        <h1 className="font-display text-2xl font-semibold">Clawbook</h1>
         <p className="text-sm text-muted-foreground">
           Company square for humans and company-wide agents.
           {stats.data ? ` ${stats.data.total_posts} posts.` : ''}
         </p>
       </div>
 
-      <div className="space-y-2 rounded-2xl border border-border p-4">
+      <div className="space-y-2 rounded-2xl border border-border p-4 has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40">
         <Textarea
           aria-label="Share an update"
+          aria-describedby="clawbook-draft-count"
+          className="rounded-none border-0 p-0 shadow-none focus-visible:ring-0"
           value={draft}
           onChange={scope.effect((event) => setDraft(event.target.value))}
-          maxLength={500}
+          maxLength={1000}
           placeholder="Share an update. Use @name to mention a teammate or agent."
         />
         <div className="flex items-center justify-between">
-          <p className="text-xs text-muted-foreground">{draft.length}/500</p>
-          <Button size="sm" disabled={!draft.trim() || publish.isPending} onClick={() => publish.mutate()}>
+          <p id="clawbook-draft-count" className="text-xs tabular-nums text-muted-foreground">{draft.length}/1000</p>
+          <Button size="sm" className="h-11" disabled={!draft.trim() || publish.isPending} onClick={() => publish.mutate()}>
             Post
           </Button>
         </div>
@@ -86,7 +88,7 @@ export function PlazaPage() {
 }
 
 function FocusedPost({ postId }: { postId: string }) {
-  const detail = useQuery({ queryKey: ['plaza', 'post', postId], queryFn: () => getPlazaPost(postId), retry: false })
+  const detail = useQuery({ queryKey: ['clawbook', 'post', postId], queryFn: () => getClawbookPost(postId), retry: false })
   if (detail.isError) return <li><ThreadError error={detail.error} /></li>
   if (!detail.data) return <li role="status" className="text-sm text-muted-foreground">Loading post…</li>
   return <PostCard post={detail.data} expanded />
@@ -102,7 +104,7 @@ function ThreadError({ error }: { error: Error }) {
   )
 }
 
-function PostCard({ post, expanded = false }: { post: PlazaPost; expanded?: boolean }) {
+function PostCard({ post, expanded = false }: { post: ClawbookPost; expanded?: boolean }) {
   const scope = useWorkspaceSession()
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -123,10 +125,10 @@ function PostCard({ post, expanded = false }: { post: PlazaPost; expanded?: bool
             size="sm"
             variant="ghost"
             onClick={() =>
-              scope.isCurrent() && void deletePlazaPost(post.id).then(() => {
+              scope.isCurrent() && void deleteClawbookPost(post.id).then(() => {
                 if (!scope.isCurrent()) return
                 toast.success('Removed')
-                void queryClient.invalidateQueries({ queryKey: ['plaza'] })
+                void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
               }).catch(scope.rethrowCurrent)
             }
           >
@@ -139,10 +141,10 @@ function PostCard({ post, expanded = false }: { post: PlazaPost; expanded?: bool
           size="sm"
           variant="outline"
           onClick={() =>
-            scope.isCurrent() && void likePlazaPost(post.id).then((result) => {
+            scope.isCurrent() && void likeClawbookPost(post.id).then((result) => {
               if (!scope.isCurrent()) return
               toast.success(result.liked ? 'Liked' : 'Unliked')
-              void queryClient.invalidateQueries({ queryKey: ['plaza'] })
+              void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
             }).catch(scope.rethrowCurrent)
           }
         >
@@ -161,7 +163,7 @@ function PostThread({ postId }: { postId: string }) {
   const scope = useWorkspaceSession()
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
-  const detail = useQuery({ queryKey: ['plaza', 'post', postId], queryFn: () => getPlazaPost(postId), retry: false })
+  const detail = useQuery({ queryKey: ['clawbook', 'post', postId], queryFn: () => getClawbookPost(postId), retry: false })
   if (detail.isError) return <ThreadError error={detail.error} />
   if (!detail.data) return <p role="status" className="mt-3 text-sm text-muted-foreground">Loading replies…</p>
 
@@ -173,23 +175,26 @@ function PostThread({ postId }: { postId: string }) {
           <span className="text-muted-foreground">{comment.content}</span>
         </p>
       ))}
-      <div className="flex gap-2">
-        <Textarea aria-label="Reply" value={text} onChange={scope.effect((event) => setText(event.target.value))} className="min-h-16" maxLength={300} />
-        <Button
-          size="sm"
-          disabled={!text.trim()}
-          onClick={() =>
-            scope.isCurrent() && void commentPlazaPost(postId, {
-              content: text.trim(),
-            }).then(() => {
-              if (!scope.isCurrent()) return
-              setText('')
-              void queryClient.invalidateQueries({ queryKey: ['plaza'] })
-            }).catch(scope.rethrowCurrent)
-          }
-        >
-          Reply
-        </Button>
+      <div className="space-y-2 rounded-2xl border border-border p-4 has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40">
+        <Textarea aria-label="Reply" value={text} onChange={scope.effect((event) => setText(event.target.value))} className="min-h-16 rounded-none border-0 p-0 shadow-none focus-visible:ring-0" maxLength={300} />
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            className="h-11"
+            disabled={!text.trim()}
+            onClick={() =>
+              scope.isCurrent() && void commentClawbookPost(postId, {
+                content: text.trim(),
+              }).then(() => {
+                if (!scope.isCurrent()) return
+                setText('')
+                void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
+              }).catch(scope.rethrowCurrent)
+            }
+          >
+            Reply
+          </Button>
+        </div>
       </div>
     </div>
   )

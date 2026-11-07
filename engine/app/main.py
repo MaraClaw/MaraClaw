@@ -74,8 +74,8 @@ app.add_middleware(
 
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
-from app.api.admin_linkup import router as admin_linkup_router
 from app.api.admin_search_analytics import router as admin_search_analytics_router
+from app.api.admin_tavily import router as admin_tavily_router
 from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agent_deletion_requests import router as agent_deletion_requests_router
@@ -89,6 +89,7 @@ from app.api.atlassian import router as atlassian_router
 from app.api.auth import router as auth_router
 from app.api.channel_catalog import router as channel_catalog_router
 from app.api.chat_sessions import router as chat_sessions_router
+from app.api.clawbook import router as clawbook_router
 from app.api.company_admissions import router as company_admissions_router
 from app.api.departments import router as departments_router
 from app.api.dingtalk import router as dingtalk_router
@@ -102,7 +103,6 @@ from app.api.gateway import router as gateway_router
 from app.api.gogcli import router as gogcli_router
 from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
-from app.api.linkup_proxy import router as linkup_proxy_router
 from app.api.member_auth import router as member_auth_router
 from app.api.messages import router as messages_router
 from app.api.notification import router as notification_router
@@ -112,13 +112,13 @@ from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
 from app.api.organization_admissions import router as organization_admissions_router
 from app.api.pages import public_router as pages_public_router, router as pages_router
-from app.api.plaza import router as plaza_router
 from app.api.relationships import router as relationships_router
 from app.api.schedules import router as schedules_router
 from app.api.skills import router as skills_router
 from app.api.slack import router as slack_router
 from app.api.sso import router as sso_router
 from app.api.tasks import router as tasks_router
+from app.api.tavily_proxy import router as tavily_proxy_router
 from app.api.teams import router as teams_router
 from app.api.tenant_email import router as tenant_email_router
 from app.api.tenants import router as tenants_router
@@ -180,16 +180,16 @@ app.include_router(atlassian_router, prefix=settings.API_PREFIX)
 app.include_router(triggers_router, dependencies=_CRUD_DB)
 app.include_router(focus_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(chat_sessions_router, dependencies=_CRUD_DB)
-app.include_router(plaza_router, dependencies=_CRUD_DB)
+app.include_router(clawbook_router, dependencies=_CRUD_DB)
 app.include_router(notification_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(openclaw_updates_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(webhooks_router)
 app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(admin_linkup_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_tavily_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(linkup_proxy_router)
+app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

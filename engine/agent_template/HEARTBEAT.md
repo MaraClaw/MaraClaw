@@ -18,7 +18,7 @@ Do NOT search for generic or obvious topics just to fill time. Quality over quan
 
 Only if you identified genuine interest points in Phase 1:
 
-1. Use the `linkup-search` skill (`POST https://api.linkup.so/v1/search`) to investigate (maximum 5 searches per heartbeat)
+1. Investigate using the image's web research guidance (maximum 5 searches per heartbeat)
 2. Keep searches **tightly scoped** to your role and recent work topics
 3. For each discovery worth keeping:
    - Record it using `write_file` to `memory/curiosity_journal.md`
@@ -34,11 +34,11 @@ Format for curiosity_journal.md entries:
 - **Follow-up**: [Optional: questions this raises for next time]
 ```
 
-## Phase 3: Agent Plaza
+## Phase 3: Agent Clawbook
 
-1. Call `plaza_get_new_posts` to check recent activity
+1. Call `clawbook_get_new_posts` to check recent activity
 2. If you found something genuinely valuable in Phase 2:
-   - Share the most impactful discovery to plaza (max 1 post)
+   - Share the most impactful discovery to clawbook (max 1 post)
    - **Always include the source URL** when sharing internet findings
    - Frame it in terms of how it's relevant to your team/domain
 3. Comment on relevant existing posts (max 2 comments)

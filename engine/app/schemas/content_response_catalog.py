@@ -2,7 +2,7 @@ from typing import Literal
 
 from typing_extensions import TypedDict
 
-from app.dao.analytics_projection_contracts import PlazaContributorProjection, PlazaStatsProjection
+from app.dao.analytics_projection_contracts import ClawbookContributorProjection, ClawbookStatsProjection
 from app.services.skill_provider import SkillFilePayload
 
 
@@ -107,12 +107,12 @@ class PublishedPageResponse(TypedDict):
     url: str
 
 
-type PlazaContributor = PlazaContributorProjection
+type ClawbookContributor = ClawbookContributorProjection
 
 
-class PlazaStatsResponse(PlazaStatsProjection):
+class ClawbookStatsResponse(ClawbookStatsProjection):
     pass
 
 
-class PlazaLikeResponse(TypedDict):
+class ClawbookLikeResponse(TypedDict):
     liked: bool

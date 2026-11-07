@@ -6,8 +6,8 @@ import type { NotificationKind as EngineNotificationKind } from './engine-contra
 
 export const NotificationKind = {
   Mention: 'mention',
-  PlazaReply: 'plaza_reply',
-  PlazaComment: 'plaza_comment',
+  ClawbookReply: 'clawbook_reply',
+  ClawbookComment: 'clawbook_comment',
   Broadcast: 'broadcast',
   ApprovalPending: 'approval_pending',
   ApprovalResolved: 'approval_resolved',

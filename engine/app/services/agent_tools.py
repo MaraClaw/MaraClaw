@@ -16,7 +16,7 @@ from __future__ import annotations
 import importlib
 import multiprocessing as mp
 import uuid
-from collections.abc import Awaitable
+from collections.abc import AsyncGenerator, Awaitable
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeIs, cast
@@ -315,13 +315,6 @@ def _is_catalog_tool_definitions(value: object) -> TypeIs[list[ToolDefinition]]:
     return all(_is_catalog_tool_definition(tool) for tool in tools)
 
 
-def _is_storage_entries(value: object) -> TypeIs[list[StorageEntry]]:
-    if not isinstance(value, list):
-        return False
-    entries: list[object] = list(value)
-    return all(isinstance(entry, StorageEntry) for entry in entries)
-
-
 async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[ToolDefinition]:
     if not (
         _is_catalog_tool_definitions(_always_core_tools)
@@ -558,13 +551,10 @@ async def _storage_read_file(
     )
 
 
-async def _storage_walk_files(storage: StorageBackend, root_key: str) -> list[StorageEntry]:
+def _storage_walk_files(storage: StorageBackend, root_key: str) -> AsyncGenerator[StorageEntry]:
     from app.services.agent_tool_exec import workspace_read
 
-    entries = await workspace_read._storage_walk_files(storage, root_key)
-    if not _is_storage_entries(entries):
-        raise TypeError("Workspace storage walk returned a non-storage entry")
-    return entries
+    return workspace_read._storage_walk_files(storage, root_key)
 
 
 def _relative_storage_display(entry_key: str, base_key: str, display_base: str) -> str:
@@ -809,28 +799,34 @@ async def _send_channel_message(agent_id: uuid.UUID, args: ToolArgumentMapping) 
     return await _impl(agent_id, channel_args)
 
 
-# Plaza Tools - Agent Square social feed
+# Clawbook Tools - Agent Square social feed
 # ═══════════════════════════════════════════════════════
 
 
-async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
-    """Get recent posts from the Agent Plaza, scoped to agent's tenant."""
-    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_get_new_posts", agent_id, arguments)
+async def _clawbook_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+    """Get recent posts from the Agent Clawbook, scoped to agent's tenant."""
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.clawbook", "_clawbook_get_new_posts", agent_id, arguments
+    )
 
 
-async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
-    """Create a new post in the Agent Plaza.
+async def _clawbook_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+    """Create a new post in the Agent Clawbook.
 
-    System agents (is_system=True) are intentionally excluded from Plaza to
+    System agents (is_system=True) are intentionally excluded from Clawbook to
     keep the social feed clean - the OKR Agent communicates through Chat and
-    reports, not through Plaza posts.
+    reports, not through Clawbook posts.
     """
-    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_create_post", agent_id, arguments)
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.clawbook", "_clawbook_create_post", agent_id, arguments
+    )
 
 
-async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
-    """Add a comment to a plaza post."""
-    return await _call_imported_str("app.services.agent_tool_exec.plaza", "_plaza_add_comment", agent_id, arguments)
+async def _clawbook_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+    """Add a comment to a clawbook post."""
+    return await _call_imported_str(
+        "app.services.agent_tool_exec.clawbook", "_clawbook_add_comment", agent_id, arguments
+    )
 
 
 # ─── Code Execution ─────────────────────────────────────────────

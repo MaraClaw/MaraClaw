@@ -1,4 +1,4 @@
-"""Plaza (Agent Square) REST API."""
+"""Clawbook (Agent Square) REST API."""
 
 import re
 import uuid
@@ -14,19 +14,19 @@ from app.core.logging import logger
 from app.core.notification_kinds import NotificationKind
 from app.core.permissions import check_agent_access
 from app.dao.agent_dao import agent_dao
-from app.dao.plaza_dao import plaza_comment_dao, plaza_like_dao, plaza_post_dao
+from app.dao.clawbook_dao import clawbook_comment_dao, clawbook_like_dao, clawbook_post_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
-from app.schemas.content_response_catalog import DeletedAcknowledgement, PlazaLikeResponse, PlazaStatsResponse
+from app.schemas.content_response_catalog import ClawbookLikeResponse, ClawbookStatsResponse, DeletedAcknowledgement
 
-router = APIRouter(prefix="/api/plaza", tags=["plaza"])
+router = APIRouter(prefix="/api/clawbook", tags=["clawbook"])
 
 
 # ── Schemas ─────────────────────────────────────────
 
 
 class PostCreate(BaseModel):
-    content: str = Field(..., max_length=500)
+    content: str = Field(..., max_length=1000)
     author_id: uuid.UUID | None = None
     author_type: Literal["human", "agent"] = "human"
     author_name: str | None = None
@@ -109,7 +109,7 @@ async def _notify_mentions(
                 notification_kind=NotificationKind.MENTION,
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
-                link=f"/plaza?post={post_id}",
+                link=f"/clawbook?post={post_id}",
                 ref_id=post_id,
                 sender_name=author_name,
             )
@@ -121,7 +121,7 @@ async def _notify_mentions(
                 notification_kind=NotificationKind.MENTION,
                 title=f"{author_name} mentioned you in a post",
                 body=content[:150],
-                link=f"/plaza?post={post_id}",
+                link=f"/clawbook?post={post_id}",
                 ref_id=post_id,
                 sender_name=author_name,
             )
@@ -151,7 +151,7 @@ async def _resolve_author(
                 or agent.is_system
                 or (agent.access_mode or "company") != "company"
             ):
-                raise HTTPException(403, "Only company-wide agents can act on Plaza")
+                raise HTTPException(403, "Only company-wide agents can act on Clawbook")
             authorized_agent, access = await check_agent_access(current_user, author_id)
             if access != "manage":
                 raise HTTPException(403, "Manage access is required for agent authorship")
@@ -171,10 +171,10 @@ async def list_posts(
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[PostOut]:
-    """List plaza posts, newest first. Filtered by tenant_id from JWT for data isolation.
+    """List clawbook posts, newest first. Filtered by tenant_id from JWT for data isolation.
 
     System agent posts are excluded from the feed - system agents (is_system=True)
-    communicate through internal Chat and reports rather than Plaza.
+    communicate through internal Chat and reports rather than Clawbook.
     """
     effective_tenant_id = _effective_tenant_id(current_user, tenant_id)
     since_dt = None
@@ -182,8 +182,8 @@ async def list_posts(
         try:
             since_dt = datetime.fromisoformat(since)
         except (TypeError, ValueError) as error:
-            logger.debug(f"[Plaza] Ignoring invalid since filter: {error}")
-    posts = await plaza_post_dao.list_feed(
+            logger.debug(f"[Clawbook] Ignoring invalid since filter: {error}")
+    posts = await clawbook_post_dao.list_feed(
         tenant_id=effective_tenant_id,
         since=since_dt,
         limit=limit,
@@ -193,13 +193,13 @@ async def list_posts(
 
 
 @router.get("/stats", response_model=None)
-async def plaza_stats(
+async def clawbook_stats(
     tenant_id: str | None = None, current_user: UserRecord = Depends(get_current_user)
-) -> PlazaStatsResponse:
-    """Get plaza statistics scoped by tenant_id from JWT."""
+) -> ClawbookStatsResponse:
+    """Get clawbook statistics scoped by tenant_id from JWT."""
     effective_tenant_id = _effective_tenant_id(current_user, tenant_id)
-    stats = await plaza_post_dao.get_stats(tenant_id=effective_tenant_id)
-    result: PlazaStatsResponse = {
+    stats = await clawbook_post_dao.get_stats(tenant_id=effective_tenant_id)
+    result: ClawbookStatsResponse = {
         "total_posts": stats["total_posts"],
         "total_comments": stats["total_comments"],
         "today_posts": stats["today_posts"],
@@ -210,17 +210,17 @@ async def plaza_stats(
 
 @router.post("/posts", response_model=PostOut)
 async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_current_user)) -> PostOut:
-    """Create a new plaza post. Requires authentication; tenant_id enforced from JWT."""
+    """Create a new clawbook post. Requires authentication; tenant_id enforced from JWT."""
     if len(body.content.strip()) == 0:
         raise HTTPException(400, "Content cannot be empty")
     effective_tenant_id = current_user.tenant_id
     author_id, author_name = await _resolve_author(current_user, body.author_id, body.author_type)
-    post = await plaza_post_dao.create_post(
+    post = await clawbook_post_dao.create_post(
         {
             "author_id": author_id,
             "author_type": body.author_type,
             "author_name": author_name,
-            "content": body.content[:500],
+            "content": body.content,
             "tenant_id": effective_tenant_id,
             "likes_count": 0,
             "comments_count": 0,
@@ -229,7 +229,7 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
     try:
         await _notify_mentions(body.content, author_id, author_name, post.id, effective_tenant_id)
     except Exception as error:
-        logger.warning(f"[Plaza] Failed to notify post mentions: {error}")
+        logger.warning(f"[Clawbook] Failed to notify post mentions: {error}")
     return PostOut.model_validate(post)
 
 
@@ -237,7 +237,7 @@ async def create_post(body: PostCreate, current_user: UserRecord = Depends(get_c
 async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> PostDetail:
     """Get a single post with its comments. Enforces tenant isolation."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    post = await plaza_post_dao.get_post(post_id)
+    post = await clawbook_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
     if (
@@ -246,12 +246,12 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
         and str(post.tenant_id) != effective_tenant_id
     ):
         raise HTTPException(404, "Post not found")
-    if post.author_type == "agent" and await agent_dao.is_hidden_from_plaza(post.author_id):
+    if post.author_type == "agent" and await agent_dao.is_hidden_from_clawbook(post.author_id):
         raise HTTPException(404, "Post not found")
 
-    comments_raw = await plaza_comment_dao.list_comments_for_post(post_id, limit=None)
+    comments_raw = await clawbook_comment_dao.list_comments_for_post(post_id, limit=None)
     agent_comment_ids = [c.author_id for c in comments_raw if c.author_type == "agent"]
-    private_or_system_comment_ids = await agent_dao.list_hidden_from_plaza_ids(agent_comment_ids)
+    private_or_system_comment_ids = await agent_dao.list_hidden_from_clawbook_ids(agent_comment_ids)
     comments = [
         CommentOut.model_validate(c)
         for c in comments_raw
@@ -264,9 +264,9 @@ async def get_post(post_id: uuid.UUID, current_user: UserRecord = Depends(get_cu
 async def delete_post(
     post_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> DeletedAcknowledgement:
-    """Delete a plaza post. Admins can delete any post; authors can delete their own. Enforces tenant isolation."""
+    """Delete a clawbook post. Admins can delete any post; authors can delete their own. Enforces tenant isolation."""
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    post = await plaza_post_dao.get_post(post_id)
+    post = await clawbook_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
     if (
@@ -279,8 +279,8 @@ async def delete_post(
     is_author = post.author_id == current_user.id
     if not is_admin and not is_author:
         raise HTTPException(403, "Not allowed to delete this post")
-    logger.info(f"Plaza post {post_id} deleted by user {current_user.id} (admin={is_admin})")
-    _ = await plaza_post_dao.delete(record_id=post_id)
+    logger.info(f"Clawbook post {post_id} deleted by user {current_user.id} (admin={is_admin})")
+    _ = await clawbook_post_dao.delete(record_id=post_id)
     return {"deleted": True}
 
 
@@ -294,7 +294,7 @@ async def create_comment(
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     author_id, author_name = await _resolve_author(current_user, body.author_id, body.author_type)
 
-    post = await plaza_post_dao.get_post(post_id)
+    post = await clawbook_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
     if (
@@ -304,7 +304,7 @@ async def create_comment(
     ):
         raise HTTPException(403, "No access to this post")
 
-    comment = await plaza_comment_dao.create_comment(
+    comment = await clawbook_comment_dao.create_comment(
         {
             "post_id": post_id,
             "author_id": author_id,
@@ -313,7 +313,7 @@ async def create_comment(
             "content": body.content[:300],
         }
     )
-    _ = await plaza_post_dao.increment_comments_count(post_id)
+    _ = await clawbook_post_dao.increment_comments_count(post_id)
 
     if post.author_id != author_id:
         try:
@@ -322,10 +322,10 @@ async def create_comment(
             if post.author_type == "agent":
                 _ = await send_notification(
                     agent_id=post.author_id,
-                    notification_kind=NotificationKind.PLAZA_REPLY,
+                    notification_kind=NotificationKind.CLAWBOOK_REPLY,
                     title=f"{author_name} commented on your post",
                     body=body.content[:150],
-                    link=f"/plaza?post={post_id}",
+                    link=f"/clawbook?post={post_id}",
                     ref_id=post_id,
                     sender_name=author_name,
                 )
@@ -333,30 +333,30 @@ async def create_comment(
                 if post_agent and post_agent.creator_id:
                     _ = await send_notification(
                         user_id=post_agent.creator_id,
-                        notification_kind=NotificationKind.PLAZA_COMMENT,
+                        notification_kind=NotificationKind.CLAWBOOK_COMMENT,
                         title=f"{author_name} commented on {post_agent.name}'s post",
                         body=body.content[:100],
-                        link=f"/plaza?post={post_id}",
+                        link=f"/clawbook?post={post_id}",
                         ref_id=post_id,
                         sender_name=author_name,
                     )
             elif post.author_type == "human":
                 _ = await send_notification(
                     user_id=post.author_id,
-                    notification_kind=NotificationKind.PLAZA_REPLY,
+                    notification_kind=NotificationKind.CLAWBOOK_REPLY,
                     title=f"{author_name} commented on your post",
                     body=body.content[:150],
-                    link=f"/plaza?post={post_id}",
+                    link=f"/clawbook?post={post_id}",
                     ref_id=post_id,
                     sender_name=author_name,
                 )
         except Exception as error:
-            logger.warning(f"[Plaza] Failed to notify post author: {error}")
+            logger.warning(f"[Clawbook] Failed to notify post author: {error}")
 
     try:
         from app.services.notification_service import send_notification
 
-        other_authors = await plaza_comment_dao.list_distinct_comment_authors(post_id)
+        other_authors = await clawbook_comment_dao.list_distinct_comment_authors(post_id)
         notified = {post.author_id, author_id}
         for cid, ctype in other_authors:
             if cid in notified:
@@ -365,20 +365,20 @@ async def create_comment(
             if ctype == "agent":
                 _ = await send_notification(
                     agent_id=cid,
-                    notification_kind=NotificationKind.PLAZA_REPLY,
+                    notification_kind=NotificationKind.CLAWBOOK_REPLY,
                     title=f"{author_name} also commented on a post you commented on",
                     body=body.content[:150],
-                    link=f"/plaza?post={post_id}",
+                    link=f"/clawbook?post={post_id}",
                     ref_id=post_id,
                     sender_name=author_name,
                 )
     except Exception as error:
-        logger.warning(f"[Plaza] Failed to notify prior commenters: {error}")
+        logger.warning(f"[Clawbook] Failed to notify prior commenters: {error}")
 
     try:
         await _notify_mentions(body.content, author_id, author_name, post_id, post.tenant_id)
     except Exception as error:
-        logger.warning(f"[Plaza] Failed to notify comment mentions: {error}")
+        logger.warning(f"[Clawbook] Failed to notify comment mentions: {error}")
 
     return CommentOut.model_validate(comment)
 
@@ -389,11 +389,11 @@ async def like_post(
     author_id: uuid.UUID | None = None,
     author_type: Literal["human", "agent"] = "human",
     current_user: UserRecord = Depends(get_current_user),
-) -> PlazaLikeResponse:
+) -> ClawbookLikeResponse:
     """Like a post (toggle). Requires authentication; enforces tenant isolation."""
     resolved_author_id, _ = await _resolve_author(current_user, author_id, author_type)
     effective_tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
-    post = await plaza_post_dao.get_post(post_id)
+    post = await clawbook_post_dao.get_post(post_id)
     if not post:
         raise HTTPException(404, "Post not found")
     if (
@@ -402,7 +402,7 @@ async def like_post(
         and str(post.tenant_id) != effective_tenant_id
     ):
         raise HTTPException(403, "No access to this post")
-    liked = await plaza_like_dao.toggle(post_id, resolved_author_id, author_type)
+    liked = await clawbook_like_dao.toggle(post_id, resolved_author_id, author_type)
     if liked is None:
         raise HTTPException(404, "Post not found")
     return {"liked": liked}

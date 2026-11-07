@@ -10,7 +10,7 @@ from pydantic.warnings import PydanticDeprecatedSince20
 def test_pydantic_models_do_not_use_deprecated_class_config() -> None:
     for module_name in (
         "app.api.chat_sessions",
-        "app.api.plaza",
+        "app.api.clawbook",
         "app.services.sandbox.config",
     ):
         sys.modules.pop(module_name, None)
@@ -18,7 +18,7 @@ def test_pydantic_models_do_not_use_deprecated_class_config() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", PydanticDeprecatedSince20)
         from app.api.chat_sessions import SessionOut
-        from app.api.plaza import CommentOut, PostOut
+        from app.api.clawbook import CommentOut, PostOut
         from app.services.sandbox.config import SandboxConfig, SandboxType
 
     now = datetime.now(UTC)

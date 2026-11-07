@@ -139,7 +139,7 @@ async def test_complete_is_guarded_by_open_status(raw: _FakeRawConnection) -> No
     query, params = raw.executed[0]
     assert query.startswith("UPDATE gateway_messages SET status = 'completed', result = %(result)s")
     assert "WHERE id = %(id)s AND agent_id = %(agent_id)s AND status IN ('pending', 'delivered')" in query
-    assert params == {"id": message_id, "agent_id": agent_id, "result": "done", "now": now}
+    assert params == {"id": message_id, "agent_id": agent_id, "result": "done", "now": now, "binding_id": None}
 
 
 @pytest.mark.asyncio

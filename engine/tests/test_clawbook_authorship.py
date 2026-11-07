@@ -7,10 +7,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api import plaza
+from app.api import clawbook
 from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
-from app.records.plaza import PlazaCommentRecord, PlazaPostRecord
+from app.records.clawbook import ClawbookCommentRecord, ClawbookPostRecord
 from app.records.user import UserRecord
 from app.services import notification_service
 
@@ -23,16 +23,16 @@ def actor() -> UserRecord:
 @pytest.fixture
 async def client(actor: UserRecord) -> AsyncIterator[httpx.AsyncClient]:
     app = FastAPI()
-    app.include_router(plaza.router)
-    app.dependency_overrides[plaza.get_current_user] = lambda: actor
+    app.include_router(clawbook.router)
+    app.dependency_overrides[clawbook.get_current_user] = lambda: actor
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def post(actor: UserRecord) -> PlazaPostRecord:
-    return PlazaPostRecord(
+def post(actor: UserRecord) -> ClawbookPostRecord:
+    return ClawbookPostRecord(
         id=uuid4(),
         author_id=uuid4(),
         author_type="human",
@@ -51,7 +51,7 @@ async def test_human_writes_and_notifications_ignore_spoofed_identity(client, ac
     created = AsyncMock(
         return_value=post
         if operation == "post"
-        else PlazaCommentRecord(
+        else ClawbookCommentRecord(
             id=uuid4(),
             post_id=post.id,
             author_id=actor.id,
@@ -61,18 +61,18 @@ async def test_human_writes_and_notifications_ignore_spoofed_identity(client, ac
             created_at=post.created_at,
         )
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "create_post", created)
-    monkeypatch.setattr(plaza.plaza_comment_dao, "create_comment", created)
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.plaza_post_dao, "increment_comments_count", AsyncMock())
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", created)
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "create_comment", created)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", AsyncMock())
     monkeypatch.setattr(
-        plaza.plaza_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[(prior_agent, "agent")])
+        clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[(prior_agent, "agent")])
     )
-    monkeypatch.setattr(plaza.agent_dao, "list_for_tenant", AsyncMock(return_value=[]))
-    monkeypatch.setattr(plaza.user_dao, "list_active_for_tenant", AsyncMock(return_value=[mentioned]))
+    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", AsyncMock(return_value=[]))
+    monkeypatch.setattr(clawbook.user_dao, "list_active_for_tenant", AsyncMock(return_value=[mentioned]))
     notify = AsyncMock()
     monkeypatch.setattr(notification_service, "send_notification", notify)
-    endpoint = "/api/plaza/posts" if operation == "post" else f"/api/plaza/posts/{post.id}/comments"
+    endpoint = "/api/clawbook/posts" if operation == "post" else f"/api/clawbook/posts/{post.id}/comments"
 
     response = await client.post(
         endpoint,
@@ -103,12 +103,28 @@ async def test_human_writes_and_notifications_ignore_spoofed_identity(client, ac
         assert written["tenant_id"] == actor.tenant_id
 
 
-async def test_like_ignores_spoofed_human_id(client, actor, post, monkeypatch):
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    toggle = AsyncMock(return_value=True)
-    monkeypatch.setattr(plaza.plaza_like_dao, "toggle", toggle, raising=False)
+async def test_post_content_accepts_1000_characters_and_rejects_1001_before_writing(client, post, monkeypatch):
+    created = AsyncMock(return_value=post)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", created)
 
-    response = await client.post(f"/api/plaza/posts/{post.id}/like", params={"author_id": str(uuid4())})
+    full = "x" * 1000
+    accepted = await client.post("/api/clawbook/posts", json={"content": full})
+    rejected = await client.post("/api/clawbook/posts", json={"content": full + "x"})
+
+    assert accepted.status_code == 200
+    created.assert_awaited_once()
+    assert created.await_args is not None
+    assert created.await_args.args[0]["content"] == full
+    assert rejected.status_code == 422
+    assert created.await_count == 1
+
+
+async def test_like_ignores_spoofed_human_id(client, actor, post, monkeypatch):
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    toggle = AsyncMock(return_value=True)
+    monkeypatch.setattr(clawbook.clawbook_like_dao, "toggle", toggle, raising=False)
+
+    response = await client.post(f"/api/clawbook/posts/{post.id}/like", params={"author_id": str(uuid4())})
 
     assert response.status_code == 200
     assert response.json() == {"liked": True}
@@ -121,13 +137,13 @@ async def test_rest_agent_authorship_requires_manage_and_uses_agent_name(
     client, actor, post, monkeypatch, operation, access
 ):
     agent = AgentRecord(id=uuid4(), name="Canonical agent", tenant_id=actor.tenant_id, creator_id=actor.id)
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
     check = AsyncMock(return_value=(agent, access))
-    monkeypatch.setattr(plaza, "check_agent_access", check, raising=False)
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook, "check_agent_access", check, raising=False)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
     write = AsyncMock(return_value=post)
     comment_write = AsyncMock(
-        return_value=PlazaCommentRecord(
+        return_value=ClawbookCommentRecord(
             id=uuid4(),
             post_id=post.id,
             author_id=agent.id,
@@ -137,18 +153,18 @@ async def test_rest_agent_authorship_requires_manage_and_uses_agent_name(
             created_at=post.created_at,
         )
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "create_post", write)
-    monkeypatch.setattr(plaza.plaza_comment_dao, "create_comment", comment_write)
-    monkeypatch.setattr(plaza.plaza_post_dao, "increment_comments_count", AsyncMock())
-    monkeypatch.setattr(plaza.plaza_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", write)
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "create_comment", comment_write)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", AsyncMock())
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
     monkeypatch.setattr(notification_service, "send_notification", AsyncMock())
     toggle = AsyncMock(return_value=True)
-    monkeypatch.setattr(plaza.plaza_like_dao, "toggle", toggle, raising=False)
+    monkeypatch.setattr(clawbook.clawbook_like_dao, "toggle", toggle, raising=False)
     author = {"author_id": str(agent.id), "author_type": "agent", "author_name": "Forged name"}
     endpoint = (
-        "/api/plaza/posts"
+        "/api/clawbook/posts"
         if operation == "post"
-        else f"/api/plaza/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
+        else f"/api/clawbook/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
     )
 
     response = await client.post(
@@ -178,9 +194,9 @@ async def test_rest_agent_authorship_requires_manage_and_uses_agent_name(
 async def test_rest_rejects_unknown_author_type(client, post, operation, author_type):
     author = {"author_id": str(uuid4()), "author_type": author_type, "author_name": "Spoofed"}
     endpoint = (
-        "/api/plaza/posts"
+        "/api/clawbook/posts"
         if operation == "post"
-        else f"/api/plaza/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
+        else f"/api/clawbook/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
     )
 
     response = await client.post(
@@ -195,9 +211,9 @@ async def test_rest_rejects_unknown_author_type(client, post, operation, author_
 @pytest.mark.parametrize("operation", ["post", "comment", "like"])
 async def test_agent_authorship_requires_an_agent_id(client, post, operation):
     endpoint = (
-        "/api/plaza/posts"
+        "/api/clawbook/posts"
         if operation == "post"
-        else f"/api/plaza/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
+        else f"/api/clawbook/posts/{post.id}/{'comments' if operation == 'comment' else 'like'}"
     )
     response = await client.post(
         endpoint,

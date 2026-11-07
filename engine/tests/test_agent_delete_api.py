@@ -273,7 +273,9 @@ async def test_delete_agent_waits_for_owning_request_commit(monkeypatch, delete_
     assert observed == ([] if rollback else [(agent.id, 1, None)])
 
 
-async def test_postgres_delete_agent_clears_plaza_children_and_peer_participant_messages(deletion_pg: DeletionPostgres):
+async def test_postgres_delete_agent_clears_clawbook_children_and_peer_participant_messages(
+    deletion_pg: DeletionPostgres,
+):
     content = await seed_deletion_content(deletion_pg)
     app = FastAPI()
     app.include_router(agents_api.router, prefix="/api", dependencies=[Depends(session.bind_crud_connection)])
@@ -284,12 +286,12 @@ async def test_postgres_delete_agent_clears_plaza_children_and_peer_participant_
     assert response.content == b""
     await asyncio.gather(*tuple(background_tasks._tasks))
     assert await deletion_pg.rows("SELECT id FROM agents WHERE id = %s", (deletion_pg.agent_id,)) == []
-    assert await deletion_pg.rows("SELECT id FROM plaza_posts WHERE id = %s", (content.agent_post_id,)) == []
+    assert await deletion_pg.rows("SELECT id FROM clawbook_posts WHERE id = %s", (content.agent_post_id,)) == []
     assert await deletion_pg.rows("SELECT id FROM participants WHERE ref_id = %s", (deletion_pg.agent_id,)) == []
     assert len(await deletion_pg.rows("SELECT id FROM chat_messages")) == 2
     assert len(await deletion_pg.rows("SELECT id FROM chat_sessions")) == 2
     assert await deletion_pg.rows(
-        "SELECT likes_count, comments_count FROM plaza_posts WHERE id = %s",
+        "SELECT likes_count, comments_count FROM clawbook_posts WHERE id = %s",
         (content.surviving_post_id,),
     ) == [{"likes_count": 2, "comments_count": 2}]
     assert len(await deletion_pg.rows("SELECT id FROM web_search_events")) == 1

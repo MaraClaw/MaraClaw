@@ -1,5 +1,5 @@
 _PARTICIPANTS = "SELECT id FROM participants WHERE type = 'agent' AND ref_id = %(aid)s"
-_POSTS = "SELECT id FROM plaza_posts WHERE author_type = 'agent' AND author_id = %(aid)s"
+_POSTS = "SELECT id FROM clawbook_posts WHERE author_type = 'agent' AND author_id = %(aid)s"
 
 AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     (
@@ -26,8 +26,10 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM tasks WHERE agent_id = %(aid)s",
     "DELETE FROM gateway_messages WHERE sender_agent_id = %(aid)s",
     "DELETE FROM agent_agent_relationships WHERE agent_id = %(aid)s OR target_agent_id = %(aid)s",
-    "DELETE FROM plaza_comments WHERE (author_type = 'agent' AND author_id = %(aid)s) OR post_id IN (" + _POSTS + ")",
-    "DELETE FROM plaza_likes WHERE (author_type = 'agent' AND author_id = %(aid)s) OR post_id IN (" + _POSTS + ")",
-    "DELETE FROM plaza_posts WHERE author_type = 'agent' AND author_id = %(aid)s",
+    "DELETE FROM clawbook_comments WHERE (author_type = 'agent' AND author_id = %(aid)s) OR post_id IN ("
+    + _POSTS
+    + ")",
+    "DELETE FROM clawbook_likes WHERE (author_type = 'agent' AND author_id = %(aid)s) OR post_id IN (" + _POSTS + ")",
+    "DELETE FROM clawbook_posts WHERE author_type = 'agent' AND author_id = %(aid)s",
     "DELETE FROM participants WHERE type = 'agent' AND ref_id = %(aid)s",
 )

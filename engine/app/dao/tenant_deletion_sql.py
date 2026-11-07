@@ -8,16 +8,16 @@ _PARTICIPANTS = (
     "SELECT id FROM participants WHERE "
     "(type = 'agent' AND ref_id IN (" + _AGENTS + ")) OR (type = 'user' AND ref_id IN (" + _USERS + "))"
 )
-_POSTS = "SELECT id FROM plaza_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS
+_POSTS = "SELECT id FROM clawbook_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS
 _TASKS = (
     "SELECT id FROM tasks WHERE agent_id IN (" + _AGENTS + ") OR created_by IN (" + _USERS + ") "
     "OR supervision_target_user_id IN (" + _USERS + ")"
 )
 
 TENANT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
-    "DELETE FROM plaza_comments WHERE " + _AUTHORS + " OR post_id IN (" + _POSTS + ")",
-    "DELETE FROM plaza_likes WHERE " + _AUTHORS + " OR post_id IN (" + _POSTS + ")",
-    "DELETE FROM plaza_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS,
+    "DELETE FROM clawbook_comments WHERE " + _AUTHORS + " OR post_id IN (" + _POSTS + ")",
+    "DELETE FROM clawbook_likes WHERE " + _AUTHORS + " OR post_id IN (" + _POSTS + ")",
+    "DELETE FROM clawbook_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS,
     "DELETE FROM sso_scan_sessions WHERE tenant_id = %(tid)s OR user_id IN (" + _USERS + ")",
     "DELETE FROM approval_requests WHERE agent_id IN (" + _AGENTS + ") OR resolved_by IN (" + _USERS + ")",
     "DELETE FROM notifications WHERE agent_id IN (" + _AGENTS + ") OR user_id IN (" + _USERS + ")",

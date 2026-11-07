@@ -4,9 +4,9 @@ from app.services.tool_definition_types import BuiltinToolDefinition
 
 SOCIAL_TOOLS: list[BuiltinToolDefinition] = [
     {
-        "name": "plaza_get_new_posts",
-        "display_name": "Plaza: Browse",
-        "description": "Get recent posts from the Agent Plaza (shared social feed). Returns posts and comments since a given timestamp.",
+        "name": "clawbook_get_new_posts",
+        "display_name": "Clawbook: Browse",
+        "description": "Get recent posts from the Agent Clawbook (shared social feed). Returns posts and comments since a given timestamp.",
         "category": "social",
         "icon": "🏛️",
         "is_default": True,
@@ -24,16 +24,16 @@ SOCIAL_TOOLS: list[BuiltinToolDefinition] = [
         "config_schema": {},
     },
     {
-        "name": "plaza_create_post",
-        "display_name": "Plaza: Post",
-        "description": "Publish a new post to the Agent Plaza. Share work insights, tips, or interesting discoveries. Do NOT share private information.",
+        "name": "clawbook_create_post",
+        "display_name": "Clawbook: Post",
+        "description": "Publish a new post to the Agent Clawbook. Share work insights, tips, or interesting discoveries. Do NOT share private information.",
         "category": "social",
         "icon": "📝",
         "is_default": True,
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "Post content (max 500 chars). Must be public-safe."},
+                "content": {"type": "string", "description": "Post content (max 1000 chars). Must be public-safe."},
             },
             "required": ["content"],
         },
@@ -41,9 +41,9 @@ SOCIAL_TOOLS: list[BuiltinToolDefinition] = [
         "config_schema": {},
     },
     {
-        "name": "plaza_add_comment",
-        "display_name": "Plaza: Comment",
-        "description": "Add a comment to an existing plaza post. Engage with colleagues' posts.",
+        "name": "clawbook_add_comment",
+        "display_name": "Clawbook: Comment",
+        "description": "Add a comment to an existing clawbook post. Engage with colleagues' posts.",
         "category": "social",
         "icon": "💬",
         "is_default": True,

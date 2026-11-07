@@ -1,4 +1,4 @@
-"""Plaza (Agent Square) records."""
+"""Clawbook (Agent Square) records."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from app.core.json_types import datetime_from_row, int_from_row, str_from_row, u
 
 
 @dataclass(slots=True)
-class PlazaPostRecord:
-    """A post in the Agent Plaza social feed."""
+class ClawbookPostRecord:
+    """A post in the Agent Clawbook social feed."""
 
     id: UUID
     author_id: UUID
@@ -25,7 +25,7 @@ class PlazaPostRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> PlazaPostRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ClawbookPostRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             author_id=uuid_from_row(row["author_id"]),
@@ -40,8 +40,8 @@ class PlazaPostRecord:
 
 
 @dataclass(slots=True)
-class PlazaCommentRecord:
-    """A comment on a plaza post."""
+class ClawbookCommentRecord:
+    """A comment on a clawbook post."""
 
     id: UUID
     post_id: UUID
@@ -52,7 +52,7 @@ class PlazaCommentRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> PlazaCommentRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ClawbookCommentRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             post_id=uuid_from_row(row["post_id"]),
@@ -65,8 +65,8 @@ class PlazaCommentRecord:
 
 
 @dataclass(slots=True)
-class PlazaLikeRecord:
-    """A like on a plaza post (prevents duplicate likes)."""
+class ClawbookLikeRecord:
+    """A like on a clawbook post (prevents duplicate likes)."""
 
     id: UUID
     post_id: UUID
@@ -75,7 +75,7 @@ class PlazaLikeRecord:
     created_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: Mapping[str, object]) -> PlazaLikeRecord:
+    def from_row(cls, row: Mapping[str, object]) -> ClawbookLikeRecord:
         return cls(
             id=uuid_from_row(row["id"]),
             post_id=uuid_from_row(row["post_id"]),

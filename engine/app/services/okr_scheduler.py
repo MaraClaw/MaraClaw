@@ -9,7 +9,7 @@ Design decisions:
   - Direct DB writes (no HTTP round-trips) for efficiency
   - Focus descriptions are parsed with regex, not LLM, for progress extraction
   - Reports are stored in WorkReport table AND returned as strings to the caller
-    so the OKR Agent LLM can post to plaza / send to channels as it sees fit
+    so the OKR Agent LLM can post to clawbook / send to channels as it sees fit
   - All errors are caught per-agent so one failed collection doesn't block the batch
 """
 

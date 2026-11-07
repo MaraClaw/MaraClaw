@@ -54,6 +54,6 @@ def test_cleanup_resolves_baseline_foreign_keys_before_deleting_parents(statemen
             assert child_index is not None, f"{child} still references deleted {parent}"
             assert child_index < deletes[parent], f"{child} must be cleaned before {parent}"
             checked.append((child, parent))
-    assert ("plaza_comments", "plaza_posts") in checked
+    assert ("clawbook_comments", "clawbook_posts") in checked
     assert ("chat_messages", "participants") in checked
     assert ("task_logs", "tasks") in checked

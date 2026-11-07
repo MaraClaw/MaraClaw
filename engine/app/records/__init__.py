@@ -8,23 +8,23 @@ from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
+from app.records.clawbook import ClawbookCommentRecord, ClawbookLikeRecord, ClawbookPostRecord
 from app.records.enterprise_info import EnterpriseInfoRecord
 from app.records.focus import AgentFocusItemRecord
 from app.records.gogcli_credential import GogcliCredentialStateRecord
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.invitation import InvitationCodeRecord
-from app.records.linkup_api_key import LinkupApiKeyRecord, LinkupAsyncJobRecord
 from app.records.llm import LLMModelRecord
 from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.org import OrgMemberRecord
 from app.records.participant import ParticipantRecord
-from app.records.plaza import PlazaCommentRecord, PlazaLikeRecord, PlazaPostRecord
 from app.records.published_page import PublishedPageRecord
 from app.records.schedule import AgentScheduleRecord
 from app.records.skill import SkillFileRecord, SkillRecord
 from app.records.sso_scan_session import SSOScanSessionRecord
 from app.records.system_setting import SystemSettingRecord
 from app.records.task import TaskLogRecord, TaskRecord
+from app.records.tavily_api_key import TavilyApiKeyRecord
 from app.records.template import AgentTemplateRecord
 from app.records.tenant import TenantRecord
 from app.records.tenant_email_domain import TenantEmailDomainRecord
@@ -48,19 +48,17 @@ __all__ = [
     "ChannelEventReceiptRecord",
     "ChatMessageRecord",
     "ChatSessionRecord",
+    "ClawbookCommentRecord",
+    "ClawbookLikeRecord",
+    "ClawbookPostRecord",
     "EnterpriseInfoRecord",
     "GogcliCredentialStateRecord",
     "IdentityProviderRecord",
     "IdentityRecord",
     "InvitationCodeRecord",
     "LLMModelRecord",
-    "LinkupApiKeyRecord",
-    "LinkupAsyncJobRecord",
     "OrgMemberRecord",
     "ParticipantRecord",
-    "PlazaCommentRecord",
-    "PlazaLikeRecord",
-    "PlazaPostRecord",
     "PublishedPageRecord",
     "SSOScanSessionRecord",
     "SkillFileRecord",
@@ -68,6 +66,7 @@ __all__ = [
     "SystemSettingRecord",
     "TaskLogRecord",
     "TaskRecord",
+    "TavilyApiKeyRecord",
     "TenantEmailDomainRecord",
     "TenantRecord",
     "ToolRecord",

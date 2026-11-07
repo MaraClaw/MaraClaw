@@ -31,8 +31,8 @@ def no_external_calls(monkeypatch):
 
 
 @pytest.fixture
-def plaza():
-    return importlib.import_module("app.services.agent_tool_exec.plaza")
+def clawbook():
+    return importlib.import_module("app.services.agent_tool_exec.clawbook")
 
 
 def _agent(agent_id, **overrides):
@@ -52,32 +52,32 @@ def _agent(agent_id, **overrides):
     ("agent", "expected"),
     [
         (None, "Error: Agent not found."),
-        (_agent(uuid.uuid4(), is_system=True), "System agents cannot access Plaza."),
-        (_agent(uuid.uuid4(), access_mode="private"), "Only company-wide agents can access Plaza."),
+        (_agent(uuid.uuid4(), is_system=True), "System agents cannot access Clawbook."),
+        (_agent(uuid.uuid4(), access_mode="private"), "Only company-wide agents can access Clawbook."),
     ],
 )
-async def test_get_new_posts_returns_access_guards(monkeypatch, plaza, agent, expected):
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+async def test_get_new_posts_returns_access_guards(monkeypatch, clawbook, agent, expected):
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
 
-    result = await agent_tools._plaza_get_new_posts(uuid.uuid4(), {})
+    result = await agent_tools._clawbook_get_new_posts(uuid.uuid4(), {})
 
     assert result == expected
 
 
-async def test_get_new_posts_returns_empty_feed_and_caps_limit(monkeypatch, plaza):
+async def test_get_new_posts_returns_empty_feed_and_caps_limit(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     agent = _agent(agent_id)
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
     list_posts = AsyncMock(return_value=[])
-    monkeypatch.setattr(plaza.plaza_post_dao, "list_posts_recent", list_posts)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_posts_recent", list_posts)
 
-    result = await agent_tools._plaza_get_new_posts(agent_id, {"limit": 99})
+    result = await agent_tools._clawbook_get_new_posts(agent_id, {"limit": 99})
 
-    assert result == "📭 No posts in the plaza yet. Be the first to share something!"
+    assert result == "📭 No posts in the clawbook yet. Be the first to share something!"
     list_posts.assert_awaited_once_with(20, tenant_id=agent.tenant_id)
 
 
-async def test_get_new_posts_formats_tenant_posts_and_comments(monkeypatch, plaza):
+async def test_get_new_posts_formats_tenant_posts_and_comments(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
     post_id = uuid.uuid4()
@@ -86,40 +86,41 @@ async def test_get_new_posts_formats_tenant_posts_and_comments(monkeypatch, plaz
         author_type="agent",
         author_name="Ada",
         created_at=datetime(2026, 7, 10, 9, 30, tzinfo=UTC),
-        content="Hello Plaza",
+        content="Hello Clawbook",
         likes_count=2,
         comments_count=1,
     )
     comment = SimpleNamespace(author_type="human", author_name="Mira", content="Welcome")
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=_agent(agent_id, tenant_id=tenant_id)))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id, tenant_id=tenant_id)))
     list_posts = AsyncMock(return_value=[post])
     list_comments = AsyncMock(return_value=[comment])
-    monkeypatch.setattr(plaza.plaza_post_dao, "list_posts_recent", list_posts)
-    monkeypatch.setattr(plaza.plaza_comment_dao, "list_comments_for_post", list_comments)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "list_posts_recent", list_posts)
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_comments_for_post", list_comments)
 
-    result = await agent_tools._plaza_get_new_posts(agent_id, {"limit": 1})
+    result = await agent_tools._clawbook_get_new_posts(agent_id, {"limit": 1})
 
     assert result == (
-        "🏛️ Agent Plaza - Recent Posts:\n\n"
+        "🏛️ Agent Clawbook - Recent Posts:\n\n"
         f"🤖 **Ada** (07-10 09:30) [post_id: {post_id}]\n"
-        "Hello Plaza\n❤️ 2  💬 1\n  └─ 👤 Mira: Welcome"
+        "Hello Clawbook\n❤️ 2  💬 1\n  └─ 👤 Mira: Welcome"
     )
     list_posts.assert_awaited_once_with(1, tenant_id=tenant_id)
     list_comments.assert_awaited_once_with(post_id, limit=5)
 
 
-async def test_get_new_posts_truncates_database_failure(monkeypatch, plaza):
+async def test_get_new_posts_truncates_database_failure(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(side_effect=RuntimeError("x" * 250)))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(side_effect=RuntimeError("x" * 250)))
 
-    result = await agent_tools._plaza_get_new_posts(agent_id, {})
+    result = await agent_tools._clawbook_get_new_posts(agent_id, {})
 
-    assert result == f"❌ Failed to load plaza posts: {'x' * 200}"
+    assert result == f"❌ Failed to load clawbook posts: {'x' * 200}"
 
 
 async def test_create_post_rejects_blank_content():
     assert (
-        await agent_tools._plaza_create_post(uuid.uuid4(), {"content": "  "}) == "Error: Post content cannot be empty."
+        await agent_tools._clawbook_create_post(uuid.uuid4(), {"content": "  "})
+        == "Error: Post content cannot be empty."
     )
 
 
@@ -129,32 +130,32 @@ async def test_create_post_rejects_blank_content():
         (None, "Error: Agent not found."),
         (
             _agent(uuid.uuid4(), is_system=True),
-            "System agents are not allowed to post to Plaza. Use send_platform_message to communicate with users directly.",
+            "System agents are not allowed to post to Clawbook. Use send_platform_message to communicate with users directly.",
         ),
-        (_agent(uuid.uuid4(), access_mode="private"), "Only company-wide agents are allowed to post to Plaza."),
+        (_agent(uuid.uuid4(), access_mode="private"), "Only company-wide agents are allowed to post to Clawbook."),
     ],
 )
-async def test_create_post_returns_access_guards(monkeypatch, plaza, agent, expected):
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+async def test_create_post_returns_access_guards(monkeypatch, clawbook, agent, expected):
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
 
-    result = await agent_tools._plaza_create_post(uuid.uuid4(), {"content": "Hello"})
+    result = await agent_tools._clawbook_create_post(uuid.uuid4(), {"content": "Hello"})
 
     assert result == expected
 
 
-async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(monkeypatch, plaza):
+async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
     mentioned_id = uuid.uuid4()
     post_id = uuid.uuid4()
-    content = "@Bob @bob " + "x" * 600
+    content = "@Bob @bob " + "x" * 1100
     agent = _agent(agent_id, tenant_id=tenant_id)
-    post = SimpleNamespace(id=post_id, content=content[:500])
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+    post = SimpleNamespace(id=post_id, content=content[:1000])
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
     create_post = AsyncMock(return_value=post)
-    monkeypatch.setattr(plaza.plaza_post_dao, "create_post", create_post)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", create_post)
     list_for_tenant = AsyncMock(return_value=[_agent(mentioned_id, name="Bob", tenant_id=tenant_id)])
-    monkeypatch.setattr(plaza.agent_dao, "list_for_tenant", list_for_tenant)
+    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", list_for_tenant)
     notifications = []
 
     async def fake_send_notification(*args, **kwargs):
@@ -162,26 +163,26 @@ async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(mo
 
     monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
 
-    result = await agent_tools._plaza_create_post(agent_id, {"content": content})
+    result = await agent_tools._clawbook_create_post(agent_id, {"content": content})
 
     assert result == f"Post published! (ID: {post_id})"
     assert create_post.await_args is not None
     obj_in = create_post.await_args.args[0] if create_post.await_args.args else create_post.await_args.kwargs["obj_in"]
-    assert obj_in["content"] == content[:500]
+    assert obj_in["content"] == content[:1000]
     list_for_tenant.assert_awaited_once_with(tenant_id)
     assert [notification[1]["agent_id"] for notification in notifications] == [mentioned_id]
     assert notifications[0][1]["notification_kind"] == "mention"
     assert notifications[0][1]["body"] == content[:150]
 
 
-async def test_create_post_swallows_notification_failure_and_commits(monkeypatch, plaza):
+async def test_create_post_swallows_notification_failure_and_commits(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     post_id = uuid.uuid4()
     agent = _agent(agent_id)
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr(plaza.plaza_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=post_id)))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=post_id)))
     monkeypatch.setattr(
-        plaza.agent_dao,
+        clawbook.agent_dao,
         "list_for_tenant",
         AsyncMock(return_value=[_agent(uuid.uuid4(), name="Bob")]),
     )
@@ -191,16 +192,16 @@ async def test_create_post_swallows_notification_failure_and_commits(monkeypatch
 
     monkeypatch.setattr(notification_service, "send_notification", failing_notification)
 
-    result = await agent_tools._plaza_create_post(agent_id, {"content": "@Bob hello"})
+    result = await agent_tools._clawbook_create_post(agent_id, {"content": "@Bob hello"})
 
     assert result == f"Post published! (ID: {post_id})"
 
 
-async def test_create_post_truncates_database_failure(monkeypatch, plaza):
+async def test_create_post_truncates_database_failure(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(side_effect=RuntimeError("x" * 250)))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(side_effect=RuntimeError("x" * 250)))
 
-    result = await agent_tools._plaza_create_post(agent_id, {"content": "Hello"})
+    result = await agent_tools._clawbook_create_post(agent_id, {"content": "Hello"})
 
     assert result == f"Failed to create post: {'x' * 200}"
 
@@ -208,10 +209,10 @@ async def test_create_post_truncates_database_failure(monkeypatch, plaza):
 async def test_add_comment_rejects_blank_content_and_invalid_post_id():
     agent_id = uuid.uuid4()
 
-    assert await agent_tools._plaza_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "  "}) == (
+    assert await agent_tools._clawbook_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "  "}) == (
         "Error: Comment content cannot be empty."
     )
-    assert await agent_tools._plaza_add_comment(agent_id, {"post_id": "not-a-uuid", "content": "Hello"}) == (
+    assert await agent_tools._clawbook_add_comment(agent_id, {"post_id": "not-a-uuid", "content": "Hello"}) == (
         "Error: Invalid post_id format."
     )
 
@@ -228,26 +229,26 @@ async def test_add_comment_rejects_blank_content_and_invalid_post_id():
         (
             SimpleNamespace(id=uuid.uuid4(), author_id=uuid.uuid4(), author_name="Mira"),
             _agent(uuid.uuid4(), is_system=True),
-            "System agents are not allowed to comment on Plaza posts.",
+            "System agents are not allowed to comment on Clawbook posts.",
         ),
         (
             SimpleNamespace(id=uuid.uuid4(), author_id=uuid.uuid4(), author_name="Mira"),
             _agent(uuid.uuid4(), access_mode="private"),
-            "Only company-wide agents are allowed to comment on Plaza posts.",
+            "Only company-wide agents are allowed to comment on Clawbook posts.",
         ),
     ],
 )
-async def test_add_comment_returns_access_guards(monkeypatch, plaza, post, agent, expected):
+async def test_add_comment_returns_access_guards(monkeypatch, clawbook, post, agent, expected):
     agent_id = uuid.uuid4()
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
 
-    result = await agent_tools._plaza_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "Hello"})
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "Hello"})
 
     assert result == expected
 
 
-async def test_add_comment_truncates_content_notifies_participants_and_mentions(monkeypatch, plaza):
+async def test_add_comment_truncates_content_notifies_participants_and_mentions(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     post_id = uuid.uuid4()
     post_author_id = uuid.uuid4()
@@ -265,9 +266,9 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     agent = _agent(agent_id)
     create_comment = AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
     increment = AsyncMock(return_value=post)
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
     monkeypatch.setattr(
-        plaza.agent_dao,
+        clawbook.agent_dao,
         "get",
         AsyncMock(
             side_effect=[
@@ -276,17 +277,17 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
             ]
         ),
     )
-    monkeypatch.setattr(plaza.plaza_comment_dao, "create_comment", create_comment)
-    monkeypatch.setattr(plaza.plaza_post_dao, "increment_comments_count", increment)
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "create_comment", create_comment)
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", increment)
     monkeypatch.setattr(
-        plaza.plaza_comment_dao,
+        clawbook.clawbook_comment_dao,
         "list_distinct_comment_authors",
         AsyncMock(
             return_value=[(post_author_id, "agent"), (other_commenter_id, "agent"), (other_commenter_id, "agent")]
         ),
     )
     monkeypatch.setattr(
-        plaza.agent_dao,
+        clawbook.agent_dao,
         "list_for_tenant",
         AsyncMock(return_value=[_agent(mentioned_id, name="Bob")]),
     )
@@ -297,7 +298,7 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
 
     monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
 
-    result = await agent_tools._plaza_add_comment(agent_id, {"post_id": post_id, "content": content})
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post_id, "content": content})
 
     assert result == "Comment added to post by Mira."
     assert create_comment.await_args is not None
@@ -309,9 +310,9 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     assert obj_in["content"] == content[:300]
     increment.assert_awaited_once_with(post_id)
     assert [notification[1]["notification_kind"] for notification in notifications] == [
-        "plaza_reply",
-        "plaza_comment",
-        "plaza_reply",
+        "clawbook_reply",
+        "clawbook_comment",
+        "clawbook_reply",
         "mention",
     ]
     assert notifications[0][1]["agent_id"] == post_author_id
@@ -320,7 +321,7 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     assert notifications[3][1]["agent_id"] == mentioned_id
 
 
-async def test_add_comment_notifies_a_human_post_author(monkeypatch, plaza):
+async def test_add_comment_notifies_a_human_post_author(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     post_id = uuid.uuid4()
     human_author_id = uuid.uuid4()
@@ -331,13 +332,13 @@ async def test_add_comment_notifies_a_human_post_author(monkeypatch, plaza):
         author_name="Mira",
         comments_count=None,
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
     monkeypatch.setattr(
-        plaza.plaza_comment_dao, "create_comment", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        clawbook.clawbook_comment_dao, "create_comment", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "increment_comments_count", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.plaza_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
     notifications = []
 
     async def fake_send_notification(*args, **kwargs):
@@ -345,14 +346,14 @@ async def test_add_comment_notifies_a_human_post_author(monkeypatch, plaza):
 
     monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
 
-    result = await agent_tools._plaza_add_comment(agent_id, {"post_id": post_id, "content": "Hello"})
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post_id, "content": "Hello"})
 
     assert result == "Comment added to post by Mira."
     assert notifications[0][1]["user_id"] == human_author_id
-    assert notifications[0][1]["notification_kind"] == "plaza_reply"
+    assert notifications[0][1]["notification_kind"] == "clawbook_reply"
 
 
-async def test_add_comment_swallows_notification_failure(monkeypatch, plaza):
+async def test_add_comment_swallows_notification_failure(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
     post_id = uuid.uuid4()
     post = SimpleNamespace(
@@ -362,35 +363,35 @@ async def test_add_comment_swallows_notification_failure(monkeypatch, plaza):
         author_name="Mira",
         comments_count=0,
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
     monkeypatch.setattr(
-        plaza.plaza_comment_dao, "create_comment", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        clawbook.clawbook_comment_dao, "create_comment", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
     )
-    monkeypatch.setattr(plaza.plaza_post_dao, "increment_comments_count", AsyncMock(return_value=post))
-    monkeypatch.setattr(plaza.plaza_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
 
     async def failing_notification(*_args, **_kwargs):
         raise RuntimeError("notification unavailable")
 
     monkeypatch.setattr(notification_service, "send_notification", failing_notification)
 
-    result = await agent_tools._plaza_add_comment(agent_id, {"post_id": post_id, "content": "Hello"})
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post_id, "content": "Hello"})
 
     assert result == "Comment added to post by Mira."
 
 
-async def test_add_comment_truncates_database_failure(monkeypatch, plaza):
+async def test_add_comment_truncates_database_failure(monkeypatch, clawbook):
     agent_id = uuid.uuid4()
-    monkeypatch.setattr(plaza.plaza_post_dao, "get_post", AsyncMock(side_effect=RuntimeError("x" * 250)))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(side_effect=RuntimeError("x" * 250)))
 
-    result = await agent_tools._plaza_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "Hello"})
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": uuid.uuid4(), "content": "Hello"})
 
     assert result == f"Failed to add comment: {'x' * 200}"
 
 
-async def test_legacy_plaza_facade_delegates_to_extracted_module(monkeypatch):
-    plaza_mod = importlib.import_module("app.services.agent_tool_exec.plaza")
+async def test_legacy_clawbook_facade_delegates_to_extracted_module(monkeypatch):
+    clawbook_mod = importlib.import_module("app.services.agent_tool_exec.clawbook")
     agent_id = uuid.uuid4()
     get_arguments = {"limit": 3}
     post_arguments = {"content": "Hello"}
@@ -409,16 +410,16 @@ async def test_legacy_plaza_facade_delegates_to_extracted_module(monkeypatch):
         calls.append(("comment", received_agent_id, received_arguments))
         return "comment sentinel"
 
-    assert signature(agent_tools._plaza_get_new_posts) == signature(plaza_mod._plaza_get_new_posts)
-    assert signature(agent_tools._plaza_create_post) == signature(plaza_mod._plaza_create_post)
-    assert signature(agent_tools._plaza_add_comment) == signature(plaza_mod._plaza_add_comment)
-    monkeypatch.setattr(plaza_mod, "_plaza_get_new_posts", fake_get_new_posts)
-    monkeypatch.setattr(plaza_mod, "_plaza_create_post", fake_create_post)
-    monkeypatch.setattr(plaza_mod, "_plaza_add_comment", fake_add_comment)
+    assert signature(agent_tools._clawbook_get_new_posts) == signature(clawbook_mod._clawbook_get_new_posts)
+    assert signature(agent_tools._clawbook_create_post) == signature(clawbook_mod._clawbook_create_post)
+    assert signature(agent_tools._clawbook_add_comment) == signature(clawbook_mod._clawbook_add_comment)
+    monkeypatch.setattr(clawbook_mod, "_clawbook_get_new_posts", fake_get_new_posts)
+    monkeypatch.setattr(clawbook_mod, "_clawbook_create_post", fake_create_post)
+    monkeypatch.setattr(clawbook_mod, "_clawbook_add_comment", fake_add_comment)
 
-    assert await agent_tools._plaza_get_new_posts(agent_id, get_arguments) == "get sentinel"
-    assert await agent_tools._plaza_create_post(agent_id, post_arguments) == "create sentinel"
-    assert await agent_tools._plaza_add_comment(agent_id, comment_arguments) == "comment sentinel"
+    assert await agent_tools._clawbook_get_new_posts(agent_id, get_arguments) == "get sentinel"
+    assert await agent_tools._clawbook_create_post(agent_id, post_arguments) == "create sentinel"
+    assert await agent_tools._clawbook_add_comment(agent_id, comment_arguments) == "comment sentinel"
     assert calls == [
         ("get", agent_id, get_arguments),
         ("create", agent_id, post_arguments),

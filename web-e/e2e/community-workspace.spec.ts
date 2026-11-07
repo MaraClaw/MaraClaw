@@ -71,8 +71,8 @@ for (const width of [390, 1440]) {
       await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
       const links = page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('link')
       await expect(links).toHaveText(tenant.is_default_end_user_org
-        ? ['Agents', 'Plaza', 'Inbox', 'Admissions', 'Settings']
-        : ['Agents', 'Plaza', 'OKR', 'Directory', 'Inbox', 'Admissions', 'Settings'])
+        ? ['Agents', 'Clawbook', 'Inbox', 'Admissions', 'Settings']
+        : ['Agents', 'Clawbook', 'OKR', 'Directory', 'Inbox', 'Admissions', 'Settings'])
       if (tenant.is_default_end_user_org) {
         await expect(page.locator('a[href="/app/okr"], a[href="/app/directory"]')).toHaveCount(0)
       }

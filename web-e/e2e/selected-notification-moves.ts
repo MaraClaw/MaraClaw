@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { inboxPath, notice, prepareNotifications, replacementNotice } from './notifications-fixture'
 import { replacementToken, writeFromOtherTab } from './session-fencing-fixture'
 
-const first = { ...notice('Announcement', 'broadcast'), id: '11111111-1111-4111-8111-111111111111', link: '/plaza?post=one' }
+const first = { ...notice('Announcement', 'broadcast'), id: '11111111-1111-4111-8111-111111111111', link: '/clawbook?post=one' }
 const second = { ...notice('Tool', 'autonomy_l2'), id: '22222222-2222-4222-8222-222222222222' }
 
 export function registerSelectedNotificationMoveTests() {
@@ -38,7 +38,7 @@ export function registerSelectedNotificationMoveTests() {
           expect(fixture.requests.filter((call) => call.method === 'POST').map((call) => call.path)).toEqual([`/api/notifications/${action}`, `/api/notifications/${action}`])
           await page.getByRole('button', { name: action === 'archive' ? 'Archived' : 'Active', exact: true }).click()
           await expect(page.getByRole('button', { name: 'Mark as read: Announcement', exact: true })).toBeVisible()
-          await expect(page.getByRole('link', { name: 'Open notification: Announcement', exact: true })).toHaveAttribute('href', '/app/plaza?post=one')
+          await expect(page.getByRole('link', { name: 'Open notification: Announcement', exact: true })).toHaveAttribute('href', '/app/clawbook?post=one')
           await page.getByLabel('Category', { exact: true }).selectOption('broadcast')
           await expect(page.getByText(`${action === 'archive' ? 0 : 1} unread in Broadcasts`, { exact: true })).toBeVisible()
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

@@ -78,8 +78,8 @@ async def send_channel_file(
     )
 
 
-@register("plaza_get_new_posts")
-async def plaza_get_new_posts(
+@register("clawbook_get_new_posts")
+async def clawbook_get_new_posts(
     *,
     arguments: ToolArguments,
     agent_id: uuid.UUID,
@@ -90,11 +90,11 @@ async def plaza_get_new_posts(
     del user_id, session_id, on_output
     from app.services import agent_tools as tools
 
-    return await tools._plaza_get_new_posts(agent_id, arguments)
+    return await tools._clawbook_get_new_posts(agent_id, arguments)
 
 
-@register("plaza_create_post")
-async def plaza_create_post(
+@register("clawbook_create_post")
+async def clawbook_create_post(
     *,
     arguments: ToolArguments,
     agent_id: uuid.UUID,
@@ -105,11 +105,11 @@ async def plaza_create_post(
     del user_id, session_id, on_output
     from app.services import agent_tools as tools
 
-    return await tools._plaza_create_post(agent_id, arguments)
+    return await tools._clawbook_create_post(agent_id, arguments)
 
 
-@register("plaza_add_comment")
-async def plaza_add_comment(
+@register("clawbook_add_comment")
+async def clawbook_add_comment(
     *,
     arguments: ToolArguments,
     agent_id: uuid.UUID,
@@ -120,7 +120,7 @@ async def plaza_add_comment(
     del user_id, session_id, on_output
     from app.services import agent_tools as tools
 
-    return await tools._plaza_add_comment(agent_id, arguments)
+    return await tools._clawbook_add_comment(agent_id, arguments)
 
 
 @register("execute_code")

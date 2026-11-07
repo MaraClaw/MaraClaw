@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useImperativeHandle, useMemo, useRef, useState, type RefObject } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 
+import { AdmissionInboxGate } from '@/components/layout/admission-access-gate'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -11,6 +12,7 @@ import { userFacingRequestError } from '@/lib/http'
 import { notificationCategories, notificationCategorySchema, notificationViews, type NotificationCategory, type NotificationView } from '@/lib/notifications-api'
 import { relativeTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
+import { AdmissionsPage } from './admissions'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal'
 const categoryLabels = { all: 'All', tool: 'Tools', approval: 'Approvals', social: 'Social', broadcast: 'Broadcasts' } satisfies Record<NotificationCategory, string>
@@ -18,14 +20,47 @@ const viewLabels = { active: 'Active', archived: 'Archived' } satisfies Record<N
 
 function memberLink(link?: string | null): string | null {
   if (!link) return null
-  if (link.startsWith('/plaza')) return `/app${link}`
+  if (link.startsWith('/clawbook')) return `/app${link}`
   return link
 }
 
 export function NotificationsPage() {
-  const [category, setCategory] = useState<NotificationCategory>('all')
+  const [search, setSearch] = useSearchParams()
+  const requested = search.get('category')
+  const parsed = notificationCategorySchema.safeParse(requested ?? 'all')
+  const category = requested === 'admissions' ? 'admissions' : parsed.success ? parsed.data : 'all'
   const [view, setView] = useState<NotificationView>('active')
   const heading = useRef<HTMLHeadingElement>(null)
+  const resetErrors = useRef<(() => void) | null>(null)
+  const scope = useWorkspaceSession()
+
+  return <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
+    <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold focus-visible:outline focus-visible:outline-ring">Inbox</h1>
+    <div className="space-y-2">
+      <Label htmlFor="notification-category">Category</Label>
+      <Select id="notification-category" value={category} onChange={(event) => scope.effect(() => {
+        const value = event.currentTarget.value
+        const next = value === 'admissions' ? value : notificationCategorySchema.parse(value)
+        if (next === category) return
+        resetErrors.current?.()
+        if (next !== 'admissions') void scope.client.resetQueries({ queryKey: notificationKeys.list(next, view), exact: true })
+        setSearch((current) => { const params = new URLSearchParams(current); params.set('category', next); return params })
+      })()}>
+        {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
+        <option value="admissions">Admissions</option>
+      </Select>
+    </div>
+    {category === 'admissions' ? <AdmissionsPage /> : <AdmissionInboxGate><NotificationContent category={category} view={view} setView={setView} heading={heading} resetErrorsRef={resetErrors} /></AdmissionInboxGate>}
+  </div>
+}
+
+function NotificationContent({ category, view, setView, heading, resetErrorsRef }: {
+  readonly category: NotificationCategory
+  readonly view: NotificationView
+  readonly setView: (view: NotificationView) => void
+  readonly heading: RefObject<HTMLHeadingElement | null>
+  readonly resetErrorsRef: RefObject<(() => void) | null>
+}) {
   const scope = useWorkspaceSession()
   const query = useInfiniteQuery(notificationListOptions(category, view))
   const unreadQuery = useQuery(notificationUnreadOptions(category))
@@ -54,11 +89,11 @@ export function NotificationsPage() {
     if (!archiveSelected.isPending) archiveSelected.reset()
     if (!restoreSelected.isPending) restoreSelected.reset()
   }
+  useImperativeHandle(resetErrorsRef, () => resetErrors)
 
   return (
-    <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold focus-visible:outline focus-visible:outline-ring">Inbox</h1>
         {view === 'active' ? <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
           {markAll.isPending ? 'Marking all read…' : 'Mark all read'}
         </Button> : null}
@@ -92,15 +127,6 @@ export function NotificationsPage() {
         })}>{viewLabels[value]}</Button>)}
       </fieldset>
       <div className="space-y-2">
-        <Label htmlFor="notification-category">Category</Label>
-        <Select id="notification-category" value={category} onChange={(event) => {
-          const next = notificationCategorySchema.parse(event.currentTarget.value)
-          resetErrors()
-          void scope.client.resetQueries({ queryKey: notificationKeys.list(next, view), exact: true })
-          setCategory(next)
-        }}>
-          {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
-        </Select>
         <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? 'Mark all read covers ALL active notifications matching this category, including those not loaded.' : 'Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.'}</p>
         <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking active unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
         {unreadQuery.isError ? <div className="space-y-2">

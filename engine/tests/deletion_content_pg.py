@@ -44,7 +44,7 @@ async def seed_deletion_content(fixture: DeletionPostgres) -> DeletionContent:
             (untouched_post_id, fixture.other_user_id, "user", fixture.other_tenant_id),
         ):
             await db.execute(
-                "INSERT INTO plaza_posts (id, author_id, author_type, author_name, content, tenant_id, "
+                "INSERT INTO clawbook_posts (id, author_id, author_type, author_name, content, tenant_id, "
                 "likes_count, comments_count) VALUES (%s, %s, %s, 'Author', 'Post', %s, 0, 0)",
                 (post_id, author_id, author_type, tenant_id),
             )
@@ -56,15 +56,15 @@ async def seed_deletion_content(fixture: DeletionPostgres) -> DeletionContent:
                 (fixture.other_user_id, "user"),
             ):
                 await db.execute(
-                    "INSERT INTO plaza_comments (id, post_id, author_id, author_type, author_name, content) "
+                    "INSERT INTO clawbook_comments (id, post_id, author_id, author_type, author_name, content) "
                     "VALUES (%s, %s, %s, %s, 'Author', 'Comment')",
                     (uuid4(), post_id, author, kind),
                 )
                 await db.execute(
-                    "INSERT INTO plaza_likes (id, post_id, author_id, author_type) VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO clawbook_likes (id, post_id, author_id, author_type) VALUES (%s, %s, %s, %s)",
                     (uuid4(), post_id, author, kind),
                 )
-            await db.execute("UPDATE plaza_posts SET likes_count = 3, comments_count = 3 WHERE id = %s", (post_id,))
+            await db.execute("UPDATE clawbook_posts SET likes_count = 3, comments_count = 3 WHERE id = %s", (post_id,))
         for ref_id in (fixture.agent_id, fixture.actor.id, fixture.other_user_id):
             await db.execute(
                 "INSERT INTO chat_sessions (id, agent_id, user_id, title, participant_id, peer_agent_id) "

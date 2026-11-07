@@ -1,4 +1,4 @@
-"""DAO for plaza posts, comments, and likes"""
+"""DAO for clawbook posts, comments, and likes"""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from typing import Any, ClassVar, Literal, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row
-from app.dao.analytics_projection_contracts import PlazaStatsProjection
+from app.dao.analytics_projection_contracts import ClawbookStatsProjection
 from app.dao.base import BaseDAO
-from app.records.plaza import PlazaCommentRecord, PlazaLikeRecord, PlazaPostRecord
+from app.records.clawbook import ClawbookCommentRecord, ClawbookLikeRecord, ClawbookPostRecord
 
 _POST_COLUMNS = (
     "id",
@@ -51,23 +51,23 @@ _HIDDEN_AGENT_EXISTS = (
     ")"
 )
 _PRIVATE_OR_SYSTEM_POST = (
-    f"(plaza_posts.author_type = 'agent' AND {_HIDDEN_AGENT_EXISTS.format(author_col='plaza_posts.author_id')})"
+    f"(clawbook_posts.author_type = 'agent' AND {_HIDDEN_AGENT_EXISTS.format(author_col='clawbook_posts.author_id')})"
 )
 
 
 @final
-class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
-    """DAO for plaza_posts rows."""
+class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
+    """DAO for clawbook_posts rows."""
 
-    table: ClassVar[str] = "plaza_posts"
+    table: ClassVar[str] = "clawbook_posts"
     columns: ClassVar[tuple[str, ...]] = _POST_COLUMNS
-    record_factory = staticmethod(PlazaPostRecord.from_row)
+    record_factory = staticmethod(ClawbookPostRecord.from_row)
 
     async def list_posts_recent(
         self,
         limit: int,
         tenant_id: UUID | None = None,
-    ) -> Sequence[PlazaPostRecord]:
+    ) -> Sequence[ClawbookPostRecord]:
         params: dict[str, Any] = {"limit": limit}
         tenant_sql = ""
         if tenant_id is not None:
@@ -75,10 +75,10 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
             params["tenant_id"] = tenant_id
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM plaza_posts{tenant_sql} ORDER BY created_at DESC LIMIT %(limit)s",
+                f"SELECT {self._select_list()} FROM clawbook_posts{tenant_sql} ORDER BY created_at DESC LIMIT %(limit)s",
                 params,
             )
-            return [PlazaPostRecord.from_row(row) for row in rows]
+            return [ClawbookPostRecord.from_row(row) for row in rows]
 
     async def list_feed(
         self,
@@ -87,8 +87,8 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         since: datetime | None = None,
         limit: int = 20,
         offset: int = 0,
-    ) -> Sequence[PlazaPostRecord]:
-        """Public plaza feed excluding system/private agent posts."""
+    ) -> Sequence[ClawbookPostRecord]:
+        """Public clawbook feed excluding system/private agent posts."""
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         clauses = [f"NOT {_PRIVATE_OR_SYSTEM_POST}"]
         if tenant_id is not None:
@@ -100,39 +100,39 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM plaza_posts{where_sql} "
+                f"SELECT {self._select_list()} FROM clawbook_posts{where_sql} "
                 "ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s",
                 params,
             )
-            return [PlazaPostRecord.from_row(row) for row in rows]
+            return [ClawbookPostRecord.from_row(row) for row in rows]
 
-    async def get_stats(self, tenant_id: UUID | str | None = None) -> PlazaStatsProjection:
-        """Aggregate plaza stats excluding system/private agent posts."""
+    async def get_stats(self, tenant_id: UUID | str | None = None) -> ClawbookStatsProjection:
+        """Aggregate clawbook stats excluding system/private agent posts."""
         params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
-            tenant_sql = " AND plaza_posts.tenant_id = %(tenant_id)s"
+            tenant_sql = " AND clawbook_posts.tenant_id = %(tenant_id)s"
             params["tenant_id"] = tenant_id
         post_filter = f"NOT {_PRIVATE_OR_SYSTEM_POST}{tenant_sql}"
         async with self.session() as db:
             total_posts = await db.fetchval(
-                f"SELECT COUNT(*) FROM plaza_posts WHERE {post_filter}",
+                f"SELECT COUNT(*) FROM clawbook_posts WHERE {post_filter}",
                 params,
             )
             total_comments = await db.fetchval(
-                "SELECT COUNT(*) FROM plaza_comments "
-                "JOIN plaza_posts ON plaza_comments.post_id = plaza_posts.id "
+                "SELECT COUNT(*) FROM clawbook_comments "
+                "JOIN clawbook_posts ON clawbook_comments.post_id = clawbook_posts.id "
                 f"WHERE {post_filter}",
                 params,
             )
             today_posts = await db.fetchval(
-                "SELECT COUNT(*) FROM plaza_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
+                "SELECT COUNT(*) FROM clawbook_posts WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
                 f"AND {post_filter}",
                 params,
             )
             top_rows = await db.fetchall(
                 "SELECT author_name, author_type, COUNT(*) AS post_count "
-                f"FROM plaza_posts WHERE {post_filter} "
+                f"FROM clawbook_posts WHERE {post_filter} "
                 "GROUP BY author_name, author_type "
                 "ORDER BY post_count DESC LIMIT 5",
                 params,
@@ -147,35 +147,35 @@ class PlazaPostDAO(BaseDAO[PlazaPostRecord]):
                 ],
             }
 
-    async def get_post(self, post_id: UUID) -> PlazaPostRecord | None:
+    async def get_post(self, post_id: UUID) -> ClawbookPostRecord | None:
         return await self.get(post_id)
 
-    async def create_post(self, obj_in: Mapping[str, Any]) -> PlazaPostRecord:
+    async def create_post(self, obj_in: Mapping[str, Any]) -> ClawbookPostRecord:
         return await self.create(obj_in=obj_in)
 
-    async def increment_comments_count(self, post_id: UUID) -> PlazaPostRecord | None:
+    async def increment_comments_count(self, post_id: UUID) -> ClawbookPostRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                "UPDATE plaza_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
+                "UPDATE clawbook_posts SET comments_count = COALESCE(comments_count, 0) + 1 "
                 f"WHERE id = %(post_id)s RETURNING {self._select_list()}",
                 {"post_id": post_id},
             )
-            return PlazaPostRecord.from_row(row) if row is not None else None
+            return ClawbookPostRecord.from_row(row) if row is not None else None
 
 
 @final
-class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
-    """DAO for plaza_comments rows."""
+class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
+    """DAO for clawbook_comments rows."""
 
-    table: ClassVar[str] = "plaza_comments"
+    table: ClassVar[str] = "clawbook_comments"
     columns: ClassVar[tuple[str, ...]] = _COMMENT_COLUMNS
-    record_factory = staticmethod(PlazaCommentRecord.from_row)
+    record_factory = staticmethod(ClawbookCommentRecord.from_row)
 
     async def list_comments_for_post(
         self,
         post_id: UUID,
         limit: int | None = 5,
-    ) -> Sequence[PlazaCommentRecord]:
+    ) -> Sequence[ClawbookCommentRecord]:
         params: dict[str, Any] = {"post_id": post_id}
         limit_sql = ""
         if limit is not None:
@@ -183,13 +183,13 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
             params["limit"] = limit
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM plaza_comments "
+                f"SELECT {self._select_list()} FROM clawbook_comments "
                 f"WHERE post_id = %(post_id)s ORDER BY created_at ASC{limit_sql}",
                 params,
             )
-            return [PlazaCommentRecord.from_row(row) for row in rows]
+            return [ClawbookCommentRecord.from_row(row) for row in rows]
 
-    async def create_comment(self, obj_in: Mapping[str, Any]) -> PlazaCommentRecord:
+    async def create_comment(self, obj_in: Mapping[str, Any]) -> ClawbookCommentRecord:
         return await self.create(obj_in=obj_in)
 
     async def list_distinct_comment_authors(
@@ -198,25 +198,25 @@ class PlazaCommentDAO(BaseDAO[PlazaCommentRecord]):
     ) -> list[tuple[UUID, str]]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT DISTINCT author_id, author_type FROM plaza_comments WHERE post_id = %(post_id)s",
+                "SELECT DISTINCT author_id, author_type FROM clawbook_comments WHERE post_id = %(post_id)s",
                 {"post_id": post_id},
             )
             return [(uuid_from_row(row["author_id"]), str_from_row(row["author_type"])) for row in rows]
 
 
 @final
-class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
-    """DAO for plaza_likes rows."""
+class ClawbookLikeDAO(BaseDAO[ClawbookLikeRecord]):
+    """DAO for clawbook_likes rows."""
 
-    table: ClassVar[str] = "plaza_likes"
+    table: ClassVar[str] = "clawbook_likes"
     columns: ClassVar[tuple[str, ...]] = _LIKE_COLUMNS
-    record_factory = staticmethod(PlazaLikeRecord.from_row)
+    record_factory = staticmethod(ClawbookLikeRecord.from_row)
 
     async def toggle(self, post_id: UUID, author_id: UUID, author_type: Literal["human", "agent"]) -> bool | None:
         """Serialize on the post and repair its count in the same bound transaction."""
         async with self.session() as db:
             post = await db.fetchone(
-                "SELECT id FROM plaza_posts WHERE id = %(post_id)s FOR UPDATE", {"post_id": post_id}
+                "SELECT id FROM clawbook_posts WHERE id = %(post_id)s FOR UPDATE", {"post_id": post_id}
             )
             if post is None:
                 return None
@@ -226,30 +226,30 @@ class PlazaLikeDAO(BaseDAO[PlazaLikeRecord]):
             else:
                 _ = await self.create(obj_in={"post_id": post_id, "author_id": author_id, "author_type": author_type})
             _ = await db.execute(
-                "UPDATE plaza_posts SET likes_count = (SELECT COUNT(*) FROM plaza_likes WHERE post_id = %(post_id)s) "
+                "UPDATE clawbook_posts SET likes_count = (SELECT COUNT(*) FROM clawbook_likes WHERE post_id = %(post_id)s) "
                 "WHERE id = %(post_id)s",
                 {"post_id": post_id},
             )
             return existing is None
 
-    async def get_by_post_and_author(self, post_id: UUID, author_id: UUID) -> PlazaLikeRecord | None:
+    async def get_by_post_and_author(self, post_id: UUID, author_id: UUID) -> ClawbookLikeRecord | None:
         async with self.session() as db:
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM plaza_likes "
+                f"SELECT {self._select_list()} FROM clawbook_likes "
                 "WHERE post_id = %(post_id)s AND author_id = %(author_id)s LIMIT 1",
                 {"post_id": post_id, "author_id": author_id},
             )
-            return PlazaLikeRecord.from_row(row) if row is not None else None
+            return ClawbookLikeRecord.from_row(row) if row is not None else None
 
     async def delete_by_post_and_author(self, post_id: UUID, author_id: UUID) -> bool:
         async with self.session() as db:
             row = await db.fetchone(
-                "DELETE FROM plaza_likes WHERE post_id = %(post_id)s AND author_id = %(author_id)s RETURNING id",
+                "DELETE FROM clawbook_likes WHERE post_id = %(post_id)s AND author_id = %(author_id)s RETURNING id",
                 {"post_id": post_id, "author_id": author_id},
             )
             return row is not None
 
 
-plaza_post_dao = PlazaPostDAO()
-plaza_comment_dao = PlazaCommentDAO()
-plaza_like_dao = PlazaLikeDAO()
+clawbook_post_dao = ClawbookPostDAO()
+clawbook_comment_dao = ClawbookCommentDAO()
+clawbook_like_dao = ClawbookLikeDAO()

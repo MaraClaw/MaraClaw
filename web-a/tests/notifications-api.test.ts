@@ -18,7 +18,7 @@ const page = (items: readonly unknown[], next_cursor: string | null = null) => (
 test('notification list preserves every canonical kind as its original wire string', async (t) => {
   // Given
   const kinds = [
-    'mention', 'plaza_reply', 'plaza_comment', 'broadcast', 'approval_pending', 'approval_resolved',
+    'mention', 'clawbook_reply', 'clawbook_comment', 'broadcast', 'approval_pending', 'approval_resolved',
     'autonomy_l2', 'company_admission_pending', 'company_admission_resolved', 'company_admission_created',
     'agent_deletion_requested', 'agent_deletion_resolved', 'agent_ownership_transferred',
     'organization_welcome', 'system_alert', 'system', 'openclaw_update',

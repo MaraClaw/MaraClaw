@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from app.core.json_types import str_list_from_row
 from app.core.notification_kinds import NotificationKind
 from app.dao.agent_dao import agent_dao
-from app.dao.plaza_dao import plaza_comment_dao, plaza_post_dao
+from app.dao.clawbook_dao import clawbook_comment_dao, clawbook_post_dao
 from app.records.agent import AgentRecord
 from app.services.agent_tool_exec.registry import ToolArgumentMapping
 
@@ -22,7 +22,7 @@ async def _agents_name_map_excluding(agent: AgentRecord) -> dict[str, AgentRecor
     return {a.name.lower(): a for a in agents if a.id != agent.id}
 
 
-async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+async def _clawbook_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
     limit_value = arguments.get("limit", 10)
     limit = min(limit_value, 20) if isinstance(limit_value, int) and not isinstance(limit_value, bool) else 10
 
@@ -31,20 +31,20 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMappi
         if not agent:
             return "Error: Agent not found."
         if agent.is_system:
-            return "System agents cannot access Plaza."
+            return "System agents cannot access Clawbook."
 
         if (agent.access_mode or "company") != "company":
-            return "Only company-wide agents can access Plaza."
+            return "Only company-wide agents can access Clawbook."
 
         tenant_id = agent.tenant_id
-        posts = await plaza_post_dao.list_posts_recent(limit, tenant_id=tenant_id)
+        posts = await clawbook_post_dao.list_posts_recent(limit, tenant_id=tenant_id)
 
         if not posts:
-            return "📭 No posts in the plaza yet. Be the first to share something!"
+            return "📭 No posts in the clawbook yet. Be the first to share something!"
 
         output = []
         for p in posts:
-            comments = await plaza_comment_dao.list_comments_for_post(p.id, limit=5)
+            comments = await clawbook_comment_dao.list_comments_for_post(p.id, limit=5)
             icon = "🤖" if p.author_type == "agent" else "👤"
             time_str = p.created_at.strftime("%m-%d %H:%M") if p.created_at else ""
             post_text = (
@@ -57,36 +57,36 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMappi
                     post_text += f"\n  └─ {c_icon} {c.author_name}: {c.content}"
             output.append(post_text)
 
-        return "🏛️ Agent Plaza - Recent Posts:\n\n" + "\n\n---\n\n".join(output)
+        return "🏛️ Agent Clawbook - Recent Posts:\n\n" + "\n\n---\n\n".join(output)
 
     except Exception as e:
-        return f"❌ Failed to load plaza posts: {str(e)[:200]}"
+        return f"❌ Failed to load clawbook posts: {str(e)[:200]}"
 
 
-async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+async def _clawbook_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
     content_value = arguments.get("content", "")
     content = content_value.strip() if isinstance(content_value, str) else ""
     if not content:
         return "Error: Post content cannot be empty."
-    if len(content) > 500:
-        content = content[:500]
+    if len(content) > 1000:
+        content = content[:1000]
 
     try:
         agent = await agent_dao.get(agent_id)
         if not agent:
             return "Error: Agent not found."
 
-        # System agents (e.g. OKR Agent) must not post to Plaza
+        # System agents (e.g. OKR Agent) must not post to Clawbook
         if agent.is_system:
             return (
-                "System agents are not allowed to post to Plaza. "
+                "System agents are not allowed to post to Clawbook. "
                 "Use send_platform_message to communicate with users directly."
             )
 
         if (agent.access_mode or "company") != "company":
-            return "Only company-wide agents are allowed to post to Plaza."
+            return "Only company-wide agents are allowed to post to Clawbook."
 
-        post = await plaza_post_dao.create_post(
+        post = await clawbook_post_dao.create_post(
             {
                 "author_id": agent_id,
                 "author_type": "agent",
@@ -113,9 +113,9 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                         _ = await send_notification(
                             agent_id=ma.id,
                             notification_kind=NotificationKind.MENTION,
-                            title=f"{agent.name} mentioned you in a plaza post",
+                            title=f"{agent.name} mentioned you in a clawbook post",
                             body=content[:150],
-                            link=f"/plaza?post={post.id}",
+                            link=f"/clawbook?post={post.id}",
                             ref_id=post.id,
                             sender_name=agent.name,
                         )
@@ -125,7 +125,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         return f"Failed to create post: {str(e)[:200]}"
 
 
-async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
+async def _clawbook_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
     post_id = arguments.get("post_id", "")
     content_value = arguments.get("content", "")
     content = content_value.strip() if isinstance(content_value, str) else ""
@@ -140,7 +140,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         return "Error: Invalid post_id format."
 
     try:
-        post = await plaza_post_dao.get_post(pid)
+        post = await clawbook_post_dao.get_post(pid)
         if not post:
             return "Error: Post not found."
 
@@ -148,12 +148,12 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         if not agent:
             return "Error: Agent not found."
         if agent.is_system:
-            return "System agents are not allowed to comment on Plaza posts."
+            return "System agents are not allowed to comment on Clawbook posts."
 
         if (agent.access_mode or "company") != "company":
-            return "Only company-wide agents are allowed to comment on Plaza posts."
+            return "Only company-wide agents are allowed to comment on Clawbook posts."
 
-        _ = await plaza_comment_dao.create_comment(
+        _ = await clawbook_comment_dao.create_comment(
             {
                 "post_id": pid,
                 "author_id": agent_id,
@@ -162,7 +162,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 "content": content,
             }
         )
-        _ = await plaza_post_dao.increment_comments_count(pid)
+        _ = await clawbook_post_dao.increment_comments_count(pid)
 
         # Notify post author (if not self)
         if post.author_id != agent_id:
@@ -172,10 +172,10 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 if post.author_type == "agent":
                     _ = await send_notification(
                         agent_id=post.author_id,
-                        notification_kind=NotificationKind.PLAZA_REPLY,
+                        notification_kind=NotificationKind.CLAWBOOK_REPLY,
                         title=f"{agent.name} commented on your post",
                         body=content[:150],
-                        link=f"/plaza?post={pid}",
+                        link=f"/clawbook?post={pid}",
                         ref_id=pid,
                         sender_name=agent.name,
                     )
@@ -184,20 +184,20 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                     if pa and pa.creator_id:
                         _ = await send_notification(
                             user_id=pa.creator_id,
-                            notification_kind=NotificationKind.PLAZA_COMMENT,
+                            notification_kind=NotificationKind.CLAWBOOK_COMMENT,
                             title=f"{agent.name} commented on {pa.name}'s post",
                             body=content[:100],
-                            link=f"/plaza?post={pid}",
+                            link=f"/clawbook?post={pid}",
                             ref_id=pid,
                             sender_name=agent.name,
                         )
                 elif post.author_type == "human":
                     _ = await send_notification(
                         user_id=post.author_id,
-                        notification_kind=NotificationKind.PLAZA_REPLY,
+                        notification_kind=NotificationKind.CLAWBOOK_REPLY,
                         title=f"{agent.name} commented on your post",
                         body=content[:150],
-                        link=f"/plaza?post={pid}",
+                        link=f"/clawbook?post={pid}",
                         ref_id=pid,
                         sender_name=agent.name,
                     )
@@ -205,7 +205,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
         with contextlib.suppress(Exception):
             from app.services.notification_service import send_notification
 
-            other_authors = await plaza_comment_dao.list_distinct_comment_authors(pid)
+            other_authors = await clawbook_comment_dao.list_distinct_comment_authors(pid)
             notified = {post.author_id, agent_id}
             for cid, ctype in other_authors:
                 if cid in notified:
@@ -214,10 +214,10 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                 if ctype == "agent":
                     _ = await send_notification(
                         agent_id=cid,
-                        notification_kind=NotificationKind.PLAZA_REPLY,
+                        notification_kind=NotificationKind.CLAWBOOK_REPLY,
                         title=f"{agent.name} also commented on a post you commented on",
                         body=content[:150],
-                        link=f"/plaza?post={pid}",
+                        link=f"/clawbook?post={pid}",
                         ref_id=pid,
                         sender_name=agent.name,
                     )
@@ -238,7 +238,7 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapping
                             notification_kind=NotificationKind.MENTION,
                             title=f"{agent.name} mentioned you in a comment",
                             body=content[:150],
-                            link=f"/plaza?post={pid}",
+                            link=f"/clawbook?post={pid}",
                             ref_id=pid,
                             sender_name=agent.name,
                         )

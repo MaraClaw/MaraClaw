@@ -58,17 +58,17 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     assert audit["action"] == "tenant_delete"
     assert audit["changes"] == {"deleted": {"before": False, "after": True}}
     assert audit["details"] == {"tenant_name": "Target"}
-    assert {row["id"] for row in rows["plaza_posts"]} == {content.surviving_post_id, content.untouched_post_id}
+    assert {row["id"] for row in rows["clawbook_posts"]} == {content.surviving_post_id, content.untouched_post_id}
     assert {row["ref_id"] for row in rows["participants"]} == {content.peer_id, deletion_pg.other_user_id}
-    for table in ("plaza_comments", "plaza_likes"):
+    for table in ("clawbook_comments", "clawbook_likes"):
         assert len(rows[table]) == 1
         assert rows[table][0]["author_id"] == deletion_pg.other_user_id
     assert await deletion_pg.rows(
-        "SELECT likes_count, comments_count FROM plaza_posts WHERE id = %s",
+        "SELECT likes_count, comments_count FROM clawbook_posts WHERE id = %s",
         (content.surviving_post_id,),
     ) == [{"likes_count": 1, "comments_count": 1}]
     assert await deletion_pg.rows(
-        "SELECT likes_count, comments_count FROM plaza_posts WHERE id = %s",
+        "SELECT likes_count, comments_count FROM clawbook_posts WHERE id = %s",
         (content.untouched_post_id,),
     ) == [{"likes_count": 0, "comments_count": 0}]
     assert len(rows["sso_scan_sessions"]) == 1
