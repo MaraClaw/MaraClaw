@@ -1,7 +1,7 @@
 {
   "name": "web-a",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "module",
   "scripts": {
     "contracts:generate": "node ../engine/scripts/contract_codegen/generate.mjs --input ../engine/contracts/api-contract.json --output src/lib/engine-contracts.generated.ts",
