@@ -203,7 +203,14 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     monkeypatch.setattr(ws_api, "persist_chat_message", persist)
     monkeypatch.setattr(ws_api, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(ws_api, "check_agent_expired", AsyncMock())
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(side_effect=lambda _id: list(queued)))
+    monkeypatch.setattr(
+        routing.gateway_message_dao,
+        "lane_heads_page",
+        AsyncMock(side_effect=lambda *_args, **_kw: (list(queued), None)),
+    )
+    monkeypatch.setattr(
+        openclaw_enqueue.gateway_message_dao, "earliest_pending_duplicate", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent))
     monkeypatch.setattr(
         openclaw_enqueue, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent)

@@ -246,11 +246,22 @@ class AgentManager:
     """Manage OpenClaw Gateway Docker containers for digital employees."""
 
     def __init__(self):
-        try:
-            self.docker_client: DockerClient | None = DockerClient()
-        except ClientNotFoundError, DockerException:
+        self.docker_client: DockerClient | None = self._connect_docker()
+        if self.docker_client is None:
             logger.warning("Docker not available - agent containers will not be managed")
-            self.docker_client = None
+
+    @staticmethod
+    def _connect_docker() -> DockerClient | None:
+        try:
+            return DockerClient()
+        except ClientNotFoundError, DockerException:
+            return None
+
+    def reacquire_docker_client(self) -> DockerClient | None:
+        """Retry Docker discovery after boot and share the result: every module reads ``docker_client``."""
+        if self.docker_client is None:
+            self.docker_client = self._connect_docker()
+        return self.docker_client
 
     def _agent_dir(self, agent_id: uuid.UUID) -> Path:
         local_root = settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR

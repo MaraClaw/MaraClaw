@@ -188,3 +188,100 @@ async def test_distinct_replicas_route_presence_to_remote_channel_only(monkeypat
     assert delivered == [
         {"agent_id": "agent", "payload": {"text": "hello"}, "session_id": "session", "user_id": "user"}
     ]
+
+
+async def reconnect_and_reack(connection: MemoryConnection, instance: router.RealtimeRouter) -> None:
+    connection.reconnecting.clear()
+    connection.allow_connect.clear()
+    await connection.messages.put(RedisConnectionError("synthetic link loss"))
+    await asyncio.wait_for(connection.reconnecting.wait(), 1)
+    connection.allow_connect.set()
+    assert (await next_command(connection))[0] == "SUBSCRIBE"
+    await settled_ack(connection, instance._instance_channel())
+
+
+async def test_resubscribe_hook_skips_the_first_acknowledgment_and_runs_serially_before_the_next_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ConnectionPool()
+    connection = MemoryConnection()
+    monkeypatch.setattr(pool, "make_connection", lambda: connection)
+    redis = Redis(connection_pool=pool)
+
+    async def existing() -> Redis:
+        return redis
+
+    monkeypatch.setattr(router, "get_redis", existing)
+    instance = router.RealtimeRouter()
+    order: list[str] = []
+    delivered = asyncio.Event()
+
+    async def deliver(**_kwargs: object) -> None:
+        order.append("deliver")
+        delivered.set()
+
+    async def hook() -> None:
+        order.append("hook-start")
+        await asyncio.sleep(0)
+        order.append("hook-end")
+
+    try:
+        await instance.start(deliver, hook)
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert order == ["deliver"]
+
+        delivered.clear()
+        await reconnect_and_reack(connection, instance)
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert order == ["deliver", "hook-start", "hook-end", "deliver"]
+
+        await instance.stop()
+        delivered.clear()
+        await instance.start(deliver, hook)
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert order.count("hook-start") == 1  # a restarted router treats its first acknowledgment as the first
+    finally:
+        await instance.stop()
+        await redis.aclose()
+        await pool.aclose()
+
+
+async def test_failing_resubscribe_hook_does_not_drop_the_subscription(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = ConnectionPool()
+    connection = MemoryConnection()
+    monkeypatch.setattr(pool, "make_connection", lambda: connection)
+    redis = Redis(connection_pool=pool)
+
+    async def existing() -> Redis:
+        return redis
+
+    monkeypatch.setattr(router, "get_redis", existing)
+    instance = router.RealtimeRouter()
+    delivered = asyncio.Event()
+    hooked = asyncio.Event()
+
+    async def deliver(**_kwargs: object) -> None:
+        delivered.set()
+
+    async def hook() -> None:
+        hooked.set()
+        raise RuntimeError("close failed")
+
+    try:
+        await instance.start(deliver, hook)
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+        delivered.clear()
+        await reconnect_and_reack(connection, instance)
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert hooked.is_set()
+        assert instance.ready
+    finally:
+        await instance.stop()
+        await redis.aclose()
+        await pool.aclose()

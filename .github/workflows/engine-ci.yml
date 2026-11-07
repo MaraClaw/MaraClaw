@@ -195,6 +195,7 @@ jobs:
           tests/test_shared_gateway_postgres.py
           tests/test_shared_gateway_surface.py
           tests/test_openclaw_native_dispatch_postgres.py
+          tests/test_gateway_lane_reads_postgres.py
           tests/test_openclaw_scope_locks_postgres.py
           tests/test_chat_submission_scope_locks_postgres.py
           tests/test_openclaw_claim_gates_postgres.py

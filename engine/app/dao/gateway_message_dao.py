@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, final
 from uuid import UUID
@@ -32,6 +33,16 @@ _COLUMNS = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PendingDuplicateProbe:
+    """The identity of an incoming user message for pending-duplicate suppression."""
+
+    agent_id: UUID
+    sender_user_id: UUID
+    conversation_id: str | None
+    content: str
+
+
 @final
 class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
     """DAO for OpenClaw gateway message queue rows."""
@@ -40,15 +51,80 @@ class GatewayMessageDAO(BaseDAO[GatewayMessageRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(GatewayMessageRecord.from_row)
 
-    async def list_pending(self, agent_id: UUID) -> Sequence[GatewayMessageRecord]:
+    async def lane_head(self, member: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        """Oldest pending row of ``member``'s lane by ``(created_at, id)``; no delivered-row or burst filter.
+
+        A NULL or empty ``conversation_id`` is a per-message lane, so its only possible head is the row itself.
+        """
+        async with self.session() as db:
+            if member.conversation_id not in (None, ""):
+                row = await db.fetchone(
+                    f"SELECT {self._select_list()} FROM gateway_messages "
+                    "WHERE agent_id = %(agent)s AND conversation_id = %(conversation)s AND status = 'pending' "
+                    "ORDER BY created_at, id LIMIT 1",
+                    {"agent": member.agent_id, "conversation": member.conversation_id},
+                )
+            else:
+                row = await db.fetchone(
+                    f"SELECT {self._select_list()} FROM gateway_messages "
+                    "WHERE agent_id = %(agent)s AND id = %(id)s AND status = 'pending'",
+                    {"agent": member.agent_id, "id": member.id},
+                )
+            return self.record_factory(row) if row is not None else None
+
+    async def lane_heads_page(
+        self, agent_id: UUID, limit: int, *, after: tuple[datetime, UUID] | None = None
+    ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
+        """Page one agent's distinct pending lane heads by ``(created_at, id)``.
+
+        Same lane rule as ``lane_head``: heads are pending-only and NULL/empty conversations are per-message
+        lanes. Delivered rows and burst readiness stay with the ``claim_*`` methods.
+        """
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM gateway_messages "
-                "WHERE agent_id = %(agent_id)s AND status = 'pending' "
-                "ORDER BY created_at ASC, id ASC",
-                {"agent_id": agent_id},
+                f"SELECT {self._select_list('g')} FROM gateway_messages g "
+                "WHERE g.agent_id = %(agent)s AND g.status = 'pending' AND (%(after_time)s::timestamptz IS NULL "
+                "OR (g.created_at, g.id) > (%(after_time)s, %(after_id)s)) "
+                "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR "
+                "NOT EXISTS (SELECT 1 FROM gateway_messages p WHERE p.agent_id = g.agent_id "
+                "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
+                "AND (p.created_at, p.id) < (g.created_at, g.id))) "
+                "ORDER BY g.created_at, g.id LIMIT %(limit)s",
+                {
+                    "agent": agent_id,
+                    "after_time": after[0] if after else None,
+                    "after_id": after[1] if after else None,
+                    "limit": limit + 1,
+                },
             )
-            return [GatewayMessageRecord.from_row(row) for row in rows]
+        messages = [self.record_factory(row) for row in rows[:limit]]
+        last = messages[-1] if len(rows) > limit else None
+        cursor = (last.created_at, last.id) if last is not None and last.created_at is not None else None
+        return messages, cursor
+
+    async def earliest_pending_duplicate(self, probe: PendingDuplicateProbe) -> GatewayMessageRecord | None:
+        """Earliest pending row with the probe's sender and content in its lane, on the caller's connection.
+
+        NULL and empty conversation IDs are the same (anonymous) lane here.
+        """
+        async with self.session() as db:
+            lane = (
+                "conversation_id = %(conversation)s"
+                if probe.conversation_id not in (None, "")
+                else "(conversation_id IS NULL OR conversation_id = '')"
+            )
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM gateway_messages "
+                "WHERE agent_id = %(agent)s AND status = 'pending' AND sender_user_id = %(sender)s "
+                f"AND content = %(content)s AND {lane} ORDER BY created_at, id LIMIT 1",
+                {
+                    "agent": probe.agent_id,
+                    "sender": probe.sender_user_id,
+                    "content": probe.content,
+                    "conversation": probe.conversation_id,
+                },
+            )
+            return self.record_factory(row) if row is not None else None
 
     async def lock_shared_lane(self, agent_id: UUID, session_id: UUID) -> bool:
         """Take (or re-take) the shared chat-session lock that serializes claims, appends and settlements."""

@@ -1,13 +1,19 @@
 import json
 import sys
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import anyio
+import pytest
 from tests.channel_submission_fixtures import channel_db, receipt_db
 from tests.test_whatsapp_personal_integration import connected
 
 from app.dao.whatsapp_personal_dao import claim, get_personal, reaped
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
+from app.records.whatsapp_personal import PersonalConnection
+from app.services.channels import whatsapp_personal_child as child_module
 from app.services.channels.whatsapp_personal_child import run_child, spawn_child
 from app.services.channels.whatsapp_personal_control import start
 from app.services.channels.whatsapp_personal_events import handle_frame
@@ -127,3 +133,38 @@ async def test_current_child_closed_logged_out_revokes_and_purges(channel_db):
         assert row.purge_requested
         assert row.error_code == "logged_out"
         assert row.state == "disconnecting"
+
+
+@pytest.mark.parametrize(
+    ("error", "classified"), [(RuntimeError("unclassified"), False), (ValueError("classified"), True)]
+)
+async def test_only_classified_child_errors_fail_the_connection(monkeypatch, error, classified):
+    # Given a claimed connection whose initial credential read raises.
+    connection = PersonalConnection(
+        config_id=uuid4(),
+        agent_id=uuid4(),
+        tenant_id=uuid4(),
+        owner_id=uuid4(),
+        auth_epoch=uuid4(),
+        generation=uuid4(),
+        attempt_id=uuid4(),
+        revision=1,
+        state="pending",
+        desired=True,
+        created_at=datetime.now(UTC),
+    )
+    fail_connection = AsyncMock()
+    monkeypatch.setattr(child_module, "fail_connection", fail_connection)
+    monkeypatch.setattr(child_module, "reaped", AsyncMock(return_value=True))
+    monkeypatch.setattr(child_module, "read_auth", AsyncMock(side_effect=error))
+    # When run_child handles it.
+    if classified:
+        await run_child(connection, ("unused",))
+    else:
+        with pytest.raises(RuntimeError, match="unclassified"):
+            await run_child(connection, ("unused",))
+    # Then credentials are purged (fail_connection) only for classified errors.
+    if classified:
+        fail_connection.assert_awaited_once_with(connection, "transport_failed")
+    else:
+        fail_connection.assert_not_awaited()

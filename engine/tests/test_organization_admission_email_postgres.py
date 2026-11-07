@@ -1,17 +1,24 @@
+import asyncio
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from psycopg import OperationalError
 from pydantic import TypeAdapter
 
 from app.dao.organization_admission_email_dao import organization_admission_email_dao as emails
+from app.db.errors import DbError
 from app.records.organization_admission_email import CredentialEmailClaim
+from app.runtime.tasks import OwnedTasks
 from app.services import organization_admission_email_worker as worker
 from app.services.organization_admission_credentials import unseal
 from app.services.system_email_service import EmailAttemptOutcome
 from organization_admission_fixtures import OrganizationScenario, organization_scenario
+from progress_fakes import FakeClock, Pacer
 
 __all__ = ["organization_scenario"]
 
@@ -235,3 +242,85 @@ async def test_obsolete_or_unreadable_credentials_are_never_sent_and_not_retryab
     assert (retried.status_code, retried.json()["credential_email_status"]) == (200, "failed")
     assert await _drain() == 0
     assert mailbox.calls == []
+
+
+async def test_claim_db_errors_retry_with_capped_backoff_and_readiness_tracks_beats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given the real loop as a budgeted owned task whose first claims fail (no database needed).
+    clock, pacer = FakeClock(), Pacer()
+    tasks = OwnedTasks(clock)
+    failures: list[Exception] = [DbError("down"), OperationalError("down"), OSError("down")]
+    claims: list[int] = []
+
+    async def claim_batch(**_kwargs: object) -> list[CredentialEmailClaim]:
+        if failures:
+            raise failures.pop(0)
+        claims.append(1)
+        return []
+
+    monkeypatch.setattr(emails, "claim_batch", claim_batch)
+    monkeypatch.setattr(worker, "sleep", pacer.sleep)
+    tasks.start(
+        "organization_admission_email",
+        worker.start_organization_admission_email_worker(),
+        requirement="loop",
+        progress_budget_seconds=worker.PROGRESS_BUDGET_SECONDS,
+    )
+    try:
+        await pacer.parked()
+        # When the budget lapses on failed attempts alone, the loop is stale but still running.
+        clock.now += worker.PROGRESS_BUDGET_SECONDS + 1
+        assert not tasks.ready()
+        assert not tasks.required["organization_admission_email"][0].done()
+        await pacer.release()
+        await pacer.release()
+        assert not tasks.ready()
+        # Then a finished pass beats and readiness recovers, after backoff 1, 2, 4 and the poll sleep.
+        await pacer.release()
+        assert tasks.ready()
+        assert pacer.waits == [1.0, 2.0, 4.0, worker.POLL_SECONDS]
+        assert claims == [1]
+        assert worker.DB_RETRY_CAP_SECONDS < worker.PROGRESS_BUDGET_SECONDS
+    finally:
+        await tasks.stop()
+
+
+async def test_batch_timeout_stays_fatal_and_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a claim whose delivery never settles and an already-expired batch deadline.
+    claim_count = 0
+    stuck = asyncio.Event()
+
+    async def claim_batch(**_kwargs: object) -> list[CredentialEmailClaim]:
+        nonlocal claim_count
+        claim_count += 1
+        return [
+            CredentialEmailClaim(
+                request_id=uuid4(),
+                identity_id=uuid4(),
+                to_email="buyer@example.com",
+                credential_fingerprint="fingerprint",
+                payload=b"",
+                message_id="<stuck@example.com>",
+                organization_name=NAME,
+                attempts=1,
+                deliver_by=datetime.now(UTC),
+                claim_token=uuid4(),
+            )
+        ]
+
+    async def deliver(_claim: CredentialEmailClaim) -> None:
+        await stuck.wait()
+
+    @contextmanager
+    def expired(_seconds: int) -> Generator[None]:
+        with anyio.fail_after(0):
+            yield
+
+    monkeypatch.setattr(emails, "claim_batch", claim_batch)
+    monkeypatch.setattr(worker, "deliver", deliver)
+    monkeypatch.setattr(worker, "fail_after", expired)
+    # When the loop runs, then the timeout ends it and nothing restarts it.
+    with pytest.raises((ExceptionGroup, TimeoutError)):
+        await worker.start_organization_admission_email_worker()
+    assert claim_count == 1

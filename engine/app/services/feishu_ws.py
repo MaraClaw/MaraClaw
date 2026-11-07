@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -26,6 +27,17 @@ except ImportError:
     _lark_mod = None
     _lark_ws_mod = None
     _HAS_LARK = False
+
+
+_CONNECT_RETRY_BASE_SECONDS = 2.0
+_CONNECT_RETRY_MAX_SECONDS = 60.0
+_RANDOM = random.SystemRandom()
+
+
+def _initial_connect_delay(attempt: int) -> float:
+    """Capped exponential backoff with 50-100% jitter for failed initial connects."""
+    capped = min(_CONNECT_RETRY_MAX_SECONDS, _CONNECT_RETRY_BASE_SECONDS * 2.0 ** min(attempt, 16))
+    return capped * (0.5 + _RANDOM.random() * 0.5)
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
@@ -215,6 +227,9 @@ class FeishuWSManager:
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._closing: bool = False
 
+    def _is_closing(self) -> bool:
+        return self._closing
+
     def _create_event_handler(self, agent_id: uuid.UUID) -> _EventHandler:
         """Create an event dispatcher for a specific agent."""
         del agent_id
@@ -338,29 +353,44 @@ class FeishuWSManager:
         # permanently replacing websockets.connect for the whole process.
         _no_proxy_ctx = _make_no_proxy_connect(_orig_websockets_connect) if _PROXY_PATCH_AVAILABLE else None
 
-        async def _do_full_connect() -> None:
-            """Perform a single clean connect + start receive/ping loops.
-
-            This is the ONLY place we call _connect() and _ping_loop().
-            The SDK's internal _reconnect() will handle subsequent reconnections.
-            """
+        async def _connect_once() -> None:
             if _no_proxy_ctx:
                 async with _no_proxy_ctx():
                     await client._connect()
             else:
                 await client._connect()
-            self._ping_tasks[agent_id] = asyncio.create_task(client._ping_loop())
 
         async def _run_async_client() -> None:
+            attempt = 0
             try:
-                logger.info(f"[Feishu WS] Connecting for agent {agent_id}")
-                await _do_full_connect()
+                # Retry only until the first successful connect. Once _connect() succeeds the SDK's
+                # receive loop owns reconnection, and calling _connect() again would be kicked by the new connection.
+                while True:
+                    logger.info(f"[Feishu WS] Connecting for agent {agent_id}")
+                    try:
+                        await _connect_once()
+                        break
+                    except Exception as e:
+                        delay = _initial_connect_delay(attempt)
+                        attempt += 1
+                        logger.warning(
+                            f"[Feishu WS] Initial connect failed for agent {agent_id} "
+                            f"(attempt {attempt}, retry in {delay:.1f}s): {e}"
+                        )
+                    try:
+                        await client._disconnect()
+                    except Exception as error:
+                        logger.debug(f"[Feishu WS] Disconnect after failed connect failed: {error}")
+                    if self._is_closing():
+                        return
+                    await asyncio.sleep(delay)
+                    if self._is_closing():
+                        return
+                self._ping_tasks[agent_id] = asyncio.create_task(client._ping_loop())
                 logger.info(f"[Feishu WS] Connected for agent {agent_id}, receive loop started")
             except asyncio.CancelledError:
                 await client._disconnect()
                 return
-            except Exception as e:
-                logger.exception(f"[Feishu WS] Initial connect failed for agent {agent_id}: {e}")
 
             # Health-watch: only log status changes for diagnostics.
             # SDK handles reconnect internally via _receive_message_loop → _reconnect.

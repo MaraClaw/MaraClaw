@@ -27,8 +27,10 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
   `handlers.issueTicket` can replace the default issuer; the socket module does not implement the HTTP mint itself.
 - Close codes 4001/4003 stop retries and call `onClose`; only 4001 calls `store.expire(owner)`.
   Issuance `ApiError` 401/403 maps to those codes; other issuance failures map to 1011.
-  Other closes back off with `Math.min(8000, 600 * 2 ** attempt)`; opening resets the attempt counter.
-  `onReconnect` runs on successful openings after the first, not on the initial open.
+  Other closes back off with the capped delay `Math.min(8000, 600 * 2 ** attempt)` scaled by `0.5 + 0.5 * random()`; `handlers.random` injects the random source (default `Math.random`; tests pass a constant).
+  Only the `connected` event resets the attempt counter, never the socket opening: a server that accepts and then closes before the handshake completes keeps backing off.
+  `onReconnect` runs on successful openings after the first, not on the initial open. The engine closes local sockets with 1012 after a Redis resubscribe, which takes this reconnect path and refetches history; there is no resync event.
+- `agent-chat.tsx` releases a live turn whose `done` was lost only when the authoritative history ends with an assistant row, no row is pending, the last user/assistant line is an assistant, and no applied chunk has arrived for 15 s. It calls `liveStore.clear(turnId)` with that turn's id, so later stragglers from it are ignored. A shared or trigger turn that keeps streaming refreshes the quiet clock and is never released; dropping the `turnId === null` guard in the history effect would end such turns early.
 - Parse inbound JSON with `inboundSchema.safeParse`; invalid JSON/schema emits `Malformed chat event` as an error event.
   Reserved acceptance/rejection types cannot fall through the generic event schema.
   Acceptance requires UUID submission/message/session IDs; submission rejection requires a UUID submission ID.

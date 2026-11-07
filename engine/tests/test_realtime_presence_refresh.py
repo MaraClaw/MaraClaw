@@ -284,6 +284,27 @@ def parked_socket(release: asyncio.Event) -> WebSocket:
     return WebSocket({"type": "websocket", "headers": []}, receive, send)
 
 
+def closable_socket(closes: list[int]) -> WebSocket:
+    """Parks on receive until the server closes it, like an ASGI server delivering the disconnect."""
+    release = asyncio.Event()
+    calls = 0
+
+    async def receive() -> Message:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"type": "websocket.connect"}
+        await release.wait()
+        return {"type": "websocket.disconnect", "code": 1000}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "websocket.close":
+            closes.append(message["code"])
+            release.set()
+
+    return WebSocket({"type": "websocket", "headers": []}, receive, send)
+
+
 @dataclass
 class HandlerEnv:
     binding: chat_tickets.ChatTicketBinding
@@ -374,3 +395,26 @@ async def test_presence_refresh_redis_failure_is_logged_and_never_raised(monkeyp
 
     report.assert_called_once()
     warning.assert_called_once()
+
+
+async def test_resubscribe_close_ends_the_handler_with_a_reconnectable_code_and_releases_presence(
+    monkeypatch: pytest.MonkeyPatch, handler_env: HandlerEnv
+) -> None:
+    binding = handler_env.binding
+    monkeypatch.setattr(websocket, "_presence_sleep", RefreshTicker(handler_env.events).sleep)
+    closes: list[int] = []
+    handler = websocket.WebSocketChatHandler(
+        closable_socket(closes), binding.agent_id, "opaque", str(binding.session_id)
+    )
+
+    run = asyncio.create_task(handler.run())
+    async with asyncio.timeout(5):
+        _ = await handler_env.refreshed.wait()
+    await websocket.manager.close_local_connections()
+    async with asyncio.timeout(5):
+        await run
+
+    assert closes == [websocket.RESUBSCRIBE_CLOSE_CODE]
+    assert closes[0] not in (4001, 4003)
+    assert handler_env.events == ["refresh", "refresh-cancelled", "unregister"]
+    assert websocket.manager.active_connections[str(binding.agent_id)] == []

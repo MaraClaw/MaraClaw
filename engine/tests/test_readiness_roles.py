@@ -122,6 +122,11 @@ async def test_actual_start_registers_required_role_evidence(
         assert ("openclaw_dispatch" in required) == role_enabled(roles, "worker")
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
+        assert set(runtime.tasks.progress) == (
+            {"broadcast_email", "organization_admission_email", "openclaw_update"}
+            if role_enabled(roles, "worker")
+            else set()
+        )
         assert ("Connector" in required) == role_enabled(roles, "connector")
         assert ("whatsapp_personal" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])

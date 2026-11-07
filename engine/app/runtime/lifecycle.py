@@ -96,7 +96,7 @@ class Runtime:
 
             self.realtime_attempted = True
             try:
-                await realtime_router.start(ws_manager.deliver_pubsub_message)
+                await realtime_router.start(ws_manager.deliver_pubsub_message, ws_manager.close_local_connections)
             except Exception as exc:
                 report_exception(exc, source="runtime", operation="realtime-startup")
                 logger.error("[startup] realtime router start failed: {}", exc)
@@ -110,13 +110,22 @@ class Runtime:
         if role_enabled(roles, "worker"):
             from app.services.agent_setup import start_agent_setup_worker
             from app.services.agent_start_reconciler import agent_start_reconciler_loop
-            from app.services.broadcast_email_worker import start_broadcast_email_worker
+            from app.services.broadcast_email_worker import (
+                PROGRESS_BUDGET_SECONDS as BROADCAST_EMAIL_BUDGET_SECONDS,
+                start_broadcast_email_worker,
+            )
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.heartbeat import start_heartbeat
             from app.services.openclaw_delayed_replies import openclaw_delayed_reply_loop
             from app.services.openclaw_dispatch_reconciler import openclaw_dispatch_reconciler_loop
-            from app.services.openclaw_update_worker import start_openclaw_update_worker
-            from app.services.organization_admission_email_worker import start_organization_admission_email_worker
+            from app.services.openclaw_update_worker import (
+                PROGRESS_BUDGET_SECONDS as OPENCLAW_UPDATE_BUDGET_SECONDS,
+                start_openclaw_update_worker,
+            )
+            from app.services.organization_admission_email_worker import (
+                PROGRESS_BUDGET_SECONDS as ADMISSION_EMAIL_BUDGET_SECONDS,
+                start_organization_admission_email_worker,
+            )
             from app.services.scheduler import start_scheduler
             from app.services.task_lease import task_lease_recovery_loop
             from app.services.tavily.export import start_web_search_export_daemon
@@ -126,14 +135,27 @@ class Runtime:
             self.tasks.start("heartbeat", start_heartbeat(), requirement="loop")
             self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
             self.tasks.start("agent_start_reconciler", agent_start_reconciler_loop(), requirement="loop")
-            self.tasks.start("broadcast_email", start_broadcast_email_worker(), requirement="loop")
             self.tasks.start(
-                "organization_admission_email", start_organization_admission_email_worker(), requirement="loop"
+                "broadcast_email",
+                start_broadcast_email_worker(),
+                requirement="loop",
+                progress_budget_seconds=BROADCAST_EMAIL_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "organization_admission_email",
+                start_organization_admission_email_worker(),
+                requirement="loop",
+                progress_budget_seconds=ADMISSION_EMAIL_BUDGET_SECONDS,
             )
             self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
             self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
-            self.tasks.start("openclaw_update", start_openclaw_update_worker(), requirement="loop")
+            self.tasks.start(
+                "openclaw_update",
+                start_openclaw_update_worker(),
+                requirement="loop",
+                progress_budget_seconds=OPENCLAW_UPDATE_BUDGET_SECONDS,
+            )
             self.tasks.start("openclaw_dispatch", openclaw_dispatch_reconciler_loop(), requirement="loop")
             self.tasks.start("openclaw_delayed_replies", openclaw_delayed_reply_loop(), requirement="loop")
             self.tasks.start("task_lease_recovery", task_lease_recovery_loop(), requirement="loop")

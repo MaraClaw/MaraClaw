@@ -36,6 +36,14 @@ function connectBrowserSocket(url: string): ChatSocket {
   return connection
 }
 
+const BACKOFF_BASE_MS = 600
+const BACKOFF_CAP_MS = 8000
+
+// Half to all of the capped exponential delay, so clients dropped together do not reconnect in lockstep.
+function backoffDelay(attempt: number, random: () => number): number {
+  return Math.round(Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt) * (0.5 + 0.5 * random()))
+}
+
 type Handlers = {
   readonly onEvent: (event: ChatInbound) => void
   readonly onClose?: (code: number) => void
@@ -45,6 +53,7 @@ type Handlers = {
   readonly transport?: ChatTransport
   readonly issueTicket?: typeof issueChatTicket
   readonly submissions?: ChatSubmissions
+  readonly random?: () => number
 }
 
 export function connectAgentChat(
@@ -101,7 +110,7 @@ export function connectAgentChat(
     socket = null
     handlers.onClose?.(code)
     if (!current()) return
-    const delay = Math.min(8000, 600 * 2 ** attempt)
+    const delay = backoffDelay(attempt, handlers.random ?? Math.random)
     attempt += 1
     timer = setTimeout(() => { void open() }, delay)
   }
@@ -139,7 +148,6 @@ export function connectAgentChat(
     const active = () => live() && socket === source
     source.onopen = () => {
       if (!active()) return
-      attempt = 0
       if (opened) handlers.onReconnect?.()
       opened = true
       for (const payload of submissions.pending()) {
@@ -162,6 +170,7 @@ export function connectAgentChat(
       }
       const parsed = inboundSchema.safeParse(data)
       if (!parsed.success) { handlers.onEvent({ type: ChatEventType.ERROR, content: 'Malformed chat event' }); return }
+      if (parsed.data.type === ChatEventType.CONNECTED) attempt = 0
       if (isTurnAccepted(parsed.data) && !submissions.accept(parsed.data)) return
           if (isTurnRejected(parsed.data) && 'client_submission_id' in parsed.data) submissions.reject(parsed.data.client_submission_id)
       handlers.onEvent(parsed.data)

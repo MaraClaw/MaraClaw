@@ -2,7 +2,11 @@
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
+import math
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
+from time import monotonic
 from typing import Literal, TypeIs
 
 from app.core.incident_reporting import report_exception
@@ -84,11 +88,56 @@ class RequiredLoopExitedError(RuntimeError):
     """A required ongoing task returned before runtime shutdown."""
 
 
+def capped_backoff(failures: int, *, base_seconds: float, cap_seconds: float) -> float:
+    """Delay after ``failures`` consecutive failures: ``base`` doubling up to ``cap``."""
+    return min(cap_seconds, base_seconds * (1 << min(failures, 32)))
+
+
+class LoopProgress:
+    """Last-beat record of a required loop that opted into a progress budget.
+
+    The loop beats when it finishes a pass. It is stale once the last beat is older than
+    its budget on the owner's injectable monotonic clock, except while inside ``exempt``.
+    """
+
+    def __init__(self, budget_seconds: float, clock: Callable[[], float]) -> None:
+        self.budget_seconds: float = budget_seconds
+        self._clock: Callable[[], float] = clock
+        self._last_beat: float = clock()
+        self._exempt: int = 0
+
+    def beat(self) -> None:
+        self._last_beat = self._clock()
+
+    @contextmanager
+    def exempt(self) -> Generator[None]:
+        """Work with its own contract (an upgrade cutover) that must never read as a stall; the clock restarts after."""
+        self._exempt += 1
+        try:
+            yield
+        finally:
+            self._exempt -= 1
+            self.beat()
+
+    def stale(self) -> bool:
+        return self._exempt == 0 and self._clock() - self._last_beat > self.budget_seconds
+
+
+_loop_progress: ContextVar[LoopProgress | None] = ContextVar("loop_progress", default=None)
+
+
+def loop_progress() -> LoopProgress:
+    """Progress record of the budgeted loop running this task; inert (never stale) for any other caller."""
+    return _loop_progress.get() or LoopProgress(math.inf, monotonic)
+
+
 class OwnedTasks:
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] = monotonic) -> None:
         self.tasks: set[asyncio.Task[object]] = set()
         self.required: dict[str, tuple[asyncio.Task[object], bool]] = {}
+        self.progress: dict[str, LoopProgress] = {}
         self.closing: bool = False
+        self._clock: Callable[[], float] = clock
 
     def start(
         self,
@@ -96,8 +145,18 @@ class OwnedTasks:
         coroutine: Coroutine[object, object, object],
         *,
         requirement: Literal["optional", "setup", "loop"] = "optional",
+        progress_budget_seconds: float | None = None,
     ) -> None:
-        task = asyncio.create_task(coroutine, name=name)
+        """Own ``coroutine``; a required loop with a budget must call ``loop_progress().beat()`` once per pass."""
+        if progress_budget_seconds is None:
+            task = asyncio.create_task(coroutine, name=name)
+        else:
+            if requirement != "loop":
+                raise ValueError("a progress budget applies only to required loops")
+            progress = self.progress[name] = LoopProgress(progress_budget_seconds, self._clock)
+            context = copy_context()
+            _ = context.run(_loop_progress.set, progress)
+            task = asyncio.create_task(coroutine, name=name, context=context)
         self.tasks.add(task)
         if requirement != "optional":
             self.required[name] = (task, requirement == "setup")
@@ -105,11 +164,11 @@ class OwnedTasks:
         task.add_done_callback(self._report)
 
     def ready(self) -> bool:
-        for task, finite in self.required.values():
+        for name, (task, finite) in self.required.items():
             if finite:
                 if not task.done() or task.cancelled() or task.exception() is not None:
                     return False
-            elif task.done():
+            elif task.done() or ((progress := self.progress.get(name)) is not None and progress.stale()):
                 return False
         return True
 

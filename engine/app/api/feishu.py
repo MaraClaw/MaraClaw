@@ -490,6 +490,10 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
         raise HTTPException(status_code=404, detail="Channel not configured")
     _ = await channel_config_dao.delete(record_id=config.id)
 
+    from app.services.feishu_ws import feishu_ws_manager
+
+    schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
+
 
 # ─── Feishu Event Webhook ───────────────────────────────
 

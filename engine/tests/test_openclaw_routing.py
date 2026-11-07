@@ -100,7 +100,7 @@ async def test_enqueue_returns_while_owned_turn_is_running(agent: AgentRecord, m
     monkeypatch.setattr(routing, "connection_ctx", transaction)
     monkeypatch.setattr(routing, "prepare_openclaw_message", AsyncMock(return_value=prepared))
     monkeypatch.setattr(routing, "_insert_prepared_message", AsyncMock(return_value=pending))
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[pending]))
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", AsyncMock(return_value=([pending], None)))
     monkeypatch.setattr(routing, "_run_inbox_wake", execute)
     try:
         result = await routing.enqueue_openclaw_message(agent=agent, content="hello")

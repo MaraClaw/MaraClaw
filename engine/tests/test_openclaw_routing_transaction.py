@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.api import background_tasks
+from app.dao.gateway_message_dao import PendingDuplicateProbe
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
@@ -58,7 +59,8 @@ async def test_prepared_enqueue_defers_wake_until_commit(
     monkeypatch.setattr(routing, "_run_inbox_wake", wake)
     for name in ("ensure_agent_company_models", "load_agent_model_bundle", "select_turn_model"):
         monkeypatch.setattr(routing, name, AsyncMock(side_effect=AssertionError("preparation inside transaction")))
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[created]))
+    monkeypatch.setattr(routing.gateway_message_dao, "earliest_pending_duplicate", AsyncMock(return_value=None))
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", AsyncMock(return_value=([created], None)))
 
     async def enqueue() -> GatewayMessageRecord:
         async with session.connection_ctx():
@@ -110,7 +112,8 @@ async def test_prepared_enqueue_suppresses_duplicate_user_message(
     pending = GatewayMessageRecord(
         id=uuid4(), agent_id=agent.id, content="hello", sender_user_id=sender, conversation_id="thread"
     )
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", AsyncMock(return_value=[pending]))
+    lookup = AsyncMock(return_value=pending)
+    monkeypatch.setattr(routing.gateway_message_dao, "earliest_pending_duplicate", lookup)
     create = AsyncMock(side_effect=AssertionError("duplicate insert"))
     monkeypatch.setattr(routing.gateway_message_dao, "create", create)
     scheduled = Mock()
@@ -119,6 +122,7 @@ async def test_prepared_enqueue_suppresses_duplicate_user_message(
     result = await routing.enqueue_prepared_openclaw_message(prepared, sender_user_id=sender, conversation_id="thread")
     # Then
     assert result is pending
+    lookup.assert_awaited_once_with(PendingDuplicateProbe(agent.id, sender, "thread", "hello"))
     create.assert_not_awaited()
     scheduled.assert_called_once_with(agent, "hello", pending.id)
 

@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from app.core.logging import logger
 from app.dao.chat_dao import chat_session_dao
-from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.gateway_message_dao import PendingDuplicateProbe, gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.dao.personal_burst_dao import personal_burst_dao
 from app.records.gateway_message import GatewayMessageRecord
@@ -33,23 +33,12 @@ async def insert_prepared_message(
         raise HTTPException(403, "Agent tenant changed during preparation")
     content = prepared.content
     shared = conversation_id == str(shared_session_id(agent.id))
-    pending = (
-        await gateway_message_dao.list_pending(agent.id)
+    duplicate = (
+        await gateway_message_dao.earliest_pending_duplicate(
+            PendingDuplicateProbe(agent.id, sender_user_id, conversation_id, content)
+        )
         if deduplicate and not shared and sender_user_id is not None
-        else ()
-    )
-    duplicate = next(
-        (
-            row
-            for row in pending
-            if (
-                row.content == content
-                and row.sender_user_id == sender_user_id
-                and sender_user_id is not None
-                and (row.conversation_id or "") == (conversation_id or "")
-            )
-        ),
-        None,
+        else None
     )
     if duplicate is not None:
         logger.info("[OpenClaw] skip duplicate pending inbox item agent={} id={}", agent.id, duplicate.id)
