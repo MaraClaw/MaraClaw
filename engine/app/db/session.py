@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -14,12 +15,12 @@ from dataclasses import dataclass, field
 
 from psycopg.pq import TransactionStatus
 
+from app.config import get_settings
 from app.core.logging import logger
 from app.db.connection import DbConnection
 from app.db.pool import durable_pool, get_pool
 
 _conn_ctx: ContextVar[DbConnection | None] = ContextVar("psycopg_conn_ctx", default=None)
-
 
 _SHOW_STATEMENT_TIMEOUT_SQL = "SELECT current_setting('statement_timeout') AS value"
 _SET_LOCAL_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %(value)s, true)"
@@ -57,10 +58,27 @@ def run_after_commit(on_commit: Callable[[], None], on_rollback: Callable[[], No
         batch.callbacks.append((on_commit, on_rollback))
 
 
-async def _commit_and_flush(db: DbConnection) -> None:
-    from app.core.access_cache import flush_deferred_acl
-    from app.core.redis_cache import flush_deferred_versions
+async def _flush_cache_invalidations() -> None:
+    """Publish both deferred invalidation families under one deadline; the commit is already durable."""
+    from app.core.access_cache import flush_deferred_acl, has_pending_acl_writes
+    from app.core.redis_cache import flush_deferred_versions, has_pending_snapshot_writes
 
+    # Scheduling tasks yields to the loop, which an empty commit must not do before releasing its checkout.
+    if not (has_pending_acl_writes() or has_pending_snapshot_writes()):
+        return
+    deadline = float(getattr(get_settings(), "REDIS_CACHE_WAIT_SECONDS", 0.2) or 0.2)
+    try:
+        async with asyncio.timeout(deadline):
+            outcomes = await asyncio.gather(flush_deferred_acl(), flush_deferred_versions(), return_exceptions=True)
+    except TimeoutError:
+        logger.warning("Post-commit cache invalidation exceeded {}s and was abandoned", deadline)
+        return
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+
+async def _commit_and_flush(db: DbConnection) -> None:
     # Detach in place so later registrations stay on the scope's batch.
     batch = _completion_ctx.get()
     pending = None
@@ -76,8 +94,7 @@ async def _commit_and_flush(db: DbConnection) -> None:
     if pending is not None:
         pending.committed = True
     try:
-        await flush_deferred_acl()
-        await flush_deferred_versions()
+        await _flush_cache_invalidations()
     finally:
         if pending is not None:
             _dispatch_completion(pending)

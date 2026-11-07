@@ -1,5 +1,5 @@
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -110,11 +110,11 @@ async def department_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPa
     assert actor is not None
     invalidated: list[UUID] = []
 
-    async def invalidate(agent_id: UUID) -> None:
-        invalidated.append(agent_id)
+    async def invalidate(bumps: Collection[UUID], _drops: Collection[UUID]) -> None:
+        invalidated.extend(bumps)
 
-    monkeypatch.setattr(access_cache, "_incr_acl_version_now", invalidate)
-    monkeypatch.setattr(access_cache, "read_acl_version", AsyncMock(return_value="0"))
+    monkeypatch.setattr(access_cache, "_invalidate_now", invalidate)
+    monkeypatch.setattr(access_cache, "read_acl_snapshot", AsyncMock(return_value=access_cache.AclSnapshot("0", None)))
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value=None))
     monkeypatch.setattr(access_cache, "set_cached_level", AsyncMock())
     monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", AsyncMock())

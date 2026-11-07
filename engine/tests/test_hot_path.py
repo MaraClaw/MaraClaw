@@ -688,3 +688,99 @@ def test_database_limit_settings_defaults_and_boundaries() -> None:
     ):
         with pytest.raises(ValidationError):
             Settings.model_validate(invalid)
+
+
+class _AclRedis:
+    """Counts round trips; ``on_fill`` runs just before the compare-and-set script, like a concurrent writer."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.round_trips = 0
+        self.on_fill: Any = None
+
+    def pipeline(self) -> Self:
+        self._keys: list[str] = []
+        return self
+
+    def get(self, key: str) -> None:
+        self._keys.append(key)
+
+    async def execute(self) -> list[str | None]:
+        self.round_trips += 1
+        return [self.store.get(key) for key in self._keys]
+
+    async def eval(self, _script, _key_count, version_key, decision_key, expected, payload, _ttl):
+        self.round_trips += 1
+        if self.on_fill is not None:
+            self.on_fill(self.store)
+        if self.store.get(version_key, "0") != expected:
+            return 0
+        self.store[decision_key] = payload
+        return 1
+
+
+@pytest.fixture
+def acl_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_AclRedis, Any, Any]]:
+    from app.core import access_cache, permissions
+    from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel
+    from app.core.domain.users import UserRole
+    from app.records.agent import AgentRecord
+    from app.records.user import UserRecord
+
+    redis = _AclRedis()
+    tenant = uuid4()
+    user = UserRecord(id=uuid4(), role=UserRole.MEMBER, tenant_id=tenant, is_active=True)
+    agent = AgentRecord(
+        id=uuid4(),
+        name="A",
+        creator_id=uuid4(),
+        tenant_id=tenant,
+        access_mode=AgentSharingMode.COMPANY,
+        company_access_level=PermissionAccessLevel.USE,
+    )
+
+    async def cache_redis() -> _AclRedis:
+        return redis
+
+    access_cache.clear_request_memo()
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    yield redis, user, agent
+    access_cache.clear_request_memo()
+
+
+@pytest.mark.asyncio
+async def test_acl_version_bumped_between_read_and_fill_caches_nothing(
+    acl_cache: tuple[_AclRedis, Any, Any],
+) -> None:
+    from app.core import permissions
+
+    # Given a revocation that lands after the snapshot but before the fill
+    redis, user, agent = acl_cache
+    redis.on_fill = lambda store: store.__setitem__(f"aclver:{agent.id}", "1")
+
+    # When
+    await permissions.check_agent_access(user, agent.id)
+
+    # Then
+    assert not any(key.startswith("acl:v1:") for key in redis.store)
+
+
+@pytest.mark.asyncio
+async def test_acl_miss_takes_two_round_trips_and_hit_takes_one(acl_cache: tuple[_AclRedis, Any, Any]) -> None:
+    from app.core import access_cache, permissions
+
+    # Given
+    redis, user, agent = acl_cache
+
+    # When the first request misses and fills
+    await permissions.check_agent_access(user, agent.id)
+    miss_trips = redis.round_trips
+    access_cache.clear_request_memo()
+    await permissions.check_agent_access(user, agent.id)
+
+    # Then
+    assert miss_trips == 2
+    assert redis.round_trips - miss_trips == 1

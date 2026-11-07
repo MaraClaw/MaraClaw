@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
+from unittest.mock import Mock
 
 import pytest
 
@@ -12,12 +13,48 @@ from app.core.cache_contracts import RedisValueRead
 from app.core.row_memo import clear_row_memo, memo_drop, memo_get, memo_set
 
 
+class FakePipeline:
+    def __init__(self, parent: FakeRedis) -> None:
+        self._parent = parent
+        self._ops: list[tuple[str, tuple[str, ...], int | None]] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def set(self, key: str, value: str, ex: int | None = None) -> FakePipeline:
+        self._ops.append(("set", (key, value), ex))
+        return self
+
+    def delete(self, *keys: str) -> FakePipeline:
+        self._ops.append(("delete", keys, None))
+        return self
+
+    async def execute(self) -> list[bool]:
+        parent = self._parent
+        if parent.fail:
+            raise RuntimeError("redis down")
+        parent.pipelines.append(self._ops)
+        for op, args, ex in self._ops:
+            if op == "set":
+                _ = await parent.set(args[0], args[1], ex=ex)
+            else:
+                await parent.delete(*args)
+        return [True] * len(self._ops)
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.fail: bool = False
         self.fail_gets: set[str] = set()
         self.expires: dict[str, int] = {}
+        self.pipelines: list[list[tuple[str, tuple[str, ...], int | None]]] = []
+
+    def pipeline(self, transaction: bool = True) -> FakePipeline:
+        return FakePipeline(self)
 
     async def get(self, key: str) -> str | None:
         if self.fail or key in self.fail_gets:
@@ -218,6 +255,83 @@ async def test_deferred_version_flush(fake_cache: FakeRedis) -> None:
     redis_cache.end_deferred_versions(token)
 
 
+@pytest.mark.asyncio
+async def test_deferred_flush_is_one_pipeline_that_expires_every_rotated_version(fake_cache: FakeRedis) -> None:
+    # Given two rotated generations and a snapshot delete queued in one scope
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await redis_cache.bump_version("ver:a", ttl=10)
+        await redis_cache.bump_version("ver:b")
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        fake_cache.store["snapshot"] = "old"
+        # When
+        await redis_cache.flush_deferred_versions()
+    finally:
+        redis_cache.end_deferred_versions(token)
+    # Then one round trip carried every write, each version with its own expiry
+    assert len(fake_cache.pipelines) == 1
+    sets = {args[0]: ex for op, args, ex in fake_cache.pipelines[0] if op == "set"}
+    assert sets == {"ver:a": 3600, "ver:b": 3600}
+    assert fake_cache.pipelines[0][-1] == ("delete", ("snapshot",), None)
+    assert fake_cache.expires == {"ver:a": 3600, "ver:b": 3600}
+    assert "snapshot" not in fake_cache.store
+    assert fake_cache.store["ver:a"] != fake_cache.store["ver:b"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_flush_with_nothing_queued_sends_no_pipeline(fake_cache: FakeRedis) -> None:
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await redis_cache.flush_deferred_versions()
+    finally:
+        redis_cache.end_deferred_versions(token)
+    assert fake_cache.pipelines == []
+
+
+@pytest.mark.asyncio
+async def test_open_circuit_never_suppresses_a_version_flush(fake_cache: FakeRedis) -> None:
+    # Given a tripped read circuit
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await redis_cache.bump_version("ver")
+        redis_cache._trip()
+        # When
+        await redis_cache.flush_deferred_versions()
+    finally:
+        redis_cache.end_deferred_versions(token)
+    # Then the rotation was still published
+    assert fake_cache.store["ver"]
+    assert len(fake_cache.pipelines) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_invalidations_log_warnings_and_do_not_trip_the_circuit(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a Redis that rejects every command
+    logger = Mock()
+    monkeypatch.setattr(redis_cache, "logger", logger)
+    fake_cache.fail = True
+    token = redis_cache.begin_deferred_versions()
+    try:
+        await redis_cache.bump_version("ver")
+        await redis_cache.cache_delete("snapshot", defer_until_commit=True)
+        # When the deferred batch is flushed
+        await redis_cache.flush_deferred_versions()
+    finally:
+        redis_cache.end_deferred_versions(token)
+    # Then one WARNING covers the batch
+    assert logger.warning.call_count == 1
+    # And immediate invalidations warn too, without being gated by or tripping the circuit
+    await redis_cache.cache_delete("sess")
+    await redis_cache.bump_version("other")
+    assert logger.warning.call_count == 3
+    assert not redis_cache._cooling_down()
+    fake_cache.fail = False
+    await redis_cache.bump_version("other")
+    assert fake_cache.store["other"]
+
+
 def test_row_memo_set_get_drop() -> None:
     clear_row_memo()
     assert memo_get("agent", "abc") is None
@@ -259,5 +373,7 @@ async def test_get_redis_passes_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured[0]["socket_timeout"] == 4.0
     assert captured[1]["max_connections"] == 12
     assert captured[1]["socket_timeout"] == 0.25
+    assert captured[1]["retry"].get_retries() == 0
+    assert "retry" not in captured[0]
     events._redis_client = None
     events._cache_redis_client = None

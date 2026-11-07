@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import access_cache, permissions
+from app.core.access_cache import AclSnapshot
 from app.core.domain.agents import AgentSharingMode
 from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
@@ -21,17 +22,17 @@ async def test_access_uses_identity_read_after_observed_version(monkeypatch, mut
         id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode=AgentSharingMode.COMPANY
     )
 
-    async def version(_id):
+    async def snapshot(_user_id, _agent_id):
         if mutation == "role":
             current.role = UserRole.MEMBER
         elif mutation == "tenant":
             current.tenant_id = uuid4()
         else:
             current.is_active = False
-        return "1"
+        return AclSnapshot("1", None)
 
     access_cache.clear_request_memo()
-    monkeypatch.setattr(access_cache, "read_acl_version", version)
+    monkeypatch.setattr(access_cache, "read_acl_snapshot", snapshot)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=current))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value=None))
