@@ -9,11 +9,10 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.api.admin_transfer_policy import router as transfer_policy_router
-from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.core.json_types import (
     date_from_row,
@@ -34,6 +33,7 @@ from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
+from app.schemas.admin_companies import CompanyOption, CompanyPageOut, CompanyStats
 from app.schemas.admin_metrics import (
     AdminAgentLeaderboardEntry,
     AdminChannelDistributionEntry,
@@ -46,6 +46,13 @@ from app.schemas.admin_metrics import (
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
+from app.services.admin_companies import (
+    DEFAULT_PAGE_SIZE,
+    get_company_stats,
+    list_company_options,
+    list_company_page,
+    list_company_stats,
+)
 from app.services.admin_provisioning import (
     AdminActivationError,
     create_additional_platform_admin,
@@ -53,7 +60,7 @@ from app.services.admin_provisioning import (
     set_peer_admin_active,
 )
 from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
-from app.services.tenant_lifecycle import set_tenant_active, tenant_can_be_disabled
+from app.services.tenant_lifecycle import set_tenant_active
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
 
 
@@ -68,31 +75,6 @@ router.include_router(transfer_policy_router)
 
 
 # ─── Schemas ────────────────────────────────────────────
-
-
-class CompanyStats(BaseModel):
-    id: uuid.UUID
-    name: str
-    slug: str
-    is_active: bool
-    sso_enabled: bool = False
-    sso_domain: str | None = None
-    is_system: bool = False
-    is_default_end_user_org: bool = False
-    created_at: datetime | None = None
-    user_count: int = 0
-    active_user_count: int = 0
-    inactive_user_count: int = 0
-    agent_count: int = 0
-    agent_running_count: int = 0
-    total_tokens: int = 0
-    cache_read_tokens_total: int = 0
-    org_admin_email: str | None = None
-
-    @computed_field
-    @property
-    def can_disable(self) -> bool:
-        return tenant_can_be_disabled(self)
 
 
 class CompanyCreateRequest(BaseModel):
@@ -171,47 +153,41 @@ async def list_companies(
 ) -> list[CompanyStats]:
     """List companies with stats. ``q`` is prefix full-text search on name and slug."""
     _ = current_user
-    query = (q or "").strip()
-    if len(query) > 200:
-        raise HTTPException(status_code=400, detail="Search is too long")
-    if query:
-        tenants = await tenant_dao.search_by_name(query)
-    else:
-        tenants = await tenant_dao.list_ordered_by_created_at(desc=True)
-    result: list[CompanyStats] = []
+    return await list_company_stats(q)
 
-    for tenant in tenants:
-        tid = tenant.id
-        user_count = await user_dao.count_for_tenant(tid)
-        active_user_count = await user_dao.count_for_tenant(tid, is_active=True)
-        agent_count = await agent_dao.count_for_tenant(tid)
-        agent_running = await agent_dao.count_for_tenant(tid, status=AgentStatus.RUNNING)
-        total_tokens, cache_read_tokens_total = await agent_dao.sum_tokens_for_tenant(tid)
-        org_admin_email = await user_dao.first_org_admin_email(tid)
 
-        result.append(
-            CompanyStats(
-                id=tenant.id,
-                name=tenant.name,
-                slug=tenant.slug,
-                is_active=tenant.is_active,
-                sso_enabled=tenant.sso_enabled,
-                sso_domain=tenant.sso_domain,
-                is_system=getattr(tenant, "is_system", False),
-                is_default_end_user_org=getattr(tenant, "is_default_end_user_org", False),
-                created_at=tenant.created_at,
-                user_count=user_count,
-                active_user_count=active_user_count,
-                inactive_user_count=max(user_count - active_user_count, 0),
-                agent_count=agent_count,
-                agent_running_count=agent_running,
-                total_tokens=total_tokens,
-                cache_read_tokens_total=cache_read_tokens_total,
-                org_admin_email=org_admin_email,
-            )
-        )
+@router.get("/companies/page", response_model=CompanyPageOut)
+async def list_companies_page(
+    q: str | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    cursor: str | None = None,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> CompanyPageOut:
+    """Keyset page (``created_at DESC, id DESC``) with stats; ``q`` returns a ranked top 50 and no cursor."""
+    _ = current_user
+    return await list_company_page(q, cursor, limit)
 
-    return result
+
+@router.get("/companies/options", response_model=list[CompanyOption])
+async def list_company_picker_options(
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> list[CompanyOption]:
+    """Complete newest-first company list without stats, for pickers."""
+    _ = current_user
+    return await list_company_options()
+
+
+@router.get("/companies/{company_id}/stats", response_model=CompanyStats)
+async def get_company_stats_route(
+    company_id: uuid.UUID,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> CompanyStats:
+    """Stats for one company."""
+    _ = current_user
+    stats = await get_company_stats(company_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return stats
 
 
 @router.post("/companies", response_model=CompanyCreateResponse, status_code=201)

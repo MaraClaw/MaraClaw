@@ -94,17 +94,10 @@ async def test_search_by_name_uses_prefix_tsquery(monkeypatch):
     assert params["limit"] == 50
 
 
+@pytest.mark.parametrize("raw", ["", "   ", "!!!", "北京公司", "ミラ"])
 @pytest.mark.asyncio
-async def test_search_by_name_blank_falls_back_to_list(monkeypatch):
-    listed = object()
-    called = {"n": 0}
-
-    async def _list(*, desc: bool = True):
-        called["n"] += 1
-        assert desc is True
-        return listed
-
-    monkeypatch.setattr(tenant_dao, "list_ordered_by_created_at", _list)
-    result = await tenant_dao.search_by_name("   ")
-    assert result is listed
-    assert called["n"] == 1
+async def test_search_by_name_without_usable_tokens_matches_nothing(monkeypatch, raw):
+    executed = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(executed))
+    assert list(await tenant_dao.search_by_name(raw)) == []
+    assert executed.executed == []

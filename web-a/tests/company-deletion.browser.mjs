@@ -47,7 +47,12 @@ async function scenario(name, exercise) {
       let status = 200
       if (path === '/api/auth/me') body = { ...admin, role: state.role, is_platform_admin: state.role === 'platform_admin' }
       else if (path === '/api/auth/login') body = { access_token: 'synthetic-token', token_type: 'bearer', user: admin }
-      else if (path === '/api/admin/companies') { state.listCalls++; body = state.companies }
+      else if (path === '/api/admin/companies/page') { state.listCalls++; body = { items: state.companies, next_cursor: null } }
+      else if (/^\/api\/admin\/companies\/[^/]+\/stats$/u.test(path)) {
+        state.listCalls++
+        body = state.companies.find((item) => item.id === decodeURIComponent(path.split('/').at(-2)))
+        if (!body) { status = 404; body = { detail: 'Company not found' } }
+      }
       else if (path.endsWith('/email-domains')) body = []
       else if (path.endsWith('/deletion-preview')) {
         state.previewCalls++

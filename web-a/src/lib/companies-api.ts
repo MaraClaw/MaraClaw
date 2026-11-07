@@ -35,6 +35,40 @@ export type CompanyStats = {
   org_admin_email: string | null
 }
 
+const companyOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+})
+
+const companyStatsSchema = companyOptionSchema.extend({
+  slug: z.string(),
+  is_active: z.boolean(),
+  sso_enabled: z.boolean(),
+  sso_domain: z.string().nullable(),
+  is_system: z.boolean(),
+  is_default_end_user_org: z.boolean(),
+  can_disable: z.boolean(),
+  created_at: z.string().nullable(),
+  user_count: z.number().int().nonnegative(),
+  active_user_count: z.number().int().nonnegative(),
+  inactive_user_count: z.number().int().nonnegative(),
+  agent_count: z.number().int().nonnegative(),
+  org_admin_email: z.string().nullable(),
+})
+
+const companiesPageSchema = z.object({
+  items: z.array(companyStatsSchema),
+  next_cursor: z.string().nullable(),
+})
+
+export type CompaniesPage = z.infer<typeof companiesPageSchema>
+export type CompanyOption = z.infer<typeof companyOptionSchema>
+
+export type CompaniesPageInput = {
+  readonly search: string
+  readonly cursor: string | null
+}
+
 export type EmailDomain = {
   id: string
   tenant_id: string
@@ -60,6 +94,21 @@ export async function listCompanies(q?: string, signal?: AbortSignal): Promise<C
   const query = q?.trim()
   const suffix = query ? `?q=${encodeURIComponent(query)}` : ''
   return apiRequest<CompanyStats[]>(`/api/admin/companies${suffix}`, { signal })
+}
+
+export async function listCompaniesPage(input: CompaniesPageInput, signal?: AbortSignal): Promise<CompaniesPage> {
+  const params = new URLSearchParams({ limit: '50' })
+  if (input.search.trim()) params.set('q', input.search.trim())
+  if (input.cursor !== null) params.set('cursor', input.cursor)
+  return apiRequest(`/api/admin/companies/page?${params}`, { schema: companiesPageSchema, signal })
+}
+
+export async function listCompanyOptions(signal?: AbortSignal): Promise<CompanyOption[]> {
+  return apiRequest('/api/admin/companies/options', { schema: z.array(companyOptionSchema), signal })
+}
+
+export async function getCompanyStats(companyId: string, signal?: AbortSignal): Promise<CompanyStats> {
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/stats`, { schema: companyStatsSchema, signal })
 }
 
 export async function createCompany(input: CreateCompanyInput): Promise<CreateCompanyResponse> {

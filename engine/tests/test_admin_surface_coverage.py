@@ -22,6 +22,7 @@ from app.api import (
     users as users_api,
 )
 from app.core.domain.users import UserRole
+from app.dao.tenant_dao import TenantUsageStats
 from app.records.audit import AdminAuditLogRecord
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.tenant import TenantRecord
@@ -152,23 +153,29 @@ async def test_get_client_ip_none_and_host():
 async def test_list_companies(monkeypatch):
     tenant = _tenant()
     monkeypatch.setattr(admin_api.tenant_dao, "list_ordered_by_created_at", AsyncMock(return_value=[tenant]))
-
-    async def count_for_tenant(_tid, *, is_active=None):
-        if is_active is True:
-            return 2
-        return 3
-
-    monkeypatch.setattr(admin_api.user_dao, "count_for_tenant", AsyncMock(side_effect=count_for_tenant))
-    monkeypatch.setattr(admin_api.agent_dao, "count_for_tenant", AsyncMock(return_value=2))
-    monkeypatch.setattr(admin_api.agent_dao, "sum_tokens_for_tenant", AsyncMock(return_value=(10, 1)))
-    monkeypatch.setattr(admin_api.user_dao, "first_org_admin_email", AsyncMock(return_value="oa@acme.com"))
+    usage = AsyncMock(
+        return_value={
+            tenant.id: TenantUsageStats(
+                user_count=3,
+                active_user_count=2,
+                agent_count=2,
+                agent_running_count=1,
+                total_tokens=10,
+                cache_read_tokens_total=1,
+                org_admin_email="oa@acme.com",
+            )
+        }
+    )
+    monkeypatch.setattr(admin_api.tenant_dao, "usage_stats", usage)
     result = await admin_api.list_companies(current_user=_user())
+    usage.assert_awaited_once_with([tenant.id])
     assert len(result) == 1
     assert result[0].org_admin_email == "oa@acme.com"
     assert result[0].user_count == 3
     assert result[0].active_user_count == 2
     assert result[0].inactive_user_count == 1
     assert result[0].agent_count == 2
+    assert result[0].agent_running_count == 1
     assert result[0].can_disable is True
 
 
@@ -177,12 +184,11 @@ async def test_list_companies_uses_name_search(monkeypatch):
     tenant = _tenant()
     search = AsyncMock(return_value=[tenant])
     monkeypatch.setattr(admin_api.tenant_dao, "search_by_name", search)
-    monkeypatch.setattr(admin_api.user_dao, "count_for_tenant", AsyncMock(return_value=1))
-    monkeypatch.setattr(admin_api.agent_dao, "count_for_tenant", AsyncMock(return_value=0))
-    monkeypatch.setattr(admin_api.agent_dao, "sum_tokens_for_tenant", AsyncMock(return_value=(0, 0)))
-    monkeypatch.setattr(admin_api.user_dao, "first_org_admin_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(admin_api.tenant_dao, "usage_stats", AsyncMock(return_value={}))
     result = await admin_api.list_companies(q="  mara  ", current_user=_user())
     assert len(result) == 1
+    assert result[0].user_count == 0
+    assert result[0].org_admin_email is None
     search.assert_awaited_once_with("mara")
 
 

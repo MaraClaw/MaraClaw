@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -10,9 +10,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { companiesPageOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
-import { getTenant, listCompanies, toggleCompany } from '@/lib/companies-api'
+import { toggleCompany } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 
@@ -31,23 +32,8 @@ export function CompaniesPage() {
   const canCreate = isPlatformAdminUser(user)
   const [searchInput, setSearchInput] = useState('')
   const search = useDebouncedValue(searchInput, 300)
-  const companies = useQuery({
-    queryKey: ['admin-companies', user?.tenant_id, search],
-    queryFn: async ({ signal }) => {
-      try {
-        return await listCompanies(search, signal)
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 403 && user?.tenant_id) {
-          const own = await getTenant(user.tenant_id, signal)
-          const needle = search.trim().toLowerCase()
-          if (!needle) return [own]
-          const haystack = `${own.name} ${own.slug}`.toLowerCase()
-          return haystack.includes(needle) ? [own] : []
-        }
-        throw error
-      }
-    },
-  })
+  const companies = useInfiniteQuery(companiesPageOptions(user?.tenant_id ?? null, search))
+  const rows = companies.data?.pages.flatMap((page) => page.items) ?? []
   const toggle = useMutation({
     mutationFn: toggleCompany,
     onSuccess: () => {
@@ -98,7 +84,7 @@ export function CompaniesPage() {
         </p>
       ) : null}
 
-      {!companies.isLoading && (companies.data ?? []).length === 0 ? (
+      {!companies.isLoading && !companies.error && rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {search.trim()
             ? `No companies match “${search.trim()}”.`
@@ -107,7 +93,7 @@ export function CompaniesPage() {
       ) : null}
 
       <div className="grid gap-4">
-        {(companies.data ?? []).map((company) => (
+        {rows.map((company) => (
           <Card key={company.id} className="relative transition-colors hover:bg-muted/40">
             <Link
               to={`/companies/${company.id}`}
@@ -152,6 +138,17 @@ export function CompaniesPage() {
           </Card>
         ))}
       </div>
+      {companies.hasNextPage ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={companies.isFetching}
+          aria-busy={companies.isFetchingNextPage}
+          onClick={() => { void companies.fetchNextPage() }}
+        >
+          Load more companies
+        </Button>
+      ) : null}
     </div>
   )
 }

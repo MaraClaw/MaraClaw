@@ -9,11 +9,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { companyStatsOptions } from '@/hooks/company-options'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import {
   addEmailDomain,
   deleteEmailDomain,
-  listCompanies,
   listEmailDomains,
   setDefaultEmailDomain,
 } from '@/lib/companies-api'
@@ -35,8 +35,8 @@ export function CompanyDetailPage() {
     navigate('/companies')
   }
 
-  const companies = useQuery({ queryKey: ['admin-companies'], queryFn: ({ signal }) => listCompanies(undefined, signal) })
-  const company = companies.data?.find((item) => item.id === companyId)
+  const companies = useQuery(companyStatsOptions(companyId ?? ''))
+  const company = companies.data
   const domains = useQuery({
     queryKey: ['email-domains', companyId],
     queryFn: ({ signal }) => listEmailDomains(companyId ?? '', signal),
