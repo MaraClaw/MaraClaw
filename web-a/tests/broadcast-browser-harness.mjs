@@ -9,8 +9,8 @@ export const broadcastId = '0d75651c-8c6c-4404-9046-50e1b3ff6dd2'
 export const counts = { ok: true, broadcast_id: broadcastId, users_notified: 7, agents_notified: 3, emails_sent: 5 }
 export const details = { 400: 'System email is not configured. Please configure it in Platform Settings.', 403: 'Only org admins can send broadcasts', 503: 'Synthetic service unavailable' }
 export const admin = {
-  id: 'operator', identity_id: 'identity', email: 'operator@example.test', display_name: 'Operator',
-  avatar_url: null, role: 'org_admin', is_platform_admin: false, tenant_id: 'tenant-a', title: null, primary_mobile: null,
+  id: '18e275bd-29a0-4adf-a1ab-1cbf787798fb', identity_id: '18e275bd-29a0-4adf-a1ab-1cbf787798fc', email: 'operator@example.test', display_name: 'Operator',
+  avatar_url: null, role: 'org_admin', is_platform_admin: false, tenant_id: '18e275bd-29a0-4adf-a1ab-1cbf787798fd', title: null, primary_mobile: null,
   registration_source: null, is_active: true, email_verified: true, must_change_password: false, created_at: '2026-10-20T00:00:00Z',
 }
 export const emptyStatus = { broadcast_id: broadcastId, available: false, queued: 0, claimed: 0, smtp_accepted: 0, failed: 0, cancelled: 0 }
@@ -37,13 +37,14 @@ export async function createBroadcastHarness() {
   let closedSkillConnections = 0
 
   async function scenario(options, exercise) {
-    const browser = await chromium.launch({ headless: true, args: ['--enable-automation', '--remote-debugging-port=0'] })
+    const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {}), args: ['--enable-automation', '--remote-debugging-port=0'] })
     let context
     let skillBrowser
     const state = {
       user: { ...admin, ...options.user }, token: 'synthetic-token', status: 200, gate: null, exchanges: [],
       receipt: counts, email: { ...emptyStatus, available: true, queued: 5 }, emailHttpStatus: 200, emailGate: null, emailRequests: [],
       cancelResult: { ...emptyStatus, available: true, cancelled: 5, cancelled_now: 5 }, cancelHttpStatus: 200, cancelGate: null, cancelRequests: [],
+      history: { items: [], next_cursor: null }, historyStatus: 200, historyGate: null, historyRequests: [],
     }
     const errors = []
     try {
@@ -61,7 +62,12 @@ export async function createBroadcastHarness() {
         else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
         else if (path === '/api/admin/search-analytics/summary') body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }
         else if (path === '/api/admin/search-analytics/orgs') body = []
-        else if (path === '/api/notifications/broadcast' && route.request().method() === 'POST') {
+        else if (path === '/api/notifications/broadcast/history') {
+          const params = new URL(route.request().url()).searchParams
+          exchange = { cursor: params.get('cursor'), limit: params.get('limit'), status: state.historyStatus, gate: state.historyGate, delivered: Promise.withResolvers() }
+          state.historyRequests.push(exchange)
+          body = typeof state.history === 'function' ? state.history(exchange.cursor) : state.history
+        } else if (path === '/api/notifications/broadcast' && route.request().method() === 'POST') {
           const payload = route.request().postDataJSON()
           exchange = { payload, status: state.status, gate: state.gate, delivered: Promise.withResolvers() }
           state.exchanges.push(exchange)
@@ -102,7 +108,7 @@ export async function createBroadcastHarness() {
       evidence.push(options.name)
       console.log(`PASS ${options.name}`)
     } finally {
-      const requests = [...state.exchanges, ...state.emailRequests, ...state.cancelRequests]
+      const requests = [...state.exchanges, ...state.emailRequests, ...state.cancelRequests, ...state.historyRequests]
       for (const exchange of requests) exchange.gate?.resolve()
       await Promise.allSettled(requests.map((exchange) => exchange.delivered.promise))
       if (skillBrowser) { await skillBrowser.close(); closedSkillConnections++ }

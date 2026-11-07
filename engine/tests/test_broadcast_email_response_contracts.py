@@ -14,8 +14,10 @@ from app.api import notification as api
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.agent import AgentRecord
+from app.records.broadcast_history import BroadcastHistoryRecord
 from app.records.broadcast_submission import BroadcastSubmissionClaim, BroadcastSubmissionRecord
 from app.records.user import UserRecord
+from app.schemas.notification_responses import BroadcastHistoryCursor, NotificationCursor
 
 
 @pytest.fixture
@@ -49,8 +51,15 @@ async def test_broadcast_enforces_role_and_tenant(
     assert response.status_code == status
 
 
+@pytest.fixture
+def history(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    dao = AsyncMock()
+    monkeypatch.setattr(api, "broadcast_history_dao", dao)
+    return dao
+
+
 async def test_broadcast_response_keeps_counts_and_tenant_scope(
-    client: httpx.AsyncClient, member: UserRecord, monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: one member and one agent receive an in-app-only broadcast.
     member.role = UserRole.ORG_ADMIN
@@ -97,7 +106,7 @@ def audience(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 @pytest.fixture
-def submissions(monkeypatch: pytest.MonkeyPatch, audience: AsyncMock) -> AsyncMock:
+def submissions(monkeypatch: pytest.MonkeyPatch, audience: AsyncMock, history: AsyncMock) -> AsyncMock:
     dao = AsyncMock()
     dao.get_for_key.return_value = None
     monkeypatch.setattr(api, "broadcast_submission_dao", dao)
@@ -218,3 +227,150 @@ async def test_refused_email_broadcast_releases_its_claim(
     assert response.status_code == 400
     submissions.release.assert_awaited_once_with(receipt.id)
     submissions.record_counts.assert_not_awaited()
+
+
+@pytest.mark.parametrize("key", [None, "draft-1"])
+async def test_every_committed_broadcast_publishes_one_history_row(
+    client: httpx.AsyncClient,
+    member: UserRecord,
+    submissions: AsyncMock,
+    history: AsyncMock,
+    audience: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str | None,
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    submissions.claim.return_value = BroadcastSubmissionClaim(
+        _receipt(member, api.BroadcastRequest(title="Update", body="Body")), created=True
+    )
+    audience.return_value = [member]
+    monkeypatch.setattr("app.services.notification_service.send_notification", AsyncMock())
+    response = await client.post(
+        "/api/notifications/broadcast",
+        json={"title": "Update", "body": "Body"},
+        headers={} if key is None else {"Idempotency-Key": key},
+    )
+    history.publish.assert_awaited_once()
+    [entry] = history.publish.await_args.args
+    assert (entry.broadcast_id, entry.tenant_id, entry.sender_id) == (
+        UUID(response.json()["broadcast_id"]),
+        member.tenant_id,
+        member.id,
+    )
+    assert (entry.title, entry.body, entry.send_email) == ("Update", "Body", False)
+    assert (entry.users_notified, entry.agents_notified, entry.emails_sent) == (1, 0, 0)
+
+
+async def test_replay_conflict_and_refusal_publish_no_history(
+    client: httpx.AsyncClient, member: UserRecord, submissions: AsyncMock, history: AsyncMock
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    receipt = _receipt(member, api.BroadcastRequest(title="Update"))
+    submissions.get_for_key.return_value = receipt
+    replay = await client.post(
+        "/api/notifications/broadcast", json={"title": "Update"}, headers={"Idempotency-Key": "draft-1"}
+    )
+    conflict = await client.post(
+        "/api/notifications/broadcast", json={"title": "Other"}, headers={"Idempotency-Key": "draft-1"}
+    )
+    assert (replay.status_code, conflict.status_code) == (200, 409)
+    history.publish.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("role", "has_tenant", "status"), [("member", True, 403), ("org_admin", False, 400)])
+async def test_broadcast_history_enforces_role_and_tenant_before_reading(
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock, role: str, has_tenant: bool, status: int
+) -> None:
+    member.role = UserRole(role)
+    if not has_tenant:
+        member.tenant_id = None
+    response = await client.get("/api/notifications/broadcast/history", params={"cursor": "not-a-cursor"})
+    assert response.status_code == status
+    history.list_page.assert_not_awaited()
+
+
+def _history_record(member: UserRecord, minute: int) -> BroadcastHistoryRecord:
+    return BroadcastHistoryRecord(
+        broadcast_id=uuid4(),
+        tenant_id=member.tenant_id or uuid4(),
+        sender_id=member.id,
+        sender_name="Member",
+        title=f"Title {minute}",
+        body="Body",
+        send_email=True,
+        users_notified=2,
+        agents_notified=1,
+        emails_sent=2,
+        published_at=datetime(2026, 11, 6, 10, minute, tzinfo=UTC),
+    )
+
+
+async def test_broadcast_history_page_uses_caller_tenant_and_hides_lookahead_row(
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    records = [_history_record(member, minute) for minute in (3, 2, 1)]
+    history.list_page.return_value = records
+    response = await client.get("/api/notifications/broadcast/history", params={"limit": 2})
+    assert response.status_code == 200
+    page = response.json()
+    assert [item["title"] for item in page["items"]] == ["Title 3", "Title 2"]
+    assert set(page["items"][0]) == {
+        "broadcast_id",
+        "sender_id",
+        "sender_name",
+        "title",
+        "body",
+        "send_email",
+        "published_at",
+        "users_notified",
+        "agents_notified",
+        "emails_sent",
+    }
+    position = BroadcastHistoryCursor.decode(page["next_cursor"])
+    assert (position.published_at, position.broadcast_id) == (records[1].published_at, records[1].broadcast_id)
+    history.list_page.assert_awaited_once_with(member.tenant_id, limit=2, before=None)
+
+
+async def test_broadcast_history_last_page_has_no_cursor_and_cursor_seeks(
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    record = _history_record(member, 1)
+    history.list_page.return_value = [record]
+    cursor = BroadcastHistoryCursor(version=1, published_at=record.published_at, broadcast_id=record.broadcast_id)
+    response = await client.get("/api/notifications/broadcast/history", params={"cursor": cursor.encode()})
+    assert response.json()["next_cursor"] is None
+    history.list_page.assert_awaited_once_with(
+        member.tenant_id, limit=20, before=(record.published_at, record.broadcast_id)
+    )
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "",
+        "!!!",
+        "e30",
+        NotificationCursor(version=1, created_at=datetime(2026, 11, 6, tzinfo=UTC), id=uuid4()).encode(),
+        "a" * 1025,
+    ],
+)
+async def test_broadcast_history_rejects_invalid_cursor(
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock, cursor: str
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    response = await client.get("/api/notifications/broadcast/history", params={"cursor": cursor})
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid cursor"}
+    history.list_page.assert_not_awaited()
+
+
+@pytest.mark.parametrize("limit", [0, 101, -1])
+async def test_broadcast_history_limit_is_bounded(
+    client: httpx.AsyncClient, member: UserRecord, history: AsyncMock, limit: int
+) -> None:
+    member.role = UserRole.ORG_ADMIN
+    response = await client.get("/api/notifications/broadcast/history", params={"limit": limit})
+    assert response.status_code == 422
+    history.list_page.assert_not_awaited()

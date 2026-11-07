@@ -1,6 +1,6 @@
 from base64 import b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
-from typing import ClassVar
+from typing import ClassVar, Self
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -8,21 +8,20 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from app.core.notification_kinds import NotificationKind
+from app.records.broadcast_history import BroadcastHistoryRecord
 from app.records.notification import NotificationRecord
 
 
-class NotificationCursor(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+class _OpaqueCursor(BaseModel):
+    """Canonical base64url JSON position; each subclass's field set makes foreign cursors invalid."""
 
-    version: int = Field(strict=True, ge=1, le=1)
-    created_at: AwareDatetime
-    id: UUID
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     def encode(self) -> str:
         return urlsafe_b64encode(self.model_dump_json().encode()).decode().rstrip("=")
 
     @classmethod
-    def decode(cls, value: str) -> NotificationCursor:
+    def decode(cls, value: str) -> Self:
         if not value or len(value) > 1024:
             raise HTTPException(400, "Invalid cursor")
         try:
@@ -33,6 +32,18 @@ class NotificationCursor(BaseModel):
         if urlsafe_b64encode(payload).decode().rstrip("=") != value:
             raise HTTPException(400, "Invalid cursor")
         return position
+
+
+class NotificationCursor(_OpaqueCursor):
+    version: int = Field(strict=True, ge=1, le=1)
+    created_at: AwareDatetime
+    id: UUID
+
+
+class BroadcastHistoryCursor(_OpaqueCursor):
+    version: int = Field(strict=True, ge=1, le=1)
+    published_at: AwareDatetime
+    broadcast_id: UUID
 
 
 class NotificationResponse(TypedDict):
@@ -81,6 +92,39 @@ class NotificationBroadcastResponse(NotificationReadResponse):
     users_notified: int
     agents_notified: int
     emails_sent: int
+
+
+class NotificationBroadcastHistoryItem(TypedDict):
+    broadcast_id: UUID
+    sender_id: UUID | None
+    sender_name: str
+    title: str
+    body: str
+    send_email: bool
+    published_at: AwareDatetime
+    users_notified: int
+    agents_notified: int
+    emails_sent: int
+
+
+class NotificationBroadcastHistoryPageResponse(TypedDict):
+    items: list[NotificationBroadcastHistoryItem]
+    next_cursor: str | None
+
+
+def broadcast_history_item(record: BroadcastHistoryRecord) -> NotificationBroadcastHistoryItem:
+    return {
+        "broadcast_id": record.broadcast_id,
+        "sender_id": record.sender_id,
+        "sender_name": record.sender_name,
+        "title": record.title,
+        "body": record.body,
+        "send_email": record.send_email,
+        "published_at": record.published_at,
+        "users_notified": record.users_notified,
+        "agents_notified": record.agents_notified,
+        "emails_sent": record.emails_sent,
+    }
 
 
 class NotificationBroadcastEmailStatusResponse(TypedDict):

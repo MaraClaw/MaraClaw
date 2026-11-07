@@ -17,8 +17,8 @@ __all__ = ["notification_db"]
 
 KINDS: list[tuple[NotificationKind, str]] = [
     (NotificationKind.MENTION, "mention"),
-    (NotificationKind.PLAZA_REPLY, "plaza_reply"),
-    (NotificationKind.PLAZA_COMMENT, "plaza_comment"),
+    (NotificationKind.CLAWBOOK_REPLY, "clawbook_reply"),
+    (NotificationKind.CLAWBOOK_COMMENT, "clawbook_comment"),
     (NotificationKind.BROADCAST, "broadcast"),
     (NotificationKind.APPROVAL_PENDING, "approval_pending"),
     (NotificationKind.APPROVAL_RESOLVED, "approval_resolved"),

@@ -19,7 +19,7 @@ try {
     if (target === 'broadcast') {
       await expect(links).toHaveCount(1)
       await expect(links).toHaveAttribute('aria-current', 'page')
-      await page.getByRole('link', { name: 'Account', exact: true }).click()
+    await page.getByRole('link', { name: 'Overview', exact: true }).click()
       await links.click()
       await expect(page.getByRole('heading', { name: 'Organization broadcast' })).toBeVisible()
     } else {
@@ -30,7 +30,7 @@ try {
   })
 
   for (const mobile of [false, true]) await scenario({ name: `${mobile ? 'mobile' : 'desktop'} force-password blocks direct route and navigation`, mobile, user: { must_change_password: true } }, async (page, state) => {
-    await expect(page).toHaveURL(`${base}account`)
+    await expect(page).toHaveURL(`${base}settings`)
     await expect(page.getByRole('link', { name: 'Broadcast', exact: true })).toHaveCount(0)
     await expect(page.locator('[aria-disabled="true"]:visible').filter({ hasText: /^Broadcast$/ })).toHaveCount(1)
     await expect(page.getByRole('heading', { name: 'Organization broadcast' })).toHaveCount(0)
