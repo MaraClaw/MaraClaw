@@ -660,3 +660,103 @@ async def test_repeated_lifespans_reopen_producer_gates(monkeypatch: pytest.Monk
         async with lifecycle.lifespan(FastAPI()):
             assert producer_gates() == {"trigger": True, "heartbeat": True, "wake": True}
         assert producer_gates() == {"trigger": False, "heartbeat": False, "wake": False}
+
+
+async def test_worker_start_budgets_only_the_three_workers_through_the_injected_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a worker runtime on a fake clock whose budgeted loops beat only when told to.
+    from app.process_roles import parse_process_roles
+    from app.runtime.tasks import loop_progress
+    from app.services import (
+        agent_setup,
+        agent_start_reconciler,
+        audit_logger,
+        broadcast_email_worker,
+        gateway_report_relay,
+        heartbeat,
+        openclaw_delayed_replies,
+        openclaw_dispatch_reconciler,
+        openclaw_update_worker,
+        organization_admission_email_worker,
+        scheduler,
+        task_lease,
+        trigger_daemon,
+    )
+    from app.services.tavily import export
+
+    now = 0.0
+    runtime = lifecycle.Runtime()
+    runtime.tasks = OwnedTasks(lambda: now)
+    runtime.readiness = lifecycle.Readiness(runtime.tasks)
+    fake_resources(monkeypatch, [])
+    beat, all_beaten = asyncio.Event(), asyncio.Event()
+    beaten: list[str] = []
+
+    async def noop(*_args: object) -> None:
+        return None
+
+    async def probe() -> bool:
+        return True
+
+    async def idle() -> None:
+        await asyncio.Event().wait()
+
+    def budgeted(name: str) -> Callable[[], Awaitable[None]]:
+        async def run() -> None:
+            await beat.wait()
+            loop_progress().beat()
+            beaten.append(name)
+            if len(beaten) == 3:
+                all_beaten.set()
+            await asyncio.Event().wait()
+
+        return run
+
+    for module, attribute in (
+        (trigger_daemon, "start_trigger_daemon"),
+        (heartbeat, "start_heartbeat"),
+        (agent_setup, "start_agent_setup_worker"),
+        (agent_start_reconciler, "agent_start_reconciler_loop"),
+        (export, "start_web_search_export_daemon"),
+        (scheduler, "start_scheduler"),
+        (gateway_report_relay, "start_gateway_report_relay"),
+        (openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop"),
+        (openclaw_delayed_replies, "openclaw_delayed_reply_loop"),
+        (task_lease, "task_lease_recovery_loop"),
+    ):
+        monkeypatch.setattr(module, attribute, idle)
+    monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", budgeted("broadcast_email"))
+    monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", budgeted("openclaw_update"))
+    monkeypatch.setattr(
+        organization_admission_email_worker,
+        "start_organization_admission_email_worker",
+        budgeted("organization_admission_email"),
+    )
+    monkeypatch.setattr(audit_logger, "write_audit_log", noop)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
+    monkeypatch.setattr(lifecycle, "init_pool", noop)
+    monkeypatch.setattr(lifecycle, "get_redis", noop)
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
+    from app.runtime import readiness
+
+    monkeypatch.setattr(readiness, "ping_pool", probe)
+    monkeypatch.setattr(readiness, "ping_redis", probe)
+    # When the worker starts and the clock passes every budget without a beat.
+    await runtime.start(parse_process_roles("worker"))
+    try:
+        assert set(runtime.tasks.progress) == {"broadcast_email", "organization_admission_email", "openclaw_update"}
+        assert await runtime.readiness.check()
+        now += 301
+        # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
+        assert not await runtime.readiness.check()
+        assert all(not task.done() for task, _ in runtime.tasks.required.values())
+        # And one beat per budgeted loop, through the real task context, recovers it.
+        beat.set()
+        await asyncio.wait_for(all_beaten.wait(), 5)
+        assert await runtime.readiness.check()
+    finally:
+        await runtime.stop()

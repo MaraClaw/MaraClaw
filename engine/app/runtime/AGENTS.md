@@ -7,7 +7,7 @@ Owns per-lifespan process resources, background work and readiness. `app/main.py
 | File / symbol | Responsibility |
 |---|---|
 | `lifecycle.py`: `Runtime`, `lifespan` | Role-gated startup, attempted-resource bookkeeping, ordered/shielded shutdown; fresh state each lifespan. |
-| `tasks.py`: `OwnedTasks`, `EventTasks`, `TaskAdmission`, `cancel_tasks` | Explicit task ownership, required-task evidence, SDK callback and producer admission/drain. |
+| `tasks.py`: `OwnedTasks`, `LoopProgress`, `EventTasks`, `TaskAdmission`, `cancel_tasks` | Explicit task ownership, required-task evidence and opt-in progress budgets, SDK callback and producer admission/drain. |
 | `readiness.py`: `Readiness`, `router` | `/api/ready`, bounded existing-dependency probes, drain-aware eligibility. |
 | `bootstrap.py`: `bootstrap` | Ordered seed boundaries; no schema DDL. |
 | `connectors.py`: `WeChatRuntime` | Finite initial reconciliation followed by a required ongoing loop. |
@@ -29,6 +29,7 @@ Owns per-lifespan process resources, background work and readiness. `app/main.py
 
 - Track only owned tasks; never cancel a global `asyncio.all_tasks()` set. Cancel unfinished tasks and await them with `gather(return_exceptions=True)`; log non-cancellation failures.
 - `OwnedTasks.start` distinguishes optional, finite `setup`, and ongoing `loop`. Required setup is ready only after successful completion; a required loop is ready only while running. Normal loop return, failure or cancellation invalidates readiness. Retain required evidence after done-task removal.
+- A required loop may opt into a progress budget (`OwnedTasks.start(..., progress_budget_seconds=)`); the loop calls `loop_progress().beat()` after each finished pass, and readiness also fails once the last beat (task start counts) is older than the budget on `OwnedTasks`' injectable monotonic clock. Only `broadcast_email`, `organization_admission_email` and `openclaw_update` opt in (300 seconds, set in `lifecycle.py` from each worker's `PROGRESS_BUDGET_SECONDS`); every other loop keeps the exited-task rule. Staleness never cancels or restarts a loop. Email workers retry only DB errors from `claim_batch`/`purge_settled` in place with capped backoff (no beat; a purge failure does not block claiming) and keep a batch timeout or error fatal. The upgrade worker reacquires Docker with capped backoff via `agent_manager.reacquire_docker_client()` (shared `docker_client`), beats while idle without Docker, stops beating while runs are active (or unreadable), and wraps `executor.process` in `loop_progress().exempt()`: no deadline, never cancelled, time inside is not staleness.
 - `EventTasks` tracks admitted SDK callbacks; closing rejects new callbacks with `CancelledError`, then cancels/awaits existing callbacks. Do not let callbacks outlive their manager's ownership.
 - Readiness requires initialized, not draining, an API/worker/connector role, satisfied required tasks, and API realtime subscription readiness when applicable.
 - Probe existing pool and Redis concurrently with separate two-second bounds; probes must not initialize resources. Skip probes while ineligible and recheck eligibility after them to catch draining/subscription races.

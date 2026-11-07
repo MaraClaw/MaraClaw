@@ -4,14 +4,18 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, override
 from uuid import UUID, uuid4
 
 import pytest
 from anyio import CancelScope, fail_after
+from psycopg import OperationalError
 
+from app.db.errors import DbError
 from app.records.broadcast_email import BroadcastEmailRecord
+from app.runtime.tasks import OwnedTasks
 from app.services import broadcast_email_worker as worker, system_email_service as email
+from progress_fakes import FakeClock, Pacer
 
 NOW = datetime(2026, 10, 23, tzinfo=UTC)
 
@@ -285,3 +289,140 @@ async def test_owned_batch_leaves_continuing_threads_without_starting_more_batch
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await asyncio.wait_for(finished.wait(), timeout=2)
+
+
+class FlakyDAO(DeliveryDAO):
+    """Raises scripted errors from ``claim_batch`` and ``purge_settled`` before delegating."""
+
+    def __init__(self, claim_errors: list[Exception], purge_errors: list[Exception]) -> None:
+        super().__init__()
+        self.claim_errors: list[Exception] = claim_errors
+        self.purge_errors: list[Exception] = purge_errors
+
+    @override
+    async def claim_batch(self, *, limit: int, lease_seconds: int, now: datetime) -> list[BroadcastEmailRecord]:
+        if self.claim_errors:
+            raise self.claim_errors.pop(0)
+        return await super().claim_batch(limit=limit, lease_seconds=lease_seconds, now=now)
+
+    @override
+    async def purge_settled(self, *, older_than: datetime, limit: int) -> int:
+        if self.purge_errors:
+            raise self.purge_errors.pop(0)
+        return await super().purge_settled(older_than=older_than, limit=limit)
+
+
+def flaky(monkeypatch: pytest.MonkeyPatch, claim_errors: list[Exception], purge_errors: list[Exception]) -> FlakyDAO:
+    store = FlakyDAO(claim_errors, purge_errors)
+    monkeypatch.setattr(worker, "broadcast_email_dao", store)
+    monkeypatch.setattr(worker, "datetime", Clock)
+    return store
+
+
+async def test_claim_db_errors_retry_with_capped_backoff_below_the_progress_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given seven consecutive claim failures, then a healthy pass.
+    errors: list[Exception] = [DbError("down"), OperationalError("down")] * 3 + [OSError("down")]
+    store = flaky(monkeypatch, errors, [])
+    sleeps: list[float] = []
+
+    async def record(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 8:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker, "sleep", record)
+    # When the loop runs.
+    with pytest.raises(asyncio.CancelledError):
+        await worker.start_broadcast_email_worker()
+    # Then it backed off 1, 2, 4, ... up to the cap, then claimed normally and resumed polling.
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, worker.POLL_SECONDS]
+    assert worker.DB_RETRY_CAP_SECONDS < worker.PROGRESS_BUDGET_SECONDS
+    assert len(store.claims) == 1
+
+
+async def test_purge_db_error_does_not_block_claiming_and_is_retried_on_a_short_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given the first purge fails and time is a fake monotonic clock advanced only by the poll sleep.
+    clock = FakeClock()
+    store = flaky(monkeypatch, [], [DbError("purge down")])
+    sleeps: list[float] = []
+
+    async def poll(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock.now += seconds
+        if len(sleeps) == 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker, "monotonic", clock)
+    monkeypatch.setattr(worker, "sleep", poll)
+    # When the loop runs three passes.
+    with pytest.raises(asyncio.CancelledError):
+        await worker.start_broadcast_email_worker()
+    # Then every pass still claimed, and the purge succeeded on pass two (short backoff), not a 60 second interval later.
+    assert len(store.claims) == 3
+    assert len(store.purges) == 1
+
+
+async def test_failed_claims_do_not_beat_so_readiness_goes_stale_then_recovers() -> None:
+    # Given the real loop as a budgeted owned task whose claims fail.
+    clock, pacer = FakeClock(), Pacer()
+    tasks = OwnedTasks(clock)
+    store = FlakyDAO([DbError("down")] * 2, [])
+    patch = pytest.MonkeyPatch()
+    patch.setattr(worker, "broadcast_email_dao", store)
+    patch.setattr(worker, "datetime", Clock)
+    patch.setattr(worker, "sleep", pacer.sleep)
+    try:
+        tasks.start(
+            "broadcast_email",
+            worker.start_broadcast_email_worker(),
+            requirement="loop",
+            progress_budget_seconds=worker.PROGRESS_BUDGET_SECONDS,
+        )
+        await pacer.parked()
+        # When the budget lapses on failed attempts alone.
+        clock.now += worker.PROGRESS_BUDGET_SECONDS + 1
+        assert not tasks.ready()
+        assert not tasks.required["broadcast_email"][0].done()
+        await pacer.release()
+        assert not tasks.ready()
+        # Then a finished pass beats and readiness recovers.
+        await pacer.release()
+        assert tasks.ready()
+    finally:
+        await tasks.stop()
+        patch.undo()
+
+
+async def test_batch_timeout_stays_fatal_and_does_not_beat(monkeypatch: pytest.MonkeyPatch, dao: DeliveryDAO) -> None:
+    # Given a stuck delivery and a batch deadline that has already expired.
+    dao.rows = [claim()]
+    clock = FakeClock()
+    tasks = OwnedTasks(clock)
+    release = asyncio.Event()
+
+    async def attempt(*_args: object, **_kwargs: object) -> email.EmailAttemptOutcome:
+        await release.wait()
+        return email.EmailAttemptOutcome("sent")
+
+    @contextmanager
+    def expired(_seconds: int) -> Generator[None]:
+        with fail_after(0):
+            yield
+
+    monkeypatch.setattr(worker, "attempt_email", attempt)
+    monkeypatch.setattr(worker, "fail_after", expired)
+    # When the required loop hits the batch timeout.
+    tasks.start(
+        "broadcast_email", worker.start_broadcast_email_worker(), requirement="loop", progress_budget_seconds=300
+    )
+    task, _ = tasks.required["broadcast_email"]
+    result = (await asyncio.gather(task, return_exceptions=True))[0]
+    # Then the loop ended with the timeout (no in-process restart, one claim) and readiness is not ready.
+    assert isinstance(result, (ExceptionGroup, TimeoutError))
+    assert len(dao.claims) == 1
+    assert not tasks.ready()
+    await tasks.stop()

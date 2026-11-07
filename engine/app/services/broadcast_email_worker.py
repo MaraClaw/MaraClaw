@@ -5,9 +5,13 @@ from time import monotonic
 from typing import Final, assert_never
 
 from anyio import create_task_group, fail_after, sleep
+from psycopg import Error as PsycopgError
 
+from app.core.logging import logger
 from app.dao.broadcast_email_dao import broadcast_email_dao
+from app.db.errors import DbError
 from app.records.broadcast_email import BroadcastEmailRecord
+from app.runtime.tasks import capped_backoff, loop_progress
 from app.services.system_email_service import attempt_email
 
 BATCH_SIZE: Final = 5
@@ -18,6 +22,10 @@ POLL_SECONDS: Final = 5
 RETENTION_DAYS: Final = 14
 PURGE_LIMIT: Final = 500
 PURGE_INTERVAL_SECONDS: Final = 60
+# Readiness fails when no pass finished this long; one pass is bounded by ATTEMPT_TIMEOUT_SECONDS + POLL_SECONDS.
+PROGRESS_BUDGET_SECONDS: Final = 300.0
+DB_RETRY_BASE_SECONDS: Final = 1.0
+DB_RETRY_CAP_SECONDS: Final = 30.0
 
 
 async def _deliver(claim: BroadcastEmailRecord) -> None:
@@ -53,20 +61,46 @@ async def _deliver(claim: BroadcastEmailRecord) -> None:
 async def start_broadcast_email_worker() -> None:
     """Own each batch through settlement; interruption leaves claims lease-recoverable.
 
-    A timeout/unexpected error is fatal to this required loop, not a new polling
-    cycle: abandoned SMTP threads must never accumulate behind fresh batches.
+    A timeout/unexpected error inside a batch is fatal to this required loop, not a new polling
+    cycle: abandoned SMTP threads must never accumulate behind fresh batches. Only database
+    errors from the purge and the claim, which start no SMTP, are retried in place with capped
+    backoff; they never beat, and a purge failure never blocks claiming.
     """
+    progress = loop_progress()
     next_purge = 0.0
+    purge_failures = claim_failures = 0
     while True:
         now = datetime.now(UTC)
         if monotonic() >= next_purge:
-            await broadcast_email_dao.purge_settled(older_than=now - timedelta(days=RETENTION_DAYS), limit=PURGE_LIMIT)
-            next_purge = monotonic() + PURGE_INTERVAL_SECONDS
-        claims = await broadcast_email_dao.claim_batch(limit=BATCH_SIZE, lease_seconds=LEASE_SECONDS, now=now)
+            try:
+                await broadcast_email_dao.purge_settled(
+                    older_than=now - timedelta(days=RETENTION_DAYS), limit=PURGE_LIMIT
+                )
+            except (DbError, PsycopgError, OSError) as exc:
+                logger.warning("[BroadcastEmail] purge failed; will retry: {}", type(exc).__name__)
+                delay = capped_backoff(
+                    purge_failures, base_seconds=DB_RETRY_BASE_SECONDS, cap_seconds=DB_RETRY_CAP_SECONDS
+                )
+                next_purge = monotonic() + delay
+                purge_failures += 1
+            else:
+                next_purge = monotonic() + PURGE_INTERVAL_SECONDS
+                purge_failures = 0
+        try:
+            claims = await broadcast_email_dao.claim_batch(limit=BATCH_SIZE, lease_seconds=LEASE_SECONDS, now=now)
+        except (DbError, PsycopgError, OSError) as exc:
+            logger.warning("[BroadcastEmail] claim failed; will retry: {}", type(exc).__name__)
+            await sleep(
+                capped_backoff(claim_failures, base_seconds=DB_RETRY_BASE_SECONDS, cap_seconds=DB_RETRY_CAP_SECONDS)
+            )
+            claim_failures += 1
+            continue
+        claim_failures = 0
         # The claim transaction has committed. No transaction surrounds SMTP.
         # This bound also covers config resolution and settlement, below the lease.
         with fail_after(ATTEMPT_TIMEOUT_SECONDS):
             async with create_task_group() as batch:
                 for claim in claims:
                     batch.start_soon(_deliver, claim)
+        progress.beat()
         await sleep(POLL_SECONDS)
