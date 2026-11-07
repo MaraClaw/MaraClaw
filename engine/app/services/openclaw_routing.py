@@ -217,6 +217,7 @@ _wake_again: set[UUID] = set()
 _lane_running: set[tuple[UUID, str]] = set()
 _lane_again: set[tuple[UUID, str]] = set()
 _wake_semaphores: dict[UUID, asyncio.Semaphore] = {}
+_LANE_HEAD_PAGE = 50
 
 
 def _forget_idle_semaphore(agent_id: UUID) -> None:
@@ -247,8 +248,7 @@ def _start_lane(agent: AgentRecord, pending: GatewayMessageRecord) -> None:
                 # Consume before re-listing so a wake during that read survives the next turn.
                 while True:
                     _lane_again.discard(key)
-                    rows = await gateway_message_dao.list_pending(agent.id)
-                    head = next((item for item in rows if (item.conversation_id or str(item.id)) == key[1]), None)
+                    head = await gateway_message_dao.lane_head(row)
                     if head is not None or key not in _lane_again:
                         break
                 if head is None:
@@ -314,15 +314,23 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
             while True:
                 _wake_again.discard(agent.id)
                 attempted: set[str] = set()
-                pending_rows = await gateway_message_dao.list_pending(agent.id) if _wake_admission.accepting else []
-                for pending in pending_rows:
-                    if not _wake_admission.accepting:
+                after: tuple[datetime, UUID] | None = None
+                while True:
+                    heads, after = (
+                        await gateway_message_dao.lane_heads_page(agent.id, _LANE_HEAD_PAGE, after=after)
+                        if _wake_admission.accepting
+                        else ([], None)
+                    )
+                    for pending in heads:
+                        if not _wake_admission.accepting:
+                            break
+                        lane = pending.conversation_id or str(pending.id)
+                        if lane in attempted:
+                            continue
+                        attempted.add(lane)
+                        _start_lane(agent, pending)
+                    if after is None:
                         break
-                    lane = pending.conversation_id or str(pending.id)
-                    if lane in attempted:
-                        continue
-                    attempted.add(lane)
-                    _start_lane(agent, pending)
                 if agent.id not in _wake_again or not _wake_admission.accepting:
                     break
         except Exception:

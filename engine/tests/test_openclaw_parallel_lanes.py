@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -31,17 +32,44 @@ class Turns:
     release: dict[UUID, asyncio.Event] = field(default_factory=dict)
     seen: list[UUID] = field(default_factory=list)
     active: set[str] = field(default_factory=set)
+    clock: int = 0
 
     def add(self, lane: str | None) -> GatewayMessageRecord:
-        row = GatewayMessageRecord(id=uuid4(), agent_id=self.agent.id, content="turn", conversation_id=lane)
+        self.clock += 1
+        row = GatewayMessageRecord(
+            id=uuid4(),
+            agent_id=self.agent.id,
+            content="turn",
+            conversation_id=lane,
+            created_at=datetime(2026, 11, 1, tzinfo=UTC) + timedelta(seconds=self.clock),
+        )
         self.pending.append(row)
         self.entered[row.id] = asyncio.Event()
         self.release[row.id] = asyncio.Event()
         return row
 
-    async def list_pending(self, agent_id: UUID) -> list[GatewayMessageRecord]:
+    @staticmethod
+    def _key(row: GatewayMessageRecord) -> tuple[datetime, UUID]:
+        assert row.created_at is not None
+        return row.created_at, row.id
+
+    def _oldest(self) -> list[GatewayMessageRecord]:
+        heads: dict[str, GatewayMessageRecord] = {}
+        for row in sorted(self.pending, key=self._key):
+            heads.setdefault(row.conversation_id or str(row.id), row)
+        return sorted(heads.values(), key=self._key)
+
+    async def lane_heads_page(
+        self, agent_id: UUID, limit: int, *, after: tuple[datetime, UUID] | None = None
+    ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
         assert agent_id == self.agent.id
-        return list(self.pending)
+        heads = [row for row in self._oldest() if after is None or self._key(row) > after]
+        page = heads[:limit]
+        return page, (self._key(page[-1]) if len(heads) > limit else None)
+
+    async def lane_head(self, member: GatewayMessageRecord) -> GatewayMessageRecord | None:
+        lane = member.conversation_id or str(member.id)
+        return next((row for row in self._oldest() if (row.conversation_id or str(row.id)) == lane), None)
 
     async def execute(self, _agent: AgentRecord, _text: str, message_id: UUID) -> None:
         row = next(row for row in self.pending if row.id == message_id)
@@ -67,7 +95,8 @@ class Turns:
 async def turns(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Turns]:
     value = Turns(AgentRecord(id=uuid4(), name="Parallel", creator_id=uuid4()))
     routing.open_wake_admission()
-    monkeypatch.setattr(routing.gateway_message_dao, "list_pending", value.list_pending)
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", value.lane_heads_page)
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_head", value.lane_head)
     monkeypatch.setattr(routing, "_run_inbox_wake", value.execute)
     yield value
     for release in value.release.values():
@@ -132,6 +161,21 @@ async def test_new_lane_starts_while_another_lane_is_running(turns: Turns) -> No
     turns.wake(second)
     await turns.started(second)
     assert turns.active == {"one", "two"}
+
+
+async def test_lanes_past_a_page_of_running_lanes_still_start(turns: Turns, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "OPENCLAW_AGENT_MAX_PARALLEL_TURNS", 3)
+    monkeypatch.setattr(routing, "_LANE_HEAD_PAGE", 1)
+    running = turns.add("one")
+    turns.wake(running)
+    await turns.started(running)
+    queued_behind_running = turns.add("one")
+    two, three = turns.add("two"), turns.add("three")
+    turns.wake(two)
+    await turns.started(two)
+    await turns.started(three)
+    assert turns.active == {"one", "two", "three"}
+    assert not turns.entered[queued_behind_running.id].is_set()
 
 
 async def test_shutdown_joins_all_active_and_queued_lane_tasks(turns: Turns, monkeypatch: pytest.MonkeyPatch) -> None:

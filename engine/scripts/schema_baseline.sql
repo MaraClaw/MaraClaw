@@ -1653,6 +1653,9 @@ CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
 
 CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
     ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending';
+-- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
+CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
+    ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered';
 
 -- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
 -- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,
