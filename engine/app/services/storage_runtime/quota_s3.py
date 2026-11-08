@@ -1,6 +1,8 @@
 """S3 backend whose every mutation under an agent prefix is charged to the agent's byte ledger first."""
 
 from collections.abc import Awaitable, Callable
+from functools import partial
+from pathlib import Path
 from typing import assert_never, override
 
 import anyio
@@ -24,6 +26,7 @@ from app.services.storage_runtime.quota_ledger import (
 from app.services.storage_runtime.quota_outcomes import Outcome, content_md5, failure_outcome
 from app.services.storage_runtime.quota_tree import delete_managed_tree
 from app.services.storage_runtime.s3 import S3StorageBackend
+from app.services.storage_runtime.upload_source import open_upload_source
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _PROVIDER_ERRORS = (BotoCoreError, ClientError, OSError)
@@ -78,6 +81,31 @@ class ManagedS3StorageBackend(S3StorageBackend):
                     return await self._create(admission, key, data, content_type)
                 case unreachable:
                     assert_never(unreachable)
+
+    @override
+    async def create_file_if_absent(
+        self, key: str, path: Path, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        managed = parse_managed_key(key)
+        if managed is None:
+            return await super().create_file_if_absent(key, path, content_type)
+        async with shielded():
+            # Everything that can fail locally (open, size, hash) finishes before the reservation commits, so a
+            # local failure never strands a charge. The handle stays open and is sent exactly as measured.
+            source = await anyio.to_thread.run_sync(partial(open_upload_source, path, with_md5=True))
+            try:
+                admission = await reserve_write(managed, source.size, source.md5)
+                match admission:
+                    case Blocked():
+                        raise StorageKeyPendingError
+                    case Reservation():
+                        return await self._create_with(
+                            admission, key, lambda: self.create_from_source(key, source, content_type)
+                        )
+                    case unreachable:
+                        assert_never(unreachable)
+            finally:
+                source.close()
 
     @override
     async def delete(self, key: str) -> None:
@@ -145,9 +173,14 @@ class ManagedS3StorageBackend(S3StorageBackend):
     async def _create(
         self, reservation: Reservation, key: str, data: bytes, content_type: str | None
     ) -> ConditionalWriteResult:
-        result = await self._call(
-            reservation, lambda: S3StorageBackend.create_bytes_if_absent(self, key, data, content_type)
+        return await self._create_with(
+            reservation, key, lambda: S3StorageBackend.create_bytes_if_absent(self, key, data, content_type)
         )
+
+    async def _create_with(
+        self, reservation: Reservation, key: str, create: Callable[[], Awaitable[ConditionalWriteResult]]
+    ) -> ConditionalWriteResult:
+        result = await self._call(reservation, create)
         if result.ok:
             await self._finish(reservation, Outcome.LANDED)
             return result
