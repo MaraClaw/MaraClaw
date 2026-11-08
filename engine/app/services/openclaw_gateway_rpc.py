@@ -36,6 +36,7 @@ from app.services.guest_bootstrap import BOOTSTRAP_PENDING_EXIT, BOOTSTRAP_PENDI
 from app.services.guest_identity import GuestOwnershipError, guest_resolutions, resolve_guest
 from app.services.onboarding_greeting import build_identity_context
 from app.services.openclaw_gateway_stream import EXEC_POLICY, DeltaRelay, streams_to_web
+from app.services.openclaw_native_capacity import native_capacity
 from app.services.openclaw_turns import runtime_session_key
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import assert_work_allowed
@@ -191,7 +192,7 @@ async def execute_gateway_turn(
                     with observation(_policy, deadline=monotonic() + 10):
                         return resolve_guest(client, fresh)
 
-                guest = await drain_on_cancel(asyncio.to_thread(inspect))
+                guest = await drain_on_cancel(native_capacity().run(inspect))
                 if guest is None:
                     return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
                 guest_resolutions.put(fresh, guest)
@@ -201,7 +202,7 @@ async def execute_gateway_turn(
                     state = client.container.inspect(guest.id).state
                     return state is not None and state.running is True
 
-            running = await drain_on_cancel(asyncio.to_thread(inspect_running))
+            running = await drain_on_cancel(native_capacity().run(inspect_running))
         except (
             ClientNotFoundError,
             DockerException,
@@ -254,7 +255,7 @@ async def execute_gateway_turn(
             relay = DeltaRelay(message, timing, guard) if stream_reply else None
             consumer = asyncio.create_task(relay.publish()) if relay is not None else None
             execute = relay.execute if relay is not None else _execute
-            task = asyncio.create_task(asyncio.to_thread(execute, guest.id, payload_name, cancel))
+            task = asyncio.create_task(native_capacity().run(execute, guest.id, payload_name, cancel))
             try:
                 output = await asyncio.shield(task)
                 if relay is not None and consumer is not None:
