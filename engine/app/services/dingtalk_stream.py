@@ -9,16 +9,18 @@ import base64
 import json
 import threading
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypedDict, cast, override
+from weakref import WeakValueDictionary
 
 import httpx
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
-from app.runtime.tasks import EventTasks
+from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.services.channels.dingtalk_stream_transport import DingTalkTransport
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
@@ -522,31 +524,32 @@ class DingTalkStreamManager:
     def __init__(self):
         self._threads: dict[uuid.UUID, threading.Thread] = {}
         self._stop_events: dict[uuid.UUID, threading.Event] = {}
+        self._transports: dict[uuid.UUID, DingTalkTransport] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
-        self._children: EventTasks = EventTasks()
+        self._children: CallbackAdmission = CallbackAdmission()
+        self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
+        self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
         self._closing: bool = False
 
-    async def _dispatch(self, loop: asyncio.AbstractEventLoop | None, coro: Coroutine[object, object, object]) -> None:
+    async def _dispatch(
+        self,
+        loop: asyncio.AbstractEventLoop | None,
+        start: Callable[[], Awaitable[object]],
+        owner: CallbackAdmission | None = None,
+    ) -> None:
         if self._closing or loop is None or loop.is_closed() or not loop.is_running():
-            coro.close()
             raise RuntimeError("DingTalk acceptance loop unavailable")
+        callbacks = owner if owner is not None else self._children
 
         async def accept() -> None:
-            if self._closing:
-                coro.close()
-                raise RuntimeError("DingTalk acceptance is stopping")
-            await coro
+            if self._closing or callbacks.closing:
+                raise CallbackRefusedError("DingTalk acceptance is stopping")
+            await start()
 
         if loop is asyncio.get_running_loop():
-            await self._children.wrap(accept)()
+            await callbacks.run(accept)
             return
-        owned = self._children.wrap(accept)()
-        try:
-            future = asyncio.run_coroutine_threadsafe(owned, loop)
-        except RuntimeError:
-            owned.close()
-            coro.close()
-            raise
+        future = callbacks.submit(loop, accept)
         await asyncio.wrap_future(future)
 
     async def start_client(
@@ -563,32 +566,30 @@ class DingTalkStreamManager:
 
         logger.info(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)")
 
-        # Capture the main event loop so threads can dispatch coroutines back
-        self._main_loop = asyncio.get_running_loop()
-        self._closing = False
-        self._children.closing = False
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            self._main_loop = asyncio.get_running_loop()
+            self._closing = False
+            existing = self._threads.get(agent_id)
+            if stop_existing or existing is None or not existing.is_alive():
+                await self._stop_client(agent_id)
+            existing = self._threads.get(agent_id)
+            if existing and existing.is_alive():
+                logger.warning("[DingTalk Stream] Existing thread still running for {}", agent_id)
+                return
 
-        # Stop existing client if any
-        if stop_existing:
-            await self.stop_client(agent_id)
-        existing = self._threads.get(agent_id)
-        if existing and existing.is_alive():
-            logger.warning("[DingTalk Stream] Existing thread still running for {}", agent_id)
-            return
-
-        stop_event = threading.Event()
-        self._stop_events[agent_id] = stop_event
-
-        # Run Stream client in a separate thread (SDK uses its own event loop)
-        thread = threading.Thread(
-            target=self._run_client_thread,
-            args=(agent_id, app_key, app_secret, stop_event),
-            name=f"dingtalk-stream-{str(agent_id)[:8]}",
-            daemon=True,
-        )
-        self._threads[agent_id] = thread
-        thread.start()
-        logger.info(f"[DingTalk Stream] Client thread started for agent {agent_id}")
+            stop_event = threading.Event()
+            self._stop_events[agent_id] = stop_event
+            callbacks = self._callbacks[agent_id] = CallbackAdmission()
+            self._transports[agent_id] = DingTalkTransport(stop_event)
+            thread = threading.Thread(
+                target=self._run_client_thread,
+                args=(agent_id, app_key, app_secret, stop_event, callbacks),
+                name=f"dingtalk-stream-{str(agent_id)[:8]}",
+                daemon=True,
+            )
+            self._threads[agent_id] = thread
+            thread.start()
+            logger.info(f"[DingTalk Stream] Client thread started for agent {agent_id}")
 
     def _run_client_thread(
         self,
@@ -596,6 +597,7 @@ class DingTalkStreamManager:
         app_key: str,
         app_secret: str,
         stop_event: threading.Event,
+        callbacks: CallbackAdmission | None = None,
     ):
         """Run the DingTalk Stream client with auto-reconnect."""
         try:
@@ -604,17 +606,16 @@ class DingTalkStreamManager:
             logger.warning(
                 "[DingTalk Stream] dingtalk-stream package not installed. Install with: pip install dingtalk-stream"
             )
-            _ = self._threads.pop(agent_id, None)
-            _ = self._stop_events.pop(agent_id, None)
             return
 
-        max_retries = 5
         retry_delays = [2, 5, 15, 30, 60]  # exponential backoff, seconds
 
         # Reference to manager's main loop for async dispatch
         main_loop = self._main_loop
         retries = 0
         manager_self = self
+        admission = callbacks if callbacks is not None else CallbackAdmission()
+        transport = self._transports.get(agent_id) or DingTalkTransport(stop_event)
 
         async def process_dingtalk_stream_message(message: dingtalk_stream.CallbackMessage) -> tuple[int, str]:
             """Handle incoming bot message from DingTalk Stream.
@@ -661,7 +662,7 @@ class DingTalkStreamManager:
 
                     await manager_self._dispatch(
                         main_loop,
-                        process_dingtalk_message(
+                        lambda: process_dingtalk_message(
                             agent_id=agent_id,
                             sender_staff_id=sender_staff_id,
                             user_text=user_text,
@@ -671,13 +672,14 @@ class DingTalkStreamManager:
                             sender_nick=sender_nick,
                             message_id=message_id,
                         ),
+                        admission,
                     )
 
                 else:
                     # Non-text message: process media in the main loop
                     await manager_self._dispatch(
                         main_loop,
-                        manager_self._handle_media_and_dispatch(
+                        lambda: manager_self._handle_media_and_dispatch(
                             msg_data=msg_data,
                             app_key=app_key,
                             app_secret=app_secret,
@@ -689,9 +691,12 @@ class DingTalkStreamManager:
                             sender_nick=sender_nick,
                             message_id=message_id,
                         ),
+                        admission,
                     )
 
                 return dingtalk_stream.AckMessage.STATUS_OK, "ok"
+            except asyncio.CancelledError:
+                return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, "DingTalk acceptance cancelled"
             except Exception as e:
                 logger.error(f"[DingTalk Stream] Error in message handler: {e}")
                 import traceback
@@ -718,7 +723,7 @@ class DingTalkStreamManager:
                 ack.data = {"response": message}
                 return ack
 
-        while not stop_event.is_set() and retries <= max_retries:
+        while not stop_event.is_set():
             try:
                 credential = dingtalk_stream.Credential(client_id=app_key, client_secret=app_secret)
                 client = dingtalk_stream.DingTalkStreamClient(credential=credential)
@@ -728,13 +733,9 @@ class DingTalkStreamManager:
                     handler,
                 )
 
-                logger.info(
-                    f"[DingTalk Stream] Connecting for agent {agent_id}... (attempt {retries + 1}/{max_retries + 1})"
-                )
-                # start_forever() blocks until disconnected
-                client.start_forever()
+                logger.info(f"[DingTalk Stream] Connecting for agent {agent_id}... (attempt {retries + 1})")
+                transport.run(client)
 
-                # start_forever returned: connection dropped
                 if stop_event.is_set():
                     break  # intentional stop, no retry
 
@@ -745,13 +746,7 @@ class DingTalkStreamManager:
 
             except Exception as e:
                 retries += 1
-                logger.error(
-                    f"[DingTalk Stream] Connection error for {agent_id} (attempt {retries}/{max_retries + 1}): {e}"
-                )
-
-            if retries > max_retries:
-                logger.error(f"[DingTalk Stream] Agent {agent_id} exhausted all {max_retries} retries, giving up")
-                break
+                logger.error(f"[DingTalk Stream] Connection error for {agent_id} (attempt {retries}): {e}")
 
             delay = retry_delays[min(retries - 1, len(retry_delays) - 1)]
             logger.info(f"[DingTalk Stream] Retrying in {delay}s for agent {agent_id}...")
@@ -759,9 +754,6 @@ class DingTalkStreamManager:
             if stop_event.wait(timeout=delay):
                 break  # stop was requested during wait
 
-        if self._threads.get(agent_id) is threading.current_thread():
-            _ = self._threads.pop(agent_id, None)
-            _ = self._stop_events.pop(agent_id, None)
         logger.info(f"[DingTalk Stream] Client stopped for agent {agent_id}")
 
     @staticmethod
@@ -846,10 +838,22 @@ class DingTalkStreamManager:
 
     async def stop_client(self, agent_id: uuid.UUID):
         """Stop a running Stream client for an agent."""
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._stop_client(agent_id)
+
+    async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        callbacks = self._callbacks.pop(agent_id, None)
+        if callbacks:
+            callbacks.close()
         stop_event = self._stop_events.get(agent_id)
         if stop_event:
             stop_event.set()
         thread = self._threads.get(agent_id)
+        transport = self._transports.get(agent_id)
+        if callbacks:
+            await callbacks.stop()
+        if transport:
+            transport.stop()
         if thread and thread.is_alive():
             logger.info(f"[DingTalk Stream] Stopping client for agent {agent_id}, waiting for thread...")
             await asyncio.to_thread(thread.join, 5)
@@ -858,13 +862,18 @@ class DingTalkStreamManager:
                 return
         self._threads.pop(agent_id, None)
         self._stop_events.pop(agent_id, None)
+        self._transports.pop(agent_id, None)
 
     async def stop_all(self) -> None:
         self._closing = True
+        for callbacks in self._callbacks.values():
+            callbacks.close()
         for stop_event in tuple(self._stop_events.values()):
             stop_event.set()
         await self._children.stop()
-        results = await asyncio.gather(*(self.stop_client(aid) for aid in tuple(self._threads)), return_exceptions=True)
+        results = await asyncio.gather(
+            *(self.stop_client(aid) for aid in set(self._threads) | set(self._callbacks)), return_exceptions=True
+        )
         for result in results:
             if isinstance(result, BaseException):
                 logger.warning("[DingTalk Stream] Cleanup failed: {}", result)

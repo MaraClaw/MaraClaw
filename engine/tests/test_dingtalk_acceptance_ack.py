@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 from uuid import uuid4
 
 import anyio
@@ -9,7 +10,9 @@ import httpx
 import pytest
 
 from app.api import dingtalk
+from app.dao.channel_config_dao import channel_config_dao
 from app.services import dingtalk_stream as dingtalk_media
+from app.services.channels.dingtalk_stream_transport import DingTalkTransport
 from app.services.channels.media_limits import MediaTooLargeError
 from app.services.dingtalk_stream import DingTalkStreamManager
 from channel_media_fixtures import serve
@@ -48,7 +51,7 @@ async def test_sdk_thread_ack_waits_for_main_loop_acceptance(monkeypatch, fails)
             stop.set()
 
     monkeypatch.setattr(dingtalk, "process_dingtalk_message", accept)
-    monkeypatch.setattr(dingtalk_stream.DingTalkStreamClient, "start_forever", start)
+    monkeypatch.setattr(DingTalkTransport, "run", lambda self, client: start(client))
     # When
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(anyio.to_thread.run_sync, manager._run_client_thread, uuid4(), "app", "secret", stop)
@@ -64,6 +67,102 @@ async def test_sdk_thread_ack_waits_for_main_loop_acceptance(monkeypatch, fails)
     assert not manager._children.tasks
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+@pytest.mark.parametrize("kind", ["text", "picture"])
+async def test_actual_thread_burst_bounds_enrichment_and_acknowledges_only_commits(monkeypatch, outcome, kind):
+    manager, agent_id = DingTalkStreamManager(), uuid4()
+    loop = asyncio.get_running_loop()
+    started, refused, completed, release = (asyncio.Event() for _ in range(4))
+    entered, enriched, committed, acknowledgements, clients = [], [], [], [], []
+    failing, restarting = outcome == "failure", False
+
+    async def config(**kwargs):
+        return SimpleNamespace(id=uuid4())
+
+    async def replay(event):
+        return False
+
+    async def media(**kwargs):
+        enriched.append(kwargs)
+        return "hello", None, None
+
+    async def accept(**kwargs):
+        assert asyncio.get_running_loop() is loop
+        entered.append(kwargs)
+        if len(entered) == 8:
+            started.set()
+        await release.wait()
+        if failing:
+            raise RuntimeError("durable acceptance failed")
+        committed.append(kwargs)
+
+    async def send(payload):
+        acknowledgements.append(json.loads(payload)["code"])
+        if len(acknowledgements) == 24:
+            loop.call_soon_threadsafe(refused.set)
+
+    def callback(index):
+        return {
+            "type": "CALLBACK",
+            "headers": {"topic": dingtalk_stream.ChatbotMessage.TOPIC, "messageId": f"delivery-{index}"},
+            "data": json.dumps(
+                {
+                    "msgtype": kind,
+                    "msgId": f"native-{index}",
+                    "text": {"content": "hello"},
+                    "content": {"downloadCode": "download"},
+                }
+            ),
+        }
+
+    def start(client):
+        clients.append(client)
+        stop = manager._stop_events[agent_id]
+        client.websocket = type("Socket", (), {"send": staticmethod(send)})()
+
+        async def receive():
+            await asyncio.gather(*(client.route_message(callback(index)) for index in range(1 if restarting else 32)))
+
+        try:
+            asyncio.run(receive())
+        finally:
+            stop.set()
+            loop.call_soon_threadsafe(completed.set)
+
+    monkeypatch.setattr(channel_config_dao, "get_for_agent", config)
+    monkeypatch.setattr(dingtalk_media, "is_channel_event_replay", replay)
+    monkeypatch.setattr(dingtalk_media, "_process_media_message", media)
+    monkeypatch.setattr(dingtalk, "process_dingtalk_message", accept)
+    monkeypatch.setattr(DingTalkTransport, "run", lambda self, client: start(client))
+    try:
+        await manager.start_client(agent_id, "app", "secret")
+        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(refused.wait(), 2)
+        assert len(entered) == 8
+        assert len(enriched) == (8 if kind == "picture" else 0)
+        assert committed == []
+        assert acknowledgements == [dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION] * 24
+        if outcome == "cancel":
+            await manager.stop_client(agent_id)
+        else:
+            release.set()
+        await asyncio.wait_for(completed.wait(), 2)
+        await manager.stop_client(agent_id)
+        assert len(committed) == (8 if outcome == "success" else 0)
+        assert acknowledgements.count(dingtalk_stream.AckMessage.STATUS_OK) == (8 if outcome == "success" else 0)
+        restarting, failing = True, False
+        completed.clear()
+        release.set()
+        await manager.start_client(agent_id, "app", "secret")
+        await asyncio.wait_for(completed.wait(), 2)
+        await clients[0].route_message(callback("stale"))
+        assert len(entered) == 9
+        assert acknowledgements[-1] == dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION
+    finally:
+        release.set()
+        await manager.stop_all()
+
+
 async def test_dispatch_on_application_loop_awaits_without_deadlock():
     # Given
     manager = DingTalkStreamManager()
@@ -74,7 +173,7 @@ async def test_dispatch_on_application_loop_awaits_without_deadlock():
 
     # When
     with anyio.fail_after(1):
-        await manager._dispatch(asyncio.get_running_loop(), accept())
+        await manager._dispatch(asyncio.get_running_loop(), accept)
     # Then
     assert accepted == ["committed"]
 
@@ -98,7 +197,7 @@ async def test_dispatch_rejects_unavailable_acceptance_loop(unavailable):
     # When / Then
     try:
         with pytest.raises(RuntimeError, match="unavailable"):
-            await manager._dispatch(loop, accept())
+            await manager._dispatch(loop, accept)
         assert accepted == []
     finally:
         if loop is not None and unavailable == "stopped":
