@@ -204,7 +204,8 @@ export function AgentChatPage() {
     scope: `${agent.id}:${activeId ?? ''}`, ready: historyQuery.data !== undefined,
     hasEarlier: historyQuery.hasEarlier, loadingEarlier: historyQuery.loadingEarlier,
     earlierError: historyQuery.earlierError, loadEarlier: historyQuery.loadEarlier,
-  })
+    retainLatest: historyQuery.retainLatest,
+  }, lines)
 
   useEffect(() => {
     if (!isCurrent(owner) || !historyQuery.data) return
@@ -589,7 +590,7 @@ export function AgentChatPage() {
             <p>Could not open the shared conversation.</p>
             <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
           </div> : null}
-          <ChatTranscript lines={lines} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
+          <ChatTranscript lines={lines} viewport={threadScroll} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
           {thinking ? <p className="text-xs text-muted-foreground italic">{thinking}</p> : null}
           <LiveReply store={liveStore} onRender={threadScroll.updateScroll} />
           {busy && !live && !slow ? <ThinkingStatus /> : null}

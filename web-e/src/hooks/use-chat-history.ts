@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
-import { chatHistoryKey, chatLatestOptions, loadEarlierHistory } from '@/lib/chat-history-query'
+import { chatHistoryKey, chatLatestOptions, loadEarlierHistory, retainLatestHistory } from '@/lib/chat-history-query'
 import type { ChatHistory } from '@/lib/chat/history'
 import { useWorkspaceSession } from './session-workspace'
 
@@ -18,6 +18,7 @@ export function useChatHistory(agentId: string, sessionId: string | undefined, e
   const [earlier, setEarlier] = useState<{ readonly target: typeof target; readonly loading: boolean; readonly error: unknown } | null>(null)
   const requestRef = useRef<AbortController | null>(null)
   const viewRef = useRef(target)
+  const retainingRef = useRef(false)
   useLayoutEffect(() => {
     viewRef.current = target
     return () => { requestRef.current?.abort(); requestRef.current = null }
@@ -40,6 +41,14 @@ export function useChatHistory(agentId: string, sessionId: string | undefined, e
     }
   }, [enabled, sessionId, scope, target])
 
+  const retainLatest = useCallback((protectedEntries: ReadonlySet<string>) => {
+    if (!enabled || !sessionId || retainingRef.current || requestRef.current || !scope.isCurrent()) return
+    retainingRef.current = true
+    void retainLatestHistory(scope, target, protectedEntries).catch((error: unknown) => {
+      if (viewRef.current === target && scope.isCurrent()) setEarlier({ target, loading: false, error })
+    }).finally(() => { retainingRef.current = false })
+  }, [enabled, sessionId, scope, target])
+
   return {
     data: retained.data?.items,
     isLoading: retained.data === undefined && latest.isPending,
@@ -50,5 +59,6 @@ export function useChatHistory(agentId: string, sessionId: string | undefined, e
     loadingEarlier: earlier?.target === target && earlier.loading,
     earlierError: earlier?.target === target ? earlier.error : null,
     loadEarlier,
+    retainLatest,
   }
 }

@@ -1,6 +1,10 @@
 import { expect, test, type Locator } from '@playwright/test'
-import { chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession } from './chat-identity-fixture'
+import { chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
+import { expectVirtualTranscript } from './chat-window-fixture'
+import { registerLongHistoryTests } from './chat-long-history-cases'
+
+registerLongHistoryTests()
 
 const rows = (count: number) => Array.from({ length: count }, (_, index) => ({
   ...message(`history-${index}`, `History entry ${index}`), created_at: new Date(Date.UTC(2029, 0, 1, 0, 0, index)).toISOString(),
@@ -28,7 +32,7 @@ test('newest messages start at the bottom and one near-top load prepends without
   await page.goto(chatPath())
   await chat.socket()
   const thread = page.locator(threadSelector)
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(100).map((row) => row.content))
+  await expectVirtualTranscript(page, history.slice(100))
   await expect(page.getByText('History entry 149', { exact: true })).toBeInViewport()
   expect(await thread.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
   const release = chat.holdNextHistory()
@@ -43,13 +47,14 @@ test('newest messages start at the bottom and one near-top load prepends without
   const anchor = await visibleEntry(thread)
   await release()
   // Then
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(50).map((row) => row.content))
+  await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
   const anchored = page.locator(`[data-chat-entry="${anchor.id}"]`)
-  expect(Math.abs(await anchored.evaluate((element) => element.getBoundingClientRect().top) - anchor.top)).toBeLessThanOrEqual(1)
+  await expect.poll(async () => Math.abs(await anchored.evaluate((element) => element.getBoundingClientRect().top) - anchor.top)).toBeLessThanOrEqual(1)
   expect(chat.requests()).toBe(before + 1)
   await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
   await expect(composer).toBeFocused()
   await page.screenshot({ path: testInfo.outputPath('history-anchored.png'), fullPage: true })
+  await expectVirtualTranscript(page, history.slice(50))
 })
 
 test('keyboard earlier loading can retry a failure while the existing socket remains writable, then reports exhaustion', async ({ page }) => {
@@ -88,7 +93,8 @@ test('keyboard earlier loading can retry a failure while the existing socket rem
   // When
   await activateEarlier(retry)
   // Then
-  await expect(page.locator('article > [data-chat-content]')).toHaveText([...history.map((row) => row.content), 'Writable after history failure'])
+  await expect(page.getByText('Writable after history failure', { exact: true })).toBeVisible()
+  await expectVirtualTranscript(page, [...history, { ...message('pending', 'Writable after history failure'), entry_id: submitted(socket).client_submission_id }])
   await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: /earlier messages/i })).toHaveCount(0)
   expect(attempts).toBe(2)
@@ -107,7 +113,8 @@ for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earl
   await page.goto(chatPath())
   await chat.socket()
   await activateEarlier(page.getByRole('button', { name: 'Load earlier messages', exact: true }))
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(25).map((row) => row.content))
+  await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
+  await expectVirtualTranscript(page, history.slice(25))
   await navigateChat(page, chatPath(secondSession))
   await expect(page.getByText('Current second session', { exact: true })).toBeVisible()
   const expanded = rows(125 + gap)
@@ -116,18 +123,20 @@ for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earl
   const before = cursors.length
   // When
   await navigateChat(page, chatPath())
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(history.slice(25).map((row) => row.content))
+  await expectVirtualTranscript(page, history.slice(25))
   await expect.poll(() => cursors.length).toBe(before + 1)
   await release()
   // Then
   const start = gap === 20 ? 25 : expanded.length - 50
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(expanded.slice(start).map((row) => row.content))
+  await expectVirtualTranscript(page, expanded.slice(start))
   expect(cursors.slice(before)).toEqual([null])
   await expect(page.getByText(`History entry ${expanded.length - 1}`, { exact: true })).toBeInViewport()
   await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
   await activateEarlier(page.getByRole('button', { name: 'Load earlier messages', exact: true }))
   const earlierStart = Math.max(0, start - 50)
-  await expect(page.locator('article > [data-chat-content]')).toHaveText(expanded.slice(earlierStart).map((row) => row.content))
+  if (earlierStart === 0) await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
+  else await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
+  await expectVirtualTranscript(page, expanded.slice(earlierStart))
   expect(cursors.slice(before)).toEqual([null, `history-${start}`])
   await page.screenshot({ path: testInfo.outputPath(`history-refresh-${gap}.png`), fullPage: true })
 })
@@ -146,7 +155,7 @@ test('live completions preserve the reading position away from the bottom and fo
   // When
   complete(socket.route, first)
   // Then
-  await expect(page.locator('article')).toHaveCount(51)
+  await expect.poll(chat.requests).toBe(2)
   const anchored = page.locator(`[data-chat-entry="${anchor.id}"]`)
   expect(Math.abs(await anchored.evaluate((element) => element.getBoundingClientRect().top) - anchor.top)).toBeLessThanOrEqual(1)
   expect(await thread.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeGreaterThan(80)
@@ -154,7 +163,7 @@ test('live completions preserve the reading position away from the bottom and fo
   const second = message('live-second', 'New reply at the bottom')
   chat.setHistory([...history, first, second])
   complete(socket.route, second)
-  await expect(page.locator('article')).toHaveCount(52)
+  await expectVirtualTranscript(page, [...history.slice(25), first, second])
   await expect(page.getByText(second.content, { exact: true })).toBeInViewport()
   expect(await thread.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
 })
