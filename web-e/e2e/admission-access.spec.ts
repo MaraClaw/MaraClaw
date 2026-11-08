@@ -118,7 +118,7 @@ test('approved target session replaces the pending cache and restores workspace 
   await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('link')).toHaveText(workspaceLabels)
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('target-token')
-  expect(workspaceRequests(fixture.calls)).toContain('/api/agents/')
+  expect(workspaceRequests(fixture.calls)).toContain('/api/agents/page')
 })
 
 test('explicit pending transfers retain the source workspace', async ({ page }) => {
@@ -133,7 +133,7 @@ test('explicit pending transfers retain the source workspace', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
   await expect(page).toHaveURL('/app/agents')
   await expect(page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('link')).toHaveText(workspaceLabels)
-  expect(workspaceRequests(calls)).toContain('/api/agents/')
+  expect(workspaceRequests(calls)).toContain('/api/agents/page')
 })
 
 test('restricted access polls persisted admission status after thirty seconds', async ({ page }) => {

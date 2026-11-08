@@ -38,11 +38,11 @@ export function assistantOnboardingOptions(
         case 'started':
           await Promise.all([
             scope.client.cancelQueries({ queryKey: ['onboarding'], exact: true }),
-            scope.client.cancelQueries({ queryKey: ['agents'], exact: true }),
+            scope.client.cancelQueries({ queryKey: ['agents'] }),
           ])
           scope.assertCurrent()
           scope.client.setQueryData(['onboarding'], result.onboarding)
-          await scope.client.invalidateQueries({ queryKey: ['agents'], exact: true, refetchType: 'all' })
+          await scope.client.invalidateQueries({ queryKey: ['agents'], refetchType: 'all' })
           scope.assertCurrent()
           effects.ready(result.agent)
           return

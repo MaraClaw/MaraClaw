@@ -32,6 +32,7 @@ async function prepare(page: Page) {
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 1 } })
       case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: NotificationKind.OpenClawUpdate, is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })
       case '/api/agents/': return route.fulfill({ json: [state.agent] })
+      case '/api/agents/page': return route.fulfill({ json: { items: [state.agent], next_cursor: null, has_more: false } })
       case `/api/agents/${agentId}`: return route.fulfill({ json: state.agent })
       case `/api/agents/${agentId}/metrics`: return route.fulfill({ json: {} })
       case `/api/agents/${agentId}/start`:

@@ -60,6 +60,7 @@ export async function prepareAccess(page: Page, initial: AdmissionDetail = pendi
       case '/api/auth/providers':
       case '/api/auth/my-tenants':
       case '/api/agents/': return route.fulfill({ json: [] })
+      case '/api/agents/page': return route.fulfill({ json: { items: [], next_cursor: null, has_more: false } })
       case '/api/notifications/page': return route.fulfill({ json: { items: [], next_cursor: null } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 0 } })
       case '/api/onboarding/status': return route.fulfill({ json: completedOnboarding })

@@ -163,7 +163,7 @@ test('read-only history wraps at phone width and keeps exact identity values sel
 test('navigating to another agent starts its history without rows or cursors from the previous agent', async ({ page }) => {
   // Given
   await prepareTriggerHistory(page)
-  await page.route('**/api/agents/', (route) => route.fulfill({ json: [originalAgent, delayedAgent] }))
+  await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [originalAgent, delayedAgent], next_cursor: null, has_more: false } }))
   await page.route(`**/api/agents/${delayedAgent.id}/openclaw-update`, (route) => route.fulfill({
     json: { notice: null, run: null, required: false, can_upgrade: false },
   }))

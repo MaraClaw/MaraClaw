@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { historyPath, historyRun } from './schedule-history-fixture'
 import { prepareSchedules, savedSchedule, schedulesApiPath, schedulesPath } from './schedules-fixture'
-import { originalAgent } from './session-fencing-fixture'
+import { delayedAgent, originalAgent } from './session-fencing-fixture'
 
 test('changing schedules clears accumulated history, cursor, and page errors before reopening', async ({ page }) => {
   const second = { ...savedSchedule, id: 'second-schedule', name: 'Evening report' }
@@ -74,11 +74,13 @@ test('a delayed older page cannot populate a different schedule or its reopened 
 })
 
 test('agent navigation resets the selected schedule and its accumulated history', async ({ page }) => {
-  const secondAgent = { ...originalAgent, id: 'second-agent', name: 'Second agent' }
+  const secondAgent = { ...originalAgent, id: delayedAgent.id, name: 'Second agent' }
   await prepareSchedules(page, [savedSchedule])
-  await page.route('**/api/agents/', (route) => route.fulfill({ json: [originalAgent, secondAgent] }))
+  await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [originalAgent, secondAgent], next_cursor: null, has_more: false } }))
   await page.route(`**/api/agents/${secondAgent.id}`, (route) => route.fulfill({ json: secondAgent }))
   await page.route(`**/api/agents/${secondAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
+  await page.route(`**/api/agents/${secondAgent.id}/openclaw-update`, (route) => route.fulfill({ json: { notice: null, run: null, required: false, can_upgrade: false } }))
+  await page.route(`**/api/agents/${secondAgent.id}/files/**`, (route) => route.fulfill({ json: [] }))
   await page.route(`**/api/agents/${secondAgent.id}/sessions/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }))
   await page.route(`**/api/agents/${secondAgent.id}/schedules/`, (route) => route.fulfill({ json: [savedSchedule] }))
   await page.route(`**/api/agents/${secondAgent.id}/schedules/${savedSchedule.id}/history/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null } }))

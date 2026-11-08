@@ -10,7 +10,7 @@ import {
 for (const status of [200, 401, 503]) {
   test(`same-token workspace replacement fences a delayed history ${status} and resets pages and cursors`, async ({ page }) => {
     await prepareWorkspace(page, { ...originalUser, tenant_id: replacementCompany.id }, originalToken)
-    await page.route('**/api/agents/', (route) => route.fulfill({ json: [originalAgent] }))
+    await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [originalAgent], next_cursor: null, has_more: false } }))
     await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
     await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
     await page.route(`**/api/agents/${originalAgent.id}/sessions/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }))

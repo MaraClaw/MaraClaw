@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ZodError } from 'zod'
-import { getAgent, listAgents } from '../src/lib/agents-api.ts'
+import { getAgent, listAgents, listAgentsPage } from '../src/lib/agents-api.ts'
 import { createTask, listFocus, listTasks } from '../src/lib/agent-work-api.ts'
 import { getChannel } from '../src/lib/channels-api.ts'
 import { ApiError } from '../src/lib/http.ts'
@@ -54,6 +54,8 @@ test('agent collections parse every item rather than trusting a type-only array'
   t.mock.method(globalThis, 'fetch', async () => Response.json([agent, { ...agent, status: 'unknown-contract-value' }]))
   // When / Then
   await assert.rejects(listAgents(), ZodError)
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [agent, { ...agent, status: 'unknown-contract-value' }], next_cursor: null, has_more: false }))
+  await assert.rejects(listAgentsPage(), ZodError)
 })
 
 for (const field of ['type', 'status', 'priority']) {
