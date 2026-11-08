@@ -266,7 +266,7 @@ class AgentCreate(BaseModel):
     skill_ids: list[uuid.UUID] = []
 
 
-class AgentOut(BaseModel):
+class AgentOut[CreatedAt: datetime | None = datetime](BaseModel):
     id: uuid.UUID
     name: str
     avatar_url: str | None = None
@@ -323,7 +323,7 @@ class AgentOut(BaseModel):
     # True so list endpoints that don't care about onboarding don't leak
     # stale "needs onboarding" UI to users they shouldn't prompt.
     onboarded_for_me: bool = True
-    created_at: datetime
+    created_at: CreatedAt
     last_active_at: datetime | None = None
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

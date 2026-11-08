@@ -5,13 +5,15 @@ from datetime import datetime
 from typing import Any, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.core.json_types import json_as_str, object_mapping_from
-from app.core.security import get_current_user, require_role
+from app.core.security import decode_access_token, get_current_user, require_role, security
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
@@ -20,6 +22,7 @@ from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.channel_response_contracts import UserRoleResponse
+from app.services import user_roster_tickets
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
 from app.services.admin_provisioning import (
@@ -35,7 +38,8 @@ from app.services.organization_plans import tier_for_tenant
 from app.services.quota_guard import agent_limit_for_tier
 from app.services.tenant_provisioning import AdminEmailTakenError
 from app.services.user_page_filters import UserPageEligibility, user_page_digest, user_page_filter
-from app.services.user_roster_export import export_user_roster
+from app.services.user_roster_response import RosterDownloadResponse
+from app.services.user_roster_tickets import UserRosterExportOut, company_roster_tenant
 
 
 async def get_client_ip(request: Request) -> str | None:
@@ -93,12 +97,6 @@ class AdminUserSummary(BaseModel):
 class UsersPageOut(BaseModel):
     items: list[AdminUserSummary]
     next_cursor: str | None
-
-
-class UserRosterExportOut(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
-
-    csv: str
 
 
 class _UsersPageCursor(BaseModel):
@@ -167,33 +165,45 @@ async def list_users(
 
 def _company_roster_tenant(tenant_id: str | None, current_user: UserRecord) -> uuid.UUID:
     """Resolve the shared company scope for paginated users and roster export."""
-    if current_user.role not in ("platform_admin", "org_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    if current_user.role == "org_admin":
-        if current_user.tenant_id is None:
-            raise HTTPException(status_code=403, detail="Organization admin must belong to a company")
-        tenant_uuid = current_user.tenant_id
-    else:
-        if tenant_id in (None, ""):
-            raise HTTPException(status_code=400, detail="tenant_id is required")
-        try:
-            tenant_uuid = uuid.UUID(tenant_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid tenant_id") from exc
-    return tenant_uuid
+    return company_roster_tenant(tenant_id, current_user)
 
 
-@export_router.get("/export", response_model=UserRosterExportOut)
+@export_router.post("/export", response_model=UserRosterExportOut)
 async def export_users(
+    response: Response,
     tenant_id: str | None = None,
     search: str = "",
     current_user: UserRecord = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> UserRosterExportOut:
-    """Generate a complete company roster CSV using the current literal search."""
+    """Mint a small single-use handoff; generation belongs to the redeeming worker."""
     tenant_uuid = _company_roster_tenant(tenant_id, current_user)
     if await tenant_dao.get(tenant_uuid) is None:
         raise HTTPException(status_code=404, detail="Company not found")
-    return UserRosterExportOut(csv=await export_user_roster(tenant_uuid, search.strip(), current_user))
+    if current_user.identity is None:
+        raise HTTPException(401, "Identity unavailable")
+    payload = decode_access_token(credentials.credentials)
+    result = await user_roster_tickets.issue(
+        user_roster_tickets.RosterTicketBinding(
+            user_id=current_user.id,
+            identity_id=current_user.identity.id,
+            actor_tenant_id=current_user.tenant_id,
+            tenant_id=tenant_uuid,
+            search=search.strip(),
+            auth_deadline=payload["exp"],
+            auth_generation=payload["gen"],
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@export_router.get("/export/download", response_class=Response)
+async def download_users(ticket: str = Query(min_length=1, max_length=128)) -> Response:
+    """Consume and freshly authorize before owning generation and native delivery."""
+    binding = await user_roster_tickets.redeem(ticket)
+    actor = await user_roster_tickets.authorize(binding)
+    return RosterDownloadResponse(binding, actor)
 
 
 @router.get("/page", response_model=UsersPageOut)

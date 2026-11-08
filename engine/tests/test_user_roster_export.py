@@ -1,5 +1,5 @@
-import csv
-from io import StringIO
+import time
+from dataclasses import replace
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -15,6 +15,7 @@ from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.user_roster_export import _text_cell
+from app.services.user_roster_tickets import UserRosterExportOut
 
 TENANT = UUID(int=100)
 FOREIGN = UUID(int=200)
@@ -40,15 +41,19 @@ async def _request(actor: UserRecord | None, params: dict[str, str]) -> httpx.Re
     app.include_router(users_api.export_router, prefix="/api")
     app.include_router(users_api.router, prefix="/api")
     if actor is not None:
+        actor = replace(actor, identity=IdentityRecord(id=UUID(int=1)))
         app.dependency_overrides[get_current_user] = lambda: actor
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        return await client.get("/api/users/export", params=params)
+        return await client.post(
+            "/api/users/export", params=params, headers={"Authorization": "Bearer test-token"} if actor else {}
+        )
 
 
 @pytest.fixture
 def exporter(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    export = AsyncMock(return_value="id,email,display_name,role,is_active,agents_count,created_at,source\r\n")
-    monkeypatch.setattr(users_api, "export_user_roster", export)
+    export = AsyncMock(return_value=UserRosterExportOut(ticket="opaque", expires_in=60))
+    monkeypatch.setattr(users_api.user_roster_tickets, "issue", export)
+    monkeypatch.setattr(users_api, "decode_access_token", lambda _token: {"exp": int(time.time()) + 3600, "gen": 7})
     monkeypatch.setattr(
         users_api.tenant_dao, "get", AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own"))
     )
@@ -60,18 +65,17 @@ async def test_uses_own_company_when_org_admin_exports_literal_search(exporter: 
     actor = UserRecord(id=UUID(int=1), tenant_id=TENANT, role=UserRole.ORG_ADMIN)
     response = await _request(actor, {**supplied, "search": "  %_\\  "})
     assert response.status_code == 200
-    envelope = users_api.UserRosterExportOut.model_validate_json(response.content)
-    assert next(csv.reader(StringIO(envelope.csv))) == [
-        "id",
-        "email",
-        "display_name",
-        "role",
-        "is_active",
-        "agents_count",
-        "created_at",
-        "source",
-    ]
-    exporter.assert_awaited_once_with(TENANT, "%_\\", actor)
+    assert response.json() == {"ticket": "opaque", "expires_in": 60}
+    assert response.headers["cache-control"] == "no-store"
+    assert exporter.await_args is not None
+    binding = exporter.await_args.args[0]
+    assert (binding.tenant_id, binding.search, binding.user_id, binding.actor_tenant_id) == (
+        TENANT,
+        "%_\\",
+        actor.id,
+        TENANT,
+    )
+    assert binding.auth_generation == 7
 
 
 @pytest.mark.parametrize(
@@ -103,7 +107,9 @@ async def test_exports_selected_company_when_platform_admin_is_authorized(export
     actor = UserRecord(id=UUID(int=1), tenant_id=None, role=UserRole.PLATFORM_ADMIN)
     response = await _request(actor, {"tenant_id": str(FOREIGN), "search": "  "})
     assert response.status_code == 200
-    exporter.assert_awaited_once_with(FOREIGN, "", actor)
+    assert exporter.await_args is not None
+    binding = exporter.await_args.args[0]
+    assert (binding.tenant_id, binding.search, binding.actor_tenant_id) == (FOREIGN, "", None)
 
 
 async def test_rejects_company_when_uuid_has_no_company(exporter: AsyncMock, monkeypatch: pytest.MonkeyPatch):
@@ -128,6 +134,6 @@ async def test_denies_export_when_password_change_is_required(exporter: AsyncMoc
     app.include_router(users_api.export_router, prefix="/api")
     app.include_router(users_api.router, prefix="/api")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/users/export", headers={"Authorization": "Bearer test-token"})
+        response = await client.post("/api/users/export", headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 403
     exporter.assert_not_awaited()

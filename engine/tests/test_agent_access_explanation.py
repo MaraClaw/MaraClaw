@@ -311,6 +311,34 @@ async def test_batch_matches_single_agent_decision_for_every_outcome(
         assert AgentAccessReason.ADMINISTRATOR in reasons
 
 
+async def test_page_enrichment_excludes_the_continuation_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
+    viewer = UserRecord(id=uuid4(), tenant_id=uuid4())
+    catalog = _catalog(viewer, copies=4)
+    visible = [agent for agent in catalog.agents if catalog.reasons[agent.id] is not None]
+    fakes = _install(monkeypatch, viewer, catalog)
+    monkeypatch.setattr(agents, "list_visible_agents", AsyncMock(return_value=visible))
+    resets = AsyncMock()
+    unread = AsyncMock(return_value={str(visible[0].id): 7})
+    onboarded = AsyncMock(return_value={visible[0].id})
+    monkeypatch.setattr(agents.agent_dao, "apply_token_counter_resets_many", resets)
+    monkeypatch.setattr(agents, "_build_unread_count_by_agent", unread)
+    monkeypatch.setattr(onboarding, "onboarded_agent_ids", onboarded)
+
+    page = await agents.list_agents_page(limit=5, cursor=None, current_user=viewer)
+
+    assert [(row.id, row.access_reason) for row in page.items] == [
+        (agent.id, catalog.reasons[agent.id]) for agent in visible[:5]
+    ]
+    assert page.has_more is True
+    assert page.next_cursor is not None
+    assert (page.items[0].unread_count, page.items[0].onboarded_for_me) == (7, True)
+    resets.assert_awaited_once_with(visible[:5])
+    unread.assert_awaited_once_with(visible[:5], viewer)
+    onboarded.assert_awaited_once_with(viewer.id, [agent.id for agent in visible[:5]])
+    assert set(fakes.batch_rows.await_args_list[0].args[0]) <= {agent.id for agent in visible[:5]}
+    _forbid_single_path(fakes)
+
+
 async def test_batch_requests_rows_only_for_agents_that_need_them(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a mixed catalog for a plain member.
     viewer = UserRecord(id=uuid4(), tenant_id=uuid4())

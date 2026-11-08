@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Literal, TextIO
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -12,11 +13,27 @@ from app.db.connection import DbConnection, Params
 from app.db.errors import DbError
 from app.db.session import connection_ctx, get_connection
 from app.records.user import UserRecord
-from app.services import admin_audit
+from app.services import admin_audit, user_roster_export as exporter
 from app.services.user_roster_export import export_user_roster
 from user_roster_export_fixtures import TENANT, RosterDatabase
 
 roster_db = fixtures.roster_db
+
+
+@pytest.fixture(autouse=True)
+def owned_spools(monkeypatch: pytest.MonkeyPatch, roster_db: RosterDatabase) -> Iterator[list[TextIO]]:
+    opened: list[TextIO] = []
+    temporary_file = exporter.TemporaryFile
+
+    def create(*, mode: Literal["w+"], encoding: str, newline: str) -> TextIO:
+        spool = temporary_file(mode=mode, encoding=encoding, newline=newline)
+        opened.append(spool)
+        return spool
+
+    monkeypatch.setattr(exporter, "TemporaryFile", create)
+    yield opened
+    assert opened
+    assert all(spool.closed for spool in opened)
 
 
 async def test_sets_snapshot_first_and_restores_request_when_generation_succeeds(
@@ -32,7 +49,9 @@ async def test_sets_snapshot_first_and_restores_request_when_generation_succeeds
     monkeypatch.setattr(DbConnection, "execute", record)
     async with connection_ctx() as outer:
         await outer.fetchval("SELECT 1")
-        csv = await export_user_roster(TENANT, "", roster_db.actor)
+        async with export_user_roster(TENANT, "", roster_db.actor) as spool:
+            csv = spool.read()
+            assert spool.fileno() >= 0
         assert get_connection() is outer
         assert "Admin" in csv
         snapshot, first = statements[0]
@@ -59,8 +78,8 @@ async def test_best_effort_audit_failure_keeps_generated_csv_and_request_transac
 
     monkeypatch.setattr(admin_audit.admin_audit_log_dao, "create", fail_audit)
     async with connection_ctx() as outer:
-        result = await export_user_roster(TENANT, "", roster_db.actor)
-        assert "Admin" in result
+        async with export_user_roster(TENANT, "", roster_db.actor) as spool:
+            assert "Admin" in spool.read()
         await outer.execute("UPDATE users SET title='still writable'")
     assert await roster_db.writer.fetchval("SELECT title FROM users") == "still writable"
     assert await roster_db.writer.fetchval("SELECT COUNT(*) FROM admin_audit_logs") == 0
@@ -87,7 +106,8 @@ async def test_releases_snapshot_without_audit_when_roster_query_fails(
     monkeypatch.setattr(user_dao, "list_for_tenant_page", fail)
     async with connection_ctx() as outer:
         with pytest.raises(DbError, match="read-only transaction"):
-            await export_user_roster(TENANT, "", roster_db.actor)
+            async with export_user_roster(TENANT, "", roster_db.actor):
+                pytest.fail("generation must fail before exposing a spool")
         assert get_connection() is outer
         assert await outer.fetchval("SELECT 1") == 1
     assert connections[0].raw.info.transaction_status == TransactionStatus.IDLE
@@ -124,7 +144,8 @@ async def test_releases_snapshot_and_restores_context_when_export_task_is_cancel
             try:
                 with scope:
                     try:
-                        await export_user_roster(TENANT, "", roster_db.actor)
+                        async with export_user_roster(TENANT, "", roster_db.actor):
+                            pytest.fail("cancelled generation must not expose a spool")
                     except anyio.get_cancelled_exc_class():
                         assert get_connection() is outer
                         raise

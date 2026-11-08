@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
+from app.api import agents
 from app.core import permissions
+from app.records.user import UserRecord
+from app.schemas.agent_directory import AgentDirectoryPosition
+from app.services.agent_directory_cursor import AgentDirectoryCursor, parse_agent_directory_cursor
 
 
 def make_user(**overrides):
@@ -56,6 +60,52 @@ async def test_list_visible_agents_accepts_explicit_tenant(monkeypatch):
 
     assert calls[0]["tenant_id"] == tenant_id
     assert calls[0]["role"] == "platform_admin"
+
+
+async def test_list_visible_agents_delegates_nullable_continuation(monkeypatch):
+    user = UserRecord(uuid.uuid4(), tenant_id=uuid.uuid4())
+    after = AgentDirectoryPosition(None, uuid.uuid4())
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(permissions.agent_dao, "list_visible_for_user", query)
+
+    assert await permissions.list_visible_agents(user, limit=51, after=after) == []
+
+    assert query.await_args is not None
+    assert query.await_args.kwargs["after"] == after
+    assert query.await_args.kwargs["limit"] == 51
+
+
+@pytest.mark.parametrize("created_at", [None, datetime(2026, 1, 1, tzinfo=UTC)])
+def test_directory_cursor_preserves_nullable_position(created_at):
+    user = make_user()
+    cursor = AgentDirectoryCursor(user_id=user.id, tenant_id=user.tenant_id, created_at=created_at, id=uuid.uuid4())
+
+    parsed = parse_agent_directory_cursor(cursor.encode(), user.id, user.tenant_id)
+
+    assert parsed == AgentDirectoryPosition(created_at, cursor.id)
+
+
+@pytest.mark.parametrize("foreign", ["member", "company", "malformed", "tampered"])
+async def test_directory_rejects_foreign_or_invalid_cursor_before_read(monkeypatch, foreign):
+    user = UserRecord(uuid.uuid4(), tenant_id=uuid.uuid4())
+    raw = AgentDirectoryCursor(
+        user_id=uuid.uuid4() if foreign == "member" else user.id,
+        tenant_id=uuid.uuid4() if foreign == "company" else user.tenant_id,
+        created_at=None,
+        id=uuid.uuid4(),
+    ).encode()
+    if foreign == "malformed":
+        raw = "not-a-cursor"
+    if foreign == "tampered":
+        raw = raw[:40] + ("A" if raw[40] != "A" else "B") + raw[41:]
+    query = AsyncMock()
+    monkeypatch.setattr(agents, "list_visible_agents", query)
+
+    with pytest.raises(HTTPException) as error:
+        await agents.list_agents_page(limit=50, cursor=raw, current_user=user)
+
+    assert error.value.status_code == 400
+    query.assert_not_awaited()
 
 
 @pytest.mark.asyncio

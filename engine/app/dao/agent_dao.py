@@ -17,6 +17,7 @@ from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.projection_contracts import AgentNameAvatarProjection
 from app.db.session import long_running_statement
 from app.records.agent import AgentPermissionRecord, AgentRecord
+from app.schemas.agent_directory import AgentDirectoryPosition
 
 __all__ = [
     "AGENT_DELETE_CLEANUP_SQL",
@@ -259,6 +260,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         exclude_agent_id: UUID | None = None,
         search: str | None = None,
         limit: int | None = None,
+        after: AgentDirectoryPosition | None = None,
     ) -> Sequence[AgentRecord]:
         """Return agents visible under the same rules as build_visible_agents_query."""
         if tenant_id is None:
@@ -280,6 +282,19 @@ class AgentDAO(BaseDAO[AgentRecord]):
         if limit is not None:
             limit_sql = " LIMIT %(limit)s"
             params["limit"] = limit
+
+        continuation_sql = ""
+        if after is not None:
+            params["after_id"] = after.id
+            if after.created_at is None:
+                continuation_sql = " AND a.created_at IS NULL AND a.id < %(after_id)s"
+            else:
+                params["after_created_at"] = after.created_at
+                continuation_sql = (
+                    " AND (a.created_at < %(after_created_at)s"
+                    " OR (a.created_at = %(after_created_at)s AND a.id < %(after_id)s)"
+                    " OR a.created_at IS NULL)"
+                )
 
         del role  # Authorization uses the current SQL membership, not the caller's snapshot.
         sql = (
@@ -303,7 +318,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             "   WHERE u.id = %(user_id)s AND u.is_active IS TRUE"
             "   AND u.tenant_id = a.tenant_id AND ap.agent_id = a.id AND ap.access_level = 'use'"
             " ))"
-            f"){exclude_sql}{search_sql} ORDER BY a.created_at DESC NULLS LAST{limit_sql}"
+            f"){exclude_sql}{search_sql}{continuation_sql} ORDER BY a.created_at DESC NULLS LAST, a.id DESC{limit_sql}"
         )
 
         async with self.session() as db:

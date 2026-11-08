@@ -1,6 +1,9 @@
 import csv
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from io import StringIO
+from tempfile import TemporaryFile
+from typing import TextIO
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -14,10 +17,12 @@ from app.api import users as users_api
 from app.core.domain.users import UserRole
 from app.core.security import create_access_token, get_current_user
 from app.db.session import bind_crud_connection, get_connection
+from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services import user_roster_response, user_roster_tickets
 from app.services.user_roster_export import export_user_roster
-from user_roster_export_fixtures import TENANT, RosterDatabase, seed_matches
+from user_roster_export_fixtures import TENANT, RosterDatabase, download_roster, seed_matches
 
 roster_single_db = fixtures.roster_single_db
 
@@ -44,7 +49,9 @@ async def test_mounted_user_page_enters_crud_binding(monkeypatch: pytest.MonkeyP
 
 
 async def test_mounted_export_completes_without_entering_crud_binding(monkeypatch: pytest.MonkeyPatch) -> None:
-    actor = UserRecord(id=UUID(int=1), tenant_id=TENANT, role=UserRole.ORG_ADMIN)
+    actor = UserRecord(
+        id=UUID(int=1), tenant_id=TENANT, role=UserRole.ORG_ADMIN, identity=IdentityRecord(id=UUID(int=1))
+    )
 
     async def reject_crud_binding() -> AsyncIterator[None]:
         raise AssertionError("export must not acquire the request-wide CRUD connection")
@@ -55,13 +62,26 @@ async def test_mounted_export_completes_without_entering_crud_binding(monkeypatc
     monkeypatch.setattr(
         users_api.tenant_dao, "get", AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own"))
     )
-    monkeypatch.setattr(users_api, "export_user_roster", AsyncMock(return_value="generated CSV"))
+    monkeypatch.setattr(user_roster_tickets, "get_redis", AsyncMock(return_value=fixtures.TicketRedis()))
+    monkeypatch.setattr(users_api, "decode_access_token", lambda _token: {"exp": 9999999999, "gen": 0})
+    monkeypatch.setattr(user_roster_tickets, "authorize", AsyncMock(return_value=actor))
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
-        response = await client.get("/api/users/export")
+    @asynccontextmanager
+    async def export(tenant_id: UUID, search: str, actor: UserRecord) -> AsyncGenerator[TextIO]:
+        with TemporaryFile(mode="w+", encoding="utf-8") as spool:
+            spool.write("generated CSV")
+            spool.seek(0)
+            yield spool
+
+    monkeypatch.setattr(user_roster_response, "export_user_roster", export)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app), base_url="http://test", headers={"Authorization": "Bearer test"}
+    ) as client:
+        response = await download_roster(client, {})
 
     assert response.status_code == 200
-    assert users_api.UserRosterExportOut.model_validate_json(response.content).csv == "generated CSV"
+    assert response.text == "generated CSV"
 
 
 @pytest.mark.parametrize("requests", [1, 4], ids=["single", "concurrent"])
@@ -69,13 +89,6 @@ async def test_mounted_exports_complete_when_pool_has_one_connection(
     roster_single_db: RosterDatabase, monkeypatch: pytest.MonkeyPatch, requests: int
 ) -> None:
     await seed_matches(roster_single_db, 201)
-    await roster_single_db.writer.execute(
-        "INSERT INTO identities (id, email) VALUES (%(id)s, 'admin@example.com')",
-        {"id": roster_single_db.actor.id},
-    )
-    await roster_single_db.writer.execute(
-        "UPDATE users SET identity_id=%(id)s WHERE id=%(id)s", {"id": roster_single_db.actor.id}
-    )
     token = await create_access_token(
         str(roster_single_db.actor.id), "org_admin", identity_id=roster_single_db.actor.id
     )
@@ -83,15 +96,17 @@ async def test_mounted_exports_complete_when_pool_has_one_connection(
     all_entered = anyio.Event()
     responses: dict[int, httpx.Response] = {}
 
-    async def export(tenant_id: UUID, search: str, actor: UserRecord) -> str:
+    @asynccontextmanager
+    async def export(tenant_id: UUID, search: str, actor: UserRecord) -> AsyncGenerator[TextIO]:
         assert get_connection() is None
         entered.append(actor.id)
         if len(entered) == requests:
             all_entered.set()
         await all_entered.wait()
-        return await export_user_roster(tenant_id, search, actor)
+        async with export_user_roster(tenant_id, search, actor) as spool:
+            yield spool
 
-    monkeypatch.setattr(users_api, "export_user_roster", export)
+    monkeypatch.setattr(user_roster_response, "export_user_roster", export)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app),
         base_url="http://test",
@@ -100,7 +115,7 @@ async def test_mounted_exports_complete_when_pool_has_one_connection(
 
         async def request(index: int) -> None:
             search = "Match%_\\" if requests == 1 else f"Match%_\\ {index}"
-            responses[index] = await client.get("/api/users/export", params={"search": search})
+            responses[index] = await download_roster(client, {"search": search})
 
         with anyio.fail_after(10):
             async with anyio.create_task_group() as group:
@@ -110,8 +125,7 @@ async def test_mounted_exports_complete_when_pool_has_one_connection(
     assert len(entered) == requests
     for index, response in responses.items():
         assert response.status_code == 200
-        envelope = users_api.UserRosterExportOut.model_validate_json(response.content)
-        rows = list(csv.reader(StringIO(envelope.csv, newline="")))[1:]
+        rows = list(csv.reader(StringIO(response.text, newline="")))[1:]
         expected = [10 + number for number in range(201) if requests == 1 or str(number).startswith(str(index))]
         assert [UUID(row[0]).int for row in rows] == expected
     assert await roster_single_db.writer.fetchval("SELECT COUNT(*) FROM admin_audit_logs") == requests

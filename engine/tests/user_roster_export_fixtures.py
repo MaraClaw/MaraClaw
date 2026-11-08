@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -16,16 +17,34 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.api import users as users_api
 from app.core.domain.users import UserRole
-from app.core.security import get_current_user
+from app.core.security import create_access_token, get_current_user
+from app.dao.user_dao import user_dao
 from app.db import pool as pool_module
 from app.db.connection import DbConnection
 from app.db.pool import EnginePool
 from app.db.session import bind_crud_connection
 from app.records.user import UserRecord
+from app.services import user_roster_tickets
 
 TENANT = UUID(int=100)
 FOREIGN = UUID(int=200)
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
+
+
+class TicketRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, tuple[str, int]] = {}
+        self.now = 0
+
+    async def set(self, key: str, value: str, *, nx: bool, ex: int) -> bool:
+        if nx and key in self.values:
+            return False
+        self.values[key] = (value, self.now + ex)
+        return True
+
+    async def getdel(self, key: str) -> str | None:
+        entry = self.values.pop(key, None)
+        return entry[0] if entry and entry[1] > self.now else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,17 +77,23 @@ async def _roster_database(monkeypatch: pytest.MonkeyPatch, max_size: int) -> As
             )
             async with pool:
                 monkeypatch.setattr(pool_module, "_pool", pool)
+                monkeypatch.setattr(user_roster_tickets, "get_redis", AsyncMock(return_value=TicketRedis()))
                 await writer.execute(
                     "INSERT INTO tenants (id, name, slug) VALUES (%(own)s, 'Own', 'own'), (%(foreign)s, 'Other', 'other')",
                     {"own": TENANT, "foreign": FOREIGN},
                 )
                 await writer.execute(
-                    "INSERT INTO users (id, tenant_id, display_name, role) VALUES (%(id)s, %(tenant)s, 'Admin', 'org_admin')",
+                    "INSERT INTO identities (id, email) VALUES (%(id)s, 'admin@example.com')",
+                    {"id": UUID(int=1)},
+                )
+                await writer.execute(
+                    "INSERT INTO users (id, identity_id, tenant_id, display_name, role) "
+                    "VALUES (%(id)s, %(id)s, %(tenant)s, 'Admin', 'org_admin')",
                     {"id": UUID(int=1), "tenant": TENANT},
                 )
-                yield RosterDatabase(
-                    writer, pool, UserRecord(id=UUID(int=1), tenant_id=TENANT, role=UserRole.ORG_ADMIN)
-                )
+                actor = await user_dao.get_with_identity(UUID(int=1), fresh=True)
+                assert actor is not None
+                yield RosterDatabase(writer, pool, actor)
         finally:
             await writer.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
@@ -91,8 +116,18 @@ async def roster_client(roster_db: RosterDatabase) -> AsyncIterator[httpx.AsyncC
     app.include_router(users_api.export_router, prefix="/api")
     app.include_router(users_api.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
     app.dependency_overrides[get_current_user] = lambda: roster_db.actor
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    token = await create_access_token(str(roster_db.actor.id), UserRole.ORG_ADMIN, identity_id=roster_db.actor.id)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": f"Bearer {token}"}
+    ) as client:
         yield client
+
+
+async def download_roster(client: httpx.AsyncClient, params: dict[str, str]) -> httpx.Response:
+    issued = await client.post("/api/users/export", params=params)
+    assert issued.status_code == 200
+    handoff = user_roster_tickets.UserRosterExportOut.model_validate_json(issued.content)
+    return await client.get("/api/users/export/download", params={"ticket": handoff.ticket})
 
 
 async def seed_matches(database: RosterDatabase, count: int) -> None:

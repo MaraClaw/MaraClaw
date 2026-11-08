@@ -24,6 +24,7 @@ from app.dao.org_department_dao import org_department_dao
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
+from app.schemas.agent_directory import AgentDirectoryPosition
 
 
 class _NeedPerms:
@@ -63,6 +64,7 @@ async def list_visible_agents(
     exclude_agent_id: uuid.UUID | None = None,
     search: str | None = None,
     limit: int | None = None,
+    after: AgentDirectoryPosition | None = None,
 ) -> list[AgentRecord]:
     """Return visible agents using the pure-psycopg agent DAO."""
     target_tenant_id = tenant_id if tenant_id is not None else user.tenant_id
@@ -74,6 +76,7 @@ async def list_visible_agents(
             exclude_agent_id=exclude_agent_id,
             search=search,
             limit=limit,
+            after=after,
         )
     )
 

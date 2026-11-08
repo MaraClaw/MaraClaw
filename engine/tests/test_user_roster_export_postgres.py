@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 import user_roster_export_fixtures as fixtures
-from app.api.users import UserRosterExportOut
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import UserPagePosition, user_dao
 from app.db.connection import DbConnection
@@ -19,6 +18,7 @@ from user_roster_export_fixtures import (
     NOW,
     TENANT,
     RosterDatabase,
+    download_roster,
     seed_agent,
     seed_matches,
 )
@@ -29,7 +29,9 @@ roster_client = fixtures.roster_client
 
 def _rows(response: httpx.Response) -> list[list[str]]:
     assert response.status_code == 200
-    return list(csv.reader(StringIO(UserRosterExportOut.model_validate_json(response.content).csv, newline="")))
+    assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    assert response.headers["content-disposition"] == 'attachment; filename="company-users.csv"'
+    return list(csv.reader(StringIO(response.text, newline="")))
 
 
 @pytest.mark.parametrize("count", [0, 99, 100, 101, 200, 201])
@@ -55,9 +57,7 @@ async def test_complete_ordered_literal_export_when_matches_cross_page_boundarie
     per_user_count = AsyncMock(side_effect=AssertionError("export must batch counts"))
     monkeypatch.setattr(agent_dao, "count_active_for_creator", per_user_count)
 
-    response = await roster_client.get(
-        "/api/users/export", params={"search": "  mAtCh%_\\  ", "tenant_id": str(FOREIGN)}
-    )
+    response = await download_roster(roster_client, {"search": "  mAtCh%_\\  ", "tenant_id": str(FOREIGN)})
 
     rows = _rows(response)
     assert rows[0] == ["id", "email", "display_name", "role", "is_active", "agents_count", "created_at", "source"]
@@ -75,7 +75,7 @@ async def test_complete_ordered_literal_export_when_matches_cross_page_boundarie
 
 
 async def test_empty_csv_when_company_has_no_search_matches(roster_client: httpx.AsyncClient):
-    rows = _rows(await roster_client.get("/api/users/export", params={"search": "not found"}))
+    rows = _rows(await download_roster(roster_client, {"search": "not found"}))
     assert len(rows) == 1
 
 
@@ -95,7 +95,7 @@ async def test_quotes_public_fields_when_text_contains_csv_syntax_and_formula_pr
     await seed_agent(roster_db, 10, expired=True)
     await seed_agent(roster_db, 10, tenant=FOREIGN)
 
-    rows = _rows(await roster_client.get("/api/users/export", params={"search": "普通"}))
+    rows = _rows(await download_roster(roster_client, {"search": "普通"}))
 
     assert rows[1:] == [
         [
@@ -140,7 +140,9 @@ async def test_snapshot_includes_initial_roster_identity_and_counts_when_other_c
                 "UPDATE users SET display_name='Changed', role='org_admin', created_at=NULL WHERE id=%(id)s",
                 {"id": UUID(int=110)},
             )
-            await roster_db.writer.execute("UPDATE identities SET email='after@example.com'")
+            await roster_db.writer.execute(
+                "UPDATE identities SET email='after@example.com' WHERE id=%(id)s", {"id": UUID(int=110)}
+            )
             await roster_db.writer.execute("DELETE FROM users WHERE id=%(id)s", {"id": UUID(int=210)})
             await roster_db.writer.execute(
                 "INSERT INTO users (id, tenant_id, display_name, role) VALUES (%(id)s, %(tenant)s, 'Match%%_\\ New', 'member')",
@@ -156,7 +158,7 @@ async def test_snapshot_includes_initial_roster_identity_and_counts_when_other_c
     monkeypatch.setattr(user_dao, "list_for_tenant_page", page)
     monkeypatch.setattr(agent_dao, "count_active_for_creators", counts)
 
-    rows = _rows(await roster_client.get("/api/users/export", params={"search": "Match%_\\"}))[1:]
+    rows = _rows(await download_roster(roster_client, {"search": "Match%_\\"}))[1:]
 
     assert [UUID(row[0]).int for row in rows] == list(range(10, 211))
     assert rows[100][1:4] == ["before@example.com", "Match%_\\ 100", "member"]
