@@ -1,8 +1,9 @@
 import asyncio
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,6 +13,9 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import openclaw_dispatch_reconciler as module, openclaw_routing as routing
 from app.services.openclaw_native_capacity import native_capacity
+from worker_progress_fixtures import WorkerHTTP, worker_http
+
+__all__ = ["worker_http"]
 
 
 @dataclass(slots=True)
@@ -195,3 +199,140 @@ async def test_saturated_recovery_coalesces_agent_rescan_and_still_checks_delive
         finish.set()
         await routing.drain_wake_tasks(0)
         routing.open_wake_admission()
+
+
+async def test_dispatch_idle_and_caught_errors_use_only_successful_complete_scans(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    page = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(module.gateway_message_dao, "pending_dispatch_page", page)
+    monkeypatch.setattr(module.agent_dao, "get_many", AsyncMock(return_value=[]))
+    monkeypatch.setattr(module.anyio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "dispatch", module.openclaw_dispatch_reconciler_loop(), requirement="loop", progress_budget_seconds=300
+    )
+    await worker_http.pacing.paused()
+    for _ in range(4):
+        await worker_http.pacing.step()
+        await worker_http.ready(expected=True)
+    page.side_effect = OSError("private dispatch failure")
+    for _ in range(4):
+        await worker_http.pacing.step()
+    await worker_http.ready(expected=False)
+    assert not worker_http.runtime.tasks.required["dispatch"][0].done()
+    page.side_effect = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+
+
+@pytest.mark.parametrize("dependency", ["pending", "delivered", "agents", "evidence", "settle", "publish"])
+async def test_dispatch_suspended_dependency_keeps_delivered_input_and_recovers_http(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, dependency: str
+) -> None:
+    agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
+    delivered = GatewayMessageRecord(
+        id=uuid4(), agent_id=agent.id, content="already submitted", status="delivered", reply_binding_id=uuid4()
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def pause() -> None:
+        entered.set()
+        await release.wait()
+
+    async def pending(*_args: object, **_kwargs: object) -> tuple[list[GatewayMessageRecord], None]:
+        if dependency == "pending":
+            await pause()
+        return [], None
+
+    async def delivered_page(*_args: object, **_kwargs: object) -> tuple[list[GatewayMessageRecord], None]:
+        if dependency == "delivered":
+            await pause()
+        return [delivered], None
+
+    async def agents(*_args: object) -> list[AgentRecord]:
+        if dependency == "agents":
+            await pause()
+        return [agent]
+
+    async def evidence(*_args: object) -> bool:
+        if dependency == "evidence":
+            await pause()
+        return dependency in {"settle", "publish"}
+
+    async def settle(*_args: object, **_kwargs: object) -> GatewayMessageRecord:
+        if dependency == "settle":
+            await pause()
+        return delivered
+
+    async def publish(*_args: object) -> None:
+        if dependency == "publish":
+            await pause()
+
+    monkeypatch.setattr(module.gateway_message_dao, "pending_dispatch_page", pending)
+    monkeypatch.setattr(module.gateway_message_dao, "delivered_dispatch_page", delivered_page)
+    monkeypatch.setattr(module.agent_dao, "get_many", agents)
+    monkeypatch.setattr(module, "_interrupted", evidence)
+    monkeypatch.setattr(module.delivery, "settle_native_report", settle)
+    monkeypatch.setattr(module.delivery, "publish_report", publish)
+    wake = Mock()
+    monkeypatch.setattr(module, "wake_shared_lane", wake)
+    monkeypatch.setattr(module.anyio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "dispatch", module.openclaw_dispatch_reconciler_loop(), requirement="loop", progress_budget_seconds=300
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        worker_http.pacing.now += 301
+        await worker_http.ready(expected=False)
+        assert delivered.status == "delivered"
+        wake.assert_not_called()
+        assert not worker_http.runtime.tasks.required["dispatch"][0].done()
+    finally:
+        release.set()
+    await worker_http.pacing.paused()
+    await worker_http.ready(expected=True)
+    assert delivered.status == "delivered"
+    wake.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [OSError, sqlite3.OperationalError])
+async def test_dispatch_unreadable_guest_evidence_is_a_failed_scan_without_replay(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, error: type[Exception]
+) -> None:
+    agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
+    delivered = GatewayMessageRecord(
+        id=uuid4(), agent_id=agent.id, content="already submitted", status="delivered", reply_binding_id=uuid4()
+    )
+    cursor = (datetime(2026, 1, 1, tzinfo=UTC), delivered.id)
+
+    async def delivered_page(
+        _limit: int, *, after: tuple[datetime, UUID] | None
+    ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
+        return ([delivered], cursor) if after is None else ([], None)
+
+    monkeypatch.setattr(module.gateway_message_dao, "pending_dispatch_page", AsyncMock(return_value=([], None)))
+    monkeypatch.setattr(module.gateway_message_dao, "delivered_dispatch_page", delivered_page)
+    monkeypatch.setattr(module.agent_dao, "get_many", AsyncMock(return_value=[agent]))
+    read = Mock(side_effect=error("private guest read failure"))
+    settle = AsyncMock()
+    wake = Mock()
+    monkeypatch.setattr(module, "interrupted_before_consumption", read)
+    monkeypatch.setattr(module.delivery, "settle_native_report", settle)
+    monkeypatch.setattr(module, "wake_shared_lane", wake)
+    monkeypatch.setattr(module.anyio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "dispatch", module.openclaw_dispatch_reconciler_loop(), requirement="loop", progress_budget_seconds=300
+    )
+    await worker_http.pacing.paused()
+    for _ in range(4):
+        await worker_http.pacing.step()
+    await worker_http.ready(expected=False)
+    assert delivered.status == "delivered"
+    settle.assert_not_awaited()
+    wake.assert_not_called()
+    read.side_effect, read.return_value = None, False
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+    assert delivered.status == "delivered"
+    settle.assert_not_awaited()
+    wake.assert_not_called()
