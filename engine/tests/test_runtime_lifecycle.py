@@ -662,7 +662,7 @@ async def test_repeated_lifespans_reopen_producer_gates(monkeypatch: pytest.Monk
         assert producer_gates() == {"trigger": False, "heartbeat": False, "wake": False}
 
 
-async def test_worker_start_budgets_only_the_four_workers_through_the_injected_clock(
+async def test_worker_start_registers_progress_budgets_through_the_injected_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given a worker runtime on a fake clock whose budgeted loops beat only when told to.
@@ -707,7 +707,7 @@ async def test_worker_start_budgets_only_the_four_workers_through_the_injected_c
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == 4:
+            if len(beaten) == 7:
                 all_beaten.set()
             await asyncio.Event().wait()
 
@@ -716,16 +716,18 @@ async def test_worker_start_budgets_only_the_four_workers_through_the_injected_c
     for module, attribute in (
         (heartbeat, "start_heartbeat"),
         (agent_setup, "start_agent_setup_worker"),
-        (agent_start_reconciler, "agent_start_reconciler_loop"),
         (export, "start_web_search_export_daemon"),
-        (scheduler, "start_scheduler"),
         (gateway_report_relay, "start_gateway_report_relay"),
-        (openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop"),
         (openclaw_delayed_replies, "openclaw_delayed_reply_loop"),
         (task_lease, "task_lease_recovery_loop"),
     ):
         monkeypatch.setattr(module, attribute, idle)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", budgeted("trigger_daemon"))
+    monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", budgeted("agent_start_reconciler"))
+    monkeypatch.setattr(scheduler, "start_scheduler", budgeted("agent_scheduler"))
+    monkeypatch.setattr(
+        openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", budgeted("openclaw_dispatch")
+    )
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", budgeted("broadcast_email"))
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", budgeted("openclaw_update"))
     monkeypatch.setattr(
@@ -753,6 +755,9 @@ async def test_worker_start_budgets_only_the_four_workers_through_the_injected_c
             "broadcast_email",
             "organization_admission_email",
             "openclaw_update",
+            "agent_start_reconciler",
+            "agent_scheduler",
+            "openclaw_dispatch",
         }
         assert await runtime.readiness.check()
         now += 301

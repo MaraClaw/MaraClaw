@@ -109,7 +109,10 @@ class Runtime:
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
             from app.services.agent_setup import start_agent_setup_worker
-            from app.services.agent_start_reconciler import agent_start_reconciler_loop
+            from app.services.agent_start_reconciler import (
+                PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
+                agent_start_reconciler_loop,
+            )
             from app.services.broadcast_email_worker import (
                 PROGRESS_BUDGET_SECONDS as BROADCAST_EMAIL_BUDGET_SECONDS,
                 start_broadcast_email_worker,
@@ -117,7 +120,10 @@ class Runtime:
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.heartbeat import start_heartbeat
             from app.services.openclaw_delayed_replies import openclaw_delayed_reply_loop
-            from app.services.openclaw_dispatch_reconciler import openclaw_dispatch_reconciler_loop
+            from app.services.openclaw_dispatch_reconciler import (
+                PROGRESS_BUDGET_SECONDS as OPENCLAW_DISPATCH_BUDGET_SECONDS,
+                openclaw_dispatch_reconciler_loop,
+            )
             from app.services.openclaw_update_worker import (
                 PROGRESS_BUDGET_SECONDS as OPENCLAW_UPDATE_BUDGET_SECONDS,
                 start_openclaw_update_worker,
@@ -126,7 +132,7 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as ADMISSION_EMAIL_BUDGET_SECONDS,
                 start_organization_admission_email_worker,
             )
-            from app.services.scheduler import start_scheduler
+            from app.services.scheduler import PROGRESS_BUDGET_SECONDS as SCHEDULER_BUDGET_SECONDS, start_scheduler
             from app.services.task_lease import task_lease_recovery_loop
             from app.services.tavily.export import start_web_search_export_daemon
             from app.services.trigger_daemon import (
@@ -142,7 +148,12 @@ class Runtime:
             )
             self.tasks.start("heartbeat", start_heartbeat(), requirement="loop")
             self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
-            self.tasks.start("agent_start_reconciler", agent_start_reconciler_loop(), requirement="loop")
+            self.tasks.start(
+                "agent_start_reconciler",
+                agent_start_reconciler_loop(),
+                requirement="loop",
+                progress_budget_seconds=AGENT_START_BUDGET_SECONDS,
+            )
             self.tasks.start(
                 "broadcast_email",
                 start_broadcast_email_worker(),
@@ -156,7 +167,12 @@ class Runtime:
                 progress_budget_seconds=ADMISSION_EMAIL_BUDGET_SECONDS,
             )
             self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
-            self.tasks.start("agent_scheduler", start_scheduler(), requirement="loop")
+            self.tasks.start(
+                "agent_scheduler",
+                start_scheduler(),
+                requirement="loop",
+                progress_budget_seconds=SCHEDULER_BUDGET_SECONDS,
+            )
             self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
             self.tasks.start(
                 "openclaw_update",
@@ -164,7 +180,12 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=OPENCLAW_UPDATE_BUDGET_SECONDS,
             )
-            self.tasks.start("openclaw_dispatch", openclaw_dispatch_reconciler_loop(), requirement="loop")
+            self.tasks.start(
+                "openclaw_dispatch",
+                openclaw_dispatch_reconciler_loop(),
+                requirement="loop",
+                progress_budget_seconds=OPENCLAW_DISPATCH_BUDGET_SECONDS,
+            )
             self.tasks.start("openclaw_delayed_replies", openclaw_delayed_reply_loop(), requirement="loop")
             self.tasks.start("task_lease_recovery", task_lease_recovery_loop(), requirement="loop")
         if role_enabled(roles, "connector"):
