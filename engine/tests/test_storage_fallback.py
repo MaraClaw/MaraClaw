@@ -106,15 +106,16 @@ class MemoryStorageBackend(StorageBackend):
         return StorageEntry(name=key.rsplit("/", 1)[-1], key=key, is_dir=False, size=len(self.files[key]))
 
 
-async def test_fallback_storage_backfills_primary_on_read():
+async def test_fallback_storage_backfills_primary_on_read(tmp_path: Path):
     primary = MemoryStorageBackend()
-    fallback = MemoryStorageBackend({"agent-id/focus.md": b"# Focus\n\n- [ ] migrate me\n"})
+    fallback = LocalStorageBackend(str(tmp_path))
+    await fallback.write_bytes("agent-id/focus.md", b"# Focus\n\n- [ ] migrate me\n")
     storage = FallbackStorageBackend(primary=primary, fallback=fallback)
 
     content = await storage.read_text("agent-id/focus.md")
 
     assert "migrate me" in content
-    assert primary.files["agent-id/focus.md"] == fallback.files["agent-id/focus.md"]
+    assert primary.files["agent-id/focus.md"] == await fallback.read_bytes("agent-id/focus.md")
 
 
 async def test_fallback_storage_writes_only_to_primary():
@@ -172,12 +173,13 @@ async def test_fallback_materialize_passes_on_the_ownership_of_the_primary_winne
     await legacy.write_bytes("report.txt", b"old")
     original_read = legacy.read_bytes
 
-    async def raced_read(key: str) -> bytes:
-        data = await original_read(key)
-        await primary.write_bytes(key, b"winning upload")
-        return data
+    original_create = primary.create_file_if_absent
 
-    monkeypatch.setattr(legacy, "read_bytes", raced_read)
+    async def raced_create(key: str, path: Path, content_type: str | None = None) -> ConditionalWriteResult:
+        await primary.write_bytes(key, b"winning upload")
+        return await original_create(key, path, content_type)
+
+    monkeypatch.setattr(primary, "create_file_if_absent", raced_create)
     storage = FallbackStorageBackend(primary, legacy)
     # When
     handle = await storage.materialize("report.txt")
@@ -200,15 +202,16 @@ async def test_fallback_promotion_returns_primary_when_upload_wins(
     await legacy.write_bytes(key, b"old")
     original_read = legacy.read_bytes
 
-    async def raced_read(key: str) -> bytes:
-        data = await original_read(key)
+    original_create = primary.create_file_if_absent
+
+    async def raced_create(key: str, path: Path, content_type: str | None = None) -> ConditionalWriteResult:
         await primary.write_bytes(key, b"winning upload")
-        return data
+        return await original_create(key, path, content_type)
 
     async def presign(key: str, filename: str | None = None, inline: bool = False) -> str:
         return (await primary.read_bytes(key)).decode()
 
-    monkeypatch.setattr(legacy, "read_bytes", raced_read)
+    monkeypatch.setattr(primary, "create_file_if_absent", raced_create)
     monkeypatch.setattr(primary, "presign_download_url", presign)
     storage = FallbackStorageBackend(primary, legacy)
 
@@ -257,7 +260,7 @@ async def test_fallback_create_only_creates_new_key_in_primary():
 
 
 @pytest.mark.parametrize("bounded", [False, True])
-async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing(bounded):
+async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing(bounded, tmp_path: Path):
     class DisappearingPrimary(MemoryStorageBackend):
         attempts = 0
 
@@ -269,7 +272,9 @@ async def test_fallback_promotion_bounds_retries_when_primary_keeps_disappearing
             return ConditionalWriteResult(ok=False, conflict=True)
 
     primary = DisappearingPrimary()
-    storage = FallbackStorageBackend(primary, MemoryStorageBackend({"report.txt": b"old"}))
+    legacy = LocalStorageBackend(str(tmp_path))
+    await legacy.write_bytes("report.txt", b"old")
+    storage = FallbackStorageBackend(primary, legacy)
 
     operation = storage.read_bytes_bounded("report.txt", 8) if bounded else storage.read_bytes("report.txt")
     with pytest.raises(StorageConditionalRaceError):
