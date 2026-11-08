@@ -25,7 +25,7 @@ const ui = {
   saveConfig: 'Replace entire configuration', confirmDelete: 'Delete tool permanently',
   retry: 'Retry loading tools', empty: 'No tools in this catalog',
   edit: (name) => `Edit details for ${name}`, remove: (name) => `Delete tool ${name}`,
-  replace: (name) => `Replace configuration for ${name}`,
+  replace: (name) => `Configure ${name}`,
 }
 const tenantA = 'a8122022-c233-4f10-91df-91e2d065d2cb'
 const tenantB = 'b8122022-c233-4f10-91df-91e2d065d2cb'
@@ -50,7 +50,7 @@ const custom = {
   tenant_id: tenantA, capabilities: { can_edit_details: true, can_delete: true, can_configure: true },
   mcp_server_url: 'https://connector.example.test/mcp', mcp_server_name: 'synthetic', mcp_tool_name: 'lookup',
   config: { api_key: '********', region: 'eu-west-1', legacy: 'remove-me' },
-  config_schema: { fields: [{ key: 'api_key', type: 'password' }] },
+  config_schema: { fields: [{ key: 'api_key', label: 'API key', type: 'password' }, { key: 'region', label: 'Region', type: 'text' }] },
 }
 const globalTool = { ...custom, id: globalId, name: 'synthetic_global', display_name: 'Synthetic global connector', tenant_id: null }
 const foreignTool = { ...custom, id: foreignId, name: 'synthetic_beta', display_name: 'Synthetic Beta connector', tenant_id: tenantB }
@@ -81,10 +81,10 @@ const receipt = {
   output, scenarios: [], assertions: [], screenshots: [], requests: [], violations: [], findings: [], blockedAssets: [], labels: ui,
   transport: { api: 'owned Vite middleware; no CDP Fetch routes', proxyDisabled: false, abandonedResponses: 0, csp: 'External origins forbidden; local dev/automation evaluation allowed. First CSP run proved local eval was blocked (not a network escape); no violation was ignored.' },
   fixtureDisclosure: 'OA foreign-company row is a deliberate negative capability-presentation fixture beyond real catalog visibility; all records and secrets are synthetic.',
-  plannedMatrix: matrix, cleanup: { routesCreated: 0, routesDisposed: 0, apiRoutesCreated: 0, apiRoutesDisposed: 0, barriersCreated: 0, barriersReleased: 0, tabsCreated: 0, tabsClosed: 0, browserClosed: false, profileRemoved: false, viteClosed: false },
+  plannedMatrix: matrix, cleanup: { routesCreated: 0, routesDisposed: 0, apiRoutesCreated: 0, apiRoutesDisposed: 0, barriersCreated: 0, barriersReleased: 0, tabsCreated: 0, tabsClosed: 0, browsersCreated: 0, browsersClosed: 0, profilesCreated: 0, profilesRemoved: 0, browserClosed: false, profileRemoved: false, viteClosed: false },
 }
 const { omowright } = await loadOmowright()
-let browser, server, profile
+let browser, server, profile, executable
 let activeScenario = 'setup'
 // Scenarios are serial. Capture this state once per HTTP request, never at release time.
 let activeScenarioState = null
@@ -93,10 +93,10 @@ const verify = (name, actual, expected = true) => { assert.deepEqual(actual, exp
 // CSS + exact text avoids this installed omowright version's implicit-role resolver
 // timing out even when snapshot() positively identifies the same heading/button.
 const exactText = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, 'u')
-const button = (page, name) => /^(?:Edit details for |Replace configuration for |Delete tool )/u.test(name) && name !== ui.confirmDelete
+const button = (page, name) => /^(?:Edit details for |Configure |Delete tool )/u.test(name) && name !== ui.confirmDelete
   ? page.locator(`button[aria-label=${JSON.stringify(name)}]`)
   : page.locator('button:not([aria-label])').filter({ hasText: exactText(name) }).last()
-const field = (page, name) => page.getByLabel(name, { exact: true })
+const field = (page, name) => name.endsWith(' operation') ? page.locator(`select[aria-label=${JSON.stringify(name)}]`) : page.getByLabel(name, { exact: true })
 const visible = (locator) => locator.waitFor({ state: 'visible', timeout: 12_000 })
 const detached = (locator) => locator.waitFor({ state: 'detached', timeout: 12_000 })
 const mutations = (state) => state.calls.filter((call) => call.method !== 'GET')
@@ -122,15 +122,27 @@ async function bounded(promise, message) {
 // Contract fixture: PUT config is replacement, never a merge or a mask echo.
 function toolsResponse(state, request) {
   const { method, path, params, payload } = request
-  const selected = payload?.tenant_id ?? params.tenant_id
+  const selected = payload?.tenant_id ?? payload?.saved?.tenant_id ?? params.tenant_id
   // DELETE has no tenant parameter; the fixture server still enforces record capabilities.
   const scope = method === 'DELETE' ? state.scope : state.role === 'platform_admin' ? selected ?? 'current' : tenantA
   verify('every Tools call is bound to the selected tenant', scope === state.scope)
   if (state.role === 'org_admin') verify('OA cannot request another tenant', !selected || selected === tenantA)
   const rows = state.catalog[scope]
   assert.ok(rows, `Unknown synthetic tenant ${scope}`)
+  if (path === '/api/tools/mcp/discover') return { body: state.discoveryMalformed ? { ok: true, tools: [{ name: 'broken', inputSchema: [] }] } : { ok: true, tools: [
+    { name: 'lookup', description: 'Find a synthetic record', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } },
+    { name: 'write', description: 'Write a synthetic record', inputSchema: { type: 'object', properties: {} } },
+  ] } }
+  if (path === '/api/tools/mcp/import') {
+    if (state.importConflict) return { status: 409, body: { detail: 'MCP definitions changed or a local name conflicts' } }
+    const created = payload.tools.map((tool, index) => ({ ...custom, id: `e8122022-c233-4f10-91df-91e2d065d2c${index}`, name: `${payload.name_prefix}_${tool.name}`, display_name: tool.name, tenant_id: scope, parameters_schema: tool.inputSchema, config: {} }))
+    state.catalog[scope] = [...rows, ...created]
+    return { body: { ok: true, tools: state.importUnknown ? [] : created.map(({ id, name }) => ({ id, name })) } }
+  }
+  if (path === '/api/tools/test-mcp' || path === '/api/tools/test-email') return { body: { ok: true, tools: [] } }
   if (method === 'GET') {
     assert.equal(path, '/api/tools', 'Only the documented list route is supported')
+    if (state.importRefreshFailure && state.calls.some((call) => call.path === '/api/tools/mcp/import')) return { status: 503, body: { detail: 'Synthetic catalog refresh unavailable' } }
     const masked = rows.map((tool) => ({ ...catalogFixture(tool, state), config: Object.fromEntries(Object.entries(tool.config).map(([key, value]) => [key, /key|token|secret|password/iu.test(key) ? '********' : value])) }))
     return { status: state.status, body: state.status === 200 ? masked : { detail: 'Synthetic tools service unavailable' } }
   }
@@ -140,13 +152,16 @@ function toolsResponse(state, request) {
     const tool = rows.find((row) => row.id === id)
     assert.ok(tool, 'Mutation targets an existing fixture')
     const { capabilities } = catalogFixture(tool, state)
-    verify('mutation uses a server-permitted capability', method === 'DELETE' ? capabilities.can_delete : Object.hasOwn(payload, 'config') ? capabilities.can_configure : capabilities.can_edit_details)
+    verify('mutation uses a server-permitted capability', method === 'DELETE' ? capabilities.can_delete : method === 'PATCH' || Object.hasOwn(payload, 'config') ? capabilities.can_configure : capabilities.can_edit_details)
   }
   if (state.mutationStatus === 403) {
     state.rejectedWrites++
     return { status: 403, body: { detail: 'Synthetic permissions changed; write denied' } }
   }
   switch (method) {
+    case 'PATCH':
+      state.catalog[scope] = rows.map((tool) => tool.id === id ? { ...tool, config: { ...Object.fromEntries(Object.entries(tool.config).filter(([key]) => !payload.unset.includes(key))), ...payload.set } } : tool)
+      return { body: { ok: true } }
     case 'POST':
       assert.equal(path, '/api/tools')
       state.catalog[scope] = [...rows, catalogFixture({ ...custom, ...payload, tenant_id: scope, id: createdId, config: {} }, state)]
@@ -178,7 +193,7 @@ async function syntheticApi(state, incoming, outgoing) {
     const body = Buffer.concat(chunks).toString('utf8')
     const request = { method: incoming.method, path, params: Object.fromEntries(url.searchParams), payload: body ? JSON.parse(body) : undefined }
     receipt.requests.push({ scenario: scenarioName, ...request })
-    const tools = /^\/api\/tools(?:\/[^/]+)?$/u.test(path)
+    const tools = /^\/api\/tools(?:\/[^/]+)?$/u.test(path) || /^\/api\/tools\/mcp\/(?:discover|import)$/u.test(path)
     const ancillary = ['/api/auth/me', '/api/notifications/unread-count', '/api/admin/companies/options', '/api/admin/search-analytics/summary', '/api/admin/search-analytics/orgs']
     assert.ok(tools || ancillary.includes(path), `Blocked unrecognized API ${path}`)
     if (!tools) assert.equal(request.method, 'GET', 'Only Tools mutations are allowed')
@@ -228,11 +243,19 @@ async function scenario(options, exercise) {
   if (state.loading) state.loadingBarrier = responseBarrier(state, (request) => request.method === 'GET' && request.path === '/api/tools')
   // Use the supported owned-tab manager with per-tab dimensions. Drain its
   // navigation repin before applying iPhone metrics (repin itself is desktop-only).
+  // The connection owns its SessionManager as well as pages. Retire both at each
+  // scenario boundary instead of retaining closed-target sessions across cases.
+  profile = await mkdtemp(join(output, 'owned-profile-'))
+  receipt.cleanup.profilesCreated++
+  browser = await omowright.connectPipe({ browserPath: executable, browserArgs: ['--headless', '--no-first-run', '--disable-background-networking', `--user-data-dir=${profile}`], storageRoot: profile, commandTimeoutMs: 10_000, dialogPolicy: { accept: false } })
+  receipt.cleanup.browsersCreated++
   const tabs = omowright.createAgentTabs(browser)
   const viewport = { width: state.width, height: state.width === 390 ? 844 : 1000 }
   const tab = await tabs.create('about:blank', { viewport })
   const page = tab.page
   receipt.cleanup.tabsCreated++
+  const scenarioFailures = [], cleanupFailures = []
+  let pageDisposed = false
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(String(error)))
   try {
@@ -256,21 +279,37 @@ async function scenario(options, exercise) {
     }
     verify('no uncaught page errors', pageErrors, [])
     verify('all requests stayed inside synthetic boundaries', receipt.violations, [])
+    verify('scenario target remains owned until teardown', tabs.get(tab.targetId)?.targetId, tab.targetId)
     receipt.scenarios.push({ name: options.name, status: 'passed' })
     console.log(`PASS ${options.name}`)
   } catch (error) {
-    receipt.failure = { scenario: activeScenario, message: String(error), snapshot: omowright.compactSnapshot(await page.snapshot()) }
-    await writeFile(join(output, 'failure.png'), await page.screenshot())
-    throw error
+    scenarioFailures.push(error)
+    receipt.failure = { scenario: activeScenario, message: String(error), stack: error instanceof Error ? error.stack : undefined }
+    try {
+      const [snapshot, screenshot] = await Promise.allSettled([page.snapshot(), page.screenshot()])
+      receipt.failure.snapshot = snapshot.status === 'fulfilled' ? omowright.compactSnapshot(snapshot.value) : String(snapshot.reason)
+      if (screenshot.status === 'fulfilled') try { await writeFile(join(output, 'failure.png'), screenshot.value) }
+      catch (error) { cleanupFailures.push({ stage: 'failure screenshot', error }) }
+    } catch (error) { cleanupFailures.push({ stage: 'failure diagnostics', error }) }
   } finally {
-    for (const barrier of state.barriers) barrier.release()
-    await bounded(Promise.all(inFlightApi), 'Owned API did not drain during scenario cleanup')
-    // Close directly while the Vite firewall remains live. Navigating about:blank
-    // first schedules the manager's asynchronous repin against a closing CDP session.
-    await tab.close(); receipt.cleanup.tabsClosed++
+    for (const [stage, dispose] of [
+      ['barriers', async () => { for (const barrier of state.barriers) barrier.release() }],
+      ['requests', async () => { await bounded(Promise.all(inFlightApi), 'Owned API did not drain during scenario cleanup') }],
+      // Page.close disposes subscriptions; browser.close also retires SessionManager
+      // and disposes any page whose explicit close failed.
+      ['page', async () => { if (tabs.get(tab.targetId)) { await page.close(); pageDisposed = true; receipt.cleanup.tabsClosed++ } }],
+      ['browser', async () => { await browser.close(); browser = null; receipt.cleanup.browsersClosed++; if (!pageDisposed) { pageDisposed = true; receipt.cleanup.tabsClosed++ } }],
+      ['profile', async () => { await rm(profile, { recursive: true, force: true }); profile = null; receipt.cleanup.profilesRemoved++ }],
+    ]) {
+      try { await dispose() } catch (error) { cleanupFailures.push({ stage, error }) }
+    }
     activeScenarioState = null
-    await writeFile(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2))
+    receipt.cleanup.failures = cleanupFailures.map(({ stage, error }) => ({ scenario: state.name, stage, message: String(error) }))
+    try { await writeFile(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2)) }
+    catch (error) { cleanupFailures.push({ stage: 'scenario receipt', error }) }
   }
+  if (scenarioFailures.length) throw scenarioFailures[0]
+  if (cleanupFailures.length) throw new AggregateError(cleanupFailures.map(({ error }) => error), 'Scenario cleanup failed')
 }
 
 async function assertFocus(page, locator) {
@@ -324,6 +363,7 @@ async function exerciseCrud(page, state) {
   const edit = button(page, ui.edit(longLabel))
   await edit.focus(); await page.keyboard.press('Enter')
   await visible(field(page, ui.display))
+  verify('manual MCP connection field has URL input semantics', await field(page, 'MCP server URL').evaluate((element) => element.type), 'url')
   await button(page, ui.cancel).focus(); await page.keyboard.press('Enter')
   await detached(field(page, ui.display))
   verify('Cancel restores editor trigger focus', await edit.evaluate((element) => element === document.activeElement))
@@ -344,6 +384,7 @@ async function exerciseCrud(page, state) {
   verify('metadata edit omits masked configuration', Object.hasOwn(mutations(state).at(-1).payload, 'config'), false)
   // When: a synthetic new secret explicitly replaces the whole config.
   await button(page, ui.replace('Synthetic renamed connector')).click()
+  await button(page, 'Replace entire configuration…').click()
   verify('configuration draft excludes mask values', !/[*•]{3,}/u.test(await field(page, ui.config).inputValue()))
   const replacement = { api_key: 'synthetic-replacement-not-a-real-secret', region: 'ap-southeast-1' }
   await field(page, ui.confirmConfig).check()
@@ -356,6 +397,7 @@ async function exerciseCrud(page, state) {
   verify('replacement is exact, not merged with masked or legacy fields', mutations(state).at(-1).payload.config, replacement)
   // When: OA replaces only the built-in source configuration for its own company.
   await button(page, ui.replace(builtin.display_name)).click()
+  await button(page, 'Replace entire configuration…').click()
   await field(page, ui.config).fill('{"region":"synthetic-company-region"}')
   await field(page, ui.confirmConfig).check(); await button(page, ui.saveConfig).click()
   await detached(field(page, ui.config))
@@ -363,6 +405,7 @@ async function exerciseCrud(page, state) {
   verify('built-in configuration does not change shared ownership', state.catalog[tenantA].find((tool) => tool.id === builtinId).tenant_id, null)
   // When: a new custom tool is created and deleted through confirmation.
   await button(page, ui.add).click()
+  await button(page, 'Create manually').click()
   await field(page, ui.name).fill('synthetic_created')
   await field(page, ui.display).fill('Synthetic created connector')
   await field(page, ui.description).fill('Synthetic test tool; no real integration')
@@ -384,6 +427,11 @@ async function captureMatrix(page, state) {
   await visible(button(page, ui.edit(longLabel)))
   await assertOrgCapabilities(page)
   await capture(page, state)
+  await button(page, ui.replace(longLabel)).click()
+  await visible(field(page, 'API key operation'))
+  activeScenario = `${state.name}-field-operations`
+  await capture(page, state)
+  await button(page, ui.cancel).click()
   activeScenario = `${state.name}-catalog-bottom`
   await button(page, ui.edit(foreignTool.display_name)).evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
   await assertInViewport(button(page, ui.edit(foreignTool.display_name)), 'catalog bottom capture reaches the last record, independently of form-end proof')
@@ -391,6 +439,7 @@ async function captureMatrix(page, state) {
   for (const panel of ['editor', 'config', 'delete']) {
     activeScenario = `${state.name}-${panel}`
     await button(page, panel === 'editor' ? ui.edit(longLabel) : panel === 'config' ? ui.replace(longLabel) : ui.remove(longLabel)).click()
+    if (panel === 'config') await button(page, 'Replace entire configuration…').click()
     const target = button(page, panel === 'editor' ? ui.save : panel === 'config' ? ui.saveConfig : ui.confirmDelete)
     await visible(target)
     await capture(page, state)
@@ -401,6 +450,81 @@ async function captureMatrix(page, state) {
     await assertInViewport(target, 'form submit/action row is actually inside the viewport')
     await capture(page, state)
     await button(page, ui.cancel).click()
+  }
+}
+
+async function exerciseFieldOperations(page, state) {
+  await visible(button(page, ui.replace(longLabel)))
+  await button(page, ui.replace(longLabel)).click()
+  await field(page, 'Region operation').selectOption('set')
+  await field(page, 'New Region').fill('ap-south-1')
+  await button(page, 'Test saved + draft').click()
+  await visible(page.locator('[role="status"]').filter({ hasText: /Connection test passed/u }))
+  verify('saved probe sends only references and explicit draft edits', state.calls.at(-1).payload, { saved: { tool_id: customId, tenant_id: tenantA }, operations: { set: { region: 'ap-south-1' }, unset: [] } })
+  state.mutationStatus = 403
+  await button(page, 'Save fields').click()
+  await visible(page.locator('main [role="alert"]'))
+  verify('failed field write retains the local draft', await field(page, 'New Region').inputValue(), 'ap-south-1')
+  state.mutationStatus = 200
+  await button(page, 'Save fields').click()
+  await detached(field(page, 'Region operation'))
+  verify('ordinary field patch omits the saved secret', mutations(state).at(-1).payload, { set: { region: 'ap-south-1' }, unset: [], tenant_id: tenantA })
+  verify('ordinary patch preserves stored credential', state.catalog[tenantA].find((tool) => tool.id === customId).config.api_key, '********')
+  await button(page, ui.replace(longLabel)).click()
+  await field(page, 'API key operation').selectOption('unset')
+  await button(page, 'Save fields').click()
+  await detached(field(page, 'API key operation'))
+  verify('deliberate field removal is explicit', mutations(state).at(-1).payload, { set: {}, unset: ['api_key'], tenant_id: tenantA })
+}
+
+async function exerciseImport(page, state) {
+  await button(page, ui.add).click()
+  await field(page, 'MCP server URL').fill('https://catalog.example.test/mcp')
+  await field(page, 'API key (optional)').fill('synthetic-import-secret')
+  activeScenario = `${state.name}-discovery`
+  await capture(page, state)
+  await button(page, 'Discover tools').click()
+  await visible(page.getByText('Choose tools (0 of 2)', { exact: true }))
+  verify('discovery does not create catalog rows', state.catalog[state.scope].length, state.scope === tenantB ? 3 : 4)
+  await page.locator('li label').filter({ hasText: /Find a synthetic record/u }).locator('input').check()
+  await field(page, 'MCP server name').fill('Synthetic catalog')
+  await field(page, 'Local name prefix').fill('catalog')
+  verify('import requires explicit review confirmation', await button(page, 'Import 1 selected tools').isDisabled())
+  activeScenario = `${state.name}-review`
+  await capture(page, state)
+  const schema = page.locator('summary').filter({ hasText: /^Parameters for lookup$/u })
+  await schema.focus(); await page.keyboard.press('Enter')
+  verify('keyboard opens the reviewed parameter schema', await schema.evaluate((element) => element.parentElement.open))
+  await schema.evaluate((element) => element.scrollIntoView({ block: 'start', behavior: 'instant' }))
+  activeScenario = `${state.name}-review-schema`
+  await capture(page, state)
+  await page.getByLabel('I reviewed the selected definitions and local names. Import these tools into the selected company catalog.', { exact: true }).check()
+  const confirm = button(page, 'Import 1 selected tools')
+  await confirm.focus()
+  await confirm.evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+  await assertInViewport(confirm, 'confirmed import action is visible at the form end')
+  activeScenario = `${state.name}-confirm-scrolled-end-keyboard`
+  await capture(page, state)
+  await button(page, 'Import 1 selected tools').click()
+  if (state.importConflict || state.importUnknown) {
+    const failure = page.locator('main [role="alert"]').filter({ hasText: state.importUnknown ? /^Import outcome is unknown/u : /^Import rejected/u })
+    await visible(failure)
+    if (state.importConflict) verify('conflict keeps catalog unchanged', state.catalog[state.scope].length, 4)
+    else {
+      if (state.importRefreshFailure) await visible(page.locator('main [role="alert"]').filter({ hasText: /^Could not load the tool catalog/u }))
+      else await visible(button(page, ui.edit('lookup')))
+      verify('ambiguous acknowledgement reports uncertainty rather than a rollback', await failure.textContent(), 'Import outcome is unknown. Refresh and check the catalog before retrying. Cancel and rediscover when ready.')
+    }
+    await button(page, ui.cancel).click()
+  } else {
+    await detached(field(page, 'API key (optional)'))
+    await visible(button(page, ui.edit('lookup')))
+    const imported = state.calls.find((call) => call.path === '/api/tools/mcp/import')
+    verify('only the reviewed subset is imported', imported.payload.tools.map((tool) => tool.name), ['lookup'])
+    verify('import retains reviewed schema without transcription', imported.payload.tools[0].inputSchema, { type: 'object', properties: { query: { type: 'string' } } })
+      verify('credentials never enter persistent storage', await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }).includes('synthetic-import-secret')), false)
+      activeScenario = `${state.name}-imported`
+      await capture(page, state)
   }
 }
 
@@ -418,6 +542,7 @@ async function exercisePendingWrites(page, state) {
   for (const kind of ['metadata', 'config', 'delete']) {
     await visible(button(page, ui.edit(label)))
     await button(page, kind === 'metadata' ? ui.edit(label) : kind === 'config' ? ui.replace(label) : ui.remove(label)).click()
+    if (kind === 'config') await button(page, 'Replace entire configuration…').click()
     if (kind === 'metadata') await field(page, ui.display).fill('Synthetic pending write accepted')
     if (kind === 'config') {
       await field(page, ui.config).fill('{"api_key":"synthetic-pending-secret","region":"pending-region"}')
@@ -427,6 +552,9 @@ async function exercisePendingWrites(page, state) {
     await button(page, kind === 'metadata' ? ui.save : kind === 'config' ? ui.saveConfig : ui.confirmDelete).click()
     await bounded(barrier.entered, `${kind} mutation did not reach the response barrier`)
     verify(`${kind}: Cancel is disabled while the server response is held`, await button(page, ui.cancel).isDisabled())
+    for (const action of [ui.add, ui.edit(label), ui.replace(label), ui.remove(label)]) {
+      verify(`${kind}: ${action} cannot retire the pending editor`, await button(page, action).isDisabled())
+    }
     const pending = button(page, kind === 'metadata' ? 'Saving…' : kind === 'config' ? 'Replacing…' : 'Deleting…')
     verify(`${kind}: pending submit is disabled`, await pending.isDisabled())
     verify(`${kind}: mutation has not committed before barrier release`, state.catalog[tenantA].find((tool) => tool.id === customId).display_name, label)
@@ -443,6 +571,7 @@ async function exercisePendingWrites(page, state) {
     else {
       await visible(button(page, ui.edit(label)))
       await button(page, ui.replace(label)).click()
+      await button(page, 'Replace entire configuration…').click()
       verify('accepted config is reflected by the refreshed real editor', JSON.parse(await field(page, ui.config).inputValue()), { region: 'pending-region' })
       await button(page, ui.cancel).click(); await detached(field(page, ui.config))
     }
@@ -476,10 +605,9 @@ async function exerciseTenantSwitchPending(page, state) {
 }
 
 try {
-  let executable = process.env.CHROMIUM_EXECUTABLE
+  executable = process.env.CHROMIUM_EXECUTABLE
   if (!executable) { const { chromium } = await import('@playwright/test'); executable = chromium.executablePath() }
   await access(executable)
-  profile = await mkdtemp(join(output, 'owned-profile-'))
   // Pre-proxy middleware OWNS every API path, including unknown ones. The resolved
   // proxy is also cleared: a handler defect cannot fall back to the real backend.
   // CSP removes remote HTTP(S) access without broad Fetch interception, whose
@@ -500,7 +628,6 @@ try {
   }], server: { host: '127.0.0.1', port: 0, headers: { 'Content-Security-Policy': csp }, watch: { ignored: (path) => path.startsWith(output) } } })
   verify('owned Vite API proxy is disabled', receipt.transport.proxyDisabled)
   await server.listen()
-  browser = await omowright.connectPipe({ browserPath: executable, browserArgs: ['--headless', '--no-first-run', '--disable-background-networking', `--user-data-dir=${profile}`], storageRoot: profile, commandTimeoutMs: 10_000, dialogPolicy: { accept: false } })
   const toolsSource = await readFile(join(root, 'src/pages/tools.tsx'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error })
   if (!toolsSource) {
     receipt.status = 'blocked-ui'
@@ -525,6 +652,36 @@ try {
       verify('wire DELETE contract', wire.remove, { status: 200, body: { ok: true } })
     })
   } else {
+    await scenario({ name: 'oa-secret-preserving-field-operations' }, exerciseFieldOperations)
+    for (const dimensions of matrix) await scenario({ ...dimensions, name: `mcp-import-${dimensions.width}-${dimensions.theme}` }, exerciseImport)
+    await scenario({ name: 'mcp-import-definition-conflict', importConflict: true }, exerciseImport)
+    await scenario({ name: 'mcp-import-unknown-outcome', importUnknown: true }, exerciseImport)
+    await scenario({ name: 'mcp-import-unknown-refresh-failure', importUnknown: true, importRefreshFailure: true }, exerciseImport)
+    await scenario({ name: 'mcp-malformed-discovery', discoveryMalformed: true }, async (page, state) => {
+      await button(page, ui.add).click()
+      await field(page, 'MCP server URL').fill('https://catalog.example.test/mcp')
+      await button(page, 'Discover tools').click()
+      await visible(page.locator('main [role="alert"]'))
+      verify('malformed discovery cannot reach import', state.calls.some((call) => call.path.endsWith('/mcp/import')), false)
+      await button(page, ui.cancel).click()
+    })
+    await scenario({ name: 'mcp-discovery-company-retirement', role: 'platform_admin', scope: 'current' }, async (page, state) => {
+      await visible(field(page, ui.company))
+      await selectCompany(page, state, tenantA)
+      await button(page, ui.add).click()
+      await field(page, 'MCP server URL').fill('https://catalog.example.test/mcp')
+      await field(page, 'API key (optional)').fill('synthetic-retired-secret')
+      const barrier = responseBarrier(state, (request) => request.path === '/api/tools/mcp/discover')
+      await button(page, 'Discover tools').click()
+      await bounded(barrier.entered, 'Discovery did not reach retirement barrier')
+      await selectCompany(page, state, tenantB)
+      barrier.release(); await bounded(barrier.completed, 'Retired discovery did not drain')
+      verify('late discovery does not restore an old editor', await field(page, 'API key (optional)').count(), 0)
+      await button(page, ui.add).click()
+      verify('new company starts with an empty credential draft', await field(page, 'API key (optional)').inputValue(), '')
+      verify('new company cannot receive the retired inventory', await page.getByText('Choose tools (0 of 2)', { exact: true }).count(), 0)
+      await button(page, ui.cancel).click()
+    })
     await scenario({ name: 'oa-crud-masks-and-builtin-guard' }, exerciseCrud)
     await scenario({ name: 'oa-pending-write-barriers' }, exercisePendingWrites)
     await scenario({ name: 'pa-pending-write-company-switch-cache', role: 'platform_admin', scope: 'current' }, exerciseTenantSwitchPending)
@@ -598,6 +755,8 @@ try {
     verify('all created response barriers were released', receipt.cleanup.barriersReleased, receipt.cleanup.barriersCreated)
     verify('no API interception routes were created', receipt.cleanup.apiRoutesCreated, 0)
     verify('owned tab cleanup is complete', receipt.cleanup.tabsClosed, receipt.cleanup.tabsCreated)
+    verify('scenario browser cleanup is complete', receipt.cleanup.browsersClosed, receipt.cleanup.browsersCreated)
+    verify('scenario profile cleanup is complete', receipt.cleanup.profilesRemoved, receipt.cleanup.profilesCreated)
     receipt.status = receipt.findings.length ? 'failed' : 'passed'
     if (receipt.findings.length) process.exitCode = 1
   }
@@ -613,7 +772,11 @@ try {
   ]) { try { await cleanup(); receipt.cleanup[key] = true } catch (error) { receipt.cleanup[key] = String(error); receipt.status = 'failed'; process.exitCode = 1 } }
   receipt.finishedAt = new Date().toISOString()
   receipt.actualMatrix = { scenarios: receipt.scenarios.length, captures: receipt.screenshots.length, assertions: receipt.assertions.length }
-  await writeFile(join(output, 'matrix-manifest.json'), JSON.stringify({ status: receipt.status, planned: matrix, captures: receipt.screenshots }, null, 2))
-  await writeFile(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2))
-  console.log(JSON.stringify({ status: receipt.status, output, assertions: receipt.assertions.length, screenshots: receipt.screenshots.length, cleanup: receipt.cleanup, blocked: receipt.blocked }))
+  const artifacts = await Promise.allSettled([
+    writeFile(join(output, 'matrix-manifest.json'), JSON.stringify({ status: receipt.status, planned: matrix, captures: receipt.screenshots }, null, 2)),
+    writeFile(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2)),
+  ])
+  const artifactFailures = artifacts.filter((result) => result.status === 'rejected').map((result) => String(result.reason))
+  if (artifactFailures.length) { receipt.status = 'failed'; process.exitCode = 1 }
+  console.log(JSON.stringify({ status: receipt.status, output, assertions: receipt.assertions.length, screenshots: receipt.screenshots.length, cleanup: receipt.cleanup, blocked: receipt.blocked, error: receipt.error, artifactFailures }))
 }

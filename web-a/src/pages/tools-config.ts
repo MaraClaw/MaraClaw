@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type { JsonObject, JsonValue, ToolUpdateInput } from '../lib/tools-api.ts'
 import { jsonObjectText } from './tools-forms.ts'
+export { configFields, fieldOperations } from './tools-config-fields.ts'
 
 const secretKeys = new Set(['api_key', 'private_key', 'auth_code', 'password', 'secret'])
 type ConfigPath = readonly (string | number)[]

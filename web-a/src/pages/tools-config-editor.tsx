@@ -5,14 +5,36 @@ import { z } from 'zod'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { updateTool } from '@/lib/tools-api'
+import { patchToolConfig, probeSavedTool, updateTool } from '@/lib/tools-api'
 import { toolRecordImpact } from './tools-catalog-state'
 import { configPathLabel, configurationDraft, configurationInput, configurationSchema } from './tools-config'
 import { ToolField, toolButtonClass, toolTextareaClass } from './tools-fields'
 import type { CatalogTool } from './tools-forms'
-import { useToolsAction } from './use-tools-action'
+import { useToolsSecretAction } from './use-tools-secret-action'
+import { ToolConfigOperationsEditor } from './tools-config-operations-editor'
 
-export function ToolConfigEditor({ tool, tenantId, onClose }: {
+export function ToolConfigEditor(props: {
+  readonly tool: CatalogTool; readonly tenantId: string; readonly onClose: () => void
+}) {
+  const [replacement, setReplacement] = useState(false)
+  const [probeMessage, setProbeMessage] = useState<string | null>(null)
+  const action = useToolsSecretAction({ success: 'Configuration saved', failure: 'Could not save configuration. Check your permissions and try again.', onAccepted: props.onClose })
+  const probe = useToolsSecretAction({ success: 'Connection test finished', failure: 'Connection test failed. Check the saved settings and draft values.', invalidate: false, onAccepted: () => setProbeMessage('Connection test passed using saved settings and the current draft.') })
+  if (replacement) return <ToolConfigReplacement {...props} />
+  const kind = props.tool.type === 'mcp' ? 'mcp' : props.tool.category === 'email' ? 'email' : null
+  return <>
+    <ToolConfigOperationsEditor tool={props.tool} pending={action.isPending || probe.isPending} error={action.errorMessage ?? probe.errorMessage}
+      onSave={(operations) => { void action.submit(() => patchToolConfig(props.tool.id, { ...operations, tenant_id: props.tenantId })) }}
+      onProbe={kind ? (operations) => { setProbeMessage(null); void probe.submit(async () => {
+        const result = await probeSavedTool({ tool_id: props.tool.id, tenant_id: props.tenantId, kind }, operations)
+        if (!result.ok) throw new Error('Connection test failed')
+      }) } : undefined}
+      onReplace={() => setReplacement(true)} onClose={props.onClose} />
+    {probeMessage ? <p role="status" className="text-sm">{probeMessage}</p> : null}
+  </>
+}
+
+function ToolConfigReplacement({ tool, tenantId, onClose }: {
   readonly tool: CatalogTool; readonly tenantId: string; readonly onClose: () => void
 }) {
   const id = useId()
@@ -23,9 +45,8 @@ export function ToolConfigEditor({ tool, tenantId, onClose }: {
     resolver: zodResolver(schema), defaultValues: { config: draft.text, confirmed: false },
   })
   const close = () => { reset({ config: '', confirmed: false }); setVisible(false); onClose() }
-  const mutation = useToolsAction(async (values: z.output<typeof schema>) => updateTool(tool.id, configurationInput(values.config, tenantId)), {
-    success: 'Configuration replaced', failure: 'Could not replace configuration. Check your permissions and try again.', onDone: close,
-    onAccepted: () => { reset({ config: '', confirmed: false }); setVisible(false) },
+  const mutation = useToolsSecretAction({
+    success: 'Configuration replaced', failure: 'Could not replace configuration. Check your permissions and try again.', onAccepted: close,
   })
   return <Card role="region" aria-labelledby={`${id}-title`} className="min-w-0">
     <CardHeader>
@@ -36,7 +57,7 @@ export function ToolConfigEditor({ tool, tenantId, onClose }: {
         : `${toolRecordImpact(tool)} Configuration is stored on this record, not as a company-specific override.`}</p>
     </CardHeader>
     <CardContent>
-      <form noValidate onSubmit={handleSubmit(mutation.submit)} className="space-y-5" autoComplete="off">
+      <form noValidate onSubmit={handleSubmit((values) => mutation.submit(() => updateTool(tool.id, configurationInput(values.config, tenantId))))} className="space-y-5" autoComplete="off">
         <p id={`${id}-help`} className="text-sm text-muted-foreground">Only non-secret existing values are prefilled. Add all required secrets again; masked values cannot be saved. To remove a stored secret, use the API with a separately reviewed replacement.</p>
         {draft.required.length ? <div className="space-y-2 text-sm">
           <p>Re-enter existing secret keys (JSON paths):</p>

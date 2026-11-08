@@ -1,22 +1,43 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useId, type FormEventHandler, type ReactNode } from 'react'
+import { useId, useState, type FormEventHandler, type ReactNode } from 'react'
 import { FormProvider, useForm, useFormContext } from 'react-hook-form'
 import { z } from 'zod'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { createTool, updateTool } from '@/lib/tools-api'
+import { createTool, discoverMcpCatalog, importMcpCatalog, updateTool, type DiscoveredMcpTool } from '@/lib/tools-api'
+import { ApiError } from '@/lib/http'
 import { toolRecordImpact } from './tools-catalog-state'
 import { createInput, mcpMetadataDefaults, metadataDefaults, metadataInput, toolCreateSchema, toolMcpMetadataSchema, toolMetadataSchema, type CatalogTool, type ToolEditorValues, type ToolMetadataValues } from './tools-forms'
 import { ToolField, toolButtonClass, toolTextareaClass } from './tools-fields'
 import { useToolsAction } from './use-tools-action'
+import { ToolCatalogImport } from './tools-import'
+import { useToolsSecretAction } from './use-tools-secret-action'
 
 export function ToolEditor({ tool, tenantId, onClose }: {
   readonly tool?: CatalogTool; readonly tenantId?: string; readonly onClose: () => void
 }) {
   return tool ? <ToolMetadataEditor tool={tool} tenantId={tenantId} onClose={onClose} />
-    : <ToolCreateEditor tenantId={tenantId} onClose={onClose} />
+    : <ToolImportEditor tenantId={tenantId} onClose={onClose} />
+}
+
+function ToolImportEditor({ tenantId, onClose }: { readonly tenantId?: string; readonly onClose: () => void }) {
+  const [manual, setManual] = useState(false)
+  const [inventory, setInventory] = useState<readonly DiscoveredMcpTool[] | null>(null)
+  const discovery = useToolsSecretAction({
+    success: 'MCP inventory discovered', failure: 'Discovery failed. Check the server address, credentials and complete inventory, then try again.', invalidate: false,
+    onAccepted: (result: Awaited<ReturnType<typeof discoverMcpCatalog>>) => setInventory(result.tools),
+  })
+  const importing = useToolsSecretAction({ success: 'MCP tools imported', invalidateOnError: true,
+    failure: (error) => error instanceof ApiError && [400, 403, 409, 422].includes(error.status)
+      ? 'Import rejected. Check permissions, changed definitions and local name conflicts. No tools were imported. Cancel and rediscover before trying again.'
+      : 'Import outcome is unknown. Refresh and check the catalog before retrying. Cancel and rediscover when ready.', onAccepted: onClose })
+  if (manual) return <ToolCreateEditor tenantId={tenantId} onClose={onClose} />
+  return <ToolCatalogImport inventory={inventory} pending={discovery.isPending || importing.isPending} error={discovery.errorMessage ?? importing.errorMessage}
+    onDiscover={(connection) => { if (tenantId) void discovery.submit(() => discoverMcpCatalog({ ...connection, tenant_id: tenantId })) }}
+    onImport={(selection) => { if (tenantId) void importing.submit(() => importMcpCatalog({ ...selection, tenant_id: tenantId })) }}
+    onManual={() => setManual(true)} onClose={onClose} />
 }
 
 function ToolCreateEditor({ tenantId, onClose }: { readonly tenantId?: string; readonly onClose: () => void }) {
@@ -65,7 +86,7 @@ function ToolConnectionFields({ creating }: { readonly creating: boolean }) {
     ...(creating ? [{ key: 'mcp_tool_name', label: 'MCP tool name' }] as const : []),
   ] as const
   return fields.map(({ key, label }) => <ToolField key={key} id={`${id}-${key}`} label={label} error={errors[key]?.message}>
-    <Input id={`${id}-${key}`} autoComplete="off" {...register(key)} aria-invalid={!!errors[key]} aria-describedby={errors[key] ? `${id}-${key}-error` : undefined} />
+    <Input id={`${id}-${key}`} type={key === 'mcp_server_url' ? 'url' : 'text'} autoComplete="off" {...register(key)} aria-invalid={!!errors[key]} aria-describedby={errors[key] ? `${id}-${key}-error` : undefined} />
   </ToolField>)
 }
 
@@ -81,7 +102,7 @@ function ToolDetailsForm({ tool, tenantId, onClose, onSubmit, pending, errorMess
       <CardTitle id={`${id}-title`} className="min-w-0 [overflow-wrap:anywhere]">{tool ? `Edit ${tool.display_name}` : 'Create MCP tool'}</CardTitle>
       <CardDescription>{tool
         ? `${toolRecordImpact(tool)} Details, Enabled and Default update this record. Existing configuration is left unchanged.`
-        : 'Add one MCP tool to the selected company catalog. You can replace its configuration separately after creation.'}</CardDescription>
+        : 'Add one MCP tool to the selected company catalog. Configure its fields separately after creation.'}</CardDescription>
       {tool?.type === 'builtin' ? <p className="text-sm text-muted-foreground">This built-in tool cannot be deleted. Its configuration is managed separately in company settings.</p> : null}
       {tool ? <p className="break-words text-sm text-muted-foreground">Name: {tool.name} · Type: {tool.type} · Category: {tool.category}{tool.mcp_tool_name ? ` · MCP tool: ${tool.mcp_tool_name}` : ''}. These fields cannot be changed.</p> : null}
     </CardHeader>

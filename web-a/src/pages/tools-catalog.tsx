@@ -10,6 +10,7 @@ import { toolActions, toolOwnership } from './tools-catalog-state'
 import { ToolConfigEditor } from './tools-config-editor'
 import { ToolDeleteConfirmation } from './tools-delete'
 import { ToolEditor } from './tools-editor'
+import { ToolsEditorPending } from './tools-editor-pending'
 import { toolButtonClass } from './tools-fields'
 import { toolsQueryKey, type CatalogTool } from './tools-forms'
 
@@ -22,11 +23,13 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
   const id = useId()
   const catalog = useQuery({ queryKey: toolsQueryKey(tenantId), queryFn: ({ signal }) => listTools(tenantId, signal) })
   const [editor, setEditor] = useState<Editor | null>(null)
+  const [pendingActions, setPendingActions] = useState(0)
+  const busy = pendingActions > 0
   const panel = useRef<HTMLDivElement>(null)
   const heading = useRef<HTMLHeadingElement>(null)
   const origin = useRef<HTMLButtonElement | null>(null)
   useLayoutEffect(() => { if (editor) panel.current?.focus() }, [editor])
-  const open = (next: Editor, trigger: HTMLButtonElement) => { origin.current = trigger; setEditor(next) }
+  const open = (next: Editor, trigger: HTMLButtonElement) => { if (busy) return; origin.current = trigger; setEditor(next) }
   const close = () => { setEditor(null); (origin.current?.isConnected ? origin.current : heading.current)?.focus() }
   const finishDelete = () => { setEditor(null); heading.current?.focus() }
   const renderEditor = () => {
@@ -46,10 +49,10 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
       </div>
       <div className="flex flex-wrap gap-3">
         <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}><RefreshCw aria-hidden className="size-4" />Refresh catalog</Button>
-        <Button className={toolButtonClass} disabled={!concreteCompany} aria-describedby={!concreteCompany ? 'tools-company-help' : undefined} onClick={(event) => open({ kind: 'create' }, event.currentTarget)}><Plus aria-hidden className="size-4" />Create MCP tool</Button>
+        <Button variant={editor ? 'outline' : 'default'} className={toolButtonClass} disabled={busy || !concreteCompany} aria-describedby={!concreteCompany ? 'tools-company-help' : undefined} onClick={(event) => open({ kind: 'create' }, event.currentTarget)}><Plus aria-hidden className="size-4" />Create MCP tool</Button>
       </div>
     </div>
-    {editor ? <div ref={panel} tabIndex={-1} className="min-w-0 outline-none" key={editor.kind === 'create' ? 'create' : `${editor.kind}-${editor.tool.id}`}>{renderEditor()}</div> : null}
+    {editor ? <div ref={panel} tabIndex={-1} className="min-w-0 outline-none" key={editor.kind === 'create' ? 'create' : `${editor.kind}-${editor.tool.id}`}><ToolsEditorPending.Provider value={setPendingActions}>{renderEditor()}</ToolsEditorPending.Provider></div> : null}
     {catalog.isPending ? <p role="status" className="py-8 text-sm text-muted-foreground">Loading tools…</p> : null}
     {catalog.isError ? <Card><CardContent className="space-y-4">
       <p role="alert" className="text-sm text-destructive">Could not load the tool catalog. Check your company selection and permissions, then retry.</p>
@@ -86,13 +89,13 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
             {tool.mcp_tool_name ? <><dt className="text-muted-foreground">MCP tool</dt><dd className="break-all">{tool.mcp_tool_name}</dd></> : null}
           </dl>
           <div className="mt-auto flex flex-wrap gap-2 pt-2">
-            <Button variant="outline" className={toolButtonClass} disabled={!actions.editDetails} aria-describedby={!actions.editDetails ? `${helpId}-edit-help` : undefined} aria-label={`Edit details for ${tool.display_name}`} onClick={(event) => open({ kind: 'edit', tool }, event.currentTarget)}>Edit details</Button>
-            <Button variant="outline" className={toolButtonClass} disabled={!actions.configure} aria-describedby={!actions.configure ? `${helpId}-config-help` : undefined} aria-label={`Replace configuration for ${tool.display_name}`} onClick={(event) => open({ kind: 'config', tool }, event.currentTarget)}>Replace configuration</Button>
-            {tool.type !== 'builtin' ? <Button variant="ghost" className={`${toolButtonClass} text-destructive`} disabled={!actions.delete} aria-describedby={!actions.delete ? `${helpId}-delete-help` : undefined} aria-label={`Delete tool ${tool.display_name}`} onClick={(event) => open({ kind: 'delete', tool }, event.currentTarget)}>Delete tool</Button> : null}
+            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.editDetails} aria-describedby={!actions.editDetails ? `${helpId}-edit-help` : undefined} aria-label={`Edit details for ${tool.display_name}`} onClick={(event) => open({ kind: 'edit', tool }, event.currentTarget)}>Edit details</Button>
+            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.configure} aria-describedby={!actions.configure ? `${helpId}-config-help` : undefined} aria-label={`Configure ${tool.display_name}`} onClick={(event) => open({ kind: 'config', tool }, event.currentTarget)}>Configure</Button>
+            {tool.type !== 'builtin' ? <Button variant="ghost" className={`${toolButtonClass} text-destructive`} disabled={busy || !actions.delete} aria-describedby={!actions.delete ? `${helpId}-delete-help` : undefined} aria-label={`Delete tool ${tool.display_name}`} onClick={(event) => open({ kind: 'delete', tool }, event.currentTarget)}>Delete tool</Button> : null}
           </div>
           {!actions.editDetails || !actions.configure || tool.type !== 'builtin' && !actions.delete ? <div className="space-y-1 text-sm text-muted-foreground">
             {!actions.editDetails ? <p id={`${helpId}-edit-help`}>Your permissions do not allow editing details for this record.</p> : null}
-            {!actions.configure ? <p id={`${helpId}-config-help`}>{tool.capabilities.can_configure ? 'Select a concrete company before replacing configuration.' : 'Your permissions do not allow configuring this record in this company context.'}</p> : null}
+            {!actions.configure ? <p id={`${helpId}-config-help`}>{tool.capabilities.can_configure ? 'Select a concrete company before configuring this record.' : 'Your permissions do not allow configuring this record in this company context.'}</p> : null}
             {tool.type !== 'builtin' && !actions.delete ? <p id={`${helpId}-delete-help`}>Your permissions do not allow deleting this record.</p> : null}
           </div> : null}
         </CardContent>
