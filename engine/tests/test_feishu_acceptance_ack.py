@@ -1,3 +1,4 @@
+import asyncio
 import json
 from uuid import uuid4
 
@@ -114,3 +115,133 @@ async def test_manager_installs_awaited_handler_on_sdk_data_frames(monkeypatch):
         assert len(acknowledgements) == 1
     finally:
         await manager.stop_all()
+
+
+@pytest.fixture
+async def live_frame_adapter(monkeypatch):
+    manager, agent_id, clients = FeishuWSManager(), uuid4(), []
+    connected = asyncio.Event()
+
+    def construct(*args, **kwargs):
+        client = Client("app", "secret")
+
+        async def connect():
+            connected.set()
+
+        async def ping():
+            await asyncio.Event().wait()
+
+        async def disconnect():
+            return None
+
+        monkeypatch.setattr(client, "_connect", connect)
+        monkeypatch.setattr(client, "_ping_loop", ping)
+        monkeypatch.setattr(client, "_disconnect", disconnect)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("app.services.feishu_ws._construct_ws_client", construct)
+    await manager.start_client(agent_id, "app", "secret")
+    await connected.wait()
+    try:
+        yield manager, agent_id, clients, connected
+    finally:
+        await manager.stop_all()
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+async def test_actual_frame_burst_refuses_before_enrichment_and_restarts_fresh(
+    monkeypatch, live_frame_adapter, outcome
+):
+    manager, agent_id, clients, connected = live_frame_adapter
+    client = clients[-1]
+    started, release, refused = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    entered, committed, acknowledgements = [], [], []
+    failing = outcome == "failure"
+
+    async def enrich(agent, body):
+        entered.append(body)
+        if len(entered) == 8:
+            started.set()
+        await release.wait()
+        if failing:
+            raise RuntimeError("database unavailable")
+        committed.append(body)
+
+    async def write(data):
+        frame = Frame()
+        frame.ParseFromString(data)
+        acknowledgements.append(json.loads(frame.payload)["code"])
+        if len(acknowledgements) == 24:
+            refused.set()
+
+    monkeypatch.setattr(feishu, "process_feishu_event", enrich)
+    monkeypatch.setattr(client, "_write_message", write)
+    payload = json.dumps({"header": {"event_type": "im.message.receive_v1"}, "event": {}}).encode()
+    callbacks = [
+        asyncio.create_task(client._handle_message(event_frame(payload).SerializeToString())) for _ in range(32)
+    ]
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(refused.wait(), 1)
+        assert len(entered) == 8
+        assert committed == []
+        assert acknowledgements == [500] * 24
+        await client._handle_message(event_frame(b"{}", kind="card").SerializeToString())
+        await client._handle_message(event_frame(payload[:10], total=2).SerializeToString())
+        assert len(entered) == 8
+        if outcome == "cancel":
+            await manager.stop_client(agent_id)
+        else:
+            release.set()
+        results = await asyncio.gather(*callbacks, return_exceptions=True)
+        assert len(committed) == (8 if outcome == "success" else 0)
+        if outcome == "cancel":
+            assert sum(isinstance(result, asyncio.CancelledError) for result in results) == 8
+            assert acknowledgements == [500] * 24
+        else:
+            assert acknowledgements.count(200) == (8 if outcome == "success" else 0)
+        await manager.stop_client(agent_id)
+        connected.clear()
+        await manager.start_client(agent_id, "app", "secret")
+        await connected.wait()
+        failing = False
+        release.set()
+        monkeypatch.setattr(clients[-1], "_write_message", write)
+        with pytest.raises(asyncio.CancelledError):
+            await client._handle_message(event_frame(payload).SerializeToString())
+        await clients[-1]._handle_message(event_frame(payload).SerializeToString())
+        assert len(entered) == 9
+        assert acknowledgements[-1] == 200
+    finally:
+        for callback in callbacks:
+            callback.cancel()
+        await asyncio.gather(*callbacks, return_exceptions=True)
+
+
+async def test_nested_actual_frame_ownership_joins_blocked_ack_write(monkeypatch, live_frame_adapter):
+    manager, agent_id, clients, _ = live_frame_adapter
+    writing, cleaned = asyncio.Event(), asyncio.Event()
+
+    async def accept(agent, body):
+        return None
+
+    async def write(data):
+        writing.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(feishu, "process_feishu_event", accept)
+    monkeypatch.setattr(clients[-1], "_write_message", write)
+    payload = json.dumps({"header": {"event_type": "im.message.receive_v1"}, "event": {}}).encode()
+    callback = asyncio.create_task(clients[-1]._handle_message(event_frame(payload).SerializeToString()))
+    try:
+        await asyncio.wait_for(writing.wait(), 1)
+        await manager.stop_client(agent_id)
+        assert callback.cancelled()
+        assert cleaned.is_set()
+    finally:
+        callback.cancel()
+        await asyncio.gather(callback, return_exceptions=True)
