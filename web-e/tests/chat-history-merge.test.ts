@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { applyHistoryRefresh, joinHistoryRanges, prependHistory, refreshHistory } from '../src/lib/chat/history.ts'
+import { applyHistoryRefresh, joinHistoryRanges, prependHistory, refreshHistory, trimHistory, type ChatHistory } from '../src/lib/chat/history.ts'
 import { mergeServerHistory, type ChatLine } from '../src/lib/chat/transcript.ts'
 import { historyCursor, historyPage, historyRow } from './chat-history-fixture.ts'
 
@@ -72,4 +72,41 @@ test('older merge keeps optimistic receipts, rejected uploads and live completio
   for (const row of local.filter((row) => row.fromHistory)) {
     assert.equal(merged.find((entry) => entry.entry_id === row.entry_id), row)
   }
+})
+
+test('whole-page eviction restores the oldest retained cursor and filters deltas below its floor', () => {
+  let held: ChatHistory = historyPage(600, 650, 'before-600')
+  for (let start = 550; start >= 0; start -= 50) held = prependHistory(held, historyPage(start, start + 50, `before-${start}`))
+  const trimmed = trimHistory(held)
+  assert.deepEqual(trimmed.items, historyPage(150, 650).items)
+  assert.equal(trimmed.next_cursor, 'before-150')
+  assert.equal(trimmed.pages?.length, 10)
+  const edited = { ...historyRow(150), content: 'Edited at floor' }
+  const changed = applyHistoryRefresh(trimmed, { kind: 'delta', revision: 'delta', items: [historyRow(0), edited, historyRow(650)] })
+  assert.deepEqual(changed.items, [edited, ...historyPage(151, 651).items])
+  assert.equal(changed.items[1], trimmed.items[1])
+  assert.equal(changed.next_cursor, 'before-150')
+})
+
+test('eviction keeps projected siblings on both sides of a page boundary together and protects focus', () => {
+  const newer = historyPage(50, 550, 'newer-page')
+  const shared = { ...historyRow(49), message_id: historyRow(50).message_id, created_at: historyRow(50).created_at }
+  const older = { ...historyPage(0, 50, 'older-page'), items: [...historyPage(0, 49).items, shared] }
+  const held = prependHistory(newer, older)
+  assert.equal(trimHistory(held), held)
+  const separate = prependHistory(historyPage(50, 550, 'retained-cursor'), historyPage(0, 50, 'evicted-cursor'))
+  assert.equal(trimHistory(separate, new Set(['entry-0'])), separate)
+})
+
+test('append-only deltas retain existing row references and resets discard the evicted floor', () => {
+  const original = historyPage(0, 50, historyCursor)
+  const appended = applyHistoryRefresh(original, { kind: 'delta', revision: 'new', items: historyPage(50, 52).items })
+  assert.deepEqual(appended.items, historyPage(0, 52).items)
+  for (const [index, row] of original.items.entries()) assert.equal(appended.items[index], row)
+  const tail = historyRow(51)
+  const sibling = { ...tail, entry_id: `${tail.entry_id}:tool`, role: 'tool_call' }
+  const extended = applyHistoryRefresh(appended, { kind: 'delta', revision: 'sibling', items: [sibling] })
+  assert.deepEqual(extended.items, [...appended.items, sibling])
+  const reset = historyPage(200, 250, 'reset')
+  assert.equal(applyHistoryRefresh({ ...appended, floor: historyRow(0) }, { kind: 'reset', page: reset }), reset)
 })
