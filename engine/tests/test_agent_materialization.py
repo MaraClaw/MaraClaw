@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 
 from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager
-from app.services.storage_runtime.base import StorageBackend, StorageEntry
+from app.services.storage_runtime.base import MaterializedFile, StorageBackend, StorageEntry
 from app.services.storage_runtime.local import LocalStorageBackend
 from sqlite_guest_fixtures import running_sqlite_guest
 
@@ -49,6 +50,12 @@ class RemoteStorage(StorageBackend):
     @override
     async def read_bytes(self, key: str) -> bytes:
         return self.objects[key]
+
+    @override
+    async def materialize(self, key: str) -> MaterializedFile | None:
+        with tempfile.NamedTemporaryFile(delete=False) as file:
+            file.write(self.objects[key])
+        return MaterializedFile(Path(file.name), owned=True)
 
 
 @pytest.fixture

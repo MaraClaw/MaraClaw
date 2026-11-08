@@ -84,6 +84,7 @@ __all__ = [
 
 settings = get_settings()
 
+_COPY_CHUNK_BYTES = 1024 * 1024
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 XAI_OAUTH_PROFILE_ID = "xai:default"
 OPENAI_OAUTH_PROFILE_ID = "openai:default"
@@ -225,6 +226,12 @@ def _is_storage_source(storage: StorageBackend, storage_key: str, local_path: Pa
     )
 
 
+def _copy_in_place(source: Path, target: Path) -> None:
+    """Stream ``source`` over ``target`` without replacing it, so the inode, owner and mode stay as they are."""
+    with source.open("rb") as reader, target.open("wb") as writer:
+        shutil.copyfileobj(reader, writer, length=_COPY_CHUNK_BYTES)
+
+
 def _clear_runtime(*records: AgentRecord) -> None:
     for record in records:
         record.status = AgentStatus.ERROR
@@ -300,7 +307,13 @@ class AgentManager:
         if _is_storage_source(storage, storage_key, local_path):
             # Copying a file onto itself truncates it, which corrupts SQLite WAL/SHM files a guest holds open.
             return
-        _ = local_path.write_bytes(await storage.read_bytes(storage_key))
+        materialized = await storage.materialize(storage_key)
+        if materialized is None:
+            raise RuntimeError(f"Storage backend cannot materialize a local file for {storage_key}")
+        try:
+            await to_thread.run_sync(_copy_in_place, materialized.path, local_path)
+        finally:
+            materialized.close()
 
     def _ensure_openclaw_workspace_layout(self, agent_dir: Path) -> None:
         """Guarantee ``workspace/`` exists and ``.openclaw/workspace`` links to it."""
