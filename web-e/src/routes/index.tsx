@@ -19,6 +19,7 @@ const AgentSettingsPage = lazy(() => import('@/pages/app/agent-settings').then((
 const AgentSkillsPage = lazy(() => import('@/pages/app/agent-skills').then((module) => ({ default: module.AgentSkillsPage })))
 const AgentTasksPage = lazy(() => import('@/pages/app/agent-tasks').then((module) => ({ default: module.AgentTasksPage })))
 const AgentToolsPage = lazy(() => import('@/pages/app/agent-tools').then((module) => ({ default: module.AgentToolsPage })))
+const AgentMcpPage = lazy(() => import('@/pages/app/agent-mcp').then((module) => ({ default: module.AgentMcpPage })))
 const AgentsListPage = lazy(() => import('@/pages/app/agents-list').then((module) => ({ default: module.AgentsListPage })))
 const AgentControlPage = lazy(() => import('@/pages/app/agent-control').then((module) => ({ default: module.AgentControlPage })))
 const AgentCredentialsPage = lazy(() => import('@/pages/app/agent-credentials').then((module) => ({ default: module.AgentCredentialsPage })))
@@ -82,6 +83,7 @@ export function AppRouter() {
                   <Route path="files" element={<AgentFilesPage />} />
                   <Route path="skills" element={<AgentSkillsPage />} />
                   <Route path="tools" element={<AgentToolsPage />} />
+                  <Route path="mcp" element={<AgentMcpPage />} />
                   <Route path="tasks" element={<AgentTasksPage />} />
                   <Route path="schedules" element={<AgentSchedulesPage />} />
                   <Route path="activity" element={<AgentActivityPage />} />
