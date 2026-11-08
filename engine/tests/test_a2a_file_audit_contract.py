@@ -39,8 +39,10 @@ class MemoryStorage(StorageBackend):
         return self.files[key]
 
     @override
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         data = self.files[key]
+        if offset is not None:
+            return data[offset : offset + max_bytes]
         if len(data) > max_bytes:
             raise StorageReadLimitExceededError(max_bytes, len(data))
         return data

@@ -73,7 +73,13 @@ class FallbackStorageBackend(StorageBackend):
         return await self.primary.read_bytes(key)
 
     @override
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        if offset is not None:
+            # A partial object cannot be promoted as a complete primary winner.
+            try:
+                return await self.primary.read_bytes_bounded(key, max_bytes, offset=offset)
+            except FileNotFoundError:
+                return await self.fallback.read_bytes_bounded(key, max_bytes, offset=offset)
         try:
             return await self.primary.read_bytes_bounded(key, max_bytes)
         except FileNotFoundError:
