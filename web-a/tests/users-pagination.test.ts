@@ -9,7 +9,7 @@ import { exportCompanyUsers, listUsers, listUsersPage, type AdminUser } from '..
 import { resetUsersPagination, usersPaginationOptions } from '../src/pages/users-pagination.ts'
 import { createRosterExporter, downloadRosterCsv } from '../src/pages/users-roster-export.ts'
 import { createFixture } from './helpers.ts'
-import { ownDownloadDocument, ownRosterSession, rosterCsv, rosterScope } from './roster-export-fixtures.ts'
+import { ownDownloadDocument, ownRosterSession, rosterTicket, rosterScope } from './roster-export-fixtures.ts'
 
 const row: AdminUser = {
   id: 'member', email: 'member@example.test', display_name: 'Member',
@@ -175,9 +175,9 @@ test('same-token session replacement cancels a pending page and cannot repopulat
   assert.equal(previous.client.getQueryCache().getAll().length, 0)
 })
 
-test('company export downloads server CSV for literal company/search with cancellation', async (t) => {
+test('company export mints a small handoff for literal company/search with cancellation', async (t) => {
   // Given
-  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json({ csv: rosterCsv }))
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json(rosterTicket))
   const signal = new AbortController().signal
   // When
   const result = await exportCompanyUsers({ ...rosterScope, tenantId: 'alpha/+' }, signal)
@@ -187,10 +187,11 @@ test('company export downloads server CSV for literal company/search with cancel
   assert.equal(request.pathname, '/api/users/export')
   assert.deepEqual(Object.fromEntries(request.searchParams), { tenant_id: 'alpha/+', search: rosterScope.search })
   assert.strictEqual(init?.signal, signal)
-  assert.deepEqual(result, { csv: rosterCsv })
+  assert.equal(init?.method, 'POST')
+  assert.deepEqual(result, rosterTicket)
 })
 
-for (const body of [{}, { csv: 1 }, { csv: '', extra: true }]) test('export rejects a malformed JSON CSV response', async (t) => {
+for (const body of [{}, { ticket: 1, expires_in: 60 }, { ticket: '', expires_in: 60 }, { ...rosterTicket, csv: '' }]) test('export rejects a malformed handoff', async (t) => {
   // Given
   t.mock.method(globalThis, 'fetch', async () => Response.json(body))
   // When / Then
@@ -220,7 +221,7 @@ for (const retirement of ['company A-B-A', 'search A-B-A', 'same-token session',
     }
     const current = exporter.getSnapshot()
     assert.equal(current.pending, false)
-    deferred.resolve(Response.json(status === 200 ? { csv: rosterCsv } : { detail: 'Retired error' }, { status }))
+    deferred.resolve(Response.json(status === 200 ? rosterTicket : { detail: 'Retired error' }, { status }))
     await pending
     // Then
     assert.deepEqual(downloads, [])
@@ -228,17 +229,17 @@ for (const retirement of ['company A-B-A', 'search A-B-A', 'same-token session',
   })
 }
 
-for (const csv of [rosterCsv, rosterCsv.split('\r\n')[0] + '\r\n']) test('current export downloads full or header-only CSV and settles pending', async (t) => {
+test('current export initiates native delivery and settles pending', async (t) => {
   // Given
   const policy = ownRosterSession(t)
   const exporter = createRosterExporter(policy, policy.capture())
   t.after(exporter.visit('alpha', ''))
-  t.mock.method(globalThis, 'fetch', async () => Response.json({ csv }))
+  t.mock.method(globalThis, 'fetch', async () => Response.json(rosterTicket))
   const downloads: string[] = []
   // When
   await exporter.run(rosterScope, (value) => { downloads.push(value) })
   // Then
-  assert.deepEqual(downloads, [csv])
+  assert.deepEqual(downloads, [rosterTicket.ticket])
   assert.equal(exporter.getSnapshot().pending, false)
   assert.equal(exporter.getSnapshot().error, null)
   assert.ok(exporter.getSnapshot().message)
@@ -250,7 +251,8 @@ for (const failure of ['http', 'download']) test(`current ${failure} failure cle
   const exporter = createRosterExporter(policy, policy.capture())
   t.after(exporter.visit('alpha', ''))
   let retry = false
-  t.mock.method(globalThis, 'fetch', async () => failure === 'http' && !retry ? Response.json({ detail: 'Export unavailable' }, { status: 503 }) : Response.json({ csv: rosterCsv }))
+  let issued = 0
+  t.mock.method(globalThis, 'fetch', async () => failure === 'http' && !retry ? Response.json({ detail: 'Export unavailable' }, { status: 503 }) : Response.json({ ...rosterTicket, ticket: `fresh-${++issued}` }))
   // When
   await exporter.run(rosterScope, () => { throw new Error('Download failed') })
   // Then
@@ -260,17 +262,21 @@ for (const failure of ['http', 'download']) test(`current ${failure} failure cle
   retry = true
   const downloads: string[] = []
   await exporter.run(rosterScope, (csv) => { downloads.push(csv) })
-  assert.deepEqual(downloads, [rosterCsv])
+  assert.deepEqual(downloads, [failure === 'http' ? 'fresh-1' : 'fresh-2'])
   assert.equal(exporter.getSnapshot().error, null)
 })
 
-for (const fail of [false, true]) test(`download removes anchor and revokes object URL on ${fail ? 'failure' : 'success'}`, (t) => {
+for (const fail of [false, true]) test(`native download removes anchor on ${fail ? 'failure' : 'success'}`, (t) => {
   // Given
   const { anchor, events } = ownDownloadDocument(t, fail)
   // When
-  if (fail) assert.throws(() => downloadRosterCsv(rosterCsv), /Download failed/)
-  else downloadRosterCsv(rosterCsv)
+  if (fail) assert.throws(() => downloadRosterCsv('opaque/+?'), /Download failed/)
+  else downloadRosterCsv('opaque/+?')
   // Then
-  assert.deepEqual(events, ['create', 'append', 'click', 'remove', 'revoke:blob:owned-roster'])
+  assert.deepEqual(events, ['append', 'click', 'remove'])
   assert.equal(anchor.download, 'company-users.csv')
+  assert.equal(anchor.referrerPolicy, 'no-referrer')
+  const url = new URL(anchor.href, 'https://example.test')
+  assert.equal(url.pathname, '/api/users/export/download')
+  assert.deepEqual([...url.searchParams], [['ticket', 'opaque/+?']])
 })

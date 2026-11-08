@@ -8,7 +8,26 @@ import { exerciseRosterExports, installRosterProbe } from './roster-export-brows
 
 const output = process.env.USERS_PAGINATION_ARTIFACTS ?? join(process.env.TMPDIR, 'users-pagination-evidence')
 await mkdir(output, { recursive: true })
-const server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
+let downloadState
+const server = await createServer({ server: { host: '127.0.0.1', port: 0 }, plugins: [{
+  name: 'owned-native-roster-download',
+  configureServer(vite) {
+    vite.middlewares.use((request, response, next) => {
+      const url = new URL(request.url, 'http://127.0.0.1')
+      if (url.pathname !== '/api/users/export/download') return next()
+      assert.ok(downloadState)
+      assert.deepEqual([...url.searchParams.keys()], ['ticket'])
+      assert.equal(request.headers.authorization, undefined)
+      assert.equal(request.headers.referer, undefined)
+      const ticket = url.searchParams.get('ticket')
+      assert.equal(downloadState.tickets.delete(ticket), true)
+      downloadState.redemptions.push(ticket)
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="company-users.csv"', 'Cache-Control': 'no-store' })
+      response.end(downloadState.downloadCsv)
+    })
+  },
+}] })
 let browser
 let ownedBrowser
 const evidence = []
@@ -30,14 +49,17 @@ const cursor = 'opaque/+?=next'
 const first = { items: [row('First member'), row('Second admin', 'alpha', { role: 'org_admin' })], next_cursor: cursor }
 
 async function scenario(name, exercise, options = {}) {
+  if (process.env.USERS_PAGINATION_SCENARIO && !name.includes(process.env.USERS_PAGINATION_SCENARIO)) return
   const context = await browser.newContext({ viewport: { width: 1365, height: 1000 } })
   context.setDefaultTimeout(10_000)
   const state = {
     role: options.role ?? 'platform_admin', calls: [], patches: [], companyCalls: 0, gates: [], exports: [], downloads: [], exportReplies: 0,
-    exportAnswer: async () => ({ csv: 'id,email\r\nserver-only,off-page@example.test\r\n' }),
+    exportAnswer: async () => ({ ticket: `issued-${state.exports.length}`, expires_in: 60 }),
+    downloadCsv: 'id,email\r\nserver-only,off-page@example.test\r\n', tickets: new Set(), redemptions: [],
     answer: async ({ tenant, search, cursor: next }) => ({ items: [row(search || (next ? 'Last member' : `${tenant} member`), tenant)], next_cursor: null }),
   }
   const errors = []
+  downloadState = state
   try {
     await context.addInitScript(() => localStorage.setItem('maraclaw-admin-token', 'synthetic-token'))
     await context.addInitScript(installRosterProbe)
@@ -57,6 +79,8 @@ async function scenario(name, exercise, options = {}) {
       else if (path === '/api/admin/platform-admins') body = [row('Hidden supervisor', null, { role: 'platform_admin' })]
       else if (path === '/api/departments') body = { departments: [], assignments: [] }
       else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
+      else if (path === '/api/admin/search-analytics/summary') body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }
+      else if (path === '/api/admin/search-analytics/orgs') body = []
       else if (path === '/api/tenants/me') body = { ...company(admin.tenant_id), is_default_end_user_org: false }
       else if (path === '/api/users/page') {
         const input = { tenant: url.searchParams.get('tenant_id'), search: url.searchParams.get('search'), cursor: url.searchParams.get('cursor') }
@@ -66,12 +90,14 @@ async function scenario(name, exercise, options = {}) {
         status = result.status ?? 200
         body = result.body ?? result
       } else if (path === '/api/users/export') {
+        assert.equal(request.method(), 'POST')
         const input = { tenant: url.searchParams.get('tenant_id'), search: url.searchParams.get('search') }
         assert.deepEqual([...url.searchParams.keys()].sort(), ['search', 'tenant_id'])
         state.exports.push(input)
         const result = await state.exportAnswer(input)
         status = result.status ?? 200
         body = result.body ?? result
+        if (status === 200 && typeof body.ticket === 'string') state.tickets.add(body.ticket)
       } else if (path.endsWith('/active') && request.method() === 'PATCH') {
         state.patches.push({ path, body: request.postDataJSON() })
         body = row(decodeURIComponent(path.split('/').at(-2)), 'alpha', { is_active: true })
@@ -85,7 +111,8 @@ async function scenario(name, exercise, options = {}) {
     console.log(`PASS ${name}`)
   } finally {
     for (const gate of state.gates) gate.resolve()
-    await context.close()
+    if (browser.isConnected()) await context.close()
+    downloadState = undefined
   }
 }
 

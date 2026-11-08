@@ -2,7 +2,7 @@ import type { TestContext } from 'node:test'
 import { adminSession } from '../src/lib/admin-session.ts'
 import { MemoryStorage } from './helpers.ts'
 
-export const rosterCsv = 'id,email,display_name,role,is_active,agents_count,created_at,source\r\noff-page,off@example.test,Off page,member,true,2,,local\r\n'
+export const rosterTicket = { ticket: 'opaque-roster-ticket', expires_in: 60 }
 export const rosterScope = { tenantId: 'alpha', search: ' %_Case+? ' }
 
 export function ownRosterSession(context: TestContext) {
@@ -20,11 +20,11 @@ export function ownRosterSession(context: TestContext) {
 export function ownDownloadDocument(context: TestContext, fail: boolean) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
   const events: string[] = []
-  const anchor = { href: '', download: '', click: () => { events.push('click'); if (fail) throw new Error('Download failed') }, remove: () => events.push('remove') }
+  const anchor = { href: '', download: '', referrerPolicy: '', click: () => { events.push('click'); if (fail) throw new Error('Download failed') }, remove: () => events.push('remove') }
   Object.defineProperty(globalThis, 'document', { configurable: true, value: {
     createElement: () => anchor, body: { append: () => events.push('append') },
   } })
-  context.mock.method(URL, 'createObjectURL', () => { events.push('create'); return 'blob:owned-roster' })
+  context.mock.method(URL, 'createObjectURL', () => { throw new Error('Roster must use native download') })
   context.mock.method(URL, 'revokeObjectURL', (url: string) => events.push(`revoke:${url}`))
   context.after(() => {
     if (previous) Object.defineProperty(globalThis, 'document', previous)
