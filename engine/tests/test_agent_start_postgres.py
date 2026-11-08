@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from importlib import import_module
@@ -14,8 +15,10 @@ from app.services.agent_start_store import PostgresStartStore
 from app.services.guest_identity import guest_container_name
 from test_guest_start_safety import Docker
 from test_openclaw_update_postgres import agent, member, tenant
+from worker_progress_fixtures import WorkerHTTP, worker_http
 
 db = postgres_fixtures.db
+__all__ = ["worker_http"]
 
 
 @pytest.fixture
@@ -295,3 +298,58 @@ async def test_prepublication_flush_ambiguity_preserves_recoverable_guest(start_
     assert current.state == "pending"
     assert guest.state.status == "running"
     assert docker.removed == []
+
+
+@pytest.mark.parametrize("boundary", ["selection", "recovery", "publication"])
+async def test_worker_readiness_stall_preserves_committed_start_and_resumes_once(
+    start_db, guest_surface, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, boundary: str
+) -> None:
+    operation, original = await pending_start(start_db)
+    docker, probes = guest_surface
+    docker.add(replace(original, container_id="progress-candidate"), status="exited")
+    entered, release = asyncio.Event(), asyncio.Event()
+    outstanding, recover, publish = (
+        reconciler.start_store.outstanding,
+        reconciler.start_store.recover,
+        reconciler.start_store.publish,
+    )
+
+    async def pause(name: str) -> None:
+        if boundary == name:
+            entered.set()
+            await release.wait()
+
+    async def selection():
+        await pause("selection")
+        return await outstanding()
+
+    async def recovery(current):
+        await pause("recovery")
+        return await recover(current)
+
+    async def publication(current, candidate):
+        await pause("publication")
+        return await publish(current, candidate)
+
+    monkeypatch.setattr(reconciler.start_store, "outstanding", selection)
+    monkeypatch.setattr(reconciler.start_store, "recover", recovery)
+    monkeypatch.setattr(reconciler.start_store, "publish", publication)
+    monkeypatch.setattr(reconciler, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "start", reconciler.agent_start_reconciler_loop(), requirement="loop", progress_budget_seconds=300
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        worker_http.pacing.now += 301
+        await worker_http.ready(expected=False)
+        assert await agent_start_dao.get(start_db, operation.agent_id) == operation
+        assert await start_db.fetchval("SELECT status FROM agents WHERE id=%(id)s", {"id": original.id}) == "stopped"
+        assert docker.runs == docker.removed == []
+    finally:
+        release.set()
+    await worker_http.pacing.paused()
+    await worker_http.ready(expected=True)
+    current = await agent_start_dao.get(start_db, operation.agent_id)
+    assert current == replace(operation, state="succeeded")
+    assert probes == ["progress-candidate"] * 2
+    assert docker.runs == docker.removed == []
