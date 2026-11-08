@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import anyio
+
+from app.core.logging import logger
 from app.services.storage import get_storage_backend, normalize_storage_key
-from app.services.storage_runtime.base import StorageBackend, WriteCondition, content_hash_bytes
+from app.services.storage_runtime.base import (
+    StorageBackend,
+    StorageReadLimitExceededError,
+    WriteCondition,
+    content_hash_bytes,
+)
+from app.services.storage_runtime.bounded import read_bounded
 from app.services.workspace_collaboration import normalize_workspace_path
 from app.services.workspace_locking import workspace_locks
 
+_FLUSH_CHUNK_BYTES: Final = 1024 * 1024
 TOOL_MATERIALIZE_MAX_FILE_BYTES: Final = 10 * 1024 * 1024
 TOOL_MATERIALIZE_MAX_TOTAL_BYTES: Final = 100 * 1024 * 1024
 TEMP_WORKSPACE_DEFAULT_PATHS: Final = ["workspace", "memory", "skills", "focus.md", "soul.md", "HEARTBEAT.md"]
@@ -70,8 +82,15 @@ async def _materialize_storage_entry(
         for child in await storage.list_dir(entry_key):
             await _materialize_storage_entry(storage, child.key, root_key, local_root)
         return
+    data = await storage.read_bytes_bounded(entry_key, TOOL_MATERIALIZE_MAX_FILE_BYTES)
+    _ = await anyio.to_thread.run_sync(_write_local_file, target, data)
+
+
+def _write_local_file(target: Path, data: bytes) -> str:
+    """Write ``data`` under a new parent and return its content hash, off the event loop."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    _ = target.write_bytes(await storage.read_bytes(entry_key))
+    _ = target.write_bytes(data)
+    return content_hash_bytes(data)
 
 
 async def _prepare_temp_workspace(
@@ -90,11 +109,15 @@ async def _prepare_temp_workspace(
     budget = {"total": 0}
     selected = TEMP_WORKSPACE_DEFAULT_PATHS if paths is None else [path for path in paths if path]
     manifest: dict[str, TempWorkspaceManifestEntry] = {}
-    for rel_path in selected:
-        storage_key, normalized, is_enterprise = agent_tools._tool_storage_key(agent_id, rel_path, tenant_id)
-        if is_enterprise:
-            continue
-        await _materialize_storage_path_with_budget(storage, storage_key, normalized, temp_ws, budget, manifest)
+    try:
+        for rel_path in selected:
+            storage_key, normalized, is_enterprise = agent_tools._tool_storage_key(agent_id, rel_path, tenant_id)
+            if is_enterprise:
+                continue
+            await _materialize_storage_path_with_budget(storage, storage_key, normalized, temp_ws, budget, manifest)
+    except BaseException:
+        tmp.cleanup()
+        raise
     return TempWorkspace(
         temp_dir=tmp,
         root=temp_ws,
@@ -114,26 +137,27 @@ async def _materialize_storage_path_with_budget(
     manifest: dict[str, TempWorkspaceManifestEntry],
 ) -> None:
     if await storage.is_file(storage_key):
-        version = await storage.get_version(storage_key)
-        if version.size > TOOL_MATERIALIZE_MAX_FILE_BYTES:
-            return
-        if budget["total"] + version.size > TOOL_MATERIALIZE_MAX_TOTAL_BYTES:
+        remaining = TOOL_MATERIALIZE_MAX_TOTAL_BYTES - budget["total"]
+        version = await storage.get_version_bounded(storage_key, TOOL_MATERIALIZE_MAX_FILE_BYTES)
+        try:
+            data = await storage.read_bytes_bounded(storage_key, min(TOOL_MATERIALIZE_MAX_FILE_BYTES, remaining))
+        except StorageReadLimitExceededError:
+            if remaining >= TOOL_MATERIALIZE_MAX_FILE_BYTES:
+                raise
             return
         target = _safe_local_target(local_root, rel_path)
         if target is None:
             return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        data = await storage.read_bytes(storage_key)
-        _ = target.write_bytes(data)
+        base_hash = await anyio.to_thread.run_sync(_write_local_file, target, data)
         normalized_rel = normalize_workspace_path(rel_path)
         manifest[normalized_rel] = TempWorkspaceManifestEntry(
             rel_path=normalized_rel,
             storage_key=storage_key,
             base_version_token=version.token,
-            base_hash=content_hash_bytes(data),
-            size=version.size,
+            base_hash=base_hash,
+            size=len(data),
         )
-        budget["total"] += version.size
+        budget["total"] += len(data)
         return
     if await storage.is_dir(storage_key):
         target = _safe_local_target(local_root, rel_path)
@@ -166,11 +190,17 @@ async def flush_temp_workspace(
             for rel_path, local_path in local_files.items():
                 if local_path.name.startswith("_exec_tmp") or "__pycache__" in local_path.parts:
                     continue
-                data = local_path.read_bytes()
-                current_hash = content_hash_bytes(data)
                 entry = manifest.get(rel_path)
-                if entry and entry.base_hash == current_hash:
+                digest = await anyio.to_thread.run_sync(_digest_local_file, local_path)
+                if digest is not None and entry and entry.base_hash == digest:
                     skipped.append(rel_path)
+                    continue
+                data = None if digest is None else await anyio.to_thread.run_sync(_read_local_file, local_path)
+                if data is None:
+                    logger.warning(f"[temp-workspace] {rel_path} exceeds {TOOL_MATERIALIZE_MAX_FILE_BYTES} bytes")
+                    conflicted.append(rel_path)
+                    if conflict_mode == "fail":
+                        return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
                     continue
                 condition = (
                     WriteCondition(version_token=entry.base_version_token)
@@ -216,6 +246,30 @@ async def flush_temp_workspace(
             await invalidate_for_workspace_paths(temp_workspace.agent_id, *changed)
 
     return {"updated": updated, "deleted": deleted, "conflicted": conflicted, "skipped": skipped}
+
+
+def _digest_local_file(path: Path) -> str | None:
+    """Hash a file in chunks, or ``None`` once it holds more than the per-file cap; never reads an oversize file."""
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as stream:
+        if os.fstat(stream.fileno()).st_size > TOOL_MATERIALIZE_MAX_FILE_BYTES:
+            return None
+        while chunk := stream.read(_FLUSH_CHUNK_BYTES):
+            total += len(chunk)
+            if total > TOOL_MATERIALIZE_MAX_FILE_BYTES:
+                return None
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_local_file(path: Path) -> bytes | None:
+    """The file's bytes, or ``None`` when it holds more than the per-file cap."""
+    with path.open("rb") as stream:
+        try:
+            return read_bounded(stream, TOOL_MATERIALIZE_MAX_FILE_BYTES)
+        except StorageReadLimitExceededError:
+            return None
 
 
 def _collect_temp_workspace_files(root: Path, selected_paths: list[str]) -> dict[str, Path]:

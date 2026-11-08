@@ -227,7 +227,8 @@ async def test_wake_starts_lanes_beyond_a_page_of_running_lanes(
     finally:
         routing._lane_running.discard(running_lane)
         routing._lane_again.discard(running_lane)
-        routing._wake_semaphores.pop(db.agent.id, None)
+        await routing.drain_wake_tasks(0)
+        routing.open_wake_admission()
 
 
 async def test_delivered_lane_index_serves_the_delivered_probe(pooled_database: ReceiptDatabase) -> None:

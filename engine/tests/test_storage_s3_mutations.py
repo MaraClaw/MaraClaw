@@ -3,10 +3,12 @@ from threading import Event, get_ident
 import anyio
 import anyio.lowlevel
 import pytest
-from botocore.exceptions import EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from botocore.stub import Stubber
 
+from app.services.storage_runtime.base import StorageConditionalRaceError
 from app.services.storage_runtime.s3 import S3StorageBackend
+from s3_wire_server import S3Server
 
 
 @pytest.fixture
@@ -119,3 +121,54 @@ async def test_mutation_runs_off_loop_and_waits_for_worker_when_cancelled(operat
         finally:
             release.set()
     assert completed.is_set()
+
+
+@pytest.mark.parametrize("statuses", [[409, 409, 200], [412], [409, 409, 409]])
+async def test_file_create_streams_rewound_body_and_maps_conflicts(tmp_path, monkeypatch, statuses):
+    path = tmp_path / "data"
+    path.write_bytes(b"streamed content")
+    backend = S3StorageBackend(bucket="bucket")
+    bodies = []
+    handles = []
+
+    class Client:
+        def put_object(self, **kwargs):
+            body = kwargs["Body"]
+            handles.append(body)
+            assert kwargs["ContentLength"] == len(b"streamed content")
+            assert kwargs["IfNoneMatch"] == "*"
+            bodies.append(body.read())
+            status = statuses[len(bodies) - 1]
+            if status != 200:
+                raise ClientError(
+                    {"Error": {"Code": str(status)}, "ResponseMetadata": {"HTTPStatusCode": status}}, "PutObject"
+                )
+            return {}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+    if statuses[-1] == 409:
+        with pytest.raises(StorageConditionalRaceError):
+            await backend.create_file_if_absent("file", path)
+    else:
+        result = await backend.create_file_if_absent("file", path)
+        assert result.ok == (statuses[-1] == 200)
+        assert result.conflict == (statuses[-1] == 412)
+    assert bodies == [b"streamed content"] * len(statuses)
+    assert all(body._stream.closed for body in handles)
+
+
+async def test_file_create_sends_body_to_real_botocore_wire(tmp_path):
+    path = tmp_path / "payload"
+    path.write_bytes(b"wire payload")
+    server = S3Server()
+    server.start()
+    try:
+        backend = S3StorageBackend(
+            bucket="bucket", endpoint_url=server.endpoint, access_key_id="key", secret_access_key="secret"
+        )
+        result = await backend.create_file_if_absent("file", path)
+        assert result.ok
+        assert server.state.objects["file"] == b"wire payload"
+        assert (await backend.create_file_if_absent("file", path)).conflict
+    finally:
+        server.stop()

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import date_from_row_opt, uuid_from_row
+from app.core.json_types import date_from_row, date_from_row_opt, datetime_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.records.okr import (
     CompanyReportRecord,
@@ -323,6 +323,20 @@ class MemberDailyReportDAO(BaseDAO[MemberDailyReportRecord]):
             )
             return [MemberDailyReportRecord.from_row(row) for row in rows]
 
+    async def source_watermark(
+        self, tenant_id: UUID, start: date, end: date
+    ) -> list[tuple[UUID, datetime | None, date]]:
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id, updated_at, report_date FROM member_daily_reports "
+                "WHERE tenant_id = %(tenant_id)s AND report_date BETWEEN %(start)s AND %(end)s ORDER BY id",
+                {"tenant_id": tenant_id, "start": start, "end": end},
+            )
+            return [
+                (uuid_from_row(row["id"]), datetime_from_row(row["updated_at"]), date_from_row(row["report_date"]))
+                for row in rows
+            ]
+
 
 @final
 class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
@@ -331,6 +345,82 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
     table: ClassVar[str] = "company_reports"
     columns: ClassVar[tuple[str, ...]] = _COMPANY_REPORT_COLUMNS
     record_factory = staticmethod(CompanyReportRecord.from_row)
+
+    async def lock_reporting(self, tenant_id: UUID) -> None:
+        """Serialize short reporting transactions, including periods with no row yet."""
+        async with self.session() as db:
+            await db.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%(key)s, 0))",
+                {"key": f"okr-reporting:{tenant_id}"},
+            )
+
+    async def publish(
+        self,
+        report: CompanyReportRecord,
+        *,
+        expected_updated_at: datetime | None,
+    ) -> CompanyReportRecord:
+        """Publish only if no competing writer changed the snapshotted target."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "INSERT INTO company_reports "
+                "(id, tenant_id, report_type, period_start, period_end, period_label, content, "
+                "submitted_count, missing_count, needs_refresh, generated_at, updated_at) VALUES "
+                "(%(id)s, %(tenant_id)s, %(report_type)s, %(period_start)s, %(period_end)s, "
+                "%(period_label)s, %(content)s, %(submitted_count)s, %(missing_count)s, "
+                "%(needs_refresh)s, clock_timestamp(), clock_timestamp()) "
+                "ON CONFLICT (tenant_id, report_type, period_start, period_end) DO UPDATE SET "
+                "period_label = EXCLUDED.period_label, content = EXCLUDED.content, "
+                "submitted_count = EXCLUDED.submitted_count, missing_count = EXCLUDED.missing_count, "
+                "needs_refresh = EXCLUDED.needs_refresh, generated_at = EXCLUDED.generated_at, "
+                "updated_at = clock_timestamp() "
+                "WHERE company_reports.updated_at = %(expected_updated_at)s "
+                f"RETURNING {self._select_list()}",
+                {
+                    "id": report.id,
+                    "tenant_id": report.tenant_id,
+                    "report_type": report.report_type,
+                    "period_start": report.period_start,
+                    "period_end": report.period_end,
+                    "period_label": report.period_label,
+                    "content": report.content,
+                    "submitted_count": report.submitted_count,
+                    "missing_count": report.missing_count,
+                    "needs_refresh": report.needs_refresh,
+                    "expected_updated_at": expected_updated_at,
+                },
+            )
+            if row is not None:
+                published = CompanyReportRecord.from_row(row)
+                await db.execute(
+                    "UPDATE company_reports AS parent SET needs_refresh = TRUE, updated_at = clock_timestamp() "
+                    "WHERE parent.tenant_id = %(tenant_id)s AND ("
+                    "(%(type)s = 'daily' AND parent.report_type = 'weekly' "
+                    "AND %(start)s BETWEEN parent.period_start AND parent.period_end) OR "
+                    "(parent.report_type = 'monthly' AND ("
+                    "(%(type)s = 'weekly' AND %(start)s BETWEEN parent.period_start AND parent.period_end) OR "
+                    "(%(type)s = 'daily' AND (%(week_start)s BETWEEN parent.period_start AND parent.period_end "
+                    "OR EXISTS (SELECT 1 FROM company_reports AS weekly "
+                    "WHERE weekly.tenant_id = parent.tenant_id AND weekly.report_type = 'weekly' "
+                    "AND weekly.period_start BETWEEN parent.period_start AND parent.period_end "
+                    "AND %(start)s BETWEEN weekly.period_start AND weekly.period_end))))))",
+                    {
+                        "tenant_id": report.tenant_id,
+                        "type": report.report_type,
+                        "start": report.period_start,
+                        "week_start": report.period_start - timedelta(days=report.period_start.weekday()),
+                    },
+                )
+                return published
+            current = await self.get_for_period(
+                report.tenant_id,
+                report_type=report.report_type,
+                period_start=report.period_start,
+                period_end=report.period_end,
+            )
+            if current is None:
+                raise RuntimeError("Conflicting company report disappeared during publication")
+            return current
 
     async def get_for_period(
         self,
@@ -415,11 +505,13 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
 
         async with self.session() as db:
             await db.execute(
-                "UPDATE company_reports SET needs_refresh = TRUE, updated_at = NOW() "
+                "UPDATE company_reports SET needs_refresh = TRUE, updated_at = clock_timestamp() "
                 "WHERE tenant_id = %(tenant_id)s AND ("
                 "  (report_type = 'daily' AND period_start = %(day)s)"
-                "  OR (report_type = 'weekly' AND period_start = %(week_start)s AND period_end = %(week_end)s)"
-                "  OR (report_type = 'monthly' AND period_start = %(month_start)s AND period_end = %(month_end)s)"
+                "  OR (report_type = 'weekly' AND period_start <= %(day)s AND period_end >= %(day)s)"
+                "  OR (report_type = 'monthly' AND ("
+                "    (period_start = %(month_start)s AND period_end = %(month_end)s)"
+                "    OR period_start = date_trunc('month', %(week_start)s::date)::date))"
                 ")",
                 {
                     "tenant_id": tenant_id,

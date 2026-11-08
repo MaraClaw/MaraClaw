@@ -61,6 +61,7 @@ async def test_prepared_enqueue_defers_wake_until_commit(
         monkeypatch.setattr(routing, name, AsyncMock(side_effect=AssertionError("preparation inside transaction")))
     monkeypatch.setattr(routing.gateway_message_dao, "earliest_pending_duplicate", AsyncMock(return_value=None))
     monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", AsyncMock(return_value=([created], None)))
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_head", AsyncMock(return_value=created))
 
     async def enqueue() -> GatewayMessageRecord:
         async with session.connection_ctx():

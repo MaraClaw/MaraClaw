@@ -7,6 +7,8 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import anyio
+
 
 @dataclass
 class StorageEntry:
@@ -196,6 +198,16 @@ class StorageBackend:
         """
         del data, content_type
         raise AtomicCreateUnsupportedError(type(self).__name__, key)
+
+    async def create_file_if_absent(
+        self, key: str, path: Path, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        """Publish a local file's bytes without replacement, with ``create_bytes_if_absent`` outcomes.
+
+        This default reads the whole file into memory; backends that can stream the file override it.
+        """
+        data = await anyio.to_thread.run_sync(path.read_bytes)
+        return await self.create_bytes_if_absent(key, data, content_type)
 
     async def write_text(self, key: str, content: str, encoding: str = "utf-8") -> None:
         await self.write_bytes(key, content.encode(encoding), content_type="text/plain; charset=utf-8")

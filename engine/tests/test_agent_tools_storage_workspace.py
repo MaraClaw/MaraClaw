@@ -174,6 +174,12 @@ class MemoryStorageBackend(StorageBackend):
         )
 
     @override
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        if key in self.files:
+            await self.read_bytes_bounded(key, max_bytes)
+        return await self.get_version(key)
+
+    @override
     async def write_bytes_if_match(
         self,
         key: str,

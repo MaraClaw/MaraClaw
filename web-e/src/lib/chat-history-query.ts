@@ -2,7 +2,7 @@ import { queryOptions } from '@tanstack/react-query'
 
 import type { SessionQueryScope } from '../hooks/session-query-scope.ts'
 import { listChatHistoryPage, refreshChatHistory, type ChatHistoryTarget } from './chat-history-api.ts'
-import { applyHistoryRefresh, prependHistory, type ChatHistory } from './chat/history.ts'
+import { applyHistoryRefresh, checkpointHistory, prependHistory, trimHistory, RETAINED_HISTORY_LIMIT, type ChatHistory } from './chat/history.ts'
 
 export const chatHistoryKey = (target: ChatHistoryTarget) => ['chat-history', target.agentId, target.sessionId] as const
 const pageKey = (target: ChatHistoryTarget) => ['chat-history-page', target.agentId, target.sessionId] as const
@@ -47,6 +47,7 @@ export async function loadEarlierHistory(scope: SessionQueryScope, target: ChatH
         cursor, owner: scope.owner, signal: AbortSignal.any([signal, querySignal]),
       })),
       staleTime: Infinity,
+      gcTime: 0,
       retry: false,
     })
     if (page.next_cursor === cursor) throw new ChatHistoryCursorError()
@@ -55,4 +56,16 @@ export async function loadEarlierHistory(scope: SessionQueryScope, target: ChatH
     scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (latest) =>
       latest?.next_cursor === cursor ? prependHistory(latest, page) : latest)
   })
+}
+
+export async function retainLatestHistory(scope: SessionQueryScope, target: ChatHistoryTarget, protectedEntries: ReadonlySet<string>) {
+  scope.assertCurrent()
+  scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (current) => current ? trimHistory(current, protectedEntries) : current)
+  const current = scope.client.getQueryData<ChatHistory>(chatHistoryKey(target))
+  if (!current || current.items.length <= RETAINED_HISTORY_LIMIT || protectedEntries.size > 0) return
+  // Deltas have no forward/page cursor. If the held tail itself has grown past
+  // the budget, fetch a real page boundary rather than inventing a cursor.
+  const page = await scope.run(() => listChatHistoryPage(target, { owner: scope.owner }))
+  scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (latest) => latest === current
+    ? trimHistory(checkpointHistory(current, page), protectedEntries) : latest)
 }

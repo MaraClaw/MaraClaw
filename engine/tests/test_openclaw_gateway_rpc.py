@@ -3,7 +3,7 @@ import errno
 import json
 import os
 from contextlib import asynccontextmanager
-from threading import Event
+from threading import Event, current_thread
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -20,9 +20,16 @@ from app.records.user import UserRecord
 from app.services import onboarding_greeting, openclaw_gateway_config, openclaw_gateway_rpc as rpc
 from app.services.agent_manager import agent_manager
 from app.services.guest_identity import GuestIdentity, GuestOwnershipError, GuestResolutionCache
+from app.services.openclaw_native_capacity import native_capacity, shutdown_native_capacity
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 from app.services.storage import LocalStorageBackend
 from app.services.turn_timing import AdapterTiming, TurnTimeline
+
+
+@pytest.fixture(autouse=True)
+async def close_native_threads():
+    yield
+    shutdown_native_capacity()
 
 
 def running_client():
@@ -426,6 +433,55 @@ class _Turn:
 
     async def run(self):
         return await rpc.execute_gateway_turn(self.agent, self.message)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_native_inspects_and_exec_use_dedicated_capacity(monkeypatch, tmp_path, streaming):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    turn = _Turn(monkeypatch, tmp_path)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = Event()
+    threads: list[str] = []
+
+    def resolve(*_args):
+        threads.append(current_thread().name)
+        return SimpleNamespace(id="owned")
+
+    def inspect(_reference):
+        threads.append(current_thread().name)
+        return SimpleNamespace(state=SimpleNamespace(running=True))
+
+    def execute(*_args):
+        threads.append(current_thread().name)
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return wire_terminal(turn.message_id)
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(rpc, "streams_to_web", AsyncMock(return_value=streaming))
+    monkeypatch.setattr(rpc, "response_guard", AsyncMock(return_value=None))
+    monkeypatch.setattr(rpc, "resolve_guest", resolve)
+    client = running_client()
+    monkeypatch.setattr(client.container, "inspect", inspect)
+    monkeypatch.setattr(agent_manager, "docker_client", client)
+    monkeypatch.setattr(rpc, "_execute", execute)
+    monkeypatch.setattr(rpc.DeltaRelay, "execute", lambda *_args: execute())
+    capacity = native_capacity()
+    assert capacity.executor is None
+    tasks = [asyncio.create_task(turn.run())]
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        tasks.append(asyncio.create_task(turn.run()))
+        default_thread = await asyncio.wait_for(asyncio.to_thread(lambda: current_thread().name), 1)
+        assert not default_thread.startswith("openclaw-native")
+        assert len(threads) == 3
+        assert all(name.startswith("openclaw-native") for name in threads)
+    finally:
+        release.set()
+        outcomes = await asyncio.wait_for(asyncio.gather(*tasks), 5)
+    assert all(isinstance(outcome, rpc.TerminalOutcome) for outcome in outcomes)
 
 
 @pytest.mark.parametrize("error", [ObservationTimeout(), ClientNotFoundError(), ParsingError()])

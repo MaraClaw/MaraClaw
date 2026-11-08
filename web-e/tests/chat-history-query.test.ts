@@ -4,8 +4,8 @@ import { QueryClient, QueryObserver } from '@tanstack/react-query'
 
 import { createSessionQueryScope, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { authSession } from '../src/lib/auth-session.ts'
-import { chatHistoryKey, chatLatestOptions, loadEarlierHistory } from '../src/lib/chat-history-query.ts'
-import type { ChatHistory } from '../src/lib/chat/history.ts'
+import { chatHistoryKey, chatLatestOptions, loadEarlierHistory, retainLatestHistory, ChatHistoryCursorError } from '../src/lib/chat-history-query.ts'
+import { prependHistory, type ChatHistory } from '../src/lib/chat/history.ts'
 import { historyCursor, historyPage, historyRows, historyTarget } from './chat-history-fixture.ts'
 
 test('a long gap resets to one bounded latest page without bridging older pages', async (context) => {
@@ -144,3 +144,34 @@ for (const status of [200, 401, 503]) {
     await assert.rejects(scope.run(() => client.fetchQuery(chatLatestOptions(scope, historyTarget))), RetiredWorkspaceError)
   })
 }
+
+test('evicted pages reenter from the retained floor cursor without a second cached history', async (context) => {
+  const client = new QueryClient()
+  context.after(() => client.clear())
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  let held: ChatHistory = historyPage(600, 650, 'before-600')
+  for (let start = 550; start >= 0; start -= 50) held = prependHistory(held, historyPage(start, start + 50, `before-${start}`))
+  client.setQueryData(chatHistoryKey(historyTarget), held)
+  await retainLatestHistory(scope, historyTarget, new Set())
+  const requests: (string | null)[] = []
+  context.mock.method(globalThis, 'fetch', async (path: string) => {
+    requests.push(new URL(path, 'https://fixture.test').searchParams.get('cursor'))
+    return Response.json(historyPage(100, 150, 'before-100'))
+  })
+  await loadEarlierHistory(scope, historyTarget, new AbortController().signal)
+  assert.deepEqual(requests, ['before-150'])
+  assert.deepEqual(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.items, historyRows(100, 650))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(client.getQueryCache().findAll({ queryKey: ['chat-history-page'] }).length, 0)
+})
+
+test('the cursor advancement guard preserves retained history on repeated cursors', async (context) => {
+  const client = new QueryClient()
+  context.after(() => client.clear())
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  const held = historyPage(50, 100, historyCursor)
+  client.setQueryData(chatHistoryKey(historyTarget), held)
+  context.mock.method(globalThis, 'fetch', async () => Response.json(historyPage(0, 50, historyCursor)))
+  await assert.rejects(loadEarlierHistory(scope, historyTarget, new AbortController().signal), ChatHistoryCursorError)
+  assert.equal(client.getQueryData(chatHistoryKey(historyTarget)), held)
+})

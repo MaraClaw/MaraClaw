@@ -1,5 +1,6 @@
 import { CheckCheck } from 'lucide-react'
-import { memo } from 'react'
+import { Fragment, memo, useCallback } from 'react'
+import type { ChatTranscriptViewport } from '@/hooks/use-chat-scroll'
 import { Button } from '@/components/ui/button'
 import type { ChatLine } from '@/lib/chat/transcript'
 import { cn } from '@/lib/utils'
@@ -42,7 +43,34 @@ const TranscriptRow = memo(function TranscriptRow({ agentId, line, entry, slow, 
   </article>
 })
 
-export const ChatTranscript = memo(function ChatTranscript({ lines, ...props }: Omit<RowProps, 'line' | 'entry'> & { readonly lines: readonly ChatLine[] }) {
-  return lines.map((line, index) => <TranscriptRow key={line.entry_id ?? line.client_submission_id ?? `${line.created_at ?? 'row'}-${index}`}
-    {...props} line={line} entry={line.entry_id ?? line.client_submission_id ?? line.message_id ?? `local-${index}`} />)
+function MeasuredRow({ id, viewport, children }: { readonly id: string; readonly viewport: ChatTranscriptViewport; readonly children: React.ReactNode }) {
+  const register = viewport.registerRow
+  const ref = useCallback((element: HTMLDivElement | null) => register(id, element), [id, register])
+  return <div ref={ref} data-transcript-row={id} className="flow-root pb-3"
+    onFocusCapture={() => viewport.setFocused(id)}
+    onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) viewport.setFocused(null) }}>
+    {children}
+  </div>
+}
+
+export const ChatTranscript = memo(function ChatTranscript({ lines, viewport, ...props }: Omit<RowProps, 'line' | 'entry'> & {
+  readonly lines: readonly ChatLine[]; readonly viewport: ChatTranscriptViewport
+}) {
+  const { rows, height, registerList } = viewport
+  const bottom = rows.at(-1)
+  const end = bottom ? bottom.top + bottom.height : 0
+  return <div ref={registerList} className="flow-root">
+    {rows.map((row, index) => {
+      const previous = rows[index - 1]
+      const gap = row.top - (previous ? previous.top + previous.height : 0)
+      const line = lines[row.index]
+      return <Fragment key={row.id}>
+        {gap > 0 ? <div aria-hidden style={{ height: gap }} /> : null}
+        <MeasuredRow id={row.id} viewport={viewport}>
+          {line ? <TranscriptRow {...props} line={line} entry={row.id} /> : null}
+        </MeasuredRow>
+      </Fragment>
+    })}
+    {height > end ? <div aria-hidden style={{ height: height - end }} /> : null}
+  </div>
 })

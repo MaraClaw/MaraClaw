@@ -5,6 +5,8 @@ import type { ChatLine } from '../src/lib/chat/transcript.ts'
 import { recoverRejectedTurn } from '../src/lib/chat/turn-rejection.ts'
 import { canonicalMessage, canonicalSession, firstSubmission, secondSubmission } from './socket-fixture.ts'
 import { referenceMerge } from './transcript-reference-fixture.ts'
+import { anchoredScrollTop, firstVisibleRow, transcriptEntryId, transcriptLayout, transcriptWindow } from '../src/lib/chat/transcript-window.ts'
+import { historyRows } from './chat-history-fixture.ts'
 
 const saved = (message_id: string, content = 'same', role = 'assistant'): ChatLine => ({
   message_id, entry_id: message_id, role, content,
@@ -201,4 +203,26 @@ test('indexed matching is differential-equivalent for colliding identities and a
       }
     }
   }
+})
+
+test('the virtual window includes eight overscan rows and distant pinned delivery or focus rows', () => {
+  const lines = historyRows(0, 1000)
+  const layout = transcriptLayout(lines, new Map(lines.map((line) => [line.entry_id, 100])))
+  const rows = transcriptWindow(layout, { top: 50_000, height: 500 }, new Set(['entry-0', 'entry-999']))
+  assert.deepEqual(rows.map((row) => row.id), ['entry-0', ...historyRows(492, 514).map((row) => row.entry_id), 'entry-999'])
+  assert.equal(layout.height, 100_000)
+  assert.equal(firstVisibleRow(layout.rows, 50_000), 500)
+  assert.deepEqual(transcriptWindow(transcriptLayout([], new Map()), { top: 0, height: 500 }, new Set()), [])
+})
+
+test('entry anchors preserve viewport offsets after prepends, eviction and remeasurement', () => {
+  const anchor = { id: 'entry-50', offset: -20 }
+  const layout = transcriptLayout(historyRows(0, 100), new Map([['entry-0', 200]]))
+  assert.equal(anchoredScrollTop(anchor, layout, 60), 4592)
+  const trimmed = transcriptLayout(historyRows(40, 100), new Map())
+  assert.equal(anchoredScrollTop(anchor, trimmed, 60), 960)
+  assert.equal(anchoredScrollTop({ id: 'removed', offset: 0 }, trimmed, 60), undefined)
+  const local: ChatLine = { role: 'tool', content: 'Local event' }
+  assert.equal(transcriptEntryId(local), transcriptEntryId(local))
+  assert.notEqual(transcriptEntryId(local), transcriptEntryId({ ...local }))
 })

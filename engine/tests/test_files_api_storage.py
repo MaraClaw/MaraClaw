@@ -14,7 +14,13 @@ from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
-from app.services.storage_runtime.base import ConditionalWriteResult, StorageBackend, StorageEntry, StorageVersion
+from app.services.storage_runtime.base import (
+    ConditionalWriteResult,
+    MaterializedFile,
+    StorageBackend,
+    StorageEntry,
+    StorageVersion,
+)
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from materialize_fixtures import GatedObject, Pause, temp_contents, temp_files, temp_root
 
@@ -213,6 +219,14 @@ async def test_agent_manager_materializes_s3_prefix_directory(monkeypatch, tmp_p
             f"{agent_id}/memory/memory.md": b"# Memory\n",
         }
     )
+
+    async def materialize(key: str) -> MaterializedFile:
+        source = tmp_path / "objects" / key
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(storage.objects[key])
+        return MaterializedFile(source, owned=True)
+
+    monkeypatch.setattr(storage, "materialize", materialize)
     monkeypatch.setattr("app.services.agent_manager.get_storage_backend", lambda: storage)
     monkeypatch.setattr("app.services.agent_manager.settings.STORAGE_LOCAL_ROOT", str(tmp_path))
 

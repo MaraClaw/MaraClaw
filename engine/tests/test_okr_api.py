@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ValidationError
 from app.api import okr as okr_api
 from app.core.domain.okr import KeyResultStatus, PeriodFrequency
 from app.core.domain.users import UserRole
-from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
+from app.records.okr import CompanyReportRecord, OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.user import UserRecord
 from app.schemas.okr import OKRSettingsOut, OKRSettingsUpdate
 
@@ -304,3 +304,64 @@ async def test_kr_progress_auto_status_buckets(monkeypatch: pytest.MonkeyPatch) 
 
     assert result.status == "on_track"
     assert update.call_args.kwargs["obj_in"]["status"] == "on_track"
+
+
+@pytest.mark.parametrize("kind", ["daily", "weekly", "monthly"])
+@pytest.mark.parametrize("role", [UserRole.ORG_ADMIN, UserRole.PLATFORM_ADMIN, UserRole.MEMBER])
+async def test_regenerate_http_keeps_auth_parsing_and_serialization(
+    kind: str,
+    role: UserRole,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import okr_reporting
+
+    user = UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=role)
+    day = date(2026, 11, 2)
+    timestamp = datetime(2026, 11, 8, tzinfo=UTC)
+    row = CompanyReportRecord(
+        id=uuid.uuid4(),
+        tenant_id=TENANT_ID,
+        report_type=kind,
+        period_start=day,
+        period_end=day,
+        period_label="period",
+        content="report",
+        submitted_count=3,
+        missing_count=2,
+        needs_refresh=True,
+        generated_at=timestamp,
+        updated_at=timestamp,
+    )
+    generate = AsyncMock(return_value=row)
+    monkeypatch.setattr(okr_reporting, f"generate_company_{kind}_report", generate)
+    app = FastAPI()
+    app.include_router(okr_api.regeneration_router)
+    app.dependency_overrides[okr_api.get_current_user] = lambda: user
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/okr/company-reports/regenerate",
+            json={
+                "report_type": kind,
+                "period_start": day.isoformat(),
+            },
+        )
+    if role == UserRole.MEMBER:
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Only org admins can regenerate company reports"
+        generate.assert_not_awaited()
+    else:
+        assert response.status_code == 200
+        assert response.json() == {
+            "id": str(row.id),
+            "report_type": kind,
+            "period_start": day.isoformat(),
+            "period_end": day.isoformat(),
+            "period_label": "period",
+            "content": "report",
+            "submitted_count": 3,
+            "missing_count": 2,
+            "needs_refresh": True,
+            "generated_at": timestamp.isoformat(),
+            "updated_at": timestamp.isoformat(),
+        }
+        generate.assert_awaited_once_with(TENANT_ID, day)

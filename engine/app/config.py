@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     OPENCLAW_BOOTSTRAP_MAX_CHARS: int | None = Field(default=None, gt=0)
     OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS: int | None = Field(default=None, gt=0)
     OPENCLAW_AGENT_MAX_PARALLEL_TURNS: int = Field(default=4, ge=1, le=16)
+    OPENCLAW_PROCESS_MAX_PARALLEL_TURNS: int = Field(default=16, ge=1, le=256)
     # Per-worker cap on concurrently running scheduled executions (periodic and manual share it).
     SCHEDULE_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1, le=256)
     # Trial limits for newly created/replacement guests; never auto-update existing guests.

@@ -139,6 +139,14 @@ class FallbackStorageBackend(StorageBackend):
         return await self.primary.create_bytes_if_absent(key, data, content_type=content_type)
 
     @override
+    async def create_file_if_absent(
+        self, key: str, path: Path, content_type: str | None = None
+    ) -> ConditionalWriteResult:
+        if await self.fallback.exists(key):
+            return ConditionalWriteResult(ok=False, conflict=True)
+        return await self.primary.create_file_if_absent(key, path, content_type=content_type)
+
+    @override
     async def write_bytes_if_match(
         self,
         key: str,
@@ -184,8 +192,10 @@ class FallbackStorageBackend(StorageBackend):
                 return True
             if not await self.fallback.is_file(key):
                 return False
-            data = await self.fallback.read_bytes(key)
-            await self.primary.create_bytes_if_absent(key, data)
+            legacy_path = await self.fallback.local_path_for(key)
+            if legacy_path is None:
+                raise RuntimeError(f"Fallback file has no local path: {key}")
+            _ = await self.primary.create_file_if_absent(key, legacy_path)
             if await self.primary.exists(key):
                 return True
         raise StorageConditionalRaceError(key, 3)

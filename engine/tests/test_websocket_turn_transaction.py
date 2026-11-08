@@ -209,6 +209,16 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
         AsyncMock(side_effect=lambda *_args, **_kw: (list(queued), None)),
     )
     monkeypatch.setattr(
+        routing.gateway_message_dao,
+        "lane_head",
+        AsyncMock(
+            side_effect=lambda member: next(
+                (row for row in queued if (row.conversation_id or row.id) == (member.conversation_id or member.id)),
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
         openclaw_enqueue.gateway_message_dao, "earliest_pending_duplicate", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent))

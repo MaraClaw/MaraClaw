@@ -82,6 +82,7 @@ from app.services.okr_owners import owner_names, resolve_owner
 from app.services.okr_periods import advance_period, compute_current_period, compute_period_for_date
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
+regeneration_router = APIRouter(prefix="/api/okr", tags=["okr"])
 
 
 type TrackedMember = tuple[uuid.UUID, str, uuid.UUID | None, str | None, str | None, str | None]
@@ -857,7 +858,7 @@ async def list_company_reports_api(
     return [_serialize_company_report(report) for report in reports]
 
 
-@router.post("/company-reports/regenerate", response_model=CompanyReportOut)
+@regeneration_router.post("/company-reports/regenerate", response_model=CompanyReportOut)
 async def regenerate_company_report(
     body: CompanyReportRegenerate,
     user: UserRecord = Depends(get_current_user),

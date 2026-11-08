@@ -16,10 +16,12 @@ test('markdown HTML matches the original renderer including escaping and blank-l
     '`**nested**` and **`code`**', '[label](http://example.test) [bad](javascript:alert(1))',
     '[`code`](https://example.test/"onclick="x) <img src=x onerror="alert(1)">',
   ]
-  await prepareChat(page, texts.map((text, index) => message(`markdown-${index}`, text)))
+  const chat = await prepareChat(page, texts.map((text, index) => message(`markdown-${index}`, text)))
   await page.goto(chatPath())
-  await expect(page.locator('[data-chat-entry]')).toHaveCount(texts.length)
+  await chat.socket()
+  await page.locator('main [aria-busy]').evaluate((element) => { element.scrollTop = 0 })
   for (const [index, text] of texts.entries()) {
+    await page.locator(`[data-chat-entry="markdown-${index}"]`).scrollIntoViewIfNeeded()
     const html = originalMarkdown(text)
     const expected = await page.evaluate((source) => {
       const wrapper = document.createElement('div')
@@ -41,20 +43,24 @@ for (const width of [390, 1440]) {
         const chat = await prepareChat(page, history)
         await page.goto(chatPath())
         const socket = await chat.socket()
-        await expect(page.locator('[data-chat-entry]')).toHaveCount(50)
+        await expect(page.locator('[data-chat-entry="retained-249"]')).toBeInViewport()
         for (const count of [100, 150, 200, 250]) {
+          const before = chat.requests()
           const earlier = page.getByRole('button', { name: 'Load earlier messages', exact: true })
           await earlier.evaluate((element) => { if (element instanceof HTMLElement) element.focus({ preventScroll: true }) })
           await earlier.press('Enter')
-          await expect(page.locator('[data-chat-entry]')).toHaveCount(count)
+          await expect.poll(chat.requests).toBe(before + 1)
+          if (count === 250) await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
+          else await expect(earlier).toBeEnabled()
         }
         await page.locator('main [aria-busy]').evaluate((element) => {
           element.scrollTop = element.scrollHeight
           element.dispatchEvent(new Event('scroll'))
         })
         await page.screenshot({ path: testInfo.outputPath('history-before.png') })
-        const entries = await page.locator('[data-chat-entry]').first().evaluateHandle((first) => {
-          const rows = [...first.parentElement?.querySelectorAll('[data-chat-entry]') ?? []]
+        const entries = await page.locator('main [aria-busy]').evaluateHandle((thread) => {
+          const bounds = thread.getBoundingClientRect()
+          const rows = [...thread.querySelectorAll('[data-chat-entry]')].filter((row) => row.getBoundingClientRect().bottom > bounds.top)
           return rows.map((row) => ({ row, children: [...row.querySelectorAll('*')] }))
         })
         socket.route.send(JSON.stringify({ type: 'chunk', turn_id: turn, seq: 0, content: '# Completed heading\n\nFirst **block**\n\nTrailing' }))
@@ -63,10 +69,10 @@ for (const width of [390, 1440]) {
         const blocks = await live.locator('h3, p').evaluateAll((elements) => elements.length)
         expect(blocks).toBe(3)
         const completed = await live.evaluateHandle((element) => [...element.querySelectorAll('h3, p')].slice(0, 2))
-        const mutations = await page.locator('[data-chat-entry]').first().evaluateHandle((first) => {
+        const mutations = await entries.evaluateHandle((saved) => {
           const records: MutationRecord[] = []
           const observer = new MutationObserver((batch) => records.push(...batch))
-          for (const row of first.parentElement?.querySelectorAll('[data-chat-entry]') ?? []) {
+          for (const { row } of saved) {
             observer.observe(row, { subtree: true, childList: true, characterData: true, attributes: true })
           }
           return { records, observer }
