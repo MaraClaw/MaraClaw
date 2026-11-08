@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
+from pydantic import BaseModel
 
 from app.core.domain.focus import FocusKind, FocusStatus
 from app.services import agent_tools, workspace_collaboration, workspace_locking
@@ -17,6 +18,7 @@ from app.services.agent_tool_exec.registry import (
     ToolArguments,
     ToolArgumentValue,
     ToolExecutionContext,
+    resolve,
     use_execution_context,
 )
 from app.services.focus_service import SerializedFocusItem
@@ -24,10 +26,13 @@ from app.services.storage_runtime.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
+    StoragePage,
     StorageReadLimitExceededError,
     StorageVersion,
     WriteCondition,
 )
+from app.services.storage_runtime.fallback import FallbackStorageBackend
+from app.services.storage_runtime.local import LocalStorageBackend
 
 
 @pytest.mark.parametrize("source", ["local", "storage", "enterprise"])
@@ -128,9 +133,11 @@ class MemoryStorageBackend(StorageBackend):
         return self.files[key]
 
     @override
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         if key not in self.files:
             raise FileNotFoundError(key)
+        if offset is not None:
+            return self.files[key][offset : offset + max_bytes]
         data = self.files[key][: max_bytes + 1]
         if len(data) > max_bytes:
             raise StorageReadLimitExceededError(max_bytes, len(data))
@@ -371,7 +378,11 @@ async def test_storage_workspace_helpers_preserve_listing_read_search_and_find(m
     # Then
     assert listing == "📂 workspace: 1 folder(s), 1 file(s)\n  📁 nested/ (1 items)\n  📄 notes.md (7B)"
     assert read == "📄 workspace/notes.md (lines 1-1 of 1)\n     1\tneedle"
-    assert search == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nworkspace/notes.md:1: needle"
+    assert (
+        search.split("\nSearch page: ")[0]
+        == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nworkspace/notes.md:1: needle"
+    )
+    assert _search_metadata(search).complete
     assert found == "📂 Found 1 item(s) (0 dirs, 1 files) matching '*.md':\n📄 workspace/notes.md (7B)"
     assert await agent_tools._storage_read_file(agent_id, "") == "File not found: root"
     assert await agent_tools._storage_search_files(agent_id, "needle", path="missing") == "Directory not found: missing"
@@ -1241,7 +1252,9 @@ async def test_search_files_stops_listing_directories_once_it_holds_fifty_matche
     result = await agent_tools._storage_search_files(agent_id, "needle", path="workspace")
     # Then
     assert "Found 50+ match(es) in 17 file(s)" in result
-    assert backend.listed() == [f"{agent_id}/workspace", *(f"{agent_id}/workspace/d{index:02d}" for index in range(17))]
+    assert backend.listed() == [
+        key for index in range(17) for key in (f"{agent_id}/workspace", f"{agent_id}/workspace/d{index:02d}")
+    ]
 
 
 async def test_find_files_reports_the_exact_total_but_keeps_only_one_hundred_rows(monkeypatch):
@@ -1296,3 +1309,723 @@ async def test_search_files_cancelled_while_listing_requests_no_further_director
         await task
     # Then
     assert backend.listed() == [f"{agent_id}/workspace", f"{agent_id}/workspace/d0"]
+
+
+class _SearchMetadata(BaseModel):
+    exhausted: bool
+    complete: bool
+    stop_reason: str
+    next_cursor: str | None
+    unreadable_files: int
+    issues: list[str]
+    entries_scanned: int
+    content_bytes: int
+    lines_scanned: int
+
+
+def _search_metadata(result: str) -> _SearchMetadata:
+    return _SearchMetadata.model_validate_json(result.rsplit("\nSearch page: ", 1)[1])
+
+
+async def _registered_search(agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a") -> str:
+    handler = resolve("search_files")
+    assert handler is not None
+    with use_execution_context(ToolExecutionContext(tenant_id=tenant, workspace_root=agent_tools.WORKSPACE_ROOT)):
+        result = handler(arguments=arguments, agent_id=agent_id, user_id=agent_id, session_id="search", on_output=None)
+        return result if isinstance(result, str) else await result
+
+
+class _SearchStorage(MemoryStorageBackend):
+    def __init__(self):
+        super().__init__()
+        self.reads: list[str] = []
+
+    @override
+    async def read_bytes(self, key: str) -> bytes:
+        raise AssertionError("search must never issue an unbounded read")
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        self.reads.append(key)
+        return await super().read_bytes_bounded(key, max_bytes, offset=offset)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_search_spill(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from app.services.agent_tool_exec import workspace_search_spill
+
+    monkeypatch.setattr(workspace_search_spill, "_cache_path", lambda: tmp_path / "private-search" / "lines.sqlite3")
+
+
+@pytest.fixture(params=["local", "object"])
+def search_backend(request, monkeypatch, tmp_path) -> tuple[uuid.UUID, StorageBackend]:
+    agent_id = uuid.uuid4()
+    backend = LocalStorageBackend(str(tmp_path)) if request.param == "local" else _SearchStorage()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    return agent_id, backend
+
+
+@pytest.mark.parametrize("count", [0, 1, 49, 50, 51, 100, 123])
+async def test_registered_search_returns_each_line_once_and_exhausts(search_backend, count):
+    agent_id, backend = search_backend
+    key = f"{agent_id}/workspace/notes.md"
+    await backend.write_bytes(key, "".join(f"needle {index}\n" for index in range(count)).encode())
+    arguments: ToolArguments = {"pattern": "needle", "path": "workspace"}
+    rows: list[str] = []
+    pages: list[_SearchMetadata] = []
+
+    for _ in range(5):
+        result = await _registered_search(agent_id, arguments)
+        metadata = _search_metadata(result)
+        rows.extend(line for line in result.splitlines() if line.startswith("workspace/"))
+        pages.append(metadata)
+        if metadata.next_cursor is None:
+            break
+        arguments["cursor"] = metadata.next_cursor
+
+    assert rows == [f"workspace/notes.md:{index + 1}: needle {index}" for index in range(count)]
+    assert len(pages) == max(1, (count + 49) // 50)
+    assert pages[-1].complete
+    assert pages[-1].exhausted
+    assert all(page.stop_reason == "result_limit" for page in pages[:-1])
+    if isinstance(backend, _SearchStorage):
+        assert backend.reads == [key]
+
+
+@pytest.mark.parametrize(
+    "separator", ["\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+async def test_registered_search_keeps_multibyte_and_line_positions(search_backend, separator):
+    agent_id, backend = search_backend
+    await backend.write_bytes(
+        f"{agent_id}/workspace/notes.md", separator.join(["é中 needle", "", "needle 終"]).encode()
+    )
+    first = await _registered_search(agent_id, {"pattern": "^.*needle", "path": "workspace", "limit": 1})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    second = await _registered_search(
+        agent_id, {"pattern": "^.*needle", "path": "workspace", "limit": 1, "cursor": cursor}
+    )
+
+    assert "workspace/notes.md:1: é中 needle" in first
+    assert "workspace/notes.md:3: needle 終" in second
+    assert _search_metadata(second).complete
+
+
+async def test_registered_search_scan_budget_can_return_an_empty_progressing_page(search_backend):
+    from app.services.agent_tool_exec.workspace_search_cursor import SCAN_STEPS
+
+    agent_id, backend = search_backend
+    for index in range(SCAN_STEPS + 1):
+        await backend.write_bytes(
+            f"{agent_id}/workspace/f{index:04}.txt", b"needle" if index == SCAN_STEPS else b"other"
+        )
+
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+    metadata = _search_metadata(first)
+    assert metadata.next_cursor is not None
+    second = await _registered_search(
+        agent_id, {"pattern": "needle", "path": "workspace", "cursor": metadata.next_cursor}
+    )
+
+    assert metadata.stop_reason == "scan_budget"
+    assert not metadata.exhausted
+    assert not metadata.complete
+    assert metadata.entries_scanned == SCAN_STEPS
+    assert not any(line.startswith("workspace/") for line in first.splitlines())
+    assert f"workspace/f{SCAN_STEPS:04}.txt:1: needle" in second
+    assert _search_metadata(second).complete
+
+
+async def test_registered_search_content_budget_and_file_size_boundary(search_backend):
+    from app.services.agent_tool_exec.workspace_search_cursor import CONTENT_BYTES, FILE_BYTES
+
+    agent_id, backend = search_backend
+    for index in range(5):
+        await backend.write_bytes(f"{agent_id}/workspace/{index}.md", b"x" * (FILE_BYTES - 7) + b"needle\n")
+    await backend.write_bytes(f"{agent_id}/workspace/large.md", b"x" * (FILE_BYTES + 1) + b"needle")
+    rows: list[str] = []
+    cursor: str | None = None
+    reasons: list[str] = []
+    pages: list[_SearchMetadata] = []
+    for _ in range(4):
+        arguments: ToolArguments = {"pattern": "needle", "path": "workspace"}
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        result = await _registered_search(agent_id, arguments)
+        metadata = _search_metadata(result)
+        pages.append(metadata)
+        rows.extend(line for line in result.splitlines() if line.startswith("workspace/"))
+        reasons.append(metadata.stop_reason)
+        assert metadata.content_bytes <= CONTENT_BYTES
+        cursor = metadata.next_cursor
+        if cursor is None:
+            break
+
+    assert len(rows) == 6
+    assert reasons == ["content_budget", "exhausted"]
+    metadata = pages[-1]
+    assert metadata.exhausted
+    assert metadata.complete
+    assert metadata.unreadable_files == 0
+    assert metadata.issues == []
+
+
+async def test_registered_search_line_budget_preserves_unfinished_file(search_backend):
+    from app.services.agent_tool_exec.workspace_search_cursor import LINE_STEPS
+
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/lines.md", b"\n" * LINE_STEPS + b"needle")
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+    metadata = _search_metadata(first)
+    assert metadata.next_cursor is not None
+    second = await _registered_search(
+        agent_id, {"pattern": "needle", "path": "workspace", "cursor": metadata.next_cursor}
+    )
+
+    assert metadata.stop_reason == "line_budget"
+    assert metadata.lines_scanned == LINE_STEPS
+    assert f"workspace/lines.md:{LINE_STEPS + 1}: needle" in second
+    assert _search_metadata(second).complete
+
+
+async def test_registered_search_preserves_captured_text_but_reads_unvisited_changes(search_backend):
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/a.md", b"needle old1\nneedle old2\n")
+    await backend.write_bytes(f"{agent_id}/workspace/b.md", b"needle before\n")
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", "limit": 1})
+    await backend.delete(f"{agent_id}/workspace/a.md")
+    await backend.write_bytes(f"{agent_id}/workspace/b.md", b"needle after\n")
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    second = await _registered_search(
+        agent_id, {"pattern": "needle", "path": "workspace", "limit": 1, "cursor": cursor}
+    )
+    cursor = _search_metadata(second).next_cursor
+    assert cursor is not None
+    third = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", "limit": 1, "cursor": cursor})
+
+    assert "workspace/a.md:2: needle old2" in second
+    assert "workspace/b.md:1: needle after" in third
+    assert _search_metadata(third).complete
+
+
+@pytest.mark.parametrize(
+    "change", ["agent", "tenant", "path", "pattern", "file_pattern", "ignore_case", "limit", "tamper"]
+)
+async def test_registered_search_cursor_is_bound_and_authenticated(search_backend, change):
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/a.md", b"needle\nneedle\n")
+    await backend.write_bytes(f"{agent_id}/other/a.md", b"needle\n")
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", "limit": 1})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    arguments: ToolArguments = {"pattern": "needle", "path": "workspace", "limit": 1, "cursor": cursor}
+    if change in ("path", "pattern", "file_pattern", "ignore_case", "limit"):
+        arguments[change] = {
+            "path": "other",
+            "pattern": "other",
+            "file_pattern": "*.txt",
+            "ignore_case": True,
+            "limit": 2,
+        }[change]
+    if change == "tamper":
+        arguments["cursor"] = cursor[:20] + ("A" if cursor[20] != "A" else "B") + cursor[21:]
+    foreign_agent = uuid.uuid4() if change == "agent" else agent_id
+    if change == "agent":
+        await backend.write_bytes(f"{foreign_agent}/workspace/a.md", b"needle")
+
+    result = await _registered_search(foreign_agent, arguments, "tenant-b" if change == "tenant" else "tenant-a")
+
+    assert result.startswith("Invalid search_files cursor:")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"cursor": ""},
+        {"cursor": "garbage"},
+        {"cursor": None},
+        {"cursor": 1},
+        {"limit": 0},
+        {"limit": 51},
+        {"limit": True},
+        {"limit": "1"},
+        {"limit": 1.5},
+    ],
+)
+async def test_registered_search_rejects_invalid_continuation(search_backend, arguments):
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/a.md", b"needle")
+
+    result = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", **arguments})
+
+    assert result.startswith("Invalid search_files")
+
+
+async def test_search_catalogs_advertise_equivalent_continuation_schema():
+    from app.services.agent_tools_definitions import AGENT_TOOLS
+    from app.services.tool_definitions.file import FILE_TOOLS
+
+    seeded = next(tool for tool in FILE_TOOLS if tool["name"] == "search_files")["parameters_schema"]
+    runtime = next(tool["function"] for tool in AGENT_TOOLS if tool["function"]["name"] == "search_files")["parameters"]
+
+    for name in ("cursor", "limit"):
+        assert seeded["properties"][name] == runtime["properties"][name]
+    assert runtime["properties"]["limit"]["maximum"] == 50
+
+
+@pytest.mark.parametrize("filename", ["*.md", "workspace/a/nested/*.md", "*"])
+async def test_registered_search_resumes_nested_traversal_with_filename_and_case_selection(search_backend, filename):
+    agent_id, backend = search_backend
+    for name in (
+        "a/nested/first.md",
+        "a/nested/last.md",
+        "z.md",
+        "skip.txt",
+        ".hidden.md",
+        ".hidden/skip.md",
+        "image.PNG",
+    ):
+        await backend.write_bytes(f"{agent_id}/workspace/{name}", b"NEEDLE\n")
+    await backend.write_bytes(f"{agent_id}/workspace/no.md", b"not matched")
+    arguments: ToolArguments = {
+        "pattern": "^needle$",
+        "path": "workspace",
+        "file_pattern": filename,
+        "ignore_case": True,
+        "limit": 1,
+    }
+    rows: list[str] = []
+    for _ in range(5):
+        result = await _registered_search(agent_id, arguments)
+        rows.extend(line for line in result.splitlines() if line.startswith("workspace/"))
+        metadata = _search_metadata(result)
+        if metadata.next_cursor is None:
+            break
+        arguments["cursor"] = metadata.next_cursor
+
+    expected = ["workspace/a/nested/first.md:1: NEEDLE", "workspace/a/nested/last.md:1: NEEDLE"]
+    if filename == "*":
+        expected.append("workspace/skip.txt:1: NEEDLE")
+    if filename in ("*.md", "*"):
+        expected.append("workspace/z.md:1: NEEDLE")
+    assert rows == expected
+    sensitive = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+    assert not any(line.startswith("workspace/") for line in sensitive.splitlines())
+    assert _search_metadata(sensitive).complete
+
+
+async def test_registered_search_unreadable_file_is_incomplete_but_traversal_continues(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch
+):
+    agent_id, backend = search_backend
+    for name in ("a.md", "b.md"):
+        await backend.write_bytes(f"{agent_id}/workspace/{name}", b"needle\n")
+    original_read = backend.read_bytes_bounded
+
+    async def interrupted_read(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        if key.endswith("/a.md"):
+            raise FileNotFoundError(key)
+        return await original_read(key, max_bytes, offset=offset)
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", interrupted_read)
+    result = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+
+    metadata = _search_metadata(result)
+    assert metadata.exhausted
+    assert not metadata.complete
+    assert metadata.unreadable_files == 1
+    assert metadata.issues == ["workspace/a.md: content unreadable"]
+    assert "workspace/b.md:1: needle" in result
+
+
+@pytest.mark.parametrize("operation", ["listing", "read"])
+async def test_registered_search_cancellation_closes_owned_operation_and_never_reads_next_entry(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch, operation
+):
+    import anyio
+
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/a.md", b"needle")
+    await backend.write_bytes(f"{agent_id}/workspace/b.md", b"needle")
+    started = anyio.Event()
+    closed = anyio.Event()
+    reads: list[str] = []
+    original_read = backend.read_bytes_bounded
+
+    async def bounded_read(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        reads.append(key)
+        if operation == "read":
+            started.set()
+            try:
+                await anyio.sleep_forever()
+            finally:
+                closed.set()
+        return await original_read(key, max_bytes, offset=offset)
+
+    async def listing(key: str, *, limit: int, after: str = "") -> StoragePage:
+        del key, limit, after
+        started.set()
+        try:
+            await anyio.sleep_forever()
+        finally:
+            closed.set()
+        raise AssertionError("cancelled operation must not return")
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", bounded_read)
+    if operation == "listing":
+        monkeypatch.setattr(backend, "list_dir_page", listing)
+    async with anyio.create_task_group() as group:
+        arguments: ToolArguments = {"pattern": "needle", "path": "workspace"}
+        group.start_soon(_registered_search, agent_id, arguments, "tenant-a")
+        with anyio.fail_after(5):
+            await started.wait()
+        group.cancel_scope.cancel()
+
+    assert closed.is_set()
+    assert reads == ([] if operation == "listing" else [f"{agent_id}/workspace/a.md"])
+
+
+@pytest.mark.parametrize("source", ["workspace", "enterprise_info"])
+async def test_registered_search_local_symlinks_and_parent_traversal_never_escape(monkeypatch, tmp_path, source):
+    agent_id = uuid.uuid4()
+    backend = LocalStorageBackend(str(tmp_path))
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    root = tmp_path / (str(agent_id) if source == "workspace" else "enterprise_info_tenant-a")
+    root.mkdir()
+    outside = tmp_path / (f"{agent_id}-other" if source == "workspace" else "enterprise_info_tenant-b")
+    outside.mkdir()
+    (outside / "secret.md").write_text("needle SECRET")
+    (root / "safe.md").write_text("needle safe\nneedle again")
+    (root / "escaped.md").symlink_to(outside / "secret.md")
+    (root / "escaped-dir").symlink_to(outside, target_is_directory=True)
+    path = "." if source == "workspace" else source
+
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": path, "limit": 1})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    second = await _registered_search(agent_id, {"pattern": "needle", "path": path, "limit": 1, "cursor": cursor})
+    explicit = await _registered_search(
+        agent_id, {"pattern": "needle", "path": ("" if path == "." else path + "/") + "escaped-dir"}
+    )
+    parent = await _registered_search(
+        agent_id, {"pattern": "needle", "path": ("" if path == "." else "./" + path + "/") + "../" + outside.name}
+    )
+
+    assert "SECRET" not in first + second
+    assert "safe.md:1: needle safe" in first
+    assert "safe.md:2: needle again" in second
+    assert _search_metadata(second).complete
+    assert explicit == parent == "Access denied for this path"
+
+
+async def test_registered_search_shared_scope_uses_context_tenant_and_rejects_missing_tenant(
+    search_backend, monkeypatch
+):
+    agent_id, backend = search_backend
+    await backend.write_bytes("enterprise_info_tenant-a/notes.md", b"needle allowed\nneedle again")
+    await backend.write_bytes("enterprise_info_tenant-b/notes.md", b"needle FOREIGN")
+    await backend.write_bytes("enterprise_info/notes.md", b"needle LEGACY")
+
+    async def forbidden_lookup(_agent_id: uuid.UUID) -> str:
+        pytest.fail("execution context must resolve the tenant without a DAO lookup")
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", forbidden_lookup)
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "enterprise_info", "limit": 1})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    foreign = await _registered_search(
+        agent_id, {"pattern": "needle", "path": "enterprise_info", "limit": 1, "cursor": cursor}, "tenant-b"
+    )
+    missing = await _registered_search(agent_id, {"pattern": "needle", "path": "enterprise_info"}, None)
+
+    assert "enterprise_info/notes.md:1: needle allowed" in first
+    assert foreign.startswith("Invalid search_files cursor:")
+    assert missing == "Directory not found: enterprise_info"
+
+
+async def test_registered_search_rejects_unknown_cursor_version(search_backend):
+    from app.services.agent_tool_exec.workspace_search_cursor import SearchQuery, _cipher
+
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/workspace/a.md", b"needle")
+    query = SearchQuery(
+        agent=str(agent_id),
+        tenant="tenant-a",
+        root=f"{agent_id}/workspace",
+        display="workspace",
+        pattern="needle",
+        file_pattern="*",
+        ignore_case=False,
+        limit=50,
+    )
+    cursor = (
+        _cipher().encrypt(('{"version":2,"query":' + query.model_dump_json() + ',"directories":[]}').encode()).decode()
+    )
+
+    result = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", "cursor": cursor})
+
+    assert result.startswith("Invalid search_files cursor:")
+
+
+async def test_registered_search_fallback_ranges_bound_actual_reads_without_partial_promotion(monkeypatch):
+    from app.services.agent_tool_exec.workspace_search_cursor import CONTENT_BYTES, FILE_BYTES
+
+    class MeteredStorage(_SearchStorage):
+        def __init__(self):
+            super().__init__()
+            self.bytes_read: int = 0
+
+        @override
+        async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+            self.bytes_read += min(len(self.files.get(key, b"")[(offset or 0) :]), max_bytes + (offset is None))
+            return await super().read_bytes_bounded(key, max_bytes, offset=offset)
+
+        @override
+        async def create_bytes_if_absent(
+            self, key: str, data: bytes, content_type: str | None = None
+        ) -> ConditionalWriteResult:
+            if key in self.files:
+                return ConditionalWriteResult(ok=False, conflict=True)
+            await self.write_bytes(key, data, content_type)
+            return ConditionalWriteResult(ok=True)
+
+    agent_id = uuid.uuid4()
+    primary, legacy = MeteredStorage(), MeteredStorage()
+    backend = FallbackStorageBackend(primary, legacy)
+    for index in range(3):
+        await legacy.write_bytes(f"{agent_id}/workspace/{index}.md", b"needle\n" + b"x" * (FILE_BYTES - 7))
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    arguments: ToolArguments = {"pattern": "needle", "path": "workspace"}
+    rows: list[str] = []
+    for _ in range(3):
+        before = primary.bytes_read + legacy.bytes_read
+        result = await _registered_search(agent_id, arguments)
+        metadata = _search_metadata(result)
+        actual_bytes = primary.bytes_read + legacy.bytes_read - before
+        rows.extend(line for line in result.splitlines() if line.startswith("workspace/"))
+        assert actual_bytes <= metadata.content_bytes <= CONTENT_BYTES
+        if metadata.next_cursor is None:
+            assert metadata.complete
+            break
+        arguments["cursor"] = metadata.next_cursor
+
+    assert rows == [f"workspace/{index}.md:1: needle" for index in range(3)]
+    assert primary.files == {}
+
+
+async def test_registered_search_large_file_streams_every_line_once_with_bounded_ranges(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    from app.services.agent_tool_exec.workspace_search_cursor import CONTENT_BYTES, FILE_BYTES
+
+    agent_id, backend = search_backend
+    key = f"{agent_id}/workspace/large.md"
+    count = 151
+    line = "é中 needle " + "x" * 20_000
+    data = ((line + "\r\n") * count).encode()
+    await backend.write_bytes(key, data)
+    original = backend.read_bytes_bounded
+    ranges: list[tuple[int, int]] = []
+
+    async def read_range(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        assert offset is not None
+        assert max_bytes <= FILE_BYTES
+        chunk = await original(key, max_bytes, offset=offset)
+        ranges.append((offset, len(chunk)))
+        return chunk
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", read_range)
+    arguments: ToolArguments = {"pattern": "^é中 needle x+$", "path": "workspace"}
+    rows: list[str] = []
+    cursors: list[str] = []
+    for _ in range(10):
+        result = await _registered_search(agent_id, arguments)
+        metadata = _search_metadata(result)
+        assert metadata.content_bytes <= CONTENT_BYTES
+        rows.extend(row for row in result.splitlines() if row.startswith("workspace/"))
+        if metadata.next_cursor is None:
+            assert metadata.complete
+            break
+        cursors.append(metadata.next_cursor)
+        arguments["cursor"] = metadata.next_cursor
+
+    assert rows == [f"workspace/large.md:{number}: {line[:100]}" for number in range(1, count + 1)]
+    assert sum(size for _, size in ranges) == len(data)
+    assert [offset for offset, _ in ranges] == list(range(0, len(data), FILE_BYTES))
+    assert len(cursors) >= 3
+
+
+@pytest.mark.parametrize("ending", ["", "\r\n", "\u2028"])
+async def test_registered_search_long_line_spills_and_replays_without_file_sized_cursor(search_backend, ending):
+    from app.services.agent_tool_exec.workspace_search_cursor import CONTENT_BYTES, SearchPosition, _cipher
+
+    agent_id, backend = search_backend
+    long_line = "é" + "x" * (CONTENT_BYTES * 2 + 31) + "中needle"
+    await backend.write_bytes(f"{agent_id}/workspace/long.md", (long_line + ending + "tail needle").encode())
+    arguments: ToolArguments = {"pattern": r"^éx+中needle(?:tail needle)?$|^tail needle$", "path": "workspace"}
+    first = await _registered_search(agent_id, arguments)
+    metadata = _search_metadata(first)
+    assert metadata.stop_reason == "content_budget"
+    assert metadata.next_cursor is not None
+    assert not any(row.startswith("workspace/") for row in first.splitlines())
+    cursor = metadata.next_cursor
+    captured = SearchPosition.model_validate_json(_cipher().decrypt(cursor.encode()))
+    assert captured.pending is not None
+    assert captured.pending.offset == CONTENT_BYTES
+    assert captured.pending.fragments
+    assert len(cursor) < 4096
+
+    rows: list[str] = []
+    result = first
+    for _ in range(4):
+        arguments["cursor"] = cursor
+        result = await _registered_search(agent_id, arguments)
+        page = _search_metadata(result)
+        assert page.content_bytes <= CONTENT_BYTES
+        rows.extend(row for row in result.splitlines() if row.startswith("workspace/"))
+        if page.next_cursor is None:
+            assert page.complete
+            break
+        cursor = page.next_cursor
+
+    assert rows == [f"workspace/long.md:1: {long_line[:100]}"] + (
+        ["workspace/long.md:2: tail needle"] if ending else []
+    )
+    replay = await _registered_search(agent_id, {**arguments, "cursor": cursor})
+    replay_again = await _registered_search(agent_id, {**arguments, "cursor": cursor})
+    assert replay.split("\nSearch page: ")[0] == result.split("\nSearch page: ")[0]
+    assert _search_metadata(replay).complete
+    assert _search_metadata(replay).content_bytes == _search_metadata(replay_again).content_bytes
+    assert replay.split("\nSearch page: ")[0] == replay_again.split("\nSearch page: ")[0]
+
+
+@pytest.mark.parametrize("boundary", ["utf8", "crlf", "unicode", "invalid_utf8", "eof"])
+async def test_registered_search_window_boundaries_keep_decode_and_line_semantics(search_backend, boundary):
+    from app.services.agent_tool_exec.workspace_search_cursor import FILE_BYTES
+
+    agent_id, backend = search_backend
+    suffix = {
+        "utf8": "中needle\nneedle".encode(),
+        "crlf": b"\r\nneedle",
+        "unicode": "\u2028needle".encode(),
+        "invalid_utf8": b"\xe4\xffneedle\nneedle",
+        "eof": b"",
+    }[boundary]
+    prefix = b"x" * (FILE_BYTES - 1) if boundary != "eof" else b"x" * FILE_BYTES
+    await backend.write_bytes(f"{agent_id}/workspace/boundary.md", prefix + suffix)
+    result = await _registered_search(agent_id, {"pattern": "needle$|^x+$", "path": "workspace"})
+    rows = [row for row in result.splitlines() if row.startswith("workspace/")]
+
+    first = "workspace/boundary.md:1: " + "x" * 100
+    assert rows == [first] + ([] if boundary == "eof" else ["workspace/boundary.md:2: needle"])
+    assert _search_metadata(result).complete
+
+
+async def test_registered_search_traversal_deeper_than_128_directories_resumes(search_backend):
+    agent_id, backend = search_backend
+    relative = "workspace/" + "d/" * 140 + "deep.md"
+    await backend.write_bytes(f"{agent_id}/{relative}", b"needle")
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    result = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace", "cursor": cursor})
+
+    assert f"{relative}:1: needle" in result
+    assert _search_metadata(result).complete
+
+
+@pytest.mark.parametrize("cursor_limit", [None, 2048])
+async def test_registered_search_deep_branched_tree_emits_consumable_cursors_through_exhaustion(
+    monkeypatch: pytest.MonkeyPatch, cursor_limit: int | None
+):
+    from app.services.agent_tool_exec import workspace_search_cursor
+
+    maximum = workspace_search_cursor.MAX_CURSOR_LENGTH if cursor_limit is None else cursor_limit
+    monkeypatch.setattr(workspace_search_cursor, "MAX_CURSOR_LENGTH", maximum)
+
+    agent_id = uuid.uuid4()
+    backend = _SearchStorage()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    depth = 1600
+    for level in range(depth + 1):
+        key = f"{agent_id}/workspace/" + "d/" * level + "z.md"
+        await backend.write_bytes(key, b"needle")
+    arguments: ToolArguments = {"pattern": "needle", "path": "workspace"}
+    rows: list[str] = []
+    exhausted = False
+    for _ in range(100):
+        result = await _registered_search(agent_id, arguments)
+        metadata = _search_metadata(result)
+        rows.extend(row for row in result.splitlines() if row.startswith("workspace/"))
+        if metadata.next_cursor is None:
+            exhausted = True
+            assert metadata.complete
+            break
+        assert len(metadata.next_cursor) <= maximum
+        arguments["cursor"] = metadata.next_cursor
+
+    assert exhausted
+    assert rows == ["workspace/" + "d/" * level + "z.md:1: needle" for level in reversed(range(depth + 1))]
+
+
+@pytest.mark.parametrize("change", ["overwrite", "truncate", "delete"])
+async def test_registered_search_future_ranges_observe_current_bytes_at_saved_offsets(search_backend, change):
+    from app.services.agent_tool_exec.workspace_search_cursor import CONTENT_BYTES
+
+    agent_id, backend = search_backend
+    key = f"{agent_id}/workspace/live.md"
+    await backend.write_bytes(key, b"x" * CONTENT_BYTES + b"old needle")
+    first = await _registered_search(agent_id, {"pattern": "^x+new needle$", "path": "workspace"})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    if change == "delete":
+        await backend.delete(key)
+    else:
+        await backend.write_bytes(key, b"z" * CONTENT_BYTES + b"new needle" if change == "overwrite" else b"short")
+
+    result = await _registered_search(agent_id, {"pattern": "^x+new needle$", "path": "workspace", "cursor": cursor})
+    metadata = _search_metadata(result)
+    rows = [row for row in result.splitlines() if row.startswith("workspace/")]
+
+    assert rows == (["workspace/live.md:1: " + "x" * 100] if change == "overwrite" else [])
+    assert metadata.exhausted
+    assert metadata.complete == (change != "delete")
+    assert metadata.unreadable_files == (1 if change == "delete" else 0)
+
+
+@pytest.mark.parametrize("continuation_storage", ["inline", "stored"])
+@pytest.mark.parametrize("failure", ["missing", "corrupt", "expired", "foreign"])
+async def test_registered_search_spill_or_cursor_loss_fails_explicitly(
+    search_backend, monkeypatch, failure, continuation_storage
+):
+    import sqlite3
+
+    from app.services.agent_tool_exec import workspace_search_cursor, workspace_search_spill
+
+    if continuation_storage == "stored":
+        monkeypatch.setattr(workspace_search_cursor, "MAX_CURSOR_LENGTH", 512)
+    agent_id, backend = search_backend
+    await backend.write_bytes(
+        f"{agent_id}/workspace/long.md", b"x" * (workspace_search_cursor.CONTENT_BYTES + 1) + b"needle"
+    )
+    first = await _registered_search(agent_id, {"pattern": "needle", "path": "workspace"})
+    cursor = _search_metadata(first).next_cursor
+    assert cursor is not None
+    if failure == "expired":
+        now = workspace_search_cursor.time()
+        monkeypatch.setattr(workspace_search_cursor, "time", lambda: now + workspace_search_cursor.CURSOR_TTL + 1)
+    elif failure != "foreign":
+        with sqlite3.connect(workspace_search_spill._cache_path()) as connection:
+            if failure == "missing":
+                connection.execute("DELETE FROM fragments")
+            else:
+                connection.execute("UPDATE fragments SET payload = ?", (b"corrupt",))
+
+    result = await _registered_search(
+        agent_id, {"pattern": "foreign" if failure == "foreign" else "needle", "path": "workspace", "cursor": cursor}
+    )
+
+    assert result.startswith("Invalid search_files cursor:")
+    assert "Search page:" not in result

@@ -207,7 +207,7 @@ CORE_AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "search_files",
-            "description": "Search for content patterns across files using regex. Returns matching lines with file paths and line numbers. Useful for finding code, configurations, or text across the workspace.",
+            "description": "Search file contents using regex, returning at most 50 matching lines per page. Pass next_cursor as cursor with identical arguments to continue, including after an empty partial page. Searches expire one hour after starting. Metadata distinguishes exhaustion, budgets, and unreadable files. Origin reads use bounded ranges; long unfinished lines and oversized traversal positions spill privately on the server. Captured windows survive changes; future ranges use current bytes at saved offsets and can mix versions. Directory changes can affect results. No snapshot isolation or bound on regex time or memory for one logical line.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -226,6 +226,17 @@ CORE_AGENT_TOOLS: list[ToolDefinition] = [
                     "ignore_case": {
                         "type": "boolean",
                         "description": "Case-insensitive search (default: false)",
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Opaque next_cursor from a previous page; omit to start a search. Keep all search arguments identical.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 50,
+                        "description": "Maximum matching lines per page (1-50, default 50).",
                     },
                 },
                 "required": ["pattern"],
