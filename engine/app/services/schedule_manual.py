@@ -96,12 +96,12 @@ async def execute_manual_run(run: ScheduleManualRunRecord) -> None:
         logger.bind(run_id=str(run.id)).exception("Manual schedule recovery failed")
 
 
-async def recover_manual_runs(limit: int | None = None) -> None:
+async def recover_manual_runs(limit: int | None = None) -> bool:
     """Claim at most ``limit`` runs (default: this worker's free capacity) and release any that cannot launch."""
     new_trace_id()
     budget = free_schedule_capacity() if limit is None else limit
     if budget < 1:
-        return
+        return True
     try:
         async with connection_ctx():
             runs = await schedule_manual_run_dao.claim_pending(datetime.now(UTC), budget)
@@ -115,3 +115,5 @@ async def recover_manual_runs(limit: int | None = None) -> None:
                         _ = await schedule_manual_run_dao.release_unstarted(run.id, run.lease_token)
     except Exception:
         logger.exception("Manual schedule claim failed")
+        return False
+    return True
