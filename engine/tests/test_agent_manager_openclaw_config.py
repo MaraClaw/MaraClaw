@@ -10,6 +10,7 @@ from pywhales.exceptions import NoSuchContainer
 
 from app.config import Settings, get_settings
 from app.core.domain.agents import AgentStatus
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.records.agent import AgentRecord
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import (
@@ -23,6 +24,7 @@ from app.services.tavily.tokens import parse_proxy_token
 @pytest.fixture(autouse=True)
 def fake_token_preparation(monkeypatch):
     monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", AsyncMock())
+    monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
 
 
 @pytest.fixture(autouse=True)

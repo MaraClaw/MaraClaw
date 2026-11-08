@@ -587,6 +587,31 @@ export type KeyResultUpdate = z.infer<typeof KeyResultUpdateSchema>;
 export const LockRequestSchema = z.looseObject({ ["env_type"]: ControlEnvironmentSchema.optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["platform_hint"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type LockRequest = z.infer<typeof LockRequestSchema>;
 
+export const MCPTimeoutSchema = z.number().gt(0);
+export type MCPTimeout = z.infer<typeof MCPTimeoutSchema>;
+
+export const MCPScalarSchema = z.union([z.string(), z.number().refine(Number.isInteger), z.number(), z.boolean()]);
+export type MCPScalar = z.infer<typeof MCPScalarSchema>;
+
+export const MCPServerNameSchema = z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", "u"));
+export type MCPServerName = z.infer<typeof MCPServerNameSchema>;
+
+export const MCPTransportValues = ["streamable-http","sse","stdio"] as const;
+export const MCPTransportSchema = z.intersection(z.union([z.literal("streamable-http"), z.literal("sse"), z.literal("stdio")]), z.string());
+export type MCPTransport = z.infer<typeof MCPTransportSchema>;
+
+export const MCPServerCreateSchema = z.strictObject({ ["args"]: z.array(z.string()).optional(), ["command"]: z.union([z.string(), z.null()]).optional(), ["connection_timeout_ms"]: z.union([MCPTimeoutSchema, z.null()]).optional(), ["cwd"]: z.union([z.string(), z.null()]).optional(), ["enabled"]: z.boolean().optional(), ["env"]: z.object({  }).catchall(MCPScalarSchema).optional(), ["headers"]: z.object({  }).catchall(MCPScalarSchema).optional(), ["name"]: MCPServerNameSchema, ["request_timeout_ms"]: z.union([MCPTimeoutSchema, z.null()]).optional(), ["transport"]: MCPTransportSchema, ["url"]: z.union([z.string(), z.null()]).optional() });
+export type MCPServerCreate = z.infer<typeof MCPServerCreateSchema>;
+
+export const MCPServerSummarySchema = z.looseObject({ ["args_count"]: z.number().refine(Number.isInteger), ["command_configured"]: z.boolean(), ["connection_timeout_ms"]: z.union([z.number(), z.null()]), ["enabled"]: z.boolean(), ["env_names"]: z.array(z.string()), ["header_names"]: z.array(z.string()), ["name"]: z.string(), ["request_timeout_ms"]: z.union([z.number(), z.null()]), ["transport"]: MCPTransportSchema, ["url_configured"]: z.boolean() });
+export type MCPServerSummary = z.infer<typeof MCPServerSummarySchema>;
+
+export const MCPServerInventorySchema = z.looseObject({ ["servers"]: z.array(MCPServerSummarySchema) });
+export type MCPServerInventory = z.infer<typeof MCPServerInventorySchema>;
+
+export const MCPServerPatchSchema = z.strictObject({ ["args"]: z.array(z.string()).optional(), ["command"]: z.union([z.string(), z.null()]).optional(), ["connection_timeout_ms"]: z.union([MCPTimeoutSchema, z.null()]).optional(), ["cwd"]: z.union([z.string(), z.null()]).optional(), ["enabled"]: z.boolean().optional(), ["env"]: z.object({  }).catchall(MCPScalarSchema).optional(), ["headers"]: z.object({  }).catchall(MCPScalarSchema).optional(), ["removed_env"]: z.array(z.string()).optional(), ["removed_headers"]: z.array(z.string()).optional(), ["request_timeout_ms"]: z.union([MCPTimeoutSchema, z.null()]).optional(), ["url"]: z.union([z.string(), z.null()]).optional() });
+export type MCPServerPatch = z.infer<typeof MCPServerPatchSchema>;
+
 export const MCPServerUpdateSchema = z.looseObject({ ["api_key"]: z.union([z.string(), z.null()]).optional(), ["server_name"]: z.string(), ["server_url"]: z.string(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
 export type MCPServerUpdate = z.infer<typeof MCPServerUpdateSchema>;
 

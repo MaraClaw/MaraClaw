@@ -51,6 +51,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "agent_credentials",
         "agent_deletion_requests",
         "agent_lifecycle",
+        "agent_mcp",
         "agent_ownership_transfers",
         "agent_setup",
         "agent_setup_mcp",

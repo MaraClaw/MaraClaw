@@ -5,10 +5,12 @@ from itertools import combinations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.config import Settings
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import AgentManager
 from app.services.guest_admission import GuestStartPreflightError
@@ -87,6 +89,7 @@ def fake_token_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", prepare)
+    monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
 
 
 def test_settings_read_exact_names_default_empty_and_ignore_other_spelling(

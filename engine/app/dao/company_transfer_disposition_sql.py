@@ -1,5 +1,6 @@
 FREE_INTEGRATION_DELETES = (
     "DELETE FROM agent_credentials WHERE agent_id=%(agent)s",
+    "DELETE FROM agent_mcp_servers WHERE agent_id=%(agent)s",
     "DELETE FROM gogcli_credential_states WHERE agent_id=%(agent)s",
     "DELETE FROM agent_tools WHERE agent_id=%(agent)s",
     "DELETE FROM agent_permissions WHERE agent_id=%(agent)s",

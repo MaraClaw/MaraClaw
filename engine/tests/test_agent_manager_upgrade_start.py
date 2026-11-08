@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pywhales.exceptions import NoSuchContainer
 
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.services import agent_manager as agent_manager_module, guest_readiness
 from app.services.agent_manager import AgentManager
 
@@ -44,6 +45,7 @@ class _Docker:
 class _Env:
     def __init__(self, tmp_path, monkeypatch: pytest.MonkeyPatch, **agent_fields: Any) -> None:
         self.agent_id = uuid.uuid4()
+        monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
         self.agent_dir = tmp_path / str(self.agent_id)
         self.agent_dir.mkdir()
         self.manager = AgentManager.__new__(AgentManager)

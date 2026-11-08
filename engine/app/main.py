@@ -98,6 +98,7 @@ from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agent_deletion_requests import router as agent_deletion_requests_router
 from app.api.agent_lifecycle import router as agent_lifecycle_router
+from app.api.agent_mcp import router as agent_mcp_router
 from app.api.agent_ownership_transfers import router as agent_ownership_transfers_router
 from app.api.agent_setup import router as agent_setup_router
 from app.api.agent_setup_mcp import router as agent_setup_mcp_router
@@ -156,6 +157,7 @@ app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(member_auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agent_lifecycle_router)
+app.include_router(agent_mcp_router)
 app.include_router(agent_setup_router)
 app.include_router(agent_setup_mcp_router)
 app.include_router(agent_deletion_requests_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

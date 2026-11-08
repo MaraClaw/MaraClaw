@@ -13,6 +13,7 @@ from pywhales.exceptions import DockerException
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
+from app.services.agent_mcp_sync import restore_existing_guest
 from app.services.agent_start_store import start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, guest_admission
 from app.services.guest_identity import guest_resolutions, inspect_guest_container, owned_guest_containers
@@ -64,6 +65,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                             memory_limit=(host_config.memory or 0) if host_config is not None else 0,
                         )
                     )
+                await restore_existing_guest(manager, agent, running=not resume)
                 agent.container_id = guest.id
                 port = next(
                     (

@@ -13,6 +13,7 @@ import pytest
 from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.core.domain.agents import AgentStatus
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager
@@ -75,6 +76,7 @@ class Docker:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
     docker = Docker()
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)

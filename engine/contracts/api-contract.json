@@ -9342,6 +9342,315 @@
         "title": "LockRequest",
         "type": "object"
       },
+      "MCPScalar": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "MCPServerCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "connection_timeout_ms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MCPTimeout"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "env": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MCPScalar"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MCPScalar"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "name": {
+            "$ref": "#/components/schemas/MCPServerName"
+          },
+          "request_timeout_ms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MCPTimeout"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transport": {
+            "$ref": "#/components/schemas/MCPTransport"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "transport",
+          "name"
+        ],
+        "title": "MCPServerCreate",
+        "type": "object"
+      },
+      "MCPServerInventory": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/MCPServerSummary"
+            },
+            "title": "Servers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers"
+        ],
+        "title": "MCPServerInventory",
+        "type": "object"
+      },
+      "MCPServerName": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+        "type": "string"
+      },
+      "MCPServerPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "connection_timeout_ms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MCPTimeout"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "env": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MCPScalar"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MCPScalar"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "removed_env": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed Env",
+            "type": "array"
+          },
+          "removed_headers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed Headers",
+            "type": "array"
+          },
+          "request_timeout_ms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MCPTimeout"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "MCPServerPatch",
+        "type": "object"
+      },
+      "MCPServerSummary": {
+        "properties": {
+          "args_count": {
+            "title": "Args Count",
+            "type": "integer"
+          },
+          "command_configured": {
+            "title": "Command Configured",
+            "type": "boolean"
+          },
+          "connection_timeout_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Timeout Ms"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "env_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Env Names",
+            "type": "array"
+          },
+          "header_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Header Names",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "request_timeout_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Timeout Ms"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/MCPTransport"
+          },
+          "url_configured": {
+            "title": "Url Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "transport",
+          "enabled",
+          "url_configured",
+          "command_configured",
+          "args_count",
+          "header_names",
+          "env_names",
+          "connection_timeout_ms",
+          "request_timeout_ms"
+        ],
+        "title": "MCPServerSummary",
+        "type": "object"
+      },
       "MCPServerUpdate": {
         "properties": {
           "api_key": {
@@ -9456,6 +9765,18 @@
         ],
         "title": "MCPTestSuccess",
         "type": "object"
+      },
+      "MCPTimeout": {
+        "exclusiveMinimum": 0.0,
+        "type": "number"
+      },
+      "MCPTransport": {
+        "enum": [
+          "streamable-http",
+          "sse",
+          "stdio"
+        ],
+        "type": "string"
       },
       "ManualRunStatus": {
         "enum": [
@@ -24233,6 +24554,227 @@
         "summary": "Read Agent Lifecycle",
         "tags": [
           "agent-lifecycle"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/mcp/servers": {
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f6d63702f73657276657273",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServerInventory"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Servers",
+        "tags": [
+          "agent-mcp"
+        ]
+      },
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f6d63702f73657276657273",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPServerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServerSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Server",
+        "tags": [
+          "agent-mcp"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/mcp/servers/{name}": {
+      "delete": {
+        "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f6d63702f736572766572732f7b6e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Server",
+        "tags": [
+          "agent-mcp"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_2f6170692f6167656e74732f7b6167656e745f69647d2f6d63702f736572766572732f7b6e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPServerPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServerSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Configure Server",
+        "tags": [
+          "agent-mcp"
         ]
       }
     },
@@ -42867,6 +43409,10 @@
       "KeyResultStatus",
       "KeyResultUpdate",
       "LockRequest",
+      "MCPServerCreate",
+      "MCPServerInventory",
+      "MCPServerPatch",
+      "MCPServerSummary",
       "MCPServerUpdate",
       "MCPServerUpdatedResponse",
       "MCPTestRequest",
@@ -43164,11 +43710,19 @@
       "LifecycleOperationalBlockCode",
       "LivePreview",
       "LockRequest",
+      "MCPScalar",
+      "MCPServerCreate",
+      "MCPServerInventory",
+      "MCPServerName",
+      "MCPServerPatch",
+      "MCPServerSummary",
       "MCPServerUpdate",
       "MCPServerUpdatedResponse",
       "MCPTestRequest",
       "MCPTestResponse",
       "MCPTestSuccess",
+      "MCPTimeout",
+      "MCPTransport",
       "ManualRunStatus",
       "MemberAuthUser",
       "MemberDailyReportOut",

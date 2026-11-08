@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import secrets
 import shutil
 import sqlite3
@@ -392,7 +393,12 @@ class AgentManager:
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.tmp")
-        _ = tmp.write_text(text, encoding="utf-8")
+        owner = path.stat() if path.exists() else None
+        with tmp.open("w", encoding="utf-8") as out:
+            if owner is not None:
+                os.fchown(out.fileno(), owner.st_uid, owner.st_gid)
+                os.fchmod(out.fileno(), owner.st_mode & 0o777)
+            _ = out.write(text)
         _ = tmp.replace(path)
         return True
 
@@ -808,6 +814,10 @@ class AgentManager:
         self._atomic_write_json(
             agent_dir / "openclaw.json", preserve_guest_resources(agent_dir / "openclaw.json", config)
         )
+        if rehydrate:
+            from app.services.agent_mcp_sync import sync_mcp_config
+
+            _ = await sync_mcp_config(agent.id, agent_dir / "openclaw.json")
         self._sync_guest_oauth(agent_dir, models.primary, models.secondary, models.fallback)
         _guest_config_fingerprints[str(agent.id)] = self._guest_config_fingerprint(
             primary=models.primary,
