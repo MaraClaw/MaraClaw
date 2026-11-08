@@ -261,38 +261,40 @@ async def upsert_member_daily_report(
     today = datetime.now(UTC).date()
     status = "late" if mark_late_if_past and report_date < today else "submitted"
 
-    existing = await member_daily_report_dao.get_for_member_date(
-        tenant_id,
-        member_type=member_type,
-        member_id=member_id,
-        report_date=report_date,
-    )
-    if existing:
-        previous_content = existing.content
-        report = await member_daily_report_dao.update(
-            db_obj=existing,
-            obj_in={
-                "content": normalized,
-                "status": "revised" if previous_content != normalized else existing.status,
-                "source": source,
-                "updated_at": datetime.now(UTC),
-            },
-        )
-    else:
-        report = await member_daily_report_dao.create(
-            obj_in={
-                "tenant_id": tenant_id,
-                "member_type": member_type,
-                "member_id": member_id,
-                "report_date": report_date,
-                "content": normalized,
-                "status": status,
-                "source": source,
-            }
-        )
+    from app.db.session import connection_ctx
 
-    await company_report_dao.mark_needs_refresh_for_day(tenant_id, report_date)
-    return report
+    async with connection_ctx():
+        await company_report_dao.lock_reporting(tenant_id)
+        existing = await member_daily_report_dao.get_for_member_date(
+            tenant_id,
+            member_type=member_type,
+            member_id=member_id,
+            report_date=report_date,
+        )
+        if existing:
+            report = await member_daily_report_dao.update(
+                db_obj=existing,
+                obj_in={
+                    "content": normalized,
+                    "status": "revised" if existing.content != normalized else existing.status,
+                    "source": source,
+                },
+            )
+        else:
+            report = await member_daily_report_dao.create(
+                obj_in={
+                    "tenant_id": tenant_id,
+                    "member_type": member_type,
+                    "member_id": member_id,
+                    "report_date": report_date,
+                    "content": normalized,
+                    "status": status,
+                    "source": source,
+                }
+            )
+
+        await company_report_dao.mark_needs_refresh_for_day(tenant_id, report_date)
+        return report
 
 
 async def list_member_daily_reports_for_date(
@@ -457,9 +459,9 @@ async def _generate_llm_report_content(
     payload: JsonObject,
     *,
     fallback_content: str,
+    models: ResolvedReportModels,
 ) -> str:
     """Generate a structured company report with the OKR Agent model."""
-    models = await _resolve_report_models(tenant_id)
     if not models.primary:
         return fallback_content
 
@@ -534,7 +536,7 @@ async def _generate_llm_report_content(
                 f"report_type={report_type} model={getattr(candidate, 'model', '?')}: {exc}"
             )
 
-    return fallback_content
+    raise RuntimeError("All configured OKR report models failed")
 
 
 def _extract_section_lines(content: str, section: str) -> list[str]:
@@ -637,224 +639,25 @@ def _build_company_rollup_content(
     return "\n".join(lines)
 
 
-async def _upsert_company_report(
-    tenant_id: uuid.UUID,
-    report_type: str,
-    period_start: date,
-    period_end: date,
-    *,
-    content: str,
-    submitted_count: int,
-    missing_count: int,
-    needs_refresh: bool = False,
-) -> CompanyReportRecord:
-    """Insert or update a company report for the same period."""
-    label = _period_label(report_type, period_start, period_end)
-    existing = await company_report_dao.get_for_period(
-        tenant_id,
-        report_type=report_type,
-        period_start=period_start,
-        period_end=period_end,
-    )
-    if existing:
-        return await company_report_dao.update(
-            db_obj=existing,
-            obj_in={
-                "content": content,
-                "period_label": label,
-                "submitted_count": submitted_count,
-                "missing_count": missing_count,
-                "needs_refresh": needs_refresh,
-                "updated_at": datetime.now(UTC),
-            },
-        )
-    return await company_report_dao.create(
-        obj_in={
-            "tenant_id": tenant_id,
-            "report_type": report_type,
-            "period_start": period_start,
-            "period_end": period_end,
-            "period_label": label,
-            "content": content,
-            "submitted_count": submitted_count,
-            "missing_count": missing_count,
-            "needs_refresh": needs_refresh,
-        }
-    )
-
-
 async def generate_company_daily_report(tenant_id: uuid.UUID, period_day: date) -> CompanyReportRecord:
     """Generate the company daily report for a specific day."""
-    members = await list_tracked_okr_members(tenant_id)
-    rows = await member_daily_report_dao.list_for_date(tenant_id, period_day)
+    from app.services.okr_report_generation import generate_company_report
 
-    submitted_lookup = {(row.member_type, row.member_id): row for row in rows}
-    submitted_items: list[SubmittedDailyItem] = []
-    missing_items: list[MissingDailyItem] = []
-    for member in members:
-        row = submitted_lookup.get((member.member_type, member.member_id))
-        member_payload: SubmittedDailyItem = {
-            "display_name": member.display_name,
-            "content": row.content if row else "",
-        }
-        if row:
-            submitted_items.append(member_payload)
-        else:
-            missing_items.append({"display_name": member.display_name})
-
-    content = _build_company_daily_content(
-        period_day,
-        len(submitted_items),
-        missing_items,
-        submitted_items,
-    )
-    llm_payload: JsonObject = {
-        "report_type": "daily",
-        "period_start": period_day.isoformat(),
-        "period_end": period_day.isoformat(),
-        "submitted_count": len(submitted_items),
-        "missing_count": len(missing_items),
-        "submitted_members": [item["display_name"] for item in submitted_items],
-        "missing_members": [item["display_name"] for item in missing_items],
-        "submitted_reports": [
-            {
-                "member_name": item["display_name"],
-                "content": _truncate_for_prompt(item["content"]),
-            }
-            for item in submitted_items
-        ],
-    }
-    content = await _generate_llm_report_content(
-        tenant_id,
-        "daily",
-        period_day,
-        period_day,
-        llm_payload,
-        fallback_content=content,
-    )
-    return await _upsert_company_report(
-        tenant_id,
-        "daily",
-        period_day,
-        period_day,
-        content=content,
-        submitted_count=len(submitted_items),
-        missing_count=len(missing_items),
-        needs_refresh=False,
-    )
+    return await generate_company_report(tenant_id, "daily", period_day)
 
 
 async def generate_company_weekly_report(tenant_id: uuid.UUID, week_start: date) -> CompanyReportRecord:
     """Generate the company weekly report for the ISO week starting at week_start."""
-    week_end = week_start + timedelta(days=6)
-    source_reports = await company_report_dao.list_dailies_in_range(
-        tenant_id, period_start=week_start, period_end=week_end
-    )
+    from app.services.okr_report_generation import generate_company_report
 
-    submitted_count = max((report.submitted_count for report in source_reports), default=0)
-    missing_count = max((report.missing_count for report in source_reports), default=0)
-    content = _build_company_rollup_content(
-        "Company Weekly Report",
-        week_start,
-        week_end,
-        source_reports,
-        missing_count=missing_count,
-        submitted_count=submitted_count,
-    )
-    llm_payload: JsonObject = {
-        "report_type": "weekly",
-        "period_start": week_start.isoformat(),
-        "period_end": week_end.isoformat(),
-        "source_report_count": len(source_reports),
-        "submitted_count": submitted_count,
-        "missing_count": missing_count,
-        "source_reports": [
-            {
-                "period_label": report.period_label,
-                "period_start": report.period_start.isoformat(),
-                "period_end": report.period_end.isoformat(),
-                "submitted_count": report.submitted_count,
-                "missing_count": report.missing_count,
-                "content": _truncate_for_prompt(report.content, limit=1800),
-            }
-            for report in source_reports
-        ],
-    }
-    content = await _generate_llm_report_content(
-        tenant_id,
-        "weekly",
-        week_start,
-        week_end,
-        llm_payload,
-        fallback_content=content,
-    )
-    return await _upsert_company_report(
-        tenant_id,
-        "weekly",
-        week_start,
-        week_end,
-        content=content,
-        submitted_count=submitted_count,
-        missing_count=missing_count,
-        needs_refresh=False,
-    )
+    return await generate_company_report(tenant_id, "weekly", week_start)
 
 
 async def generate_company_monthly_report(tenant_id: uuid.UUID, month_anchor: date) -> CompanyReportRecord:
     """Generate the company monthly report for the month containing month_anchor."""
-    period_start = _month_start(month_anchor)
-    period_end = _month_end(month_anchor)
-    source_reports = await company_report_dao.list_weeklies_in_range(
-        tenant_id, period_start=period_start, period_end=period_end
-    )
+    from app.services.okr_report_generation import generate_company_report
 
-    submitted_count = max((report.submitted_count for report in source_reports), default=0)
-    missing_count = max((report.missing_count for report in source_reports), default=0)
-    content = _build_company_rollup_content(
-        "Company Monthly Report",
-        period_start,
-        period_end,
-        source_reports,
-        missing_count=missing_count,
-        submitted_count=submitted_count,
-    )
-    llm_payload: JsonObject = {
-        "report_type": "monthly",
-        "period_start": period_start.isoformat(),
-        "period_end": period_end.isoformat(),
-        "source_report_count": len(source_reports),
-        "submitted_count": submitted_count,
-        "missing_count": missing_count,
-        "source_reports": [
-            {
-                "period_label": report.period_label,
-                "period_start": report.period_start.isoformat(),
-                "period_end": report.period_end.isoformat(),
-                "submitted_count": report.submitted_count,
-                "missing_count": report.missing_count,
-                "content": _truncate_for_prompt(report.content, limit=1800),
-            }
-            for report in source_reports
-        ],
-    }
-    content = await _generate_llm_report_content(
-        tenant_id,
-        "monthly",
-        period_start,
-        period_end,
-        llm_payload,
-        fallback_content=content,
-    )
-    return await _upsert_company_report(
-        tenant_id,
-        "monthly",
-        period_start,
-        period_end,
-        content=content,
-        submitted_count=submitted_count,
-        missing_count=missing_count,
-        needs_refresh=False,
-    )
+    return await generate_company_report(tenant_id, "monthly", month_anchor)
 
 
 async def list_company_reports(

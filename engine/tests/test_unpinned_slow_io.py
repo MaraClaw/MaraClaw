@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import anyio
 import httpx
 import pytest
+from tests.test_okr_report_generation import ReportStore, store
 from tests.test_transaction_boundaries import pool
 from tests.transaction_pool_fakes import CountingPool
 
@@ -28,7 +29,7 @@ from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import agentbay_client, email_service, mcp_client, openclaw_update_exclusion as exclusion
 
-__all__ = ["pool"]
+__all__ = ["pool", "store"]
 
 type Request = Callable[[httpx.AsyncClient], Awaitable[httpx.Response]]
 
@@ -274,3 +275,50 @@ async def test_upload_policy_holds_a_connection_only_while_authenticating(
     assert response.status_code == 200
     assert seen == [0]
     assert (pool.active, pool.checkouts) == (0, 0)
+
+
+@pytest.mark.parametrize("kind", ["daily", "weekly", "monthly"])
+async def test_okr_model_leaves_single_slot_free(
+    kind: str,
+    store: ReportStore,
+    probe: Probe,
+    pool: CountingPool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import okr_reporting
+
+    async def model(*_args: object, **_kwargs: object) -> str:
+        await probe.external("okr_model")
+        return "generated report"
+
+    monkeypatch.setattr(okr_reporting, "_generate_llm_report_content", model)
+    responses: list[httpx.Response] = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+
+        async def regenerate() -> None:
+            responses.append(
+                await client.post(
+                    "/api/okr/company-reports/regenerate",
+                    json={
+                        "report_type": kind,
+                        "period_start": "2026-11-02",
+                    },
+                )
+            )
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(regenerate)
+            try:
+                with anyio.fail_after(3):
+                    await probe.entered.wait()
+                with anyio.fail_after(1):
+                    other = await client.get("/api/departments")
+                assert other.status_code == 200
+            finally:
+                probe.release.set()
+    assert responses[0].status_code == 200, responses[0].text
+    assert responses[0].json()["content"] == "generated report"
+    assert probe.events == [("okr_model", False, 0)]
+    assert store.phases == [True, True]
+    assert pool.active == 0
+    assert pool.checkouts == pool.releases == pool.raw.commits
