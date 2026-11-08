@@ -67,11 +67,11 @@
       "skillPath": "skills/interface-review/SKILL.md",
       "computedHash": "8feb4aa0e2a35b629cdff8121ccbed7ff9bfca83bd245a691d16ca9ccd3e52b5"
     },
-    "pywhales": {
+    "pywhales-docker-container": {
       "source": "MaraClaw/PyWhales",
       "sourceType": "github",
-      "skillPath": "skills/pywhales/SKILL.md",
-      "computedHash": "92e212b02ad8c47ff0816005aba4aba8f16dbe35b9028e4e7893d9cc9f59e5c1"
+      "skillPath": "skills/pywhales-docker-container/SKILL.md",
+      "computedHash": "c3563d33c7f6f4eaebf4a1d1cf4587095a87754dcdc64b7aa22454924597abab"
     },
     "state-machine": {
       "source": "jakubkrehel/skills",
