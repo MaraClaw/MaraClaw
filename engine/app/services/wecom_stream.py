@@ -7,15 +7,16 @@ No callback URL or domain verification needed.
 import asyncio
 import inspect
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from functools import wraps
 from typing import TypeIs, cast
 from unittest.mock import patch
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
-from app.runtime.tasks import EventTasks
+from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 
 _WECOM_SDK_PROXY_DISABLED = False
 
@@ -70,9 +71,6 @@ def _disable_wecom_sdk_proxy() -> None:
 async def _await_maybe(value: object) -> object:
     if not asyncio.iscoroutine(value):
         return value
-    from collections.abc import Awaitable
-    from typing import cast
-
     return await cast("Awaitable[object]", value)
 
 
@@ -131,7 +129,7 @@ class WeComStreamManager:
         self._clients: dict[uuid.UUID, _WeComClient] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._connected: dict[uuid.UUID, bool] = {}
-        self._event_tasks: EventTasks = EventTasks()
+        self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
 
     async def start_client(
         self,
@@ -156,9 +154,9 @@ class WeComStreamManager:
                 return existing_task
 
         self._connected[agent_id] = False
-        self._event_tasks.closing = False
+        callbacks = self._callbacks[agent_id] = CallbackAdmission()
         task = asyncio.create_task(
-            self._run_client(agent_id, bot_id, bot_secret),
+            self._run_client(agent_id, bot_id, bot_secret, callbacks),
             name=f"wecom-stream-{str(agent_id)[:8]}",
         )
         self._tasks[agent_id] = task
@@ -178,6 +176,7 @@ class WeComStreamManager:
         agent_id: uuid.UUID,
         bot_id: str,
         bot_secret: str,
+        callbacks: CallbackAdmission,
     ) -> None:
         """Run the WeCom WebSocket client (async, runs in the main event loop)."""
         task = asyncio.current_task()
@@ -330,10 +329,25 @@ class WeComStreamManager:
                     logger.error(f"[WeCom Stream] Error sending welcome: {e}")
 
             # Register event handlers
-            stream_client.on("message.text", self._event_tasks.wrap(on_text))
-            stream_client.on("message.image", self._event_tasks.wrap(on_image))
-            stream_client.on("message.file", self._event_tasks.wrap(on_file))
-            stream_client.on("event.enter_chat", self._event_tasks.wrap(on_enter_chat))
+            def business(
+                callback: Callable[[_WeComFrame], Awaitable[None]],
+            ) -> Callable[[_WeComFrame], Awaitable[None]]:
+                @wraps(callback)
+                async def handle(frame: _WeComFrame) -> None:
+                    try:
+                        await callbacks.run(callback, frame)
+                    except CallbackRefusedError as error:
+                        logger.warning("[WeCom Stream] Message refused for {}: {}", agent_id, error)
+                        await callbacks.report_refusal(
+                            _reply_stream, stream_client, frame, generate_req_id("stream"), str(error)
+                        )
+
+                return callbacks.wrap(handle)
+
+            stream_client.on("message.text", business(on_text))
+            stream_client.on("message.image", business(on_image))
+            stream_client.on("message.file", business(on_file))
+            stream_client.on("event.enter_chat", callbacks.wrap(on_enter_chat))
             stream_client.on("disconnected", on_disconnected)
 
             # The SDK handles reconnects after a successful connection.
@@ -361,15 +375,17 @@ class WeComStreamManager:
             if client is not None and self._clients.get(agent_id) is client:
                 self._connected[agent_id] = False
             logger.info(f"[WeCom Stream] Client task cancelled for agent {agent_id}")
-            if client is not None:
-                try:
-                    await _disconnect_client(client)
-                except Exception as disconnect_error:
-                    logger.warning(
-                        f"[WeCom Stream] Disconnect during cancellation failed for {agent_id}: {disconnect_error}"
-                    )
             raise
         finally:
+            await callbacks.stop()
+            try:
+                await _disconnect_client(client)
+            except Exception as disconnect_error:
+                logger.warning(
+                    f"[WeCom Stream] Disconnect during cancellation failed for {agent_id}: {disconnect_error}"
+                )
+            if self._callbacks.get(agent_id) is callbacks:
+                _ = self._callbacks.pop(agent_id, None)
             if self._tasks.get(agent_id) is task:
                 _ = self._tasks.pop(agent_id, None)
                 _ = self._connected.pop(agent_id, None)
@@ -378,6 +394,8 @@ class WeComStreamManager:
 
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stop a running WebSocket client for an agent."""
+        if callbacks := self._callbacks.pop(agent_id, None):
+            await callbacks.stop()
         task = self._tasks.pop(agent_id, None)
         client = self._clients.pop(agent_id, None)
         _ = self._connected.pop(agent_id, None)
@@ -416,15 +434,15 @@ class WeComStreamManager:
         logger.info(f"[WeCom Stream] Started {started} WeCom AI Bot client(s)")
 
     async def stop_all(self) -> None:
-        self._event_tasks.closing = True
+        for callbacks in self._callbacks.values():
+            callbacks.close()
         results = await asyncio.gather(
-            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients)),
+            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients) | set(self._callbacks)),
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, BaseException):
                 logger.warning("[WeCom Stream] Client cleanup failed: {}", result)
-        await self._event_tasks.stop()
         self._connected.clear()
 
     def status(self) -> dict[str, bool]:
