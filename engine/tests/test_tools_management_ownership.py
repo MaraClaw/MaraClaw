@@ -1,13 +1,14 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api import tools
+from app.api import tool_config_operations, tools
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.records.identity import IdentityRecord
@@ -72,6 +73,26 @@ def writes(monkeypatch: pytest.MonkeyPatch) -> WriteState:
     monkeypatch.setattr(tools, "set_tenant_tool_config", set_config)
     monkeypatch.setattr(tools, "connection_ctx", transaction)
     return state
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        {"set": {"api_key": "replacement"}, "unset": ["api_key"]},
+        {"unset": ["api_key", "api_key"]},
+        {"set": {"nested.key": "value"}},
+        {"set": {"": "value"}},
+        {"config": {"api_key": "legacy"}},
+    ],
+)
+async def test_additive_config_rejects_ambiguous_operations_before_persistence(
+    client: httpx.AsyncClient, writes: WriteState, monkeypatch: pytest.MonkeyPatch, operations: JsonObject
+) -> None:
+    persist = AsyncMock()
+    monkeypatch.setattr(tool_config_operations, "patch_stored_config", persist)
+    response = await client.patch(f"/api/tools/{writes.records['own'].id}", json=operations)
+    assert response.status_code == 422
+    persist.assert_not_awaited()
 
 
 @pytest.fixture

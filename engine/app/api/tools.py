@@ -2,10 +2,20 @@
 
 import uuid
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from app.api.tool_catalog_import import router as catalog_import_router
+from app.api.tool_config_operations import router as config_operations_router
+from app.api.tool_probes import (
+    EmailTestRequest,
+    MCPTestRequest,
+    check_email_connection,
+    check_mcp_connection,
+    router as connection_probe_router,
+)
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
@@ -24,6 +34,7 @@ from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.system_setting_dao import system_setting_dao
+from app.dao.tool_config_dao import lock_agent_config
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.db.session import connection_ctx
 from app.records.channel_config import ChannelConfigRecord
@@ -39,12 +50,10 @@ from app.schemas.operator_response_tools import (
     CategoryTestResponse,
     EmailProviderHelp,
     MCPServerUpdatedResponse,
-    MCPTestResponse,
     ToolAcknowledgement,
     ToolCatalogResponse,
     ToolCreatedResponse,
 )
-from app.services.email_service import EmailConfig, EmailConnectionResult
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     encrypt_sensitive_fields,
@@ -56,9 +65,15 @@ from app.services.tool_config import (
 )
 from app.services.tool_ownership import can_configure_tool, can_mutate_tool, tool_capabilities
 
+__all__ = ["EmailTestRequest", "MCPTestRequest", "check_email_connection", "check_mcp_connection"]
+
 router = APIRouter(prefix="/tools", tags=["tools"])
 # Connectivity probes wait on MCP, mail and provider servers, so they stay off the request-wide CRUD checkout.
 probe_router = APIRouter(prefix="/tools", tags=["tools"])
+
+probe_router.include_router(catalog_import_router)
+probe_router.include_router(connection_probe_router)
+router.include_router(config_operations_router)
 
 
 CATEGORY_CONFIG_PRIMARY_TOOL = {
@@ -475,40 +490,6 @@ async def update_agent_tools(
     return {"ok": True}
 
 
-# ─── MCP Server Testing ────────────────────────────────────
-class MCPTestRequest(BaseModel):
-    server_url: str
-    # Optional standalone API Key. If provided, it is sent as
-    # 'Authorization: Bearer {api_key}' and is NOT embedded in the URL.
-    api_key: str | None = None
-
-
-@probe_router.post("/test-mcp")
-async def check_mcp_connection(
-    data: MCPTestRequest,
-    current_user: UserRecord = Depends(get_current_user),
-) -> MCPTestResponse:
-    """Test connection to an MCP server and list available tools.
-
-    Supports two authentication modes:
-    - URL-embedded key (e.g. ?tavilyApiKey=xxx) - include in server_url.
-    - Bearer token - pass via api_key field; sent as Authorization header.
-    """
-    _ = current_user
-    from app.core.outbound_policy import OutboundPolicyError, validate_public_url
-    from app.services.mcp_client import MCPClient
-
-    try:
-        server_url = await validate_public_url(data.server_url)
-        client = MCPClient(server_url, api_key=data.api_key or None)
-        tools = await client.list_tools()
-        return {"ok": True, "tools": tools}
-    except OutboundPolicyError as exc:
-        raise HTTPException(status_code=400, detail="MCP server URL is not allowed") from exc
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
-
-
 # ─── Agent-installed Tools Management (admin) ───────────────
 
 
@@ -592,6 +573,10 @@ async def get_agent_tool_config(
     agent = await _load_agent_for_tool_scope(agent_id)
     at = await agent_tool_dao.get_assignment(agent_id, tool_id)
 
+    assignments = await _load_agent_tool_assignments(agent_id)
+    if not _tool_record_visible_to_agent(tool, agent.tenant_id, assignments):
+        raise HTTPException(404, "Tool not found")
+
     schema = tool.config_schema
     raw_global = await get_tool_company_config(tool, agent.tenant_id)
     raw_agent = _decrypt_sensitive_fields(json_object_from(at.config if at else {}), schema)
@@ -620,32 +605,33 @@ async def update_agent_tool_config(
         raise HTTPException(status_code=403, detail="Manage access required")
     # Network / proxy settings affect untrusted code egress; admin-only.
     _network_proxy_keys = ("allow_network", "http_proxy", "https_proxy", "no_proxy")
-    if any(key in data.config for key in _network_proxy_keys) and current_user.role not in (
-        "platform_admin",
-        "org_admin",
-    ):
+    is_admin = current_user.is_platform_admin or current_user.role == "org_admin"
+    if any(key in data.config for key in _network_proxy_keys) and not is_admin:
         raise HTTPException(
             status_code=403,
             detail="Only platform admin or organization admin can modify network or proxy settings",
         )
 
     tool_for_schema = await tool_dao.get(tool_id)
-    encrypted_config = _encrypt_sensitive_fields(
-        data.config, tool_for_schema.config_schema if tool_for_schema else None
-    )
-
+    if tool_for_schema is None:
+        raise HTTPException(404, "Tool not found")
     at = await agent_tool_dao.get_assignment(agent_id, tool_id)
-    if at:
-        _ = await agent_tool_dao.update(db_obj=at, obj_in={"config": encrypted_config})
-    else:
-        _ = await agent_tool_dao.create(
-            obj_in={
-                "agent_id": agent_id,
-                "tool_id": tool_id,
-                "enabled": True,
-                "config": encrypted_config,
-            }
-        )
+    async with AsyncExitStack() as stack:
+        if not is_admin or at is None:
+            _ = await stack.enter_async_context(connection_ctx())
+            await lock_agent_config(_agent, tool_id)
+            at = await agent_tool_dao.get_assignment(agent_id, tool_id)
+        if not _tool_record_visible_to_agent(tool_for_schema, _agent.tenant_id, {str(tool_id): at} if at else {}):
+            raise HTTPException(404, "Tool not found")
+        if at and set(at.config) & set(_network_proxy_keys) and not is_admin:
+            raise HTTPException(403, "Only platform admin or organization admin can modify network or proxy settings")
+        encrypted_config = _encrypt_sensitive_fields(data.config, tool_for_schema.config_schema)
+        if at:
+            _ = await agent_tool_dao.update(db_obj=at, obj_in={"config": encrypted_config})
+        else:
+            _ = await agent_tool_dao.create(
+                obj_in={"agent_id": agent_id, "tool_id": tool_id, "enabled": True, "config": encrypted_config}
+            )
     return {"ok": True}
 
 
@@ -663,7 +649,7 @@ async def get_agent_tools_with_config(
     rather than Tool.config. We resolve those as part of the global config so
     the agent-level UI can show the inherited key hint.
     """
-    _ = current_user
+    _ = await check_agent_access(current_user, agent_id)
     from app.services.agent_tools import _agent_has_feishu
 
     has_feishu = await _agent_has_feishu(agent_id)
@@ -728,33 +714,11 @@ async def get_agent_tools_with_config(
                 "mcp_server_url": t.mcp_server_url,
                 "config_schema": t.config_schema or {},
                 "global_config": masked_global,
-                "agent_config": raw_agent,
+                "agent_config": mask_sensitive_fields(raw_agent, t.config_schema),
                 "source": t.source,
             }
         )
     return result
-
-
-# ─── Email Connection Testing ──────────────────────────────
-
-
-class EmailTestRequest(BaseModel):
-    config: EmailConfig
-
-
-@probe_router.post("/test-email")
-async def check_email_connection(
-    data: EmailTestRequest,
-    current_user: UserRecord = Depends(get_current_user),
-) -> EmailConnectionResult:
-    """Test IMAP and SMTP email connections with provided config."""
-    _ = current_user
-    from app.services.email_service import test_connection
-
-    try:
-        return await test_connection(data.config)
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
 
 
 @router.get("/email-providers")
@@ -843,9 +807,9 @@ async def get_category_config(
         "agent_id": str(agent_id),
         "category": category,
         "is_configured": is_configured,
-        "config": effective_config,
+        "config": mask_sensitive_fields(effective_config, cat_schema),
         "global_config": masked_global,
-        "agent_config": raw_agent,
+        "agent_config": mask_sensitive_fields(raw_agent, cat_schema),
     }
 
 

@@ -14,10 +14,9 @@ from app.core.security import decrypt_data
 from app.core.tool_types import ToolConfigSchema
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
-from app.services.tool_config import get_tenant_tool_config
+from app.services.tool_config import SENSITIVE_FIELD_KEYS, get_tenant_tool_config
 from app.services.tool_runtime.provenance import ConfigLayer, merge_layers
 
-SENSITIVE_FIELD_KEYS = {"api_key", "private_key", "auth_code", "password", "secret", "atlassian_api_key"}
 _tool_config_cache: dict[tuple[str | None, str], tuple[JsonObject, datetime]] = {}
 _TOOL_CONFIG_CACHE_TTL_SECONDS = 60
 

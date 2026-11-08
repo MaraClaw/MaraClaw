@@ -8,8 +8,12 @@ from uuid import UUID
 
 from app.core.json_types import JsonObject
 from app.dao.tool_dao import agent_tool_dao, tool_dao
+from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
+from app.schemas.operator_response_tools import ToolCreatedResponse
+from app.schemas.tool_management import MCPCatalogImport, MCPDiscoveredTool
 from app.services.tool_config import encrypt_sensitive_fields
+from app.services.tool_management_auth import ToolActor, catalog_tenant, fresh_tool_actor
 
 if TYPE_CHECKING:
     from app.services.resource_discovery import DiscoveredMCPTool
@@ -75,4 +79,50 @@ async def persist_mcp_installation(
                 assignment = await agent_tool_dao.get_assignment(agent_id, generic.id)
                 if assignment is not None:
                     _ = await agent_tool_dao.delete(record_id=assignment.id)
+    return imported
+
+
+async def persist_admin_mcp_catalog(
+    actor: ToolActor, request: MCPCatalogImport, inventory: list[MCPDiscoveredTool]
+) -> list[ToolCreatedResponse]:
+    """Insert a rediscovered selection atomically without touching agent installations."""
+    from fastapi import HTTPException
+
+    current = {tool.name: tool for tool in inventory}
+    if any(current.get(tool.name) != tool for tool in request.tools):
+        raise HTTPException(409, "Selected MCP definitions changed; discover again")
+    tenant_id = catalog_tenant(actor.user, request.tenant_id)
+    names = [f"{request.name_prefix}_{tool.name}" for tool in request.tools]
+    config = encrypt_sensitive_fields({"api_key": request.api_key} if request.api_key not in (None, "") else {})
+    imported: list[ToolCreatedResponse] = []
+    try:
+        async with connection_ctx() as db, db.raw.transaction():
+            fresh = await fresh_tool_actor(actor.user, tenant_id, actor.generation)
+            if catalog_tenant(fresh, request.tenant_id) != tenant_id:
+                raise HTTPException(403, "Company authority changed")
+            if await tool_dao.list_by_names(names):
+                raise HTTPException(409, "One or more local tool names are unavailable")
+            for name, remote in zip(names, request.tools, strict=True):
+                tool = await tool_dao.create(
+                    obj_in={
+                        "name": name,
+                        "display_name": f"{request.server_name}: {remote.name}",
+                        "description": remote.description,
+                        "type": "mcp",
+                        "category": "mcp",
+                        "icon": "🔌",
+                        "parameters_schema": remote.input_schema,
+                        "mcp_server_url": request.server_url,
+                        "mcp_server_name": request.server_name,
+                        "mcp_tool_name": remote.name,
+                        "enabled": True,
+                        "is_default": False,
+                        "source": "admin",
+                        "tenant_id": tenant_id,
+                        "config": config,
+                    }
+                )
+                imported.append({"id": str(tool.id), "name": tool.name})
+    except UniqueViolationError:
+        raise HTTPException(409, "One or more local tool names are unavailable") from None
     return imported

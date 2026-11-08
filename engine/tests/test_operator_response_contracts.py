@@ -134,12 +134,12 @@ async def test_tool_config_masks_both_configs_without_dropping_null(tool_state: 
     assert TypeAdapter(tool_contracts.AgentToolConfigResponse).validate_python(result) == result
 
 
-async def test_with_config_preserves_existing_unmasked_agent_override(tool_state: ToolState) -> None:
+async def test_with_config_masks_agent_override_without_dropping_null(tool_state: ToolState) -> None:
     user, agent, _tool, assignment = tool_state
 
     result = await tools_api.get_agent_tools_with_config(agent.id, current_user=user)
 
-    assert result[0]["agent_config"] == {"credential": "agent-secret", "optional": None}
+    assert result[0]["agent_config"] == {"credential": "****cret", "optional": None}
     assert json_object_from(result[0]["global_config"])["credential"] == "****cret"
     assert result[0]["agent_tool_id"] == str(assignment.id)
     assert TypeAdapter(list[tool_contracts.AgentToolWithConfigResponse]).validate_python(result) == result
@@ -330,7 +330,7 @@ async def test_installed_tools_normalize_nullable_metadata_and_keep_configuratio
     assert TypeAdapter(list[tool_contracts.AgentInstalledToolResponse]).validate_python(result) == result
 
 
-async def test_category_config_preserves_agent_overrides_and_masked_global_config(
+async def test_category_config_masks_agent_overrides_and_global_config(
     monkeypatch: pytest.MonkeyPatch, tool_state: ToolState
 ) -> None:
     user, agent, _tool, _assignment = tool_state
@@ -349,9 +349,9 @@ async def test_category_config_preserves_agent_overrides_and_masked_global_confi
 
     result = await tools_api.get_category_config(agent.id, ChannelType.SLACK.value, current_user=user)
 
-    assert result["config"]["credential"] == "agent-override"
+    assert result["config"]["credential"] == "****ride"
     assert result["global_config"]["credential"] == "****cret"
-    assert result["agent_config"]["api_key"] == "agent-key"
+    assert result["agent_config"]["api_key"] == "****-key"
     assert result["agent_config"]["vendor"] is False
     assert "optional" not in result["agent_config"]
     assert TypeAdapter(tool_contracts.CategoryConfigResponse).validate_python(result) == result

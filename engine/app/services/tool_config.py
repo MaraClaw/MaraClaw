@@ -16,17 +16,25 @@ from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.core.security import decrypt_data, encrypt_data
 from app.core.tool_types import ToolConfigSchema
+from app.dao.tool_config_dao import TENANT_TOOL_CONFIG_PREFIX, tenant_tool_config_key
 from app.db.session import connection_ctx
 from app.db.types import as_jsonb
 from app.records.tool import ToolRecord
+from app.schemas.tool_management import ConfigOperations
 from app.services.service_contracts import TenantToolSettings
 
-SENSITIVE_FIELD_KEYS = {"api_key", "private_key", "auth_code", "password", "secret"}
-TENANT_TOOL_CONFIG_PREFIX = "tool_config:"
+__all__ = ["TENANT_TOOL_CONFIG_PREFIX", "tenant_tool_config_key"]
 
-
-def tenant_tool_config_key(tool_name: str) -> str:
-    return f"{TENANT_TOOL_CONFIG_PREFIX}{tool_name}"
+SENSITIVE_FIELD_KEYS = {
+    "api_key",
+    "private_key",
+    "auth_code",
+    "password",
+    "secret",
+    "atlassian_api_key",
+    "api_secret",
+    "app_secret",
+}
 
 
 def get_sensitive_keys(config_schema: Mapping[str, Any] | ToolConfigSchema | None = None) -> set[str]:
@@ -191,6 +199,20 @@ def mask_sensitive_fields(
     for key in get_sensitive_keys(config_schema):
         value = masked.get(key)
         if value is not None and value and isinstance(value, str):
-            suffix = value[-4:] if len(value) > 4 else value
+            suffix = value[-4:] if len(value) > 4 else ""
             masked[key] = f"****{suffix}"
     return masked
+
+
+def apply_config_operations(config: JsonObject, operations: ConfigOperations) -> JsonObject:
+    return {**{key: value for key, value in config.items() if key not in operations.unset}, **operations.set}
+
+
+def encrypted_config_operations(operations: ConfigOperations, tool: ToolRecord) -> ConfigOperations:
+    from fastapi import HTTPException
+
+    for key in get_sensitive_keys(tool.config_schema):
+        value = operations.set.get(key)
+        if isinstance(value, str) and value.startswith("****"):
+            raise HTTPException(422, "Saved secret displays cannot be submitted as credentials")
+    return ConfigOperations(set=encrypt_sensitive_fields(operations.set, tool.config_schema), unset=operations.unset)

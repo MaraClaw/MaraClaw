@@ -15,6 +15,11 @@ class ToolCreatedResponse(TypedDict):
     name: str
 
 
+class MCPCatalogImportResponse(TypedDict):
+    ok: Literal[True]
+    tools: list[ToolCreatedResponse]
+
+
 class MCPServerUpdatedResponse(ToolAcknowledgement):
     updated: int
 
