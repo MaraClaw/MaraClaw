@@ -1796,6 +1796,15 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE TRIGGER personal_burst_input_protected
 BEFORE UPDATE ON personal_burst_inputs FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_input();
 
+-- NULL ciphertext is a deletion tombstone: stale guest/storage copies must not resurrect it.
+CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    name TEXT NOT NULL CHECK (name ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$'),
+    definition_ciphertext TEXT CHECK (definition_ciphertext IS NULL OR definition_ciphertext <> ''),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    PRIMARY KEY (agent_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS gogcli_credential_states (
 	id UUID DEFAULT gen_random_uuid() NOT NULL, 
 	agent_id UUID NOT NULL, 
