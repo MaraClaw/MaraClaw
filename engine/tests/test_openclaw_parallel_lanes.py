@@ -9,7 +9,7 @@ import pytest
 from app.config import get_settings
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services import openclaw_routing as routing
+from app.services import openclaw_native_capacity as capacity_module, openclaw_routing as routing
 from app.services.shared_chat import shared_session_id
 
 
@@ -105,7 +105,6 @@ async def turns(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Turns]:
     routing.open_wake_admission()
     assert not routing._lane_running
     assert not routing._lane_again
-    assert not routing._wake_semaphores
 
 
 @pytest.mark.parametrize("limit", [1, 2])
@@ -180,6 +179,8 @@ async def test_lanes_past_a_page_of_running_lanes_still_start(turns: Turns, monk
 
 async def test_shutdown_joins_all_active_and_queued_lane_tasks(turns: Turns, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "OPENCLAW_AGENT_MAX_PARALLEL_TURNS", 2)
+    capacity = capacity_module.native_capacity()
+    await capacity.run(lambda: None)
     first, second, third = (turns.add(lane) for lane in ("one", "two", "three"))
     turns.wake(first)
     await turns.started(first)
@@ -201,6 +202,9 @@ async def test_shutdown_joins_all_active_and_queued_lane_tasks(turns: Turns, mon
         await asyncio.wait_for(draining, 2)
     assert not routing._wake_tasks
     assert turns.pending == [third]
+    assert capacity.executor is None
+    assert not capacity.active
+    assert not capacity.waiting
 
 
 async def test_conversationless_rows_have_independent_lanes(turns: Turns) -> None:
@@ -209,3 +213,110 @@ async def test_conversationless_rows_have_independent_lanes(turns: Turns) -> Non
     await turns.started(first)
     await turns.started(second)
     assert turns.active == {str(first.id), str(second.id)}
+
+
+@pytest.fixture
+async def fleet(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[list[Turns]]:
+    values = [Turns(AgentRecord(id=uuid4(), name=name, creator_id=uuid4())) for name in ("A", "B", "C")]
+    by_id = {turns.agent.id: turns for turns in values}
+
+    async def heads(agent_id: UUID, limit: int, *, after=None):
+        return await by_id[agent_id].lane_heads_page(agent_id, limit, after=after)
+
+    async def head(member: GatewayMessageRecord):
+        return await by_id[member.agent_id].lane_head(member)
+
+    async def run(agent: AgentRecord, text: str, message_id: UUID):
+        await by_id[agent.id].execute(agent, text, message_id)
+
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", heads)
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_head", head)
+    monkeypatch.setattr(routing, "_run_inbox_wake", run)
+    routing.open_wake_admission()
+    yield values
+    for turns in values:
+        for release in turns.release.values():
+            release.set()
+    await routing.drain_wake_tasks(0)
+    routing.open_wake_admission()
+
+
+async def test_process_limit_below_agent_limit_bounds_all_agents(fleet: list[Turns], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 2)
+    monkeypatch.setattr(get_settings(), "OPENCLAW_AGENT_MAX_PARALLEL_TURNS", 4)
+    rows = [turns.add("lane") for turns in fleet]
+    for turns, row in zip(fleet, rows, strict=True):
+        turns.wake(row)
+    await fleet[0].started(rows[0])
+    await fleet[1].started(rows[1])
+    await _checkpoint()
+    assert fleet[2].seen == []
+    assert len(routing._lane_running) == 2
+    assert len(routing._wake_tasks) == 2
+    assert capacity_module.native_capacity().active == {fleet[0].agent.id: 1, fleet[1].agent.id: 1}
+    fleet[0].release[rows[0].id].set()
+    await fleet[2].started(rows[2])
+
+
+async def test_round_robin_reenters_a_hot_lane_behind_another_agent(
+    fleet: list[Turns], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    a, b, _ = fleet
+    first, second, third = (a.add("deep") for _ in range(3))
+    other = b.add("single")
+    a.wake(first)
+    await a.started(first)
+    b.wake(other)
+    a.release[first.id].set()
+    await b.started(other)
+    assert a.seen == [first.id]
+    b.release[other.id].set()
+    await a.started(second)
+    a.release[second.id].set()
+    await a.started(third)
+    assert a.seen == [first.id, second.id, third.id]
+
+
+async def test_round_robin_rotates_agent_lane_queues(fleet: list[Turns], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    a, b, _ = fleet
+    first, second, third = (a.add(lane) for lane in ("one", "two", "three"))
+    other = b.add("single")
+    a.wake(first)
+    await a.started(first)
+    b.wake(other)
+    a.release[first.id].set()
+    await a.started(second)
+    a.release[second.id].set()
+    await b.started(other)
+    assert a.seen == [first.id, second.id]
+    b.release[other.id].set()
+    await a.started(third)
+
+
+async def test_waiting_lane_resolves_new_head_at_admission(turns: Turns, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    running = turns.add("busy")
+    stale, fresh = turns.add("waiting"), turns.add("waiting")
+    turns.wake(running)
+    await turns.started(running)
+    turns.pending.remove(stale)
+    turns.release[running.id].set()
+    await turns.started(fresh)
+    assert turns.seen == [running.id, fresh.id]
+
+
+async def test_queue_overflow_refills_without_another_wake(turns: Turns, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    monkeypatch.setattr(capacity_module, "WAITING_LANES_PER_AGENT", 1)
+    rows = [turns.add(str(index)) for index in range(6)]
+    turns.wake(rows[0])
+    for row in rows:
+        await turns.started(row)
+        capacity = capacity_module.native_capacity()
+        assert sum(len(lanes) for lanes in capacity.waiting.values()) <= 1
+        turns.release[row.id].set()
+    await _join_wakes()
+    assert turns.seen == [row.id for row in rows]
+    assert not turns.pending

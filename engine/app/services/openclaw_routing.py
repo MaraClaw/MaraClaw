@@ -9,14 +9,12 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
-from app.config import get_settings
 from app.core.logging import logger
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.session import connection_ctx, get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import PreparedOpenClawMessage, SharedDispatchRequest
-from app.runtime.tasks import TaskAdmission
 from app.services.agent_manager import guest_model_ref
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel
 from app.services.agent_work_eligibility import load_agent_for_new_work
@@ -35,7 +33,13 @@ from app.services.openclaw_model_selection import (
     NoCompanyModelError,
     bundle_usable,
 )
+from app.services.openclaw_native_capacity import (
+    discard_waiting_lanes,
+    release_turn,
+    shutdown_native_capacity,
+)
 from app.services.openclaw_native_claims import claim_ordinary_turn
+from app.services.openclaw_native_dispatch import NativeDispatcher
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.quota_guard import AgentExpired
@@ -167,7 +171,10 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
             return
         timeline = TurnTimeline.claimed(claimed)
         try:
-            outcome = await execute_gateway_turn(agent, claimed, timing=timeline)
+            try:
+                outcome = await execute_gateway_turn(agent, claimed, timing=timeline)
+            finally:
+                release_turn()
         except WorkspaceLockTimeoutError, GuestConfigWriteError, OpenClawUpdateGateError:
             # These adapter boundaries refuse before sending any RPC request.
             outcome_kind = "released"
@@ -206,64 +213,22 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
         outcome_kind = "failed"
         logger.warning("[OpenClaw] native dispatch failed agent={} code=dispatch_failed", agent.id)
     finally:
+        release_turn()
         if timeline is not None:
             timeline.emit(outcome_kind)
 
 
-_wake_tasks: set[asyncio.Task[None]] = set()
-_wake_admission = TaskAdmission("Inbox wake", _wake_tasks)
-_wake_running: set[UUID] = set()
-_wake_again: set[UUID] = set()
-_lane_running: set[tuple[UUID, str]] = set()
-_lane_again: set[tuple[UUID, str]] = set()
-_wake_semaphores: dict[UUID, asyncio.Semaphore] = {}
+_dispatcher = NativeDispatcher(
+    lambda agent, text, message_id: _run_inbox_wake(agent, text, message_id), lambda: _LANE_HEAD_PAGE
+)
+_wake_tasks = _dispatcher.tasks
+_wake_admission = _dispatcher.admission
+_wake_running = _dispatcher.scanning
+_wake_again = _dispatcher.scan_again
+_lane_running = _dispatcher.running
+_lane_again = _dispatcher.again
 _LANE_HEAD_PAGE = 50
-
-
-def _forget_idle_semaphore(agent_id: UUID) -> None:
-    if agent_id not in _wake_running and not any(key[0] == agent_id for key in _lane_running):
-        _wake_semaphores.pop(agent_id, None)
-
-
-def _start_lane(agent: AgentRecord, pending: GatewayMessageRecord) -> None:
-    key = (agent.id, pending.conversation_id or str(pending.id))
-    if key in _lane_running:
-        _lane_again.add(key)
-        return
-    _lane_running.add(key)
-    semaphore = _wake_semaphores.setdefault(
-        agent.id, asyncio.Semaphore(get_settings().OPENCLAW_AGENT_MAX_PARALLEL_TURNS)
-    )
-
-    async def run_lane() -> None:
-        row = pending
-        try:
-            while True:
-                async with semaphore:
-                    if not _wake_admission.accepting:
-                        break
-                    await _run_inbox_wake(agent, row.content, row.id)
-                if key not in _lane_again:
-                    break
-                # Consume before re-listing so a wake during that read survives the next turn.
-                while True:
-                    _lane_again.discard(key)
-                    head = await gateway_message_dao.lane_head(row)
-                    if head is not None or key not in _lane_again:
-                        break
-                if head is None:
-                    break
-                row = head
-        except Exception:
-            logger.warning("[OpenClaw] native lane failed agent={} code=drain_failed", agent.id)
-        finally:
-            _lane_running.discard(key)
-            _lane_again.discard(key)
-            _forget_idle_semaphore(agent.id)
-
-    task = asyncio.create_task(run_lane())
-    _wake_tasks.add(task)
-    task.add_done_callback(_wake_tasks.discard)
+_start_lane = _dispatcher.start
 
 
 def open_wake_admission() -> None:
@@ -274,11 +239,16 @@ def open_wake_admission() -> None:
 def close_wake_admission() -> None:
     """Stop admitting native drains; refused wakes remain durable pending work."""
     _wake_admission.close()
+    discard_waiting_lanes()
 
 
 async def drain_wake_tasks(grace_seconds: float = 20.0) -> None:
     """Join owned turns, including repeated-cancel cleanup, before runtime resources close."""
-    await drain_on_cancel(_wake_admission.drain(grace_seconds))
+    close_wake_admission()
+    try:
+        await drain_on_cancel(_wake_admission.drain(grace_seconds))
+    finally:
+        shutdown_native_capacity()
 
 
 def wake_shared_lane(agent: AgentRecord, message_id: UUID) -> None:
@@ -300,46 +270,7 @@ def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | No
         schedule_background_task(after_commit(), description="wake committed OpenClaw inbox")
         return
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return
-    if agent.id in _wake_running:
-        _wake_again.add(agent.id)
-        return
-
-    _wake_running.add(agent.id)
-
-    async def _run() -> None:
-        try:
-            while True:
-                _wake_again.discard(agent.id)
-                attempted: set[str] = set()
-                after: tuple[datetime, UUID] | None = None
-                while True:
-                    heads, after = (
-                        await gateway_message_dao.lane_heads_page(agent.id, _LANE_HEAD_PAGE, after=after)
-                        if _wake_admission.accepting
-                        else ([], None)
-                    )
-                    for pending in heads:
-                        if not _wake_admission.accepting:
-                            break
-                        lane = pending.conversation_id or str(pending.id)
-                        if lane in attempted:
-                            continue
-                        attempted.add(lane)
-                        _start_lane(agent, pending)
-                    if after is None:
-                        break
-                if agent.id not in _wake_again or not _wake_admission.accepting:
-                    break
-        except Exception:
-            logger.warning("[OpenClaw] native drain failed agent={} code=drain_failed", agent.id)
-        finally:
-            _wake_running.discard(agent.id)
-            _wake_again.discard(agent.id)
-            _forget_idle_semaphore(agent.id)
-
-    task = loop.create_task(_run())
-    _wake_tasks.add(task)
-    task.add_done_callback(_wake_tasks.discard)
+    _dispatcher.wake(agent)

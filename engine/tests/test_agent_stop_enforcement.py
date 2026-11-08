@@ -513,10 +513,11 @@ async def test_enqueued_wake_uses_only_committed_clean_context(monkeypatch, roll
         observations.append((raw.commit.await_count, session.get_connection()))
 
     monkeypatch.setattr(openclaw_routing, "_run_inbox_wake", wake)
-    pending = SimpleNamespace(id=uuid4(), content="hello", conversation_id=None)
+    pending = SimpleNamespace(id=uuid4(), agent_id=agent.id, content="hello", conversation_id=None)
     monkeypatch.setattr(
         openclaw_routing.gateway_message_dao, "lane_heads_page", AsyncMock(return_value=([pending], None))
     )
+    monkeypatch.setattr(openclaw_routing.gateway_message_dao, "lane_head", AsyncMock(return_value=pending))
     # When: the owner commits or rolls back after scheduling a wake.
     try:
         async with session.connection_ctx():

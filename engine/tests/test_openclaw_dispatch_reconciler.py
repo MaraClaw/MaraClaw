@@ -6,10 +6,12 @@ from uuid import uuid4
 
 import pytest
 
+from app.config import get_settings
 from app.db.session import get_connection
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services import openclaw_dispatch_reconciler as module
+from app.services import openclaw_dispatch_reconciler as module, openclaw_routing as routing
+from app.services.openclaw_native_capacity import native_capacity
 
 
 @dataclass(slots=True)
@@ -138,3 +140,58 @@ async def test_recovery_cancellation_propagates_without_logging(
         with pytest.raises(asyncio.CancelledError):
             await task
     warning.assert_not_called()
+
+
+async def test_saturated_recovery_coalesces_agent_rescan_and_still_checks_delivered(monkeypatch):
+    monkeypatch.setattr(get_settings(), "OPENCLAW_PROCESS_MAX_PARALLEL_TURNS", 1)
+    agent = AgentRecord(id=uuid4(), name="Busy", creator_id=uuid4())
+    running = GatewayMessageRecord(uuid4(), agent.id, "running", conversation_id="one")
+    pending = GatewayMessageRecord(uuid4(), agent.id, "pending", conversation_id="two")
+    started, finish, recovered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    rows = [running]
+    scans = 0
+
+    async def heads(*_args, **_kwargs):
+        nonlocal scans
+        scans += 1
+        return list(rows), None
+
+    async def head(member):
+        return next((row for row in rows if row.conversation_id == member.conversation_id), None)
+
+    async def execute(_agent, _text, message_id):
+        row = next(row for row in rows if row.id == message_id)
+        rows.remove(row)
+        if message_id == running.id:
+            started.set()
+            await finish.wait()
+        else:
+            recovered.set()
+
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_heads_page", heads)
+    monkeypatch.setattr(routing.gateway_message_dao, "lane_head", head)
+    monkeypatch.setattr(routing, "_run_inbox_wake", execute)
+    monkeypatch.setattr(module.gateway_message_dao, "pending_dispatch_page", AsyncMock(return_value=([pending], None)))
+    delivered = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(module.gateway_message_dao, "delivered_dispatch_page", delivered)
+    monkeypatch.setattr(module.agent_dao, "get_many", AsyncMock(return_value=[agent]))
+    routing.open_wake_admission()
+    routing.wake_shared_lane(agent, running.id)
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        rows.append(pending)
+        scanner = module.OpenClawDispatchReconciler()
+        for _ in range(100):
+            assert await scanner.scan_once() == 1
+        assert scans == 1
+        assert native_capacity().dirty == {agent.id}
+        assert delivered.await_count == 100
+        finish.set()
+        await asyncio.wait_for(recovered.wait(), 1)
+        while routing._wake_tasks:
+            await asyncio.wait_for(asyncio.wait(routing._wake_tasks), 1)
+        assert scans == 2
+    finally:
+        finish.set()
+        await routing.drain_wake_tasks(0)
+        routing.open_wake_admission()
