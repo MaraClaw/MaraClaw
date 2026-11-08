@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from botocore.config import Config
 
 from app.services.storage_runtime.base import StorageBackend
+from app.services.storage_runtime.upload_source import SizedBody
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -27,8 +28,9 @@ class S3ListArguments(TypedDict):
 
 
 class S3PutArguments(S3ObjectArguments):
-    Body: bytes
+    Body: bytes | SizedBody
     ContentType: str
+    ContentLength: NotRequired[int]
     IfNoneMatch: NotRequired[str]
 
 
