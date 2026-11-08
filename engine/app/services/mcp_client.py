@@ -26,6 +26,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.outbound_policy import OutboundPolicyError, ensure_same_origin
 from app.core.outbound_transport import public_http_client
+from app.services.mcp_inventory import MCPInventoryError, complete_inventory
 
 
 def _require_json_object(value: object) -> JsonObject:
@@ -50,8 +51,9 @@ class MCPClient:
         qs = parse_qs(parsed.query, keep_blank_values=True)
 
         self.api_key: str | None = api_key
-        if self.api_key in (None, "") and "apiKey" in qs:
-            self.api_key = qs.pop("apiKey")[0]
+        embedded_key = qs.pop("apiKey", None)
+        if self.api_key in (None, "") and embedded_key is not None:
+            self.api_key = embedded_key[0]
 
         # Rebuild URL without apiKey in query string
         remaining_qs = urlencode({k: v[0] for k, v in qs.items()}) if qs else ""
@@ -131,7 +133,7 @@ class MCPClient:
         except OutboundPolicyError:
             raise
         except Exception as exc:
-            logger.debug("MCP streamable initialization failed; continuing without a session: {}", exc)
+            logger.debug("MCP streamable initialization failed; continuing without a session: {}", type(exc).__name__)
 
     async def _streamable_request(self, method: str, params: Mapping[str, JsonValue] | None = None) -> JsonObject:
         """Send a JSON-RPC request via Streamable HTTP transport."""
@@ -192,8 +194,7 @@ class MCPClient:
     async def _sse_request(self, method: str, params: Mapping[str, JsonValue] | None = None) -> JsonObject:
         """Send a JSON-RPC request via SSE transport.
 
-        Opens a fresh SSE connection each call to get the messages endpoint,
-        sends the JSON-RPC request, then reads responses from the SSE stream.
+        Keep cursor discovery inside one connection and initialized session.
         """
         # Connect to SSE to get the messages endpoint
         sse_url = self.server_url if self.server_url.endswith("/sse") else f"{self.server_url}/sse"
@@ -206,8 +207,6 @@ class MCPClient:
         if self.api_key not in (None, ""):
             headers_sse["Authorization"] = f"Bearer {self.api_key}"
             headers_post["Authorization"] = f"Bearer {self.api_key}"
-
-        body: JsonObject = {"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})}
 
         timeout = 60 if method == "tools/call" else 30
 
@@ -256,35 +255,32 @@ class MCPClient:
                 headers=headers_post,
             )
 
-            # Send the actual request
-            post_resp = await client.post(messages_url, json=body, headers=headers_post)
+            request_id = 0
 
-            # Phase 3: Read the response - either from POST response or from SSE stream
-            if post_resp.status_code == 200:
-                ct = http_header(post_resp.headers, "content-type")
-                if "application/json" in ct:
+            async def exchange(method: str, parameters: JsonObject) -> JsonObject:
+                nonlocal request_id, event_type
+                request_id += 1
+                body: JsonObject = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": parameters}
+                post_resp = await client.post(messages_url, json=body, headers=headers_post)
+                if post_resp.status_code == 200 and "application/json" in http_header(
+                    post_resp.headers, "content-type"
+                ):
                     return _require_json_object(json_value_from_response(post_resp))
-
-            # Read response from SSE stream
-            result: JsonObject | None = None
-            async for line in line_iter:
-                line = line.strip()
-                if line.startswith("event:"):
-                    event_type = line[6:].strip()
-                elif line.startswith("data:"):
-                    data = line[5:].strip()
-                    if event_type == "message" and data:
+                async for line in line_iter:
+                    line = line.strip()
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:") and event_type == "message":
                         with suppress(json.JSONDecodeError):
-                            parsed_data = json_loads_value(data)
-                            # Match our request ID
-                            if is_json_object(parsed_data) and parsed_data.get("id") in (0, 1):
-                                result = parsed_data
-                                if parsed_data.get("id") == 1:
-                                    break  # Got our actual request response
-
-            if result is None:
+                            parsed = json_loads_value(line[5:].strip())
+                            if is_json_object(parsed) and parsed.get("id") == request_id:
+                                return parsed
                 raise MCPClientError("No response received from SSE transport")
-            return result
+
+            if method == "tools/list":
+                inventory: list[JsonValue] = list(await complete_inventory(exchange))
+                return {"result": {"tools": inventory}}
+            return await exchange(method, dict(params or {}))
 
     # ── Auto-detect Transport ────────────────────────────────────
 
@@ -311,7 +307,7 @@ class MCPClient:
             raise
         except Exception as streamable_err:
             streamable_error_message = str(streamable_err)
-            logger.info(f"[MCPClient] Streamable HTTP failed ({streamable_err}), trying SSE transport...")
+            logger.info("[MCPClient] Streamable HTTP failed ({}), trying SSE transport", type(streamable_err).__name__)
 
         # Fallback to SSE
         try:
@@ -328,33 +324,11 @@ class MCPClient:
     # ── Public API ───────────────────────────────────────────────
 
     async def list_tools(self) -> list[JsonObject]:
-        """Fetch available tools from the MCP server."""
+        """Fetch and validate every page, or fail without returning a partial inventory."""
         try:
-            data = await self._detect_and_request("tools/list")
-
-            if "error" in data:
-                err = data["error"]
-                error_message = err.get("message", str(err)) if is_json_object(err) else str(err)
-                msg = error_message if isinstance(error_message, str) else str(error_message)
-                raise MCPClientError(f"MCP error: {msg}")
-
-            result = data.get("result", {})
-            if not is_json_object(result):
-                return []
-            tools = result.get("tools", [])
-            if not isinstance(tools, list):
-                return []
-            return [
-                {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                    "inputSchema": tool.get("inputSchema", {}),
-                }
-                for tool in tools
-                if is_json_object(tool)
-            ]
-        except httpx.HTTPError as e:
-            raise MCPClientError(f"Connection failed: {str(e)[:200]}") from e
+            return await complete_inventory(self._detect_and_request)
+        except httpx.HTTPError, MCPInventoryError, MCPClientError, json.JSONDecodeError:
+            raise MCPClientError("MCP discovery failed") from None
 
     async def call_tool(self, tool_name: str, arguments: Mapping[str, JsonValue]) -> str:
         """Execute a tool on the MCP server."""
