@@ -17,6 +17,7 @@ const tabs = [
   { id: 'files', to: 'files', label: 'Files', icon: 'files' },
   { id: 'skills', to: 'skills', label: 'Skills', icon: 'skills' },
   { id: 'tools', to: 'tools', label: 'Tools', icon: 'tools' },
+  { id: 'mcp', to: 'mcp', label: 'MCP', icon: 'mcp' },
   { id: 'tasks', to: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'schedules', to: 'schedules', label: 'Schedules', icon: 'schedules' },
   { id: 'activity', to: 'activity', label: 'Activity', icon: 'activity' },

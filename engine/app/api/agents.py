@@ -34,6 +34,7 @@ from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction, optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
+from app.schemas.agent_directory import AgentDirectoryOut, AgentPageOut
 from app.schemas.collaboration_response_agents import (
     AgentApiKeyResponse,
     AgentApprovalResolvedResponse,
@@ -58,6 +59,7 @@ from app.schemas.collaboration_response_agents import (
 from app.schemas.collaboration_response_relationships import CollaborationAcknowledgement
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
+from app.services.agent_directory_cursor import AgentDirectoryCursor, parse_agent_directory_cursor
 from app.services.agent_lifecycle import (
     LifecycleFailure,
     LifecycleSuccess,
@@ -232,6 +234,12 @@ async def list_agents(
     requested_tenant_id = current_user.tenant_id
     agents = list(await list_visible_agents(current_user, tenant_id=requested_tenant_id, limit=limit))
 
+    return await _enrich_agent_directory(agents, current_user, AgentOut)
+
+
+async def _enrich_agent_directory[T: (AgentOut, AgentDirectoryOut)](
+    agents: list[AgentRecord], current_user: UserRecord, output_type: type[T]
+) -> list[T]:
     await agent_dao.apply_token_counter_resets_many(agents)
 
     unread_by_agent = await _build_unread_count_by_agent(agents, current_user)
@@ -239,12 +247,43 @@ async def list_agents(
 
     onboarded = await onboarded_agent_ids(current_user.id, [a.id for a in agents])
     decisions = await compute_agent_access_decisions(current_user, agents)
-    out: list[AgentOut] = []
+    out: list[T] = []
     for a in agents:
-        model = _build_agent_out(a, decisions[a.id], unread_by_agent.get(str(a.id), 0))
+        model = output_type.model_validate(a)
+        decision = decisions[a.id]
+        model.access_reason = decision.reason if decision is not None else None
+        model.unread_count = unread_by_agent.get(str(a.id), 0)
         model.onboarded_for_me = a.id in onboarded
         out.append(model)
     return out
+
+
+@router.get("/page", response_model=AgentPageOut)
+async def list_agents_page(
+    tenant_id: uuid.UUID | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    current_user: UserRecord = Depends(get_current_user),
+) -> AgentPageOut:
+    """Page current visibility before enriching the bounded returned rows."""
+    if tenant_id is not None and tenant_id != current_user.tenant_id:
+        raise HTTPException(403, "Can only list agents in your own company")
+    company = current_user.tenant_id
+    after = parse_agent_directory_cursor(cursor, current_user.id, company)
+    rows = await list_visible_agents(current_user, tenant_id=company, limit=limit + 1, after=after)
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = None
+    if has_more:
+        last = page[-1]
+        next_cursor = AgentDirectoryCursor(
+            user_id=current_user.id, tenant_id=company, created_at=last.created_at, id=last.id
+        ).encode()
+    return AgentPageOut(
+        items=await _enrich_agent_directory(page, current_user, AgentDirectoryOut),
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=None)

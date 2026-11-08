@@ -19,8 +19,9 @@ from app.records.schedule_manual_run import ScheduleManualRunRecord
 from app.services import schedule_manual, scheduler, scheduler_tasks
 from test_schedule_dao import NEXT, NOW, _next_run, _Pool, _Raw, _schedule, pool
 from test_scheduler_tasks import owner
+from worker_progress_fixtures import WorkerHTTP, worker_http
 
-__all__ = ["owner", "pool"]
+__all__ = ["owner", "pool", "worker_http"]
 
 
 class _Clock(datetime):
@@ -478,3 +479,131 @@ class _NoDb:
 
     async def __aexit__(self, *_args: object) -> None:
         return None
+
+
+@pytest.mark.parametrize("capacity", [0, 2])
+async def test_scheduler_idle_and_full_capacity_keep_http_ready(
+    pool: _Pool, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, capacity: int
+) -> None:
+    _cap(monkeypatch, max(1, capacity))
+    if capacity == 0:
+        entered = asyncio.Event()
+
+        async def execution() -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        _ = scheduler_tasks.schedule_execution(execution)
+        await asyncio.wait_for(entered.wait(), 2)
+    executing = set(scheduler_tasks._tasks)
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", AsyncMock(return_value=[]))
+    monkeypatch.setattr(scheduler.asyncio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "scheduler", scheduler.start_scheduler(), requirement="loop", progress_budget_seconds=300
+    )
+    await worker_http.pacing.paused()
+    for _ in range(4):
+        await worker_http.pacing.step()
+        await worker_http.ready(expected=True)
+    assert pool.rows == {}
+    assert scheduler_tasks._tasks == executing
+
+
+@pytest.mark.parametrize("claim", ["manual", "periodic"])
+async def test_scheduler_caught_claim_errors_cannot_be_masked_by_the_other_scanner(
+    pool: _Pool, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, claim: str
+) -> None:
+    from app.dao.schedule_dao import agent_schedule_dao
+
+    _cap(monkeypatch, 2)
+    manual, periodic = AsyncMock(return_value=[]), AsyncMock(return_value=[])
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", manual)
+    monkeypatch.setattr(agent_schedule_dao, "claim_due", periodic)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "scheduler", scheduler.start_scheduler(), requirement="loop", progress_budget_seconds=300
+    )
+    await worker_http.pacing.paused()
+    failure = manual if claim == "manual" else periodic
+    failure.side_effect = OSError("private claim failure")
+    for _ in range(4):
+        await worker_http.pacing.step()
+    await worker_http.ready(expected=False)
+    assert not worker_http.runtime.tasks.required["scheduler"][0].done()
+    assert not scheduler_tasks._tasks
+    assert pool.rows == {}
+    failure.side_effect = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+
+
+@pytest.mark.parametrize("claim", ["manual", "periodic"])
+async def test_scheduler_suspended_claim_recovers_http_readiness_without_advancing_schedule(
+    pool: _Pool, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, claim: str
+) -> None:
+    from app.dao.schedule_dao import agent_schedule_dao
+
+    _cap(monkeypatch, 2)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked(*_args: object) -> list[object]:
+        entered.set()
+        await release.wait()
+        return []
+
+    monkeypatch.setattr(
+        schedule_manual_run_dao, "claim_pending", blocked if claim == "manual" else AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(agent_schedule_dao, "claim_due", blocked if claim == "periodic" else AsyncMock(return_value=[]))
+    monkeypatch.setattr(scheduler.asyncio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "scheduler", scheduler.start_scheduler(), requirement="loop", progress_budget_seconds=300
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        worker_http.pacing.now += 301
+        await worker_http.ready(expected=False)
+        assert pool.rows == {}
+        assert not scheduler_tasks._tasks
+        assert not worker_http.runtime.tasks.required["scheduler"][0].done()
+    finally:
+        release.set()
+    await worker_http.pacing.paused()
+    await worker_http.ready(expected=True)
+
+
+async def test_scheduler_stuck_after_claim_commit_does_not_reclaim_live_occurrence(
+    pool: _Pool, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    row = _schedule()
+    pool.rows[row.id] = row
+    _cap(monkeypatch, 2)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", AsyncMock(return_value=[]))
+    execute = AsyncMock()
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def audit(*_args: object, **_kwargs: object) -> None:
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", audit)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", worker_http.pacing.wait)
+    worker_http.runtime.tasks.start(
+        "scheduler", scheduler.start_scheduler(), requirement="loop", progress_budget_seconds=300
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        claimed = pool.rows[row.id]
+        assert claimed.lease_token is not None
+        assert claimed.pending_due_at == row.next_run_at
+        worker_http.pacing.now += 301
+        await worker_http.ready(expected=False)
+        assert pool.rows[row.id] == claimed
+    finally:
+        release.set()
+    await worker_http.pacing.paused()
+    await worker_http.ready(expected=True)
+    assert pool.rows[row.id] == claimed
+    execute.assert_awaited_once_with(claimed)

@@ -9,6 +9,7 @@ from app.db.errors import DbError
 from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
+from app.runtime.tasks import loop_progress
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
@@ -22,6 +23,8 @@ from app.services.guest_identity import (
 )
 from app.services.guest_start import start_operation_id
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
+
+PROGRESS_BUDGET_SECONDS = 300.0
 
 
 async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, due_only: bool = False) -> bool:
@@ -54,7 +57,9 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
 async def _execute_start(operation: AgentStartOperation, agent: AgentRecord) -> bool:
     token = start_operation_id.set(operation.operation_id)
     try:
-        reference = await agent_manager.start_container(agent)
+        # Docker preparation and admission have no total deadline; retain the workspace fence until drained.
+        with loop_progress().exempt(restart_on_error=False):
+            reference = await agent_manager.start_container(agent)
     finally:
         start_operation_id.reset(token)
     if reference is None and agent.status != "idle":
@@ -144,7 +149,10 @@ async def reconcile_agent_start(operation: AgentStartOperation, *, due_only: boo
 
 
 async def reconcile_agent_starts_once() -> None:
-    for operation in await start_store.outstanding():
+    operations = await start_store.outstanding()
+    if not operations:
+        loop_progress().beat()
+    for operation in operations:
         try:
             await reconcile_agent_start(operation, due_only=True)
         except (
@@ -158,6 +166,8 @@ async def reconcile_agent_starts_once() -> None:
             GuestOwnershipError,
         ) as exc:
             logger.warning("Pending guest start retry failed for agent {}: {}", operation.agent_id, type(exc).__name__)
+        else:
+            loop_progress().beat()
 
 
 async def agent_start_reconciler_loop() -> None:

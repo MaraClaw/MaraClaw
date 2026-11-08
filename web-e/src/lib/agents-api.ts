@@ -2,6 +2,7 @@ import { apiRequest } from './http.ts'
 import { z } from 'zod'
 import { AgentOutSchema, PermissionAccessLevelSchema } from './engine-contracts.generated.ts'
 import type { AgentCreate, AgentPermissionUpdate, AgentUpdate } from './engine-contracts.generated.ts'
+import { authSession, type SessionOwner } from './auth-session.ts'
 
 export type AgentTemplate = {
   id: string
@@ -21,6 +22,27 @@ export type AgentOut = z.infer<typeof memberAgentSchema>
 
 export async function listAgents(): Promise<AgentOut[]> {
   return apiRequest('/api/agents/', { schema: z.array(memberAgentSchema) })
+}
+
+const agentPageSchema = z.object({
+  items: z.array(memberAgentSchema.extend({ created_at: AgentOutSchema.shape.created_at.nullable() })),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+}).refine((page) => page.has_more === (page.next_cursor !== null), 'Inconsistent agent continuation')
+export type AgentPage = z.infer<typeof agentPageSchema>
+
+export async function listAgentsPage(request: {
+  readonly owner?: SessionOwner
+  readonly signal?: AbortSignal
+  readonly cursor?: string | null
+  readonly limit?: number
+} = {}): Promise<AgentPage> {
+  const params = new URLSearchParams({ limit: String(request.limit ?? 50) })
+  if (request.cursor != null) params.set('cursor', request.cursor)
+  return apiRequest(`/api/agents/page?${params}`, {
+    schema: agentPageSchema, owner: request.owner ?? authSession.capture(),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  })
 }
 
 export async function listTemplates(): Promise<AgentTemplate[]> {

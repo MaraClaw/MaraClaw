@@ -123,7 +123,15 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
         assert set(runtime.tasks.progress) == (
-            {"trigger_daemon", "broadcast_email", "organization_admission_email", "openclaw_update"}
+            {
+                "trigger_daemon",
+                "broadcast_email",
+                "organization_admission_email",
+                "openclaw_update",
+                "agent_start_reconciler",
+                "agent_scheduler",
+                "openclaw_dispatch",
+            }
             if role_enabled(roles, "worker")
             else set()
         )

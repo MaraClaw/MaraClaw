@@ -67,6 +67,34 @@ async def test_sdk_event_children_are_cancelled_and_awaited() -> None:
     assert not owner.tasks
 
 
+async def test_nested_sdk_wrappers_retain_the_outer_callback_until_cleanup() -> None:
+    owner = EventTasks()
+    returned, cleaned = asyncio.Event(), asyncio.Event()
+
+    @owner.wrap
+    async def inner() -> None:
+        return None
+
+    @owner.wrap
+    async def outer() -> None:
+        await inner()
+        returned.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    callback = asyncio.create_task(outer())
+    try:
+        await asyncio.wait_for(returned.wait(), 1)
+        await owner.stop()
+        assert callback.cancelled()
+        assert cleaned.is_set()
+    finally:
+        callback.cancel()
+        await asyncio.gather(callback, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_dingtalk_thread_join_does_not_block_main_loop() -> None:
     # Given

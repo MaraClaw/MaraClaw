@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, assert_never
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 
 from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_loads_object, json_object_from
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services import agent_manager as module
@@ -31,6 +33,7 @@ class Guest:
 
 @pytest.fixture
 def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
+    monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr(module.settings, "TAVILY_PROXY_ENABLED", False)
     monkeypatch.setattr(module.settings, "TAVILY_API_KEY", "")

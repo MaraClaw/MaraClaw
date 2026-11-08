@@ -1,8 +1,10 @@
 """Generate company roster CSV in an independently owned database snapshot."""
 
 import csv
-from io import StringIO
-from typing import Final
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from tempfile import TemporaryFile
+from typing import Final, TextIO
 from uuid import UUID
 
 from app.dao.agent_dao import agent_dao
@@ -24,10 +26,11 @@ def _text_cell(value: str) -> str:
     return value
 
 
-async def export_user_roster(tenant_id: UUID, search: str, actor: UserRecord) -> str:
-    """Return all matching company rows; audit generation, not download delivery."""
+@asynccontextmanager
+async def export_user_roster(tenant_id: UUID, search: str, actor: UserRecord) -> AsyncGenerator[TextIO]:
+    """Own an unlinked disk spool through delivery; audit only complete generation."""
     row_count = 0
-    with StringIO(newline="") as output:
+    with TemporaryFile(mode="w+", encoding="utf-8", newline="") as output:
         writer = csv.writer(output)
         writer.writerow(_COLUMNS)
         # Never join the request's already-used CRUD connection. DAOs join this
@@ -57,13 +60,14 @@ async def export_user_roster(tenant_id: UUID, search: str, actor: UserRecord) ->
                     break
                 last = page[-1]
                 after = UserPagePosition(int(last.role in ("member", "agent_admin")), last.created_at, last.id)
-        result = output.getvalue()
-    await write_admin_audit(
-        actor=actor,
-        action="user_roster_export_generated",
-        target_type="tenant",
-        target_id=tenant_id,
-        tenant_id=tenant_id,
-        details={"rows_count": row_count, "search_applied": bool(search)},
-    )
-    return result
+        output.flush()
+        output.seek(0)
+        await write_admin_audit(
+            actor=actor,
+            action="user_roster_export_generated",
+            target_type="tenant",
+            target_id=tenant_id,
+            tenant_id=tenant_id,
+            details={"rows_count": row_count, "search_applied": bool(search)},
+        )
+        yield output

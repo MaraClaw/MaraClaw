@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -11,8 +12,9 @@ from app.process_roles import parse_process_roles
 from app.runtime import lifecycle, readiness
 from app.runtime.tasks import OwnedTasks, loop_progress
 from producer_admission_fixtures import producer_admission
+from worker_progress_fixtures import Pacing, WorkerHTTP, worker_http
 
-__all__ = ["producer_admission"]
+__all__ = ["producer_admission", "worker_http"]
 
 
 @dataclass
@@ -310,3 +312,87 @@ async def test_repeated_lifespans_allocate_fresh_runtime_state(monkeypatch: pyte
             assert not application.state.readiness.draining
         assert application.state.readiness.draining
     assert states[0] is not states[1]
+
+
+@pytest.mark.parametrize("blocked_scanner", ["start", "scheduler", "dispatch"])
+async def test_http_observes_each_scanner_stall_while_its_siblings_keep_progressing(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, blocked_scanner: str
+) -> None:
+    from app.dao.schedule_dao import agent_schedule_dao
+    from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
+    from app.services import agent_start_reconciler as starts, openclaw_dispatch_reconciler as dispatch, scheduler
+
+    pacing = {name: Pacing() for name in ("start", "scheduler", "dispatch")}
+    entered, release = asyncio.Event(), asyncio.Event()
+    stalled = False
+
+    async def dependency(name: str) -> None:
+        if stalled and name == blocked_scanner:
+            entered.set()
+            await release.wait()
+
+    async def outstanding() -> list[object]:
+        await dependency("start")
+        return []
+
+    async def manual(*_args: object) -> list[object]:
+        await dependency("scheduler")
+        return []
+
+    async def empty(*_args: object) -> list[object]:
+        return []
+
+    async def pending(*_args: object, **_kwargs: object) -> tuple[list[object], None]:
+        await dependency("dispatch")
+        return [], None
+
+    async def delivered(*_args: object, **_kwargs: object) -> tuple[list[object], None]:
+        return [], None
+
+    @asynccontextmanager
+    async def connection():
+        yield None
+
+    monkeypatch.setattr(starts.start_store, "outstanding", outstanding)
+    monkeypatch.setattr(starts, "sleep", pacing["start"].wait)
+    monkeypatch.setattr(scheduler, "free_schedule_capacity", lambda: 2)
+    monkeypatch.setattr(scheduler, "connection_ctx", connection)
+    monkeypatch.setattr("app.services.schedule_manual.connection_ctx", connection)
+    monkeypatch.setattr(schedule_manual_run_dao, "claim_pending", manual)
+    monkeypatch.setattr(agent_schedule_dao, "claim_due", empty)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", pacing["scheduler"].wait)
+    monkeypatch.setattr(dispatch.gateway_message_dao, "pending_dispatch_page", pending)
+    monkeypatch.setattr(dispatch.gateway_message_dao, "delivered_dispatch_page", delivered)
+    monkeypatch.setattr(dispatch.agent_dao, "get_many", empty)
+    monkeypatch.setattr(dispatch.anyio, "sleep", pacing["dispatch"].wait)
+    loops = {
+        "start": starts.agent_start_reconciler_loop(),
+        "scheduler": scheduler.start_scheduler(),
+        "dispatch": dispatch.openclaw_dispatch_reconciler_loop(),
+    }
+    for name, loop in loops.items():
+        worker_http.runtime.tasks.start(name, loop, requirement="loop", progress_budget_seconds=300)
+    for control in pacing.values():
+        await control.paused()
+    await worker_http.ready(expected=True)
+    stalled = True
+    for control in pacing.values():
+        control.go.put_nowait(None)
+    await asyncio.wait_for(entered.wait(), 2)
+    for name, control in pacing.items():
+        if name != blocked_scanner:
+            await control.paused()
+    worker_http.pacing.now += 301
+    for name, control in pacing.items():
+        if name != blocked_scanner:
+            control.go.put_nowait(None)
+            await control.paused()
+    await worker_http.ready(expected=False)
+    assert all(not task.done() for task, _ in worker_http.runtime.tasks.required.values())
+    release.set()
+    await pacing[blocked_scanner].paused()
+    await worker_http.ready(expected=True)
+    worker_http.runtime.begin_drain()
+    await worker_http.ready(expected=False)
+    await worker_http.runtime.tasks.stop()
+    assert all(task.cancelled() for task, _ in worker_http.runtime.tasks.required.values())

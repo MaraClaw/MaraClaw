@@ -66,6 +66,9 @@ async function prepareMember(page: Page, user: UserOut = originalUser, replaceme
       case '/api/onboarding/status':
         await route.fulfill({ json: { status: 'completed' } })
         break
+      case '/api/agents/page':
+        await route.fulfill({ json: { items: [], next_cursor: null, has_more: false } })
+        break
       case '/api/agents/':
       case '/api/auth/my-tenants':
       case '/api/auth/providers':

@@ -50,9 +50,9 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
       case '/api/company-admissions/mine/page':
         await route.fulfill(requiresPassword ? passwordRequired : { json: { items: [], next_cursor: null } })
         break
-      case '/api/agents/':
+      case '/api/agents/page':
         onboardingRequests.push(path)
-        await route.fulfill(requiresPassword ? passwordRequired : { json: [] })
+        await route.fulfill(requiresPassword ? passwordRequired : { json: { items: [], next_cursor: null, has_more: false } })
         break
       case '/api/onboarding/status':
         onboardingRequests.push(path)
@@ -126,7 +126,7 @@ for (const path of ['/app', '/app/agents', '/app/notifications']) {
     await expect(page).toHaveURL('/app/onboarding')
     await expect(page.getByRole('heading', { name: 'Meet your assistant', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Create assistant', exact: true })).toBeEnabled()
-    expect(onboardingRequests).toEqual(expect.arrayContaining(['/api/agents/', '/api/onboarding/status']))
+    expect(onboardingRequests).toEqual(expect.arrayContaining(['/api/agents/page', '/api/onboarding/status']))
   })
 }
 

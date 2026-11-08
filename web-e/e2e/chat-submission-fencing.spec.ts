@@ -5,7 +5,7 @@ import { originalAgent, replacementAgent, replacementToken, writeFromOtherTab } 
 for (const boundary of ['owner', 'conversation', 'agent'] as const) {
   test(`unacknowledged submissions and late receipts cannot cross a retired ${boundary}`, async ({ page }) => {
     const chat = await prepareChat(page)
-    if (boundary === 'agent') await page.route('**/api/agents/', (route) => route.fulfill({ json: [originalAgent, replacementAgent] }))
+    if (boundary === 'agent') await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [originalAgent, replacementAgent], next_cursor: null, has_more: false } }))
     await page.goto(chatPath())
     const retired = await chat.socket()
     await page.getByRole('textbox', { name: `Message ${originalAgent.name}` }).fill('Private original submission')

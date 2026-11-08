@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pywhales.exceptions import DockerException, NoSuchContainer
 
+from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.services import agent_manager as agent_manager_module, gogcli_oauth, gogcli_runtime
 from app.services.agent_manager import AgentManager
 
@@ -13,6 +14,7 @@ from app.services.agent_manager import AgentManager
 @pytest.fixture(autouse=True)
 def fake_token_preparation(monkeypatch):
     monkeypatch.setattr(AgentManager, "_prepare_tavily_proxy_token", AsyncMock())
+    monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
 
 
 class _RecordingContainerAPI:

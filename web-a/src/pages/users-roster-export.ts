@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react'
 
 import { adminSession } from '../lib/admin-session.ts'
+import { apiUrl } from '../lib/api.ts'
 import { ApiError } from '../lib/http.ts'
 import type { SessionOwner, SessionPolicy } from '../lib/session-policy.ts'
 import { exportCompanyUsers, type CompanyRosterRequest } from '../lib/users-api.ts'
@@ -12,18 +13,16 @@ type ExportState = {
 }
 const idle: ExportState = { pending: false, message: null, error: null }
 
-export function downloadRosterCsv(csv: string) {
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-  let anchor: HTMLAnchorElement | undefined
+export function downloadRosterCsv(ticket: string) {
+  const anchor = document.createElement('a')
   try {
-    anchor = document.createElement('a')
-    anchor.href = url
+    anchor.href = apiUrl(`/api/users/export/download?${new URLSearchParams({ ticket })}`)
     anchor.download = 'company-users.csv'
+    anchor.referrerPolicy = 'no-referrer'
     document.body.append(anchor)
     anchor.click()
   } finally {
-    anchor?.remove()
-    URL.revokeObjectURL(url)
+    anchor.remove()
   }
 }
 
@@ -66,11 +65,11 @@ export function createRosterExporter(policy: SessionPolicy, owner: SessionOwner)
       const current = () => epoch === requestEpoch && !signal.aborted && policy.isCurrent(owner)
       publish({ pending: true, message: null, error: null })
       try {
-        const { csv } = await exportCompanyUsers(input, signal)
+        const { ticket } = await exportCompanyUsers(input, signal)
         if (!current()) return
-        download(csv)
+        download(ticket)
         if (!current()) return
-        publish({ pending: false, message: 'Company CSV downloaded. Empty results contain column headers only.', error: null })
+        publish({ pending: false, message: 'Company CSV download started. Check your browser downloads for completion.', error: null })
       } catch (error) {
         if (!current()) return
         publish({ pending: false, message: null, error: error instanceof ApiError ? error.message : 'Could not export company users. Try again.' })

@@ -96,6 +96,7 @@ export async function prepareTransfers(page: Page, options: {
       case '/api/notifications/unread-count': await route.fulfill({ json: { unread_count: 0 } }); return
       case '/api/onboarding/status': await route.fulfill({ json: completedOnboarding }); return
       case '/api/agents/': await route.fulfill({ json: [] }); return
+      case '/api/agents/page': await route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }); return
       case '/api/auth/switch-tenant':
         state.switches++
         expect(request.postDataJSON()).toEqual({ tenant_id: target.id })

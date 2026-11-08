@@ -18,8 +18,11 @@ from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
 from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
+from app.runtime.tasks import loop_progress
 from app.services.schedule_time import next_local_run
 from app.services.scheduler_tasks import free_schedule_capacity, schedule_execution
+
+PROGRESS_BUDGET_SECONDS = 300.0
 
 
 def compute_next_run(cron_expr: str, after: datetime | None = None, timezone: str = "UTC") -> datetime | None:
@@ -213,7 +216,7 @@ async def _release_unlaunched(claims: Sequence[AgentScheduleRecord]) -> None:
                 _ = await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, now)
 
 
-async def _tick(limit: int | None = None) -> None:
+async def _tick(limit: int | None = None) -> bool:
     """One scheduler tick: claim and execute at most ``limit`` due schedules (default: free capacity)."""
     new_trace_id()
     from app.dao.schedule_dao import agent_schedule_dao
@@ -222,7 +225,7 @@ async def _tick(limit: int | None = None) -> None:
     now = datetime.now(UTC)
     budget = free_schedule_capacity() if limit is None else limit
     if budget < 1:
-        return
+        return True
 
     try:
         async with connection_ctx():
@@ -257,12 +260,14 @@ async def _tick(limit: int | None = None) -> None:
     except Exception as e:
         logger.exception(f"Scheduler tick error: {e}")
         await write_audit_log("schedule_error", {"error": str(e)[:300]})
+        return False
+    return True
 
 
 _manual_first = True
 
 
-async def _dispatch_round() -> None:
+async def _dispatch_round() -> bool:
     """Split free capacity between manual and periodic work, alternating who claims first each round.
 
     The first class takes the larger half, the second takes whatever is still free, so a spare slot is never wasted
@@ -273,15 +278,16 @@ async def _dispatch_round() -> None:
 
     capacity = free_schedule_capacity()
     if capacity < 1:
-        return
+        return True
     first_share = (capacity + 1) // 2
     if _manual_first:
-        await recover_manual_runs(first_share)
-        await _tick(free_schedule_capacity())
+        manual = await recover_manual_runs(first_share)
+        periodic = await _tick(free_schedule_capacity())
     else:
-        await _tick(first_share)
-        await recover_manual_runs(free_schedule_capacity())
+        periodic = await _tick(first_share)
+        manual = await recover_manual_runs(free_schedule_capacity())
     _manual_first = not _manual_first
+    return manual and periodic
 
 
 async def start_scheduler() -> None:
@@ -290,5 +296,6 @@ async def start_scheduler() -> None:
     logger.info("🕐 Agent scheduler started (30s interval)")
 
     while True:
-        await _dispatch_round()
+        if await _dispatch_round():
+            loop_progress().beat()
         await asyncio.sleep(30)

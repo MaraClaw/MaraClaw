@@ -15,6 +15,7 @@ const ICON_NAMES = [
   'files',
   'skills',
   'tools',
+  'mcp',
   'tasks',
   'schedules',
   'activity',

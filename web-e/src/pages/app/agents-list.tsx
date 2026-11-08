@@ -1,4 +1,4 @@
-import { useQuery } from '@/hooks/session-workspace'
+import { useInfiniteQuery } from '@/hooks/session-workspace'
 import { Loader2, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -6,10 +6,11 @@ import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { listAgents } from '@/lib/workspace-api'
+import { agentPageOptions, distinctAgents } from '@/lib/agents-query'
 
 export function AgentsListPage() {
-  const query = useQuery({ queryKey: ['agents'], queryFn: listAgents })
+  const query = useInfiniteQuery(agentPageOptions())
+  const agents = distinctAgents(query.data?.pages)
 
   return (
     <div className="space-y-5 p-6">
@@ -32,7 +33,14 @@ export function AgentsListPage() {
         </div>
       ) : null}
 
-      {query.data?.length === 0 ? (
+      {query.isError && !query.data ? (
+        <div className="space-y-3">
+          <p role="alert" className="text-sm text-destructive">Could not load agents. Try again.</p>
+          <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry loading agents</Button>
+        </div>
+      ) : null}
+
+      {query.isSuccess && agents.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-sm text-muted-foreground">
             No agents yet.{' '}
@@ -44,8 +52,8 @@ export function AgentsListPage() {
         </Card>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {(query.data ?? []).map((agent) => (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {agents.map((agent) => (
           <Link key={agent.id} to={`/app/agents/${agent.id}/chat`}>
             <Card className="h-full transition-colors hover:border-primary/40">
               <CardHeader>
@@ -64,6 +72,14 @@ export function AgentsListPage() {
           </Link>
         ))}
       </div>
+      {query.hasNextPage ? (
+        <div className="space-y-3">
+          {query.isFetchNextPageError ? <p role="alert" className="text-sm text-destructive">Could not load more agents. Your loaded agents are still available.</p> : null}
+          <Button variant="outline" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
+            {query.isFetchingNextPage ? 'Loading more agents...' : query.isFetchNextPageError ? 'Retry loading more' : 'Load more'}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

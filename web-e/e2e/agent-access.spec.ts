@@ -17,7 +17,7 @@ for (const [reason, label] of reasons) {
     await prepareChat(page)
     let reads = 0
     const agent = { ...originalAgent, creator_id: originalUser.id, access_level: 'manage', access_reason: reason }
-    await page.route('**/api/agents/', (route) => route.fulfill({ json: [agent] }))
+    await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [agent], next_cursor: null, has_more: false } }))
     await page.route(`**/api/agents/${agent.id}`, (route) => { reads++; return route.fulfill({ json: agent }) })
     await page.route(`**/api/agents/${agent.id}/metrics`, (route) => route.fulfill({ json: {} }))
     await page.route('**/api/agent-deletion-requests?*', (route) => route.fulfill({ json: { items: [], next_cursor: null } }))

@@ -10,12 +10,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol, TypeIs
 from unittest.mock import patch
+from weakref import WeakValueDictionary
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
-from app.runtime.tasks import EventTasks, cancel_tasks, is_async_callback
+from app.runtime.callbacks import CallbackAdmission
+from app.runtime.tasks import cancel_tasks, is_async_callback
 from app.services.channels.feishu_ws_acceptance import EventFrame, accept_event_frame
 
 try:
@@ -223,7 +225,8 @@ class FeishuWSManager:
         # Tasks for reconnection or ping loops if we want to cancel them later
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._ping_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._sdk_tasks: EventTasks = EventTasks()
+        self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
+        self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._closing: bool = False
 
@@ -277,6 +280,16 @@ class FeishuWSManager:
         app_secret: str,
         stop_existing: bool = True,
     ) -> None:
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._start_client(agent_id, app_id, app_secret, stop_existing)
+
+    async def _start_client(
+        self,
+        agent_id: uuid.UUID,
+        app_id: str,
+        app_secret: str,
+        stop_existing: bool,
+    ) -> None:
         """Spawns a WebSocket client fully asynchronously inside FastAPI's loop."""
         if not _HAS_LARK:
             logger.warning("[Feishu WS] lark-oapi not installed, cannot start client")
@@ -300,9 +313,8 @@ class FeishuWSManager:
 
         self._main_loop = asyncio.get_running_loop()
         self._closing = False
-        self._sdk_tasks.closing = False
         if stop_existing:
-            await self.stop_client(agent_id)
+            await self._stop_client(agent_id)
         elif agent_id in self._tasks and not self._tasks[agent_id].done():
             return
 
@@ -335,19 +347,20 @@ class FeishuWSManager:
             return
         client = built
         self._clients[agent_id] = client
+        callbacks = self._callbacks[agent_id] = CallbackAdmission()
 
         async def accept(body: JsonObject) -> None:
-            await self._async_handle_message(agent_id, body)
+            await callbacks.run(self._async_handle_message, agent_id, body)
 
         async def handle_data_frame(frame: EventFrame) -> None:
             await accept_event_frame(client, frame, accept)
 
-        client._handle_data_frame = self._sdk_tasks.wrap(handle_data_frame)
+        client._handle_data_frame = callbacks.wrap(handle_data_frame)
         # Retain SDK-spawned receive/message work for this client, without changing SDK retries.
         for name in ("_receive_message_loop", "_handle_message"):
             callback: object = getattr(client, name, None)
             if is_async_callback(callback):
-                setattr(client, name, self._sdk_tasks.wrap(callback))
+                setattr(client, name, callbacks.wrap(callback))
 
         # Build scoped proxy bypass: active only during _connect() to avoid
         # permanently replacing websockets.connect for the whole process.
@@ -447,11 +460,18 @@ class FeishuWSManager:
 
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stops an actively running WebSocket client for an agent."""
-        ping_task = self._ping_tasks.pop(agent_id, None)
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._stop_client(agent_id)
+
+    async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        callbacks = self._callbacks.pop(agent_id, None)
         task = self._tasks.pop(agent_id, None)
+        client = self._clients.pop(agent_id, None)
+        if callbacks:
+            await callbacks.stop()
+        ping_task = self._ping_tasks.pop(agent_id, None)
         await cancel_tasks(child for child in (ping_task, task) if child is not None)
-        if agent_id in self._clients:
-            client = self._clients.pop(agent_id)
+        if client is not None:
             try:
                 await client._disconnect()
             except Exception as e:
@@ -459,10 +479,10 @@ class FeishuWSManager:
 
     async def stop_all(self) -> None:
         self._closing = True
-        self._sdk_tasks.closing = True
-        await self._sdk_tasks.stop()
+        for callbacks in self._callbacks.values():
+            callbacks.close()
         results = await asyncio.gather(
-            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients) | set(self._ping_tasks)),
+            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients) | set(self._callbacks)),
             return_exceptions=True,
         )
         for result in results:

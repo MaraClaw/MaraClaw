@@ -19,6 +19,9 @@ export async function launchRosterBrowser() {
     })
     const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+    owned.browserProcess.once('exit', (code, signal) => {
+      console.log(`Owned roster browser exited: code=${code}, signal=${signal}`)
+    })
     return {
       browser,
       resources: { profile, cdpPort: Number(port) },

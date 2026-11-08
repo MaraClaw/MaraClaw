@@ -98,6 +98,10 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
         expect(request.method(), 'Creation must be handled by the deferred response gate').toBe('GET')
         await route.fulfill({ json: [replacing ? replacementAgent : originalAgent] })
         return
+      case '/api/agents/page':
+        expect(request.method()).toBe('GET')
+        await route.fulfill({ json: { items: [replacing ? replacementAgent : originalAgent], next_cursor: null, has_more: false } })
+        return
       case '/api/onboarding/status':
         await route.fulfill({ json: {
           exists: true, status: 'completed', current_step: 'completed', entry_mode: null,

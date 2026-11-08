@@ -8,6 +8,8 @@ import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { getOnboardingStatus, type OnboardingStatus } from '../src/lib/onboarding-api.ts'
 import { listAgents, type AgentOut } from '../src/lib/workspace-api.ts'
 import { ownAccountSession } from './auth-account-fixture.ts'
+import { agentExistenceOptions, agentPageOptions } from '../src/lib/agents-query.ts'
+import { listAgentsPage } from '../src/lib/agents-api.ts'
 
 const session = {
   access_token: 'onboarding-session',
@@ -111,6 +113,7 @@ test('retry refreshes fresh gate caches before opening the persisted assistant c
   let completions = 0
   context.mock.method(globalThis, 'fetch', async (path: string, options?: RequestInit) => {
     if (path === '/api/agents/') return Response.json(completions ? [{ ...assistant, role_description: '', status: 'running', creator_id: session.user.id }] : [])
+    if (path.startsWith('/api/agents/page?')) return Response.json({ items: completions ? [assistant] : [], next_cursor: null, has_more: false })
     if (path.endsWith('/personal-assistant')) {
       bodies.push(JSON.parse(String(options?.body)))
       return Response.json({ agent: assistant, onboarding, start: bodies.length === 1 ? startFailure : { status: 'started' } })
@@ -119,6 +122,8 @@ test('retry refreshes fresh gate caches before opening the persisted assistant c
     return Response.json(completions ? { ...onboarding, status: 'completed', current_step: 'completed' } : onboarding)
   })
   await client.fetchQuery({ queryKey: ['agents'], queryFn: listAgents })
+  await client.fetchQuery(agentExistenceOptions())
+  await client.fetchInfiniteQuery(agentPageOptions())
   await client.fetchQuery({ queryKey: ['onboarding'], queryFn: getOnboardingStatus })
   const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
     ready: (agent) => {
@@ -142,6 +147,8 @@ test('retry refreshes fresh gate caches before opening the persisted assistant c
   assert.deepEqual(bodies, [input, input])
   assert.equal(completions, 1)
   assert.deepEqual(ready, [{ agentId: assistant.id, gateAgents: [assistant.id], onboardingStatus: 'completed' }])
+  assert.deepEqual(client.getQueryData<Awaited<ReturnType<typeof listAgentsPage>>>(agentExistenceOptions().queryKey)?.items.map((entry) => entry.id), [assistant.id])
+  assert.deepEqual(client.getQueryData<{ pages: Awaited<ReturnType<typeof listAgentsPage>>[] }>(agentPageOptions().queryKey)?.pages[0]?.items.map((entry) => entry.id), [assistant.id])
 })
 
 test('completion failure does not announce a started assistant as ready', async (context) => {

@@ -21,7 +21,8 @@ from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
-from app.runtime.tasks import EventTasks, cancel_tasks
+from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.runtime.tasks import cancel_tasks
 
 
 class _DiscordUserLike(Protocol):
@@ -110,7 +111,7 @@ class DiscordGatewayManager:
     def __init__(self):
         self._clients: dict[uuid.UUID, _DiscordClientLike] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._event_tasks: EventTasks = EventTasks()
+        self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
 
     async def start_client(
         self,
@@ -132,6 +133,9 @@ class DiscordGatewayManager:
         # Stop existing client if any
         if stop_existing and agent_id in self._tasks:
             await self.stop_client(agent_id)
+        existing = self._tasks.get(agent_id)
+        if existing and not existing.done():
+            return
 
         if (sdk := _get_discord_module()) is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
@@ -155,9 +159,10 @@ class DiscordGatewayManager:
             return
         client = client_obj
         self._clients[agent_id] = client
-        self._event_tasks.closing = False
+        callbacks = self._callbacks[agent_id] = CallbackAdmission()
 
         @client.event
+        @callbacks.wrap
         async def on_ready():
             user = client.user
             if user is None:
@@ -167,7 +172,7 @@ class DiscordGatewayManager:
             )
 
         @client.event
-        @self._event_tasks.wrap
+        @callbacks.wrap
         async def on_message(message: _DiscordMessageLike):
             # Ignore own messages
             if message.author == client.user:
@@ -189,6 +194,13 @@ class DiscordGatewayManager:
             if not user_text:
                 return
 
+            try:
+                await callbacks.run(process_message, message, user_text)
+            except CallbackRefusedError as error:
+                logger.warning("[Discord GW] Message refused for {}: {}", agent_id, error)
+                await callbacks.report_refusal(message.reply, str(error), mention_author=False)
+
+        async def process_message(message: _DiscordMessageLike, user_text: str) -> None:
             logger.info(f"[Discord GW] Message for agent {agent_id} from {message.author.name}: {user_text[:80]}")
 
             # Show typing indicator while processing
@@ -215,9 +227,13 @@ class DiscordGatewayManager:
                 else:
                     logger.exception(f"[Discord GW] Bot error for agent {agent_id}: {exc}")
             finally:
+                await callbacks.stop()
                 if not client.is_closed():
                     await client.close()
-                _ = self._clients.pop(agent_id, None)
+                if self._clients.get(agent_id) is client:
+                    _ = self._clients.pop(agent_id, None)
+                if self._callbacks.get(agent_id) is callbacks:
+                    _ = self._callbacks.pop(agent_id, None)
 
         task = asyncio.create_task(_run_bot(), name=f"discord-gw-{str(agent_id)[:8]}")
         self._tasks[agent_id] = task
@@ -262,6 +278,8 @@ class DiscordGatewayManager:
 
     async def stop_client(self, agent_id: uuid.UUID):
         """Stop a running Discord Gateway client."""
+        if callbacks := self._callbacks.pop(agent_id, None):
+            await callbacks.stop()
         task = self._tasks.pop(agent_id, None)
         if task:
             await cancel_tasks((task,))
@@ -274,15 +292,15 @@ class DiscordGatewayManager:
                 logger.error(f"[Discord GW] Error closing client for {agent_id}: {e}")
 
     async def stop_all(self) -> None:
-        self._event_tasks.closing = True
+        for callbacks in self._callbacks.values():
+            callbacks.close()
         results = await asyncio.gather(
-            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients)),
+            *(self.stop_client(agent_id) for agent_id in set(self._tasks) | set(self._clients) | set(self._callbacks)),
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, BaseException):
                 logger.warning("[Discord GW] Client cleanup failed: {}", result)
-        await self._event_tasks.stop()
 
     async def start_all(self):
         """Start Gateway clients for all configured Discord agents."""

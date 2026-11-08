@@ -6,6 +6,7 @@ import math
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from functools import wraps
 from time import monotonic
 from typing import Literal, TypeIs
 
@@ -110,14 +111,19 @@ class LoopProgress:
         self._last_beat = self._clock()
 
     @contextmanager
-    def exempt(self) -> Generator[None]:
-        """Work with its own contract (an upgrade cutover) that must never read as a stall; the clock restarts after."""
+    def exempt(self, *, restart_on_error: bool = True) -> Generator[None]:
+        """Exclude work with its own duration contract; optionally retain failure evidence."""
         self._exempt += 1
         try:
             yield
+        except BaseException:
+            if restart_on_error:
+                self.beat()
+            raise
+        else:
+            self.beat()
         finally:
             self._exempt -= 1
-            self.beat()
 
     def stale(self) -> bool:
         return self._exempt == 0 and self._clock() - self._last_beat > self.budget_seconds
@@ -195,16 +201,18 @@ class EventTasks:
         self.closing: bool = False
 
     def wrap[**P, R](self, callback: Callable[P, Awaitable[R]]) -> Callable[P, Coroutine[object, object, R]]:
+        @wraps(callback)
         async def owned(*args: P.args, **kwargs: P.kwargs) -> R:
             if self.closing:
                 raise asyncio.CancelledError
             task = asyncio.current_task()
+            outermost = task not in self.tasks
             if task:
                 self.tasks.add(task)
             try:
                 return await callback(*args, **kwargs)
             finally:
-                if task:
+                if task and outermost:
                     self.tasks.discard(task)
 
         return owned

@@ -79,6 +79,13 @@ async def require_destination_capacity(
 async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> None:
     async with connection_ctx() as db:
         params = {"agent": agent.id, "target": transfer.target_tenant_id}
+        # Match native cleanup: source-company catalog servers must never be rehydrated in the destination.
+        await db.execute(
+            "UPDATE agent_mcp_servers m SET definition_ciphertext=NULL,updated_at=now() "
+            "WHERE m.agent_id=%(agent)s AND EXISTS(SELECT 1 FROM tools t "
+            "WHERE t.mcp_server_name=m.name AND t.tenant_id=%(source)s)",
+            {**params, "source": transfer.source_tenant_id},
+        )
         await db.execute(
             "DELETE FROM agent_tools a USING tools t WHERE a.tool_id=t.id AND a.agent_id=%(agent)s "
             "AND t.tenant_id IS NOT NULL AND t.tenant_id<>%(target)s",

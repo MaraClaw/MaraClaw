@@ -32,7 +32,8 @@ async function download(page, state) {
   await expect(exportButton(page)).toBeEnabled()
   const result = await readFile(await file.path(), 'utf8')
   const resources = await probe(page)
-  assert.deepEqual(resources.revoked, resources.created)
+   assert.deepEqual(resources.created, [])
+   assert.deepEqual(resources.revoked, [])
   assert.equal(resources.anchors, 0)
   assert.equal(await file.failure(), null)
   assert.equal(state.downloads.length, resources.clicks)
@@ -42,7 +43,7 @@ async function download(page, state) {
 export async function exerciseRosterExports(scenario, h) {
   const actions = []
   for (const role of ['platform_admin', 'org_admin']) await scenario(`${role} exports complete server CSV for the current company and literal search`, async (page, state) => {
-    state.exportAnswer = async () => ({ csv })
+    state.downloadCsv = csv
     await h.openUsers(page, 'company=beta&q=%20%25_Case%2B%3F%20')
     await expect(exportButton(page)).toBeEnabled()
     const { file, result, resources } = await download(page, state)
@@ -56,17 +57,18 @@ export async function exerciseRosterExports(scenario, h) {
   }, { role })
 
   await scenario('header-only CSV is a successful download with visible outcome', async (page, state) => {
-    state.exportAnswer = async () => ({ csv: header })
+    state.downloadCsv = header
     state.answer = async () => ({ items: [], next_cursor: null })
     await h.openUsers(page, 'company=alpha&q=missing')
     const { result } = await download(page, state)
     assert.equal(result, header)
-    await expect(page.getByRole('status').filter({ hasText: 'column headers only' })).toBeVisible()
+    await expect(page.getByRole('status').filter({ hasText: 'download started' })).toBeVisible()
     await h.ownedBrowser.capture(page, join(h.output, 'roster-empty-download.png'))
   })
 
   for (const failure of ['http', 'schema', 'download']) await scenario(`current export ${failure} failure clears pending, cleans URLs and permits retry`, async (page, state) => {
-    state.exportAnswer = async () => failure === 'http' ? { status: 503, body: { detail: 'Export temporarily unavailable' } } : failure === 'schema' ? { csv: 4 } : { csv }
+    state.downloadCsv = csv
+    state.exportAnswer = async () => failure === 'http' ? { status: 503, body: { detail: 'Export temporarily unavailable' } } : failure === 'schema' ? { ticket: 4, expires_in: 60 } : { ticket: `issued-${state.exports.length}`, expires_in: 60 }
     await h.openUsers(page)
     await page.evaluate((fail) => { window.__roster.fail = fail }, failure === 'download')
     await exportButton(page).click()
@@ -76,7 +78,7 @@ export async function exerciseRosterExports(scenario, h) {
     assert.deepEqual(resources.created, resources.revoked)
     assert.equal(resources.anchors, 0)
     await h.ownedBrowser.capture(page, join(h.output, `roster-${failure}-error.png`))
-    state.exportAnswer = async () => ({ csv })
+    state.exportAnswer = async () => ({ ticket: `issued-${state.exports.length}`, expires_in: 60 })
     await page.evaluate(() => { window.__roster.fail = false })
     if (failure === 'download') state.downloads.push({ syntheticFailedClick: true })
     const { result } = await download(page, state)
@@ -88,10 +90,11 @@ export async function exerciseRosterExports(scenario, h) {
     const old = h.gated(state)
     const fresh = h.gated(state)
     const started = Promise.withResolvers()
+    state.downloadCsv = header
     state.exportAnswer = async () => {
-      if (state.exports.length === 1) { started.resolve(); await old.promise; return status === 200 ? { csv } : { status, body: { detail: 'Retired export error' } } }
+      if (state.exports.length === 1) { started.resolve(); await old.promise; return status === 200 ? { ticket: 'retired', expires_in: 60 } : { status, body: { detail: 'Retired export error' } } }
       await fresh.promise
-      return { csv: header }
+      return { ticket: 'fresh', expires_in: 60 }
     }
     await h.openUsers(page)
     await exportButton(page).click()
