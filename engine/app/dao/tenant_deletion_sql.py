@@ -78,6 +78,7 @@ TENANT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM workspace_edit_locks WHERE agent_id IN (" + _AGENTS + ") OR user_id IN (" + _USERS + ")",
     "DELETE FROM daily_token_usage WHERE tenant_id = %(tid)s OR agent_id IN (" + _AGENTS + ")",
     "DELETE FROM agents WHERE tenant_id = %(tid)s",
+    "SELECT id FROM skills WHERE tenant_id = %(tid)s ORDER BY id FOR UPDATE",
     "DELETE FROM skill_files WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = %(tid)s)",
     "DELETE FROM skills WHERE tenant_id = %(tid)s",
     "DELETE FROM llm_models WHERE tenant_id = %(tid)s",

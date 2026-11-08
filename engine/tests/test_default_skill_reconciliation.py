@@ -145,6 +145,25 @@ async def test_reconciliation_skips_agents_and_storage_when_hash_is_unchanged(re
     assert reconciliation.persisted == []
 
 
+@pytest.mark.parametrize("stored_hash", ["matching", "stale"])
+async def test_content_only_refresh_preserves_existing_default_workspace(
+    reconciliation: Reconciliation, stored_hash: str
+) -> None:
+    reconciliation.setting = SyncSetting(
+        value={"hash": hashlib.sha256(b"current-default").hexdigest() if stored_hash == "matching" else "old"}
+    )
+    existing = {
+        f"{agent_manager._agent_storage_prefix(agent_id)}/skills/current-default/{file.path}": "workspace customization"
+        for agent_id in reconciliation.agent_ids
+        for file in reconciliation.defaults[0].files
+    }
+    reconciliation.storage.files.update(existing)
+    reconciliation.defaults[0].files[0].content = "refreshed registry instructions"
+    await skill_seeder.push_default_skills_to_existing_agents()
+    assert reconciliation.storage.files == existing
+    assert reconciliation.storage.written == reconciliation.storage.deleted == []
+
+
 async def test_reconciliation_returns_before_hash_lookup_when_defaults_are_empty(
     reconciliation: Reconciliation,
 ) -> None:

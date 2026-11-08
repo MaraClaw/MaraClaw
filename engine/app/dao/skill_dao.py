@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
-from app.records.skill import SkillFileRecord, SkillRecord
+from app.records.skill import SkillFileRecord, SkillRecord, SkillSource
+from app.services.skill_content import skill_fingerprint
+from app.services.skill_provider import SkillFilePayload
 
 _SKILL_COLUMNS = (
     "id",
@@ -20,14 +22,12 @@ _SKILL_COLUMNS = (
     "folder_name",
     "is_builtin",
     "is_default",
+    "source_metadata",
+    "imported_fingerprint",
     "created_at",
 )
 
 _SKILL_FILE_COLUMNS = ("id", "skill_id", "path", "content")
-
-
-def _skill_from_row(row: Mapping[str, object]) -> SkillRecord:
-    return SkillRecord.from_row(row)
 
 
 @final
@@ -36,7 +36,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
 
     table: ClassVar[str] = "skills"
     columns: ClassVar[tuple[str, ...]] = _SKILL_COLUMNS
-    record_factory = staticmethod(_skill_from_row)
+    record_factory = staticmethod(SkillRecord.from_row)
 
     async def get_by_folder_name(
         self,
@@ -79,6 +79,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         tenant_id: UUID | None,
         role: str | None = None,
         with_files: bool = False,
+        for_update: bool = False,
     ) -> SkillRecord | None:
         params: dict[str, Any] = {"skill_id": skill_id}
         scope_sql = ""
@@ -86,8 +87,9 @@ class SkillDAO(BaseDAO[SkillRecord]):
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
             params["tenant_id"] = tenant_id
         async with self.session() as db:
+            lock_sql = " FOR UPDATE" if for_update else ""
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM skills WHERE id = %(skill_id)s{scope_sql} LIMIT 1",
+                f"SELECT {self._select_list()} FROM skills WHERE id = %(skill_id)s{scope_sql} LIMIT 1{lock_sql}",
                 params,
             )
             if row is None:
@@ -102,6 +104,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         tenant_id: UUID | None,
         role: str | None = None,
         with_files: bool = False,
+        for_update: bool = False,
     ) -> SkillRecord | None:
         params: dict[str, Any] = {"folder_name": folder_name}
         scope_sql = ""
@@ -109,8 +112,9 @@ class SkillDAO(BaseDAO[SkillRecord]):
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
             params["tenant_id"] = tenant_id
         async with self.session() as db:
+            lock_sql = " FOR UPDATE" if for_update else ""
             row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM skills WHERE folder_name = %(folder_name)s{scope_sql} LIMIT 1",
+                f"SELECT {self._select_list()} FROM skills WHERE folder_name = %(folder_name)s{scope_sql} LIMIT 1{lock_sql}",
                 params,
             )
             if row is None:
@@ -120,12 +124,28 @@ class SkillDAO(BaseDAO[SkillRecord]):
 
     async def replace_files(self, skill_id: UUID, files: Sequence[tuple[str, str]]) -> None:
         async with self.session() as db:
+            await db.fetchone("SELECT id FROM skills WHERE id = %(skill_id)s FOR UPDATE", {"skill_id": skill_id})
             await db.execute("DELETE FROM skill_files WHERE skill_id = %(skill_id)s", {"skill_id": skill_id})
-        for path, content in files:
-            _ = await skill_file_dao.create(obj_in={"skill_id": skill_id, "path": path, "content": content})
+            for path, content in files:
+                _ = await skill_file_dao.create(obj_in={"skill_id": skill_id, "path": path, "content": content})
+
+    async def replace_imported_package(
+        self, skill: SkillRecord, files: Sequence[SkillFilePayload], source: SkillSource
+    ) -> SkillRecord:
+        """Publish children and provenance inside the caller's locked transaction."""
+        async with self.session():
+            await self.replace_files(skill.id, [(file["path"], file["content"]) for file in files])
+            return await self.update(
+                db_obj=skill,
+                obj_in={
+                    "source_metadata": source.model_dump(mode="json"),
+                    "imported_fingerprint": skill_fingerprint((file["path"], file["content"]) for file in files),
+                },
+            )
 
     async def delete_with_files(self, skill_id: UUID) -> None:
         async with self.session() as db:
+            await db.fetchone("SELECT id FROM skills WHERE id = %(skill_id)s FOR UPDATE", {"skill_id": skill_id})
             await db.execute("DELETE FROM skill_files WHERE skill_id = %(skill_id)s", {"skill_id": skill_id})
             await db.execute("DELETE FROM skills WHERE id = %(skill_id)s", {"skill_id": skill_id})
 
