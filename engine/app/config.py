@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # Recycle idle / long-lived sockets before Aiven (or a LB) silently drops them.
     DATABASE_POOL_MAX_IDLE: float = 600.0
     DATABASE_POOL_MAX_LIFETIME: float = 1800.0
+    # Session limits applied to every pooled connection of both pools (milliseconds; 0 disables a limit).
+    DATABASE_STATEMENT_TIMEOUT_MS: int = Field(default=30000, ge=0, le=2147483647)
+    DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS: int = Field(default=60000, ge=0, le=2147483647)
+    # The durable pool is sized on its own; it no longer inherits DATABASE_POOL_MAX_SIZE.
+    DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -173,6 +178,8 @@ class Settings(BaseSettings):
     OPENCLAW_BOOTSTRAP_MAX_CHARS: int | None = Field(default=None, gt=0)
     OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS: int | None = Field(default=None, gt=0)
     OPENCLAW_AGENT_MAX_PARALLEL_TURNS: int = Field(default=4, ge=1, le=16)
+    # Per-worker cap on concurrently running scheduled executions (periodic and manual share it).
+    SCHEDULE_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1, le=256)
     # Trial limits for newly created/replacement guests; never auto-update existing guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)

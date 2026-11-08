@@ -45,7 +45,7 @@ async def access_api(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AccessAPI
     access_cache.clear_request_memo()
     row_memo.clear_row_memo()
     fake = FakeRedis()
-    monkeypatch.setattr(access_cache, "get_redis", AsyncMock(return_value=fake))
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=fake))
     monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
     async with await AsyncConnection[DictRow].connect(conninfo, autocommit=True, row_factory=dict_row) as raw:
         db = DbConnection(raw)

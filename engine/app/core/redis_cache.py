@@ -18,6 +18,7 @@ from app.core.cache_contracts import RedisValueRead
 from app.core.logging import logger
 
 _COOLDOWN_SECONDS = 2.0
+_VERSION_MIN_TTL = 3600
 _cache_dead_until = 0.0
 
 
@@ -131,7 +132,7 @@ async def _delete_now(*keys: str) -> None:
         client = await _client()
         _ = await client.delete(*keys)
     except Exception as exc:
-        logger.debug("redis_cache delete skipped: {}", type(exc).__name__)
+        logger.warning("redis_cache delete failed: keys={} error={}", len(keys), type(exc).__name__)
 
 
 async def cache_get_json(key: str) -> object | None:
@@ -194,12 +195,12 @@ async def drop_version(version_key: str) -> None:
 
 
 async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None:
-    expire_for = ttl if ttl not in (None, 0) and ttl > 0 else 3600
+    expire_for = ttl if ttl not in (None, 0) and ttl > 0 else _VERSION_MIN_TTL
     try:
         client = await _client()
-        _ = await client.set(version_key, uuid4().hex, ex=max(expire_for, 3600))
+        _ = await client.set(version_key, uuid4().hex, ex=max(expire_for, _VERSION_MIN_TTL))
     except Exception as exc:
-        logger.debug("redis_cache incr skipped: {}", type(exc).__name__)
+        logger.warning("redis_cache version bump failed: keys=1 error={}", type(exc).__name__)
 
 
 def has_pending_snapshot_writes() -> bool:
@@ -219,11 +220,19 @@ async def flush_deferred_versions() -> None:
     pending = _deferred_versions.get()
     if pending is None:
         return
-    keys = list(pending.incrs)
-    deletes = list(pending.deletes)
+    bumps = tuple(pending.incrs)
+    deletes = tuple(pending.deletes)
     pending.incrs.clear()
     pending.deletes.clear()
-    for key in keys:
-        await _incr_version_now(key)
-    if deletes:
-        await _delete_now(*deletes)
+    if not bumps and not deletes:
+        return
+    try:
+        client = await _client()
+        async with client.pipeline(transaction=False) as pipe:
+            for key in bumps:
+                _ = pipe.set(key, uuid4().hex, ex=_VERSION_MIN_TTL)
+            if deletes:
+                _ = pipe.delete(*deletes)
+            _ = await pipe.execute()
+    except Exception as exc:
+        logger.warning("redis_cache flush failed: keys={} error={}", len(bumps) + len(deletes), type(exc).__name__)

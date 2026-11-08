@@ -10,6 +10,7 @@ from app.core.json_types import JsonObject, json_as_str_or, json_object_from, js
 def tool_app() -> FastAPI:
     app = FastAPI()
     app.include_router(tools.router, prefix="/api")
+    app.include_router(tools.probe_router, prefix="/api")
     return app
 
 

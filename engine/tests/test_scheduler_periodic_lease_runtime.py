@@ -10,7 +10,7 @@ from app.core.domain.agents import AgentStatus
 from app.core.logging import get_trace_id, set_trace_id
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.agent_dao import agent_dao
-from app.dao.schedule_dao import agent_schedule_dao
+from app.dao.schedule_dao import AgentScheduleDAO, agent_schedule_dao
 from app.db import session
 from app.records.agent import AgentRecord
 from app.records.schedule import AgentScheduleRecord
@@ -250,3 +250,34 @@ async def test_periodic_heartbeat_revocation_cancels_blocked_provider_without_hi
     assert cancelled.is_set()
     assert activities == []
     assert pool.rows[occurrence.id].pending_due_at == occurrence.pending_due_at
+
+
+async def test_tick_releases_claim_when_shutdown_races_the_launch(pool, monkeypatch):
+    # Given a worker that stops accepting between claiming a row and launching it.
+    row = _schedule()
+    pool.rows[row.id] = row
+    monkeypatch.setattr(scheduler, "datetime", _Clock)
+    monkeypatch.setattr(scheduler, "compute_next_run", _next_run)
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
+    claim_due = agent_schedule_dao.claim_due
+
+    async def claim_then_stop(*args):
+        claims = await claim_due(*args)
+        await scheduler_tasks.stop_schedule_tasks()
+        return claims
+
+    monkeypatch.setattr(agent_schedule_dao, "claim_due", claim_then_stop)
+    execute = AsyncMock(side_effect=AssertionError("launched after stop"))
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", execute)
+    # When the tick completes.
+    await scheduler._tick()
+    # Then the unstarted lease is handed back at once and the occurrence stays pending for a peer.
+    released = pool.rows[row.id]
+    assert released.lease_expires_at == NOW
+    assert released.pending_due_at == row.next_run_at
+    assert released.next_run_at == NEXT
+    assert released.pending_started_at is None
+    execute.assert_not_called()
+    (peer,) = await AgentScheduleDAO().claim_due(NOW, lambda *_: pytest.fail("recomputed"))
+    assert peer.pending_due_at == row.next_run_at
+    assert peer.lease_token != released.lease_token

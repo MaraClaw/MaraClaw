@@ -15,6 +15,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
 from app.api import schedules
+from app.core.json_types import uuid_from_row
 from app.core.security import get_current_user, load_user_principal
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
@@ -101,6 +102,29 @@ async def manual_http(manual_schedule: AgentScheduleRecord) -> AsyncIterator[htt
         transport=httpx.ASGITransport(app=schedule_app(manual_schedule)), base_url="http://schedule-qa"
     ) as client:
         yield client
+
+
+async def add_due_schedules(template: AgentScheduleRecord, count: int) -> None:
+    """Insert ``count`` more schedules on the template's agent, each due one minute apart before the template."""
+    async with connection_ctx() as db:
+        await db.execute(
+            "INSERT INTO agent_schedules (id, agent_id, name, instruction, cron_expr, created_by, next_run_at, run_count) "
+            "SELECT gen_random_uuid(), %(agent)s, 'Burst ' || n, 'Burst report', %(cron)s, %(creator)s, "
+            "%(due)s - make_interval(mins => n), 0 FROM generate_series(1, %(count)s) AS n",
+            {
+                "agent": template.agent_id,
+                "cron": template.cron_expr,
+                "creator": template.created_by,
+                "due": template.next_run_at,
+                "count": count,
+            },
+        )
+
+
+async def leased_ids() -> set[UUID]:
+    async with connection_ctx() as db:
+        rows = await db.fetchall("SELECT id FROM agent_schedules WHERE lease_token IS NOT NULL")
+    return {uuid_from_row(row["id"]) for row in rows}
 
 
 async def accept_claim(schedule: AgentScheduleRecord) -> ScheduleManualRunRecord:
@@ -422,3 +446,86 @@ async def test_live_manual_run_remains_available_after_cutoff(
     receipt = await schedule_manual_run_dao.get(UUID(response.json()["run_id"]))
     assert receipt is not None
     assert receipt.instruction == manual_schedule.instruction
+
+
+async def test_live_limit_leases_exactly_the_cap_per_tick_oldest_first(live_schedule: AgentScheduleRecord) -> None:
+    # Given 200 due schedules; the seeded one is the newest.
+    await add_due_schedules(live_schedule, 199)
+    # When two ticks each have room for ten.
+    first = await agent_schedule_dao.claim_due(NOW, _next_run, 10)
+    assert len(await leased_ids()) == 10
+    second = await agent_schedule_dao.claim_due(NOW, _next_run, 10)
+    # Then each leases exactly ten distinct rows, oldest due first, and the other 180 stay untouched.
+    assert len(first) == len(second) == 10
+    assert not {claim.id for claim in first} & {claim.id for claim in second}
+    due = [claim.pending_due_at for claim in (*first, *second) if claim.pending_due_at is not None]
+    assert len(due) == 20
+    assert due == sorted(due)
+    assert live_schedule.id not in await leased_ids()
+    assert len(await leased_ids()) == 20
+
+
+async def test_live_concurrent_capped_claimers_never_share_a_row(live_schedule: AgentScheduleRecord) -> None:
+    await add_due_schedules(live_schedule, 199)
+    batches = await asyncio.gather(*(agent_schedule_dao.claim_due(NOW, _next_run, 10) for _ in range(4)))
+    ids = [claim.id for batch in batches for claim in batch]
+    assert [len(batch) for batch in batches] == [10] * 4
+    assert len(set(ids)) == 40
+    assert await leased_ids() == set(ids)
+
+
+async def test_live_invalid_cron_rows_do_not_consume_the_limit(live_schedule: AgentScheduleRecord) -> None:
+    # Given invalid crons that are older than every valid row.
+    await add_due_schedules(live_schedule, 20)
+    async with connection_ctx() as db:
+        await db.execute(
+            "UPDATE agent_schedules SET cron_expr = 'invalid', next_run_at = next_run_at - interval '30 days' "
+            "WHERE name IN ('Burst 1', 'Burst 2', 'Burst 3')"
+        )
+    # When claiming five.
+    claims = await agent_schedule_dao.claim_due(
+        NOW, lambda cron, after, zone: None if cron == "invalid" else _next_run(cron, after, zone), 5
+    )
+    # Then five valid rows are leased and the broken ones are disabled.
+    assert len(claims) == 5
+    assert {claim.cron_expr for claim in claims} == {live_schedule.cron_expr}
+    async with connection_ctx() as db:
+        disabled = await db.fetchall("SELECT name FROM agent_schedules WHERE is_enabled IS FALSE")
+    assert {row["name"] for row in disabled} == {"Burst 1", "Burst 2", "Burst 3"}
+
+
+async def test_live_released_claim_is_taken_by_a_second_worker_without_a_duplicate(
+    live_schedule: AgentScheduleRecord,
+) -> None:
+    # Given a worker that leased ten of 200 but could launch only seven.
+    await add_due_schedules(live_schedule, 199)
+    first = await agent_schedule_dao.claim_due(NOW, _next_run, 10)
+    kept, unlaunched = first[:7], first[7:]
+    for claim in unlaunched:
+        assert claim.lease_token is not None
+        assert not await agent_schedule_dao.release_unstarted_occurrence(claim.id, uuid4(), NOW)
+        assert await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, NOW)
+    # When a second worker ticks on the same instant.
+    second_worker = type(agent_schedule_dao)()
+    compute = Mock(side_effect=lambda cron, after, zone: _next_run(cron, after, zone))
+    second = await second_worker.claim_due(NOW, compute, 10)
+    # Then it takes the released three first with their original occurrence, and nothing the first worker kept.
+    assert [claim.id for claim in second[:3]] == [claim.id for claim in unlaunched]
+    assert [claim.pending_due_at for claim in second[:3]] == [claim.pending_due_at for claim in unlaunched]
+    assert not {claim.id for claim in kept} & {claim.id for claim in second}
+    assert compute.call_count == 7
+    assert all(claim.lease_token != old.lease_token for claim, old in zip(second[:3], unlaunched, strict=True))
+    for claim in unlaunched:
+        reloaded = await agent_schedule_dao.get(claim.id)
+        assert reloaded is not None
+        assert reloaded.next_run_at == claim.next_run_at
+        assert reloaded.run_count == 0
+
+
+async def test_live_release_refuses_started_and_superseded_claims(live_schedule: AgentScheduleRecord) -> None:
+    (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run, 1)
+    assert claim.lease_token is not None
+    assert await agent_schedule_dao.start_occurrence(claim.id, claim.lease_token, NOW)
+    started = await agent_schedule_dao.get(claim.id)
+    assert not await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, NOW)
+    assert await agent_schedule_dao.get(claim.id) == started

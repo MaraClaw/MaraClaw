@@ -523,6 +523,67 @@ async def test_catalog_defaults_use_one_channel_query(raw: _FakeRawConnection, m
     assert calls["n"] == 1
 
 
+def _pool_settings(**overrides: object) -> Any:
+    values: dict[str, object] = {
+        "DATABASE_URL": "postgresql://u:p@localhost/db",
+        "DATABASE_POOL_MIN_SIZE": 1,
+        "DATABASE_POOL_MAX_SIZE": 2,
+        "DATABASE_POOL_TIMEOUT": 5.0,
+        "DATABASE_POOL_MAX_IDLE": 600.0,
+        "DATABASE_POOL_MAX_LIFETIME": 1800.0,
+        "DATABASE_STATEMENT_TIMEOUT_MS": 30000,
+        "DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": 60000,
+        "DATABASE_DURABLE_POOL_MAX_SIZE": 4,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class _ConfigureConnection:
+    def __init__(self) -> None:
+        self.row_factory: object = None
+        self.events: list[str] = []
+        self.executed: list[tuple[str, object]] = []
+
+    async def execute(self, query: str, params: object = None) -> None:
+        self.events.append("execute")
+        self.executed.append((query, params))
+
+    async def commit(self) -> None:
+        self.events.append("commit")
+
+
+class _RecordingPool:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.conninfo = kwargs["conninfo"]
+        self.max_size = kwargs["max_size"]
+        self.timeout = kwargs["timeout"]
+        self.max_idle = kwargs["max_idle"]
+        self.max_lifetime = kwargs["max_lifetime"]
+
+    async def open(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def recording_pools(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[_RecordingPool]]:
+    created: list[_RecordingPool] = []
+
+    def build(**kwargs: Any) -> _RecordingPool:
+        pool = _RecordingPool(**kwargs)
+        created.append(pool)
+        return pool
+
+    pool_module.reset_pool_for_tests()
+    monkeypatch.setattr(pool_module, "AsyncConnectionPool", build)
+    yield created
+    pool_module.reset_pool_for_tests()
+
+
 @pytest.mark.asyncio
 async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
@@ -537,18 +598,7 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
 
     pool_module.reset_pool_for_tests()
     monkeypatch.setattr(pool_module, "AsyncConnectionPool", FakePool)
-    monkeypatch.setattr(
-        pool_module,
-        "get_settings",
-        lambda: SimpleNamespace(
-            DATABASE_URL="postgresql://u:p@localhost/db",
-            DATABASE_POOL_MIN_SIZE=1,
-            DATABASE_POOL_MAX_SIZE=2,
-            DATABASE_POOL_TIMEOUT=5.0,
-            DATABASE_POOL_MAX_IDLE=600.0,
-            DATABASE_POOL_MAX_LIFETIME=1800.0,
-        ),
-    )
+    monkeypatch.setattr(pool_module, "get_settings", _pool_settings)
     try:
         await pool_module.init_pool()
         assert captured["max_idle"] == 600.0
@@ -561,3 +611,176 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
         await pool_module._check_pooled_connection(open_connection)
     finally:
         pool_module.reset_pool_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_both_pools_apply_session_limits_and_leave_no_open_transaction(
+    monkeypatch: pytest.MonkeyPatch, recording_pools: list[_RecordingPool]
+) -> None:
+    # Given
+    monkeypatch.setattr(
+        pool_module,
+        "get_settings",
+        lambda: _pool_settings(
+            DATABASE_STATEMENT_TIMEOUT_MS=1500,
+            DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS=2500,
+        ),
+    )
+
+    # When
+    await pool_module.init_pool()
+    await pool_module.durable_pool()
+
+    # Then
+    main, durable = recording_pools
+    for pool in (main, durable):
+        conn = _ConfigureConnection()
+        await pool.kwargs["configure"](conn)
+        assert conn.events == ["execute", "commit"]
+        query, params = conn.executed[0]
+        assert "set_config('statement_timeout'" in query
+        assert "set_config('idle_in_transaction_session_timeout'" in query
+        assert "lock_timeout" not in query
+        assert params == {"statement": "1500", "idle": "2500"}
+        assert conn.row_factory is not None
+
+
+@pytest.mark.asyncio
+async def test_durable_pool_size_is_independent_of_main_pool(
+    monkeypatch: pytest.MonkeyPatch, recording_pools: list[_RecordingPool]
+) -> None:
+    # Given
+    monkeypatch.setattr(pool_module, "get_settings", lambda: _pool_settings(DATABASE_DURABLE_POOL_MAX_SIZE=3))
+
+    # When
+    await pool_module.init_pool(max_size=17)
+    await pool_module.durable_pool()
+
+    # Then
+    main, durable = recording_pools
+    assert main.max_size == 17
+    assert durable.max_size == 3
+    assert durable.timeout == main.timeout
+    assert durable.conninfo == main.conninfo
+
+
+def test_database_limit_settings_defaults_and_boundaries() -> None:
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    defaults = Settings()
+    assert defaults.DATABASE_STATEMENT_TIMEOUT_MS == 30000
+    assert defaults.DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS == 60000
+    assert defaults.DATABASE_DURABLE_POOL_MAX_SIZE == 4
+
+    assert Settings.model_validate({"DATABASE_DURABLE_POOL_MAX_SIZE": 1}).DATABASE_DURABLE_POOL_MAX_SIZE == 1
+    assert Settings.model_validate({"DATABASE_STATEMENT_TIMEOUT_MS": 0}).DATABASE_STATEMENT_TIMEOUT_MS == 0
+    assert (
+        Settings.model_validate({"DATABASE_STATEMENT_TIMEOUT_MS": 2147483647}).DATABASE_STATEMENT_TIMEOUT_MS
+        == 2147483647
+    )
+    for invalid in (
+        {"DATABASE_DURABLE_POOL_MAX_SIZE": 0},
+        {"DATABASE_STATEMENT_TIMEOUT_MS": -1},
+        {"DATABASE_STATEMENT_TIMEOUT_MS": 2147483648},
+        {"DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": -1},
+    ):
+        with pytest.raises(ValidationError):
+            Settings.model_validate(invalid)
+
+
+class _AclRedis:
+    """Counts round trips; ``on_fill`` runs just before the compare-and-set script, like a concurrent writer."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.round_trips = 0
+        self.on_fill: Any = None
+
+    def pipeline(self) -> Self:
+        self._keys: list[str] = []
+        return self
+
+    def get(self, key: str) -> None:
+        self._keys.append(key)
+
+    async def execute(self) -> list[str | None]:
+        self.round_trips += 1
+        return [self.store.get(key) for key in self._keys]
+
+    async def eval(self, _script, _key_count, version_key, decision_key, expected, payload, _ttl):
+        self.round_trips += 1
+        if self.on_fill is not None:
+            self.on_fill(self.store)
+        if self.store.get(version_key, "0") != expected:
+            return 0
+        self.store[decision_key] = payload
+        return 1
+
+
+@pytest.fixture
+def acl_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_AclRedis, Any, Any]]:
+    from app.core import access_cache, permissions
+    from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel
+    from app.core.domain.users import UserRole
+    from app.records.agent import AgentRecord
+    from app.records.user import UserRecord
+
+    redis = _AclRedis()
+    tenant = uuid4()
+    user = UserRecord(id=uuid4(), role=UserRole.MEMBER, tenant_id=tenant, is_active=True)
+    agent = AgentRecord(
+        id=uuid4(),
+        name="A",
+        creator_id=uuid4(),
+        tenant_id=tenant,
+        access_mode=AgentSharingMode.COMPANY,
+        company_access_level=PermissionAccessLevel.USE,
+    )
+
+    async def cache_redis() -> _AclRedis:
+        return redis
+
+    access_cache.clear_request_memo()
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    yield redis, user, agent
+    access_cache.clear_request_memo()
+
+
+@pytest.mark.asyncio
+async def test_acl_version_bumped_between_read_and_fill_caches_nothing(
+    acl_cache: tuple[_AclRedis, Any, Any],
+) -> None:
+    from app.core import permissions
+
+    # Given a revocation that lands after the snapshot but before the fill
+    redis, user, agent = acl_cache
+    redis.on_fill = lambda store: store.__setitem__(f"aclver:{agent.id}", "1")
+
+    # When
+    await permissions.check_agent_access(user, agent.id)
+
+    # Then
+    assert not any(key.startswith("acl:v1:") for key in redis.store)
+
+
+@pytest.mark.asyncio
+async def test_acl_miss_takes_two_round_trips_and_hit_takes_one(acl_cache: tuple[_AclRedis, Any, Any]) -> None:
+    from app.core import access_cache, permissions
+
+    # Given
+    redis, user, agent = acl_cache
+
+    # When the first request misses and fills
+    await permissions.check_agent_access(user, agent.id)
+    miss_trips = redis.round_trips
+    access_cache.clear_request_memo()
+    await permissions.check_agent_access(user, agent.id)
+
+    # Then
+    assert miss_trips == 2
+    assert redis.round_trips - miss_trips == 1

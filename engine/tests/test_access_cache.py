@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -20,50 +21,62 @@ from app.records.user import UserRecord
 
 
 class _FakePipeline:
-    def __init__(self, store: dict[str, str]) -> None:
-        self._store = store
-        self._ops: list[tuple[str, str]] = []
+    def __init__(self, parent: FakeRedis) -> None:
+        self._parent = parent
+        self._ops: list[tuple[str, str, int]] = []
 
     def get(self, key: str) -> None:
-        self._ops.append(("get", key))
+        self._ops.append(("get", key, 0))
 
-    async def execute(self) -> list[str | None]:
-        return [self._store.get(key) for _op, key in self._ops]
+    def delete(self, *keys: str) -> None:
+        self._ops.extend(("delete", key, 0) for key in keys)
+
+    def incr(self, key: str) -> None:
+        self._ops.append(("incr", key, 0))
+
+    def expire(self, key: str, ttl: int) -> None:
+        self._ops.append(("expire", key, ttl))
+
+    async def execute(self) -> list[str | int | bool | None]:
+        parent = self._parent
+        parent.round_trips += 1
+        if parent.fail:
+            raise RuntimeError("redis down")
+        results: list[str | int | bool | None] = []
+        for op, key, ttl in self._ops:
+            if op == "get":
+                results.append(parent.store.get(key))
+            elif op == "delete":
+                results.append(parent.store.pop(key, None) is not None)
+                parent.ttls.pop(key, None)
+            elif op == "incr":
+                parent.store[key] = str(int(parent.store.get(key) or 0) + 1)
+                results.append(int(parent.store[key]))
+            else:
+                parent.ttls[key] = ttl
+                results.append(True)
+        return results
 
 
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.ttls: dict[str, int] = {}
+        self.round_trips = 0
         self.fail = False
 
     def pipeline(self) -> _FakePipeline:
-        if self.fail:
-            raise RuntimeError("redis down")
-        return _FakePipeline(self.store)
+        return _FakePipeline(self)
 
     async def get(self, key: str) -> str | None:
+        self.round_trips += 1
         if self.fail:
             raise RuntimeError("redis down")
         return self.store.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> None:
-        if self.fail:
-            raise RuntimeError("redis down")
-        del ex
-        self.store[key] = value
-
-    async def incr(self, key: str) -> int:
-        if self.fail:
-            raise RuntimeError("redis down")
-        nxt = int(self.store.get(key) or 0) + 1
-        self.store[key] = str(nxt)
-        return nxt
-
-    async def delete(self, key: str) -> None:
-        self.store.pop(key, None)
-
     async def eval(self, script, key_count, version_key, decision_key, expected, payload, ttl):
         del script, key_count, ttl
+        self.round_trips += 1
         if self.fail:
             raise RuntimeError("redis down")
         if self.store.get(version_key, "0") != expected:
@@ -174,7 +187,7 @@ async def test_redis_hit_skips_permission_list(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
 
     access_cache.clear_request_memo()
     first = await permissions.check_agent_access(user, agent.id)
@@ -200,7 +213,7 @@ async def test_role_change_misses_cache(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
 
     await permissions.check_agent_access(user, agent.id)
     access_cache.clear_request_memo()
@@ -229,7 +242,7 @@ async def test_version_bump_invalidates_decision(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
 
     await permissions.check_agent_access(user, agent.id)
     access_cache.clear_request_memo()
@@ -253,7 +266,7 @@ async def test_redis_failure_falls_open(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
 
     agent_row, level = await permissions.check_agent_access(user, agent.id)
     assert agent_row is agent
@@ -292,7 +305,7 @@ async def test_denied_access_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(permissions.agent_dao, "get", fake_get)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_for_agent)
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
 
     with pytest.raises(HTTPException) as exc:
         await permissions.check_agent_access(user, agent.id)
@@ -310,7 +323,7 @@ async def test_set_cached_level_skips_when_version_changes(monkeypatch: pytest.M
     async def get_redis():
         return fake
 
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
     await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert any(key.startswith("acl:v1:") for key in fake.store)
     fake.store.clear()
@@ -331,7 +344,7 @@ async def test_permission_delete_bumps_after_commit(monkeypatch: pytest.MonkeyPa
     async def get_redis():
         return fake
 
-    monkeypatch.setattr(access_cache, "get_redis", get_redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", get_redis)
     monkeypatch.setattr(session_module, "get_pool", lambda: _SessionPool(raw))
     token = session_module._conn_ctx.set(None)
     try:
@@ -392,7 +405,7 @@ async def test_permission_rollback_never_publishes_acl_version(monkeypatch):
     async def redis():
         return fake
 
-    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
     monkeypatch.setattr(session_module, "get_pool", lambda: _SessionPool(raw))
     token = session_module._conn_ctx.set(None)
 
@@ -419,7 +432,7 @@ async def test_dirty_acl_inputs_are_never_cached(monkeypatch):
     async def redis():
         return fake
 
-    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
     await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert await access_cache.get_cached_level(user, agent_id) == "use"
     token = access_cache.begin_deferred_acl()
@@ -447,7 +460,7 @@ async def test_version_change_between_validation_and_write_rejects_stale_fill(mo
     async def redis():
         return fake
 
-    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
     await access_cache.set_cached_level(_user(), agent_id, PermissionAccessLevel.USE, observed_ver="0")
     assert not any(key.startswith("acl:v1:") for key in fake.store)
 
@@ -471,7 +484,7 @@ async def test_access_helpers_observe_version_before_decision_inputs(monkeypatch
             fake.store[f"aclver:{agent.id}"] = "1"
         return user
 
-    monkeypatch.setattr(access_cache, "get_redis", redis)
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
     monkeypatch.setattr(permissions.agent_dao, "get", agent_input)
     monkeypatch.setattr(permissions.user_dao, "get", user_input)
     if helper == "request":
@@ -527,7 +540,7 @@ async def test_promotion_rollback_does_not_publish_session_or_acl_versions(monke
     raw = _SessionRaw()
     fake = FakeRedis()
     monkeypatch.setattr(session, "get_pool", lambda: _SessionPool(raw))
-    monkeypatch.setattr(access_cache, "get_redis", AsyncMock(return_value=fake))
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=fake))
     monkeypatch.setattr(acl_locks, "lock_tenants", AsyncMock())
     monkeypatch.setattr(acl_locks, "lock_user", AsyncMock())
     monkeypatch.setattr(BaseDAO, "update", AsyncMock(return_value=replace(user, role="org_admin")))
@@ -551,3 +564,165 @@ async def test_promotion_rollback_does_not_publish_session_or_acl_versions(monke
         assert fake.store == {}
     finally:
         session._conn_ctx.reset(token)
+
+
+class _WarningRecorder:
+    def __init__(self) -> None:
+        self.warnings: list[str] = []
+
+    def warning(self, message: str, *args: object) -> None:
+        self.warnings.append(message.format(*args))
+
+    def debug(self, *_args: object) -> None:
+        return None
+
+
+class _StalledPipeline(_FakePipeline):
+    def __init__(self, parent: _SocketTimeoutRedis) -> None:
+        super().__init__(parent)
+        self._stalled = parent
+
+    @override
+    async def execute(self) -> list[str | int | bool | None]:
+        await self._stalled.stall()
+        return []
+
+
+class _SocketTimeoutRedis(FakeRedis):
+    """Stand-in for a stalled server: every call fails the way redis-py does when the socket timeout fires."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = 0
+
+    async def stall(self) -> None:
+        self.round_trips += 1
+        try:
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        raise TimeoutError("socket timeout")
+
+    @override
+    def pipeline(self) -> _StalledPipeline:
+        return _StalledPipeline(self)
+
+    @override
+    async def eval(self, *_args, **_kwargs):
+        await self.stall()
+
+
+@pytest.mark.asyncio
+async def test_stalled_redis_costs_one_wait_and_is_never_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id)
+    fake = _SocketTimeoutRedis()
+
+    async def cache_redis():
+        return fake
+
+    async def forbidden_wait_for(*_args, **_kwargs):
+        raise AssertionError("ACL cache calls must be bounded by the client socket timeout, not wait_for")
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    monkeypatch.setattr(asyncio, "wait_for", forbidden_wait_for)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+
+    _, level = await permissions.check_agent_access(user, agent.id)
+
+    assert level == "use"
+    assert fake.round_trips == 1
+    assert fake.cancelled == 0
+
+
+@pytest.mark.asyncio
+async def test_fill_requires_an_observed_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeRedis()
+
+    async def cache_redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    await access_cache.set_cached_level(_user(), uuid.uuid4(), PermissionAccessLevel.USE)
+    assert fake.round_trips == 0
+    assert fake.store == {}
+
+
+@pytest.mark.asyncio
+async def test_cached_decision_is_validated_against_the_loaded_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user(role="member")
+    agent_id = uuid.uuid4()
+    fake = FakeRedis()
+
+    async def cache_redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.MANAGE, observed_ver="0")
+    snapshot = await access_cache.read_acl_snapshot(user.id, agent_id)
+
+    assert await access_cache.get_cached_level(user, agent_id, snapshot) == "manage"
+    assert (
+        await access_cache.get_cached_level(
+            _user(id=user.id, role="org_admin", tenant_id=user.tenant_id), agent_id, snapshot
+        )
+        is None
+    )
+    assert await access_cache.get_cached_level(_user(id=user.id, role="member"), agent_id, snapshot) is None
+
+
+@pytest.mark.asyncio
+async def test_deferred_flush_is_one_pipeline_with_ttl_and_drops_win(monkeypatch: pytest.MonkeyPatch) -> None:
+    bumped, dropped, both = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    fake = FakeRedis()
+    fake.store[f"aclver:{dropped}"] = "4"
+    fake.store[f"aclver:{both}"] = "7"
+
+    async def cache_redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    token = access_cache.begin_deferred_acl()
+    try:
+        await access_cache.bump_agent_acl_version(bumped)
+        await access_cache.bump_agent_acl_version(both)
+        await access_cache.drop_agent_acl_version(dropped)
+        await access_cache.drop_agent_acl_version(both)
+        assert fake.round_trips == 0
+        await access_cache.flush_deferred_acl()
+        await access_cache.flush_deferred_acl()
+    finally:
+        access_cache.end_deferred_acl(token)
+
+    assert fake.round_trips == 1
+    assert fake.store == {f"aclver:{bumped}": "1"}
+    assert fake.ttls == {f"aclver:{bumped}": 3600}
+
+
+@pytest.mark.asyncio
+async def test_failed_invalidation_warns_and_ignores_the_read_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import redis_cache
+
+    agent_id = uuid.uuid4()
+    fake = FakeRedis()
+    recorder = _WarningRecorder()
+
+    async def cache_redis():
+        return fake
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
+    monkeypatch.setattr(access_cache, "logger", recorder)
+    redis_cache._trip()
+    try:
+        await access_cache.bump_agent_acl_version(agent_id)
+        assert fake.store[f"aclver:{agent_id}"] == "1"
+        fake.fail = True
+        await access_cache.drop_agent_acl_version(agent_id)
+    finally:
+        redis_cache.reset_circuit()
+
+    assert len(recorder.warnings) == 1
+    assert "invalidation failed" in recorder.warnings[0]
+    assert "RuntimeError" in recorder.warnings[0]

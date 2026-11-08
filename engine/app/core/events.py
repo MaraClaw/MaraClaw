@@ -7,6 +7,8 @@ import contextlib
 import json
 
 import redis.asyncio as redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 
 from app.config import get_settings
 from app.core.json_types import JsonObject
@@ -27,8 +29,10 @@ def _pool_kwargs(*, cache: bool) -> dict[str, object]:
     settings = get_settings()
     connect = float(getattr(settings, "REDIS_SOCKET_CONNECT_TIMEOUT", 2.0) or 2.0)
     if cache:
+        # Fail fast: a retry would repeat a timed-out command and pin the caller for several socket timeouts.
         return {
             "decode_responses": True,
+            "retry": Retry(NoBackoff(), 0),
             "max_connections": int(getattr(settings, "REDIS_CACHE_MAX_CONNECTIONS", 20) or 20),
             "socket_connect_timeout": connect,
             "socket_timeout": float(getattr(settings, "REDIS_CACHE_SOCKET_TIMEOUT", 0.2) or 0.2),

@@ -7,11 +7,14 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from psycopg.errors import QueryCanceled
+from psycopg_pool import PoolTimeout
 from starlette.routing import Route
 
 from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.middleware import TraceIdMiddleware
+from app.db.errors import DbError, overload_error
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
@@ -49,6 +52,21 @@ async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) 
 @app.exception_handler(StorageQuotaError)
 async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(DbError)
+@app.exception_handler(PoolTimeout)
+@app.exception_handler(QueryCanceled)
+async def database_overload(_request: Request, exc: Exception) -> JSONResponse:
+    overload = overload_error(exc)
+    if overload is None:
+        # Not an overload: hand the original to the catch-all so it is reported and answered with the usual 500.
+        raise exc
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(overload)},
+        headers={"Retry-After": str(overload.retry_after_seconds)},
+    )
 
 
 @app.exception_handler(Exception)
@@ -122,7 +140,7 @@ from app.api.tavily_proxy import router as tavily_proxy_router
 from app.api.teams import router as teams_router
 from app.api.tenant_email import router as tenant_email_router
 from app.api.tenants import router as tenants_router
-from app.api.tools import router as tools_router
+from app.api.tools import probe_router as tools_probe_router, router as tools_router
 from app.api.triggers import router as triggers_router
 from app.api.upload import router as upload_router
 from app.api.users import export_router as users_export_router, router as users_router
@@ -153,7 +171,7 @@ app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
 app.include_router(tenant_email_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(upload_router, prefix=settings.API_PREFIX)
 app.include_router(relationships_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(activity_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(messages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
@@ -162,8 +180,9 @@ app.include_router(company_admissions_router, prefix=settings.API_PREFIX, depend
 app.include_router(organization_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(schedules_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tools_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(files_upload_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
-app.include_router(enterprise_kb_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(tools_probe_router, prefix=settings.API_PREFIX)
+app.include_router(files_upload_router, prefix=settings.API_PREFIX)
+app.include_router(enterprise_kb_router, prefix=settings.API_PREFIX)
 app.include_router(skills_router, prefix=settings.API_PREFIX)
 app.include_router(users_export_router, prefix=settings.API_PREFIX)
 app.include_router(users_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

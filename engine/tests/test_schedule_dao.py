@@ -153,3 +153,76 @@ async def test_record_started_increments_atomically_without_advancing_slot(pool:
     assert pool.rows[row.id] == replace(row, run_count=(count or 0) + 2, last_run_at=NOW)
     assert pool.counts[row.id] == (count or 0) + 2
     assert all(len(raw.executed) == 1 and raw.commits == 1 for raw in pool.connections)
+
+
+async def test_claim_limit_takes_oldest_due_first_across_fresh_and_expired_rows(pool: _Pool) -> None:
+    # Given four due rows whose ordering key mixes fresh slots and an expired lease.
+    fresh = [replace(_schedule(), next_run_at=NOW - timedelta(hours=hours)) for hours in (1, 5, 3)]
+    expired = replace(
+        _schedule(),
+        next_run_at=NEXT,
+        pending_due_at=NOW - timedelta(hours=4),
+        pending_instruction="Old",
+        pending_notify_on_failure=False,
+        lease_token=uuid4(),
+        lease_expires_at=NOW,
+    )
+    pool.rows = {row.id: row for row in (*fresh, expired)}
+    # When a worker with room for three claims.
+    claims = await agent_schedule_dao.claim_due(NOW, _next_run, 3)
+    # Then the three oldest due occurrences are leased in order, and the newest stays untouched.
+    assert [claim.id for claim in claims] == [fresh[1].id, expired.id, fresh[2].id]
+    assert pool.rows[fresh[0].id] == fresh[0]
+    assert "LIMIT %(limit)s" in pool.connections[0].executed[0][0]
+
+
+async def test_claim_without_limit_keeps_every_due_row(pool: _Pool) -> None:
+    rows = [_schedule() for _ in range(5)]
+    pool.rows = {row.id: row for row in rows}
+    assert len(await agent_schedule_dao.claim_due(NOW, _next_run)) == 5
+
+
+async def test_claim_invalid_cron_does_not_consume_the_limit(pool: _Pool) -> None:
+    # Given invalid crons that sort ahead of the valid rows.
+    invalid = [
+        replace(_schedule(), cron_expr="invalid", next_run_at=NOW - timedelta(days=9, hours=i)) for i in range(3)
+    ]
+    valid = [replace(_schedule(), next_run_at=NOW - timedelta(hours=i + 1)) for i in range(3)]
+    pool.rows = {row.id: row for row in (*invalid, *valid)}
+    # When claiming two.
+    claims = await agent_schedule_dao.claim_due(
+        NOW, lambda cron, after, timezone: None if cron == "invalid" else _next_run(cron, after, timezone), 2
+    )
+    # Then both budget slots go to valid rows and every broken schedule is disabled.
+    assert [claim.id for claim in claims] == [valid[2].id, valid[1].id]
+    assert all(not pool.rows[row.id].is_enabled for row in invalid)
+    assert pool.rows[valid[0].id] == valid[0]
+
+
+async def test_release_expires_only_the_matching_unstarted_claim(pool: _Pool) -> None:
+    # Given a claimed occurrence.
+    row = _schedule()
+    pool.rows[row.id] = row
+    (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+    assert claim.lease_token is not None
+    # When a foreign token tries to release, nothing changes.
+    assert not await agent_schedule_dao.release_unstarted_occurrence(claim.id, uuid4(), NOW)
+    assert pool.rows[row.id] == claim
+    # When the owner releases, only the lease expires; the slot and next run stay put.
+    assert await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, NOW)
+    assert pool.rows[row.id] == replace(claim, lease_expires_at=NOW)
+    # Then a peer can reclaim the same occurrence without recomputing the cron.
+    (reclaimed,) = await agent_schedule_dao.claim_due(NOW, lambda *_: pytest.fail("recomputed"))
+    assert reclaimed.pending_due_at == row.next_run_at
+    assert reclaimed.lease_token != claim.lease_token
+
+
+async def test_release_refuses_a_started_occurrence(pool: _Pool) -> None:
+    row = _schedule()
+    pool.rows[row.id] = row
+    (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+    assert claim.lease_token is not None
+    assert await agent_schedule_dao.start_occurrence(claim.id, claim.lease_token, NOW)
+    started = pool.rows[row.id]
+    assert not await agent_schedule_dao.release_unstarted_occurrence(claim.id, claim.lease_token, NOW)
+    assert pool.rows[row.id] == started

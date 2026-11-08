@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from tests.test_db_session import _FakePool, _FakeRawConnection
 from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache, session_cache
@@ -14,6 +15,7 @@ from app.core.domain.users import UserRole
 from app.core.json_types import is_json_object
 from app.core.row_memo import clear_row_memo
 from app.core.security import load_identity_for_password
+from app.db import session as db_session
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -147,6 +149,34 @@ async def test_session_cache_bump_user_invalidates(fake_cache: FakeRedis) -> Non
     await session_cache.bump_user_session(user.id)
     clear_row_memo()
     assert await session_cache.get_cached_user(user.id) is None
+
+
+@pytest.mark.asyncio
+async def test_bump_in_nested_scope_flushes_once_at_the_outer_commit(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an outer scope with a joined inner scope that bumps the same user twice
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(db_session, "get_pool", lambda: _FakePool(raw))
+    user = _user()
+    version_key = session_cache.user_version_key(user.id)
+    sess_key = session_cache._sess_key(user.id)
+    fake_cache.store[sess_key] = "snapshot"
+    # When
+    async with db_session.connection_ctx():
+        async with db_session.connection_ctx():
+            await session_cache.bump_user_session(user.id)
+            async with db_session.transaction():
+                await session_cache.bump_user_session(user.id)
+        # Then nothing reached Redis before the outer commit
+        assert (fake_cache.pipelines, raw.commits) == ([], 0)
+        assert sess_key in fake_cache.store
+    # And exactly one pipeline rotates the version and drops the snapshot afterwards
+    assert raw.commits == 1
+    assert len(fake_cache.pipelines) == 1
+    assert [(op, args[0]) for op, args, _ in fake_cache.pipelines[0]] == [("set", version_key), ("delete", sess_key)]
+    assert version_key in fake_cache.store
+    assert sess_key not in fake_cache.store
 
 
 @pytest.mark.asyncio

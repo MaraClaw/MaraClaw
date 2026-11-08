@@ -2,10 +2,11 @@
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
@@ -149,28 +150,50 @@ async def deletion_pg(
                     assert remaining == [], "Version invalidation ran before deletion committed"
                     events.append(key)
 
-                async def acl_now(deleted_agent_id: UUID) -> None:
-                    remaining = await fixture.rows("SELECT id FROM agents WHERE id = %s", (deleted_agent_id,))
-                    assert remaining == [], "ACL invalidation ran before deletion committed"
-                    events.append(f"aclver:{deleted_agent_id}")
+                async def acl_now(bumps: Collection[UUID], drops: Collection[UUID]) -> None:
+                    for deleted_agent_id in (*bumps, *drops):
+                        remaining = await fixture.rows("SELECT id FROM agents WHERE id = %s", (deleted_agent_id,))
+                        assert remaining == [], "ACL invalidation ran before deletion committed"
+                        events.append(f"aclver:{deleted_agent_id}")
 
                 async def cache_get(_key: str) -> None:
                     return None
 
-                class DeleteObserver:
-                    async def delete(self, *keys: str) -> None:
-                        events.extend(f"delete:{key}" for key in keys)
+                class PipelineObserver:
+                    def __init__(self) -> None:
+                        self.ops: list[tuple[str, tuple[str, ...]]] = []
+
+                    async def __aenter__(self) -> Self:
+                        return self
+
+                    async def __aexit__(self, *_exc: object) -> None:
+                        return None
+
+                    def set(self, key: str, _value: str, *, ex: int | None = None) -> None:
+                        self.ops.append(("set", (key,)))
+
+                    def delete(self, *keys: str) -> None:
+                        self.ops.append(("delete", keys))
+
+                    async def execute(self) -> None:
+                        for op, keys in self.ops:
+                            events.extend(key if op == "set" else f"delete:{key}" for key in keys)
                         remaining = await fixture.rows("SELECT id FROM tenants WHERE id = %s", (tenant_id,))
                         if remaining:
                             events.append("delete_before_commit")
-                        assert remaining == [], "Snapshot deletion ran before deletion committed"
+                        assert remaining == [], "Snapshot invalidation ran before deletion committed"
 
-                async def cache_client() -> DeleteObserver:
-                    return DeleteObserver()
+                class CacheObserver:
+                    def pipeline(self, *, transaction: bool = True) -> PipelineObserver:
+                        assert transaction is False, "Snapshot flush must not hold a MULTI/EXEC"
+                        return PipelineObserver()
+
+                async def cache_client() -> CacheObserver:
+                    return CacheObserver()
 
                 if getattr(request, "param", None) != "warm":
                     monkeypatch.setattr(redis_cache, "_incr_version_now", version_now)
-                    monkeypatch.setattr(access_cache, "_drop_acl_version_now", acl_now)
+                    monkeypatch.setattr(access_cache, "_invalidate_now", acl_now)
                     monkeypatch.setattr(redis_cache, "cache_get", cache_get)
                     monkeypatch.setattr(redis_cache, "_client", cache_client)
                 async with pool.connection() as raw:

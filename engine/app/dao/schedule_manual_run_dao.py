@@ -64,13 +64,13 @@ class ScheduleManualRunDAO(BaseDAO[ScheduleManualRunRecord]):
             )
             return self.record_factory(row) if row is not None else None
 
-    async def claim_pending(self, now: datetime) -> list[ScheduleManualRunRecord]:
+    async def claim_pending(self, now: datetime, limit: int = 100) -> list[ScheduleManualRunRecord]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id FROM agent_schedule_manual_runs WHERE finished_at IS NULL "
                 "AND (lease_token IS NULL OR lease_expires_at <= %(now)s) "
-                "ORDER BY created_at, id LIMIT 100 FOR UPDATE SKIP LOCKED",
-                {"now": now},
+                "ORDER BY created_at, id LIMIT %(limit)s FOR UPDATE SKIP LOCKED",
+                {"now": now, "limit": limit},
             )
             claimed: list[ScheduleManualRunRecord] = []
             for candidate in rows:
@@ -82,6 +82,17 @@ class ScheduleManualRunDAO(BaseDAO[ScheduleManualRunRecord]):
                 if row is not None:
                     claimed.append(self.record_factory(row))
             return claimed
+
+    async def release_unstarted(self, run_id: UUID, token: UUID) -> bool:
+        """Drop a claim that never launched so a peer can take it; only the matching unstarted token releases."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agent_schedule_manual_runs SET lease_token = NULL, lease_expires_at = NULL "
+                "WHERE id = %(id)s AND finished_at IS NULL AND started_at IS NULL AND lease_token = %(token)s "
+                "RETURNING id",
+                {"id": run_id, "token": token},
+            )
+            return row is not None
 
     async def renew(self, run_id: UUID, token: UUID, now: datetime) -> bool:
         async with self.session() as db:

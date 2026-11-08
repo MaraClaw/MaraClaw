@@ -1163,7 +1163,8 @@ async def upload_file_to_workspace(
     current_user: UserRecord = Depends(get_current_user),
 ) -> FileUploadResponse:
     """Upload a binary file to agent workspace."""
-    agent, _ = await check_agent_access(current_user, agent_id)
+    async with optional_connection_ctx():
+        agent, _ = await check_agent_access(current_user, agent_id)
 
     normalized_path = (path or "").strip().strip("/")
     if not normalized_path or normalized_path == ".":
@@ -1220,6 +1221,17 @@ async def upload_file_to_workspace(
 # ─── Enterprise Knowledge Base ─────────────────────────────────
 
 enterprise_kb_router = APIRouter(prefix="/enterprise/knowledge-base", tags=["enterprise"])
+
+
+async def _recheck_enterprise_admin(current_user: UserRecord, denied: str) -> None:
+    """Fresh admin authority in one short scope, taken right before a storage write."""
+    from app.api.skills import _fresh_import_actor
+
+    async with optional_connection_ctx() as conn:
+        if conn is not None:
+            actor = await _fresh_import_actor(current_user)
+            if actor.role not in ("platform_admin", "org_admin"):
+                raise HTTPException(status_code=403, detail=denied)
 
 
 def _enterprise_kb_dir(tenant_id: str) -> Path:
@@ -1285,6 +1297,7 @@ async def upload_enterprise_kb_file(
         content = await read_bytes_limited(file.read, MAX_INPUT_BYTES)
     except DocumentTooLargeError as exc:
         raise HTTPException(status_code=400, detail=format_parse_failure(exc)) from exc
+    await _recheck_enterprise_admin(current_user, "Only admins can upload to enterprise knowledge base")
     await storage.write_bytes(storage_key, content, content_type=guess_content_type(filename))
 
     extracted_path = None
@@ -1340,6 +1353,7 @@ async def write_enterprise_file(
         raise HTTPException(status_code=400, detail="No tenant associated")
 
     storage = get_storage_backend()
+    await _recheck_enterprise_admin(current_user, "Only admins can edit enterprise knowledge base")
     await storage.write_text(_enterprise_storage_key(str(current_user.tenant_id), path), data.content, encoding="utf-8")
     return {"status": "ok", "path": path}
 
@@ -1361,6 +1375,7 @@ async def delete_enterprise_file(
     storage_is_dir = await storage.is_dir(storage_key)
     if not storage_exists and not storage_is_dir:
         raise HTTPException(status_code=404, detail="File not found")
+    await _recheck_enterprise_admin(current_user, "Only admins can delete enterprise knowledge base files")
     if storage_is_dir:
         await storage.delete_tree(storage_key)
     else:

@@ -182,6 +182,7 @@ jobs:
           tests/test_clawbook_likes_postgres.py
           tests/test_clawbook_feed_postgres.py
           tests/test_bootstrap_postgres.py
+          tests/test_tenant_deletion_postgres.py
           tests/test_company_admission_sso.py
           tests/test_agent_ownership_transfers_postgres.py
           tests/test_guest_config_transaction_postgres.py

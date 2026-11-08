@@ -13,7 +13,7 @@ from pathlib import Path
 import anyio
 
 from app.db.pool import close_pool, init_pool
-from app.db.session import connection_ctx
+from app.db.session import connection_ctx, long_running_statement
 
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
 _TX_WRAPPERS = frozenset({"BEGIN", "COMMIT", "BEGIN TRANSACTION", "COMMIT TRANSACTION"})
@@ -148,7 +148,7 @@ def _statement_bodies(sql: str) -> list[str]:
 
 async def _apply_sql_script(path: Path) -> None:
     sql = path.read_text(encoding="utf-8")  # noqa: ASYNC240 - one-shot bootstrap CLI
-    async with connection_ctx() as conn:
+    async with connection_ctx() as conn, long_running_statement(conn):
         for body in _statement_bodies(sql):
             await conn.execute(body)
 

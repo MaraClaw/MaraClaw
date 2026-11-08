@@ -45,9 +45,16 @@ class _Cursor:
                 assert "(pending_due_at IS NULL AND next_run_at <= %(now)s " in sql
                 assert "AND (ends_at IS NULL OR next_run_at < ends_at)) OR " in sql
                 assert "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)" in sql
-                now = params["now"]
+                assert "ORDER BY COALESCE(pending_due_at, next_run_at), id LIMIT %(limit)s FOR UPDATE" in sql
+                now, limit = params["now"], params["limit"]
                 assert isinstance(now, datetime)
-                for row in pool.rows.values():
+                assert limit is None or isinstance(limit, int)
+                eligible = [
+                    row for row in pool.rows.values() if row.is_enabled and (row.pending_due_at or row.next_run_at)
+                ]
+                for row in sorted(eligible, key=lambda row: (row.pending_due_at or row.next_run_at, row.id)):
+                    if limit is not None and len(self.rows) >= limit:
+                        break
                     due = (
                         row.pending_due_at is None
                         and row.next_run_at is not None
@@ -91,7 +98,12 @@ class _Cursor:
         if row is None:
             return
         changes: dict[str, object]
-        if "token" in params:
+        if "AND pending_started_at IS NULL RETURNING id" in sql:
+            assert sql.startswith("UPDATE agent_schedules SET lease_expires_at = %(now)s WHERE id = %(id)s")
+            if row.pending_due_at is None or row.lease_token != params["token"] or row.pending_started_at is not None:
+                return
+            changes = {"lease_expires_at": params["now"]}
+        elif "token" in params:
             assert "is_enabled IS TRUE AND pending_due_at IS NOT NULL" in sql
             assert "lease_token = %(token)s AND lease_expires_at > %(now)s" in sql
             now = params["now"]

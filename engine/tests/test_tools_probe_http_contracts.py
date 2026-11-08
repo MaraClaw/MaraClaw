@@ -31,7 +31,7 @@ async def test_mcp_probe_http_preserves_success_and_failure_payloads(
     monkeypatch.setattr(outbound_policy, "validate_public_url", validate)
     monkeypatch.setattr(mcp_client.MCPClient, "list_tools", list_tools)
     app = FastAPI()
-    app.include_router(tools.router, prefix="/api")
+    app.include_router(tools.probe_router, prefix="/api")
     app.dependency_overrides[tools.get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.MEMBER)
     # When testing connectivity through the actual HTTP response serializer.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -66,7 +66,7 @@ async def test_category_probe_http_preserves_provider_variants(
     monkeypatch.setattr(atlassian, "check_atlassian_channel", probe)
     monkeypatch.setattr(agentbay_client, "check_agentbay_channel", probe)
     app = FastAPI()
-    app.include_router(tools.router, prefix="/api")
+    app.include_router(tools.probe_router, prefix="/api")
     app.dependency_overrides[tools.get_current_user] = lambda: UserRecord(id=uuid4(), role=UserRole.MEMBER)
     # When testing the category using its real route.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

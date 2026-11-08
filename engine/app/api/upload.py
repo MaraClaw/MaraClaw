@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
+from app.db.session import optional_connection_ctx
 from app.records.user import UserRecord
 from app.schemas.content_response_files import ChatUploadResponse
 from app.services.document_parser import (
@@ -142,7 +143,8 @@ async def upload_file(
             agent_uuid = uuid.UUID(agent_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid agent_id") from exc
-        _ = await check_agent_access(current_user, agent_uuid)
+        async with optional_connection_ctx():
+            _ = await check_agent_access(current_user, agent_uuid)
         async with guest_write_section(agent_uuid):
             storage = get_storage_backend()
             stem = filename.removesuffix(suffix)

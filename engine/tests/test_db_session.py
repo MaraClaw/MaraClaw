@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextvars import Context
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Self, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import pytest
 from psycopg import AsyncConnection
+from psycopg.pq import TransactionStatus
 from psycopg.rows import DictRow
+from tests.test_redis_cache import FakeRedis
 
 from app.core import access_cache, redis_cache
 from app.db import pool as pool_module, session as session_module
@@ -20,14 +25,21 @@ from app.db.session import (
     connection_ctx,
     flush_request_transaction,
     get_connection,
+    long_running_statement,
     transaction,
 )
+from app.records.user import UserRecord
+from app.services import agent_setup_lock, openclaw_update_exclusion as exclusion
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from transaction_pool_fakes import CountingPool
+
+_REAL_FLUSH_VERSIONS = redis_cache.flush_deferred_versions
 
 
 class _FakeCursor:
     def __init__(self, parent: _FakeRawConnection) -> None:
         self._parent = parent
+        self._last = ""
 
     async def __aenter__(self) -> Self:
         return self
@@ -42,9 +54,18 @@ class _FakeCursor:
         return False
 
     async def execute(self, query: object, params: object = None) -> None:
-        self._parent.executed.append((str(query), params))
+        self._last = str(query)
+        self._parent.executed.append((self._last, params))
+        if "set_config('statement_timeout'" in self._last:
+            value = cast("dict[str, str]", params)["value"]
+            if value in self._parent.failing_values:
+                raise RuntimeError("restore failed")
+            self._parent.timeout = value
+            self._parent.timeouts.append(value)
 
-    async def fetchone(self) -> None:
+    async def fetchone(self) -> dict[str, str] | None:
+        if "current_setting('statement_timeout')" in self._last:
+            return {"value": self._parent.timeout}
         return None
 
     async def fetchall(self) -> list[Any]:
@@ -73,6 +94,10 @@ class _FakeRawConnection:
         self.executed: list[tuple[str, Any]] = []
         self.commits = 0
         self.rollbacks = 0
+        self.timeout = "30s"
+        self.timeouts: list[str] = []
+        self.failing_values: set[str] = set()
+        self.info = SimpleNamespace(transaction_status=TransactionStatus.INTRANS)
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
@@ -116,6 +141,17 @@ def _clear_conn_ctx() -> Iterator[None]:
     yield
     session_module._conn_ctx.reset(token)
     pool_module.reset_pool_for_tests()
+
+
+def _install_cache(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
+    redis_cache.reset_circuit()
+    cache = FakeRedis()
+
+    async def client() -> FakeRedis:
+        return cache
+
+    monkeypatch.setattr(redis_cache, "_client", client)
+    return cache
 
 
 @pytest.mark.asyncio
@@ -202,35 +238,26 @@ async def test_flush_request_transaction_commits_before_request_exit(monkeypatch
 async def test_snapshot_deletes_publish_after_explicit_request_flush(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given
     raw = _FakeRawConnection()
-    publications: list[tuple[int, tuple[str, ...]]] = []
+    cache = _install_cache(monkeypatch)
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
 
-    async def delete_now(*keys: str) -> None:
-        publications.append((raw.commits, keys))
-
-    monkeypatch.setattr(redis_cache, "_delete_now", delete_now)
     async with connection_ctx():
         await redis_cache.cache_delete("snapshot", defer_until_commit=True)
         await redis_cache.cache_delete("snapshot", defer_until_commit=True)
-        assert publications == []
+        assert cache.pipelines == []
         # When
         await flush_request_transaction()
         # Then
-        assert publications == [(1, ("snapshot",))]
-    assert publications == [(1, ("snapshot",))]
+        assert (raw.commits, cache.pipelines) == (1, [[("delete", ("snapshot",), None)]])
+    assert cache.pipelines == [[("delete", ("snapshot",), None)]]
 
 
 @pytest.mark.asyncio
 async def test_snapshot_deletes_are_discarded_after_request_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given
     raw = _FakeRawConnection()
-    publications: list[str] = []
+    cache = _install_cache(monkeypatch)
     monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
-
-    async def delete_now(*keys: str) -> None:
-        publications.extend(keys)
-
-    monkeypatch.setattr(redis_cache, "_delete_now", delete_now)
 
     async def failing_scope() -> None:
         async with connection_ctx():
@@ -243,7 +270,7 @@ async def test_snapshot_deletes_are_discarded_after_request_rollback(monkeypatch
     async with connection_ctx():
         pass
     # Then
-    assert publications == []
+    assert cache.pipelines == []
     assert raw.rollbacks == 1
 
 
@@ -296,6 +323,11 @@ def callback_scope(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeRawConnection,
     return raw, events
 
 
+async def _queue_cache_writes() -> None:
+    await access_cache.bump_agent_acl_version(uuid4())
+    await redis_cache.bump_version("ver")
+
+
 def test_after_commit_without_scope_runs_immediately() -> None:
     # Given
     events: list[str] = []
@@ -311,6 +343,7 @@ async def test_after_commit_runs_in_order_after_deferred_flushes(callback_scope)
     _, events = callback_scope
     # When
     async with connection_ctx():
+        await _queue_cache_writes()
         session_module.run_after_commit(lambda: events.append("first"))
         session_module.run_after_commit(lambda: events.append("second"))
         assert events == []
@@ -365,12 +398,17 @@ async def test_after_commit_flush_failure_still_launches(callback_scope, monkeyp
         raise failure
 
     monkeypatch.setattr(access_cache, "flush_deferred_acl", fail_flush)
+
+    async def scope() -> None:
+        async with connection_ctx():
+            await _queue_cache_writes()
+            session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
+
     # When
     with pytest.raises(type(failure)):
-        async with connection_ctx():
-            session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
-    # Then
-    assert events == ["commit", "launched"]
+        await scope()
+    # Then the failure surfaces, yet the sibling family was still attempted and the callbacks launched
+    assert events == ["commit", "versions", "launched"]
 
 
 @pytest.mark.asyncio
@@ -405,11 +443,23 @@ async def test_after_commit_callback_failure_is_logged_and_next_runs(callback_sc
 
 
 @pytest.mark.asyncio
+async def test_commit_without_pending_invalidations_schedules_no_flush(callback_scope) -> None:
+    # Given a scope that queued nothing
+    _, events = callback_scope
+    # When
+    async with connection_ctx():
+        session_module.run_after_commit(lambda: events.append("launched"))
+    # Then neither family was started
+    assert events == ["commit", "launched"]
+
+
+@pytest.mark.asyncio
 async def test_after_commit_nested_joins_share_outer_batch(callback_scope) -> None:
     # Given
     _, events = callback_scope
     # When
     async with connection_ctx():
+        await _queue_cache_writes()
         async with connection_ctx(), transaction():
             session_module.run_after_commit(lambda: events.append("launched"))
         assert events == []
@@ -424,6 +474,7 @@ async def test_after_commit_explicit_flush_starts_new_batch(callback_scope) -> N
 
     async def scope() -> None:
         async with connection_ctx():
+            await _queue_cache_writes()
             session_module.run_after_commit(lambda: events.append("first"), lambda: events.append("drop first"))
             await flush_request_transaction()
             assert events == ["commit", "acl", "versions", "first"]
@@ -451,6 +502,7 @@ async def test_after_commit_failed_explicit_flush_drops_its_batch(callback_scope
     monkeypatch.setattr(raw, "commit", reject_once)
     # When
     async with connection_ctx():
+        await _queue_cache_writes()
         session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
         with pytest.raises(RuntimeError, match="commit rejected"):
             await flush_request_transaction()
@@ -467,6 +519,7 @@ async def test_after_commit_explicit_transaction_uses_same_lifecycle(callback_sc
 
     async def scope() -> None:
         async with transaction(_wrap(raw)), transaction():
+            await _queue_cache_writes()
             session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
             assert events == []
             if rollback:
@@ -589,3 +642,288 @@ async def test_cancelled_task_cleans_owner_context_and_returns_slot(monkeypatch:
     async with asyncio.timeout(5), connection_ctx():
         pass
     assert (pool.active, pool.checkouts, pool.releases) == (0, 2, 2)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_lifts_then_restores_actual_prior_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a limit that is not the configured default
+    raw = _FakeRawConnection()
+    raw.timeout = "1min"
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    # When
+    async with connection_ctx() as db:
+        async with long_running_statement(db):
+            assert raw.timeout == "0"
+        assert raw.timeout == "1min"
+
+    # Then the override is transaction-local and the owner still commits once
+    assert raw.timeouts == ["0", "1min"]
+    assert (raw.commits, raw.rollbacks) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_nested_scopes_unwind_one_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async with connection_ctx() as db, long_running_statement(db):
+        async with long_running_statement(db):
+            assert raw.timeout == "0"
+        assert raw.timeout == "0"
+
+    assert raw.timeouts == ["0", "0", "0", "30s"]
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_failure_restores_and_keeps_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def failing_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raise ValueError("body failed")
+
+    with pytest.raises(ValueError, match="body failed"):
+        await failing_scope()
+
+    assert raw.timeouts == ["0", "30s"]
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_skips_restore_in_aborted_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+
+    async def aborted_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raw.info.transaction_status = TransactionStatus.INERROR
+            raise ValueError("statement failed")
+
+    with pytest.raises(ValueError, match="statement failed"):
+        await aborted_scope()
+
+    assert raw.timeouts == ["0"]
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_long_running_statement_restore_failure_does_not_mask_body_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _FakeRawConnection()
+    raw.failing_values = {"30s"}
+    logger = Mock()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(session_module, "logger", logger)
+
+    async def failing_scope() -> None:
+        async with connection_ctx() as db, long_running_statement(db):
+            raise ValueError("body failed")
+
+    with pytest.raises(ValueError, match="body failed"):
+        await failing_scope()
+
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+    logger.opt.assert_called_once()
+
+
+async def _never() -> None:
+    await asyncio.Event().wait()
+
+
+@pytest.fixture
+def short_deadline(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    logger = Mock()
+    monkeypatch.setattr(session_module, "logger", logger)
+    monkeypatch.setattr(session_module, "get_settings", lambda: SimpleNamespace(REDIS_CACHE_WAIT_SECONDS=0.05))
+    return logger
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stalled", ["acl", "versions"])
+async def test_stalled_invalidation_family_cannot_suppress_the_other_or_the_callbacks(
+    callback_scope, monkeypatch: pytest.MonkeyPatch, short_deadline: Mock, stalled: str
+) -> None:
+    # Given one family that never answers
+    raw, events = callback_scope
+
+    async def healthy() -> None:
+        events.append("healthy")
+
+    monkeypatch.setattr(access_cache, "flush_deferred_acl", _never if stalled == "acl" else healthy)
+    monkeypatch.setattr(redis_cache, "flush_deferred_versions", _never if stalled == "versions" else healthy)
+    # When the scope commits
+    async with connection_ctx():
+        await _queue_cache_writes()
+        session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
+    # Then the other family ran, the commit stood, the stall was abandoned with a warning, callbacks launched
+    assert events == ["commit", "healthy", "launched"]
+    assert (raw.commits, raw.rollbacks) == (1, 0)
+    short_deadline.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_both_families_share_one_deadline(
+    callback_scope, monkeypatch: pytest.MonkeyPatch, short_deadline: Mock
+) -> None:
+    # Given both families stalled
+    _, events = callback_scope
+    monkeypatch.setattr(access_cache, "flush_deferred_acl", _never)
+    monkeypatch.setattr(redis_cache, "flush_deferred_versions", _never)
+    # When
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with connection_ctx():
+        await _queue_cache_writes()
+        session_module.run_after_commit(lambda: events.append("launched"))
+    # Then a single wait bounded the flush, not one per family
+    assert loop.time() - started < 0.5
+    assert events == ["commit", "launched"]
+    short_deadline.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_failure_after_commit_keeps_commit_and_launches_callbacks(
+    callback_scope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a Redis that rejects the deferred version batch
+    raw, events = callback_scope
+    cache = _install_cache(monkeypatch)
+    cache.fail = True
+    monkeypatch.setattr(redis_cache, "flush_deferred_versions", _REAL_FLUSH_VERSIONS)
+    # When
+    async with connection_ctx():
+        await redis_cache.bump_version("ver")
+        session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
+    # Then
+    assert events == ["commit", "acl", "launched"]
+    assert (raw.commits, raw.rollbacks) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_flush_propagates_and_still_launches(
+    callback_scope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a flush that is in flight when the request task is cancelled
+    raw, events = callback_scope
+    in_flight = asyncio.Event()
+
+    async def stall() -> None:
+        in_flight.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(redis_cache, "flush_deferred_versions", stall)
+
+    async def scope() -> None:
+        async with connection_ctx():
+            await _queue_cache_writes()
+            session_module.run_after_commit(lambda: events.append("launched"), lambda: events.append("dropped"))
+
+    task = asyncio.create_task(scope())
+    # When
+    await in_flight.wait()
+    _ = task.cancel()
+    # Then
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert events == ["commit", "acl", "launched"]
+    assert raw.commits == 1
+
+
+@pytest.fixture
+def guest_write_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> CountingPool:
+    pool = CountingPool()
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    monkeypatch.setattr(exclusion.agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
+    monkeypatch.setattr(exclusion, "assert_no_active_run", AsyncMock())
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_guest_write_flock_wait_times_out_with_no_checkout_held(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given an exclusive cutover holder and a short shared-lock wait budget
+    agent_id = uuid4()
+    waits: list[int] = []
+    real_sleep = agent_setup_lock.anyio.sleep
+
+    async def observed_sleep(delay: float) -> None:
+        waits.append(guest_write_pool.active)
+        await real_sleep(delay)
+
+    monkeypatch.setattr(exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(agent_setup_lock.anyio, "sleep", observed_sleep)
+
+    # When the writer waits out GUEST_WRITE_LOCK_TIMEOUT_SECONDS behind the holder
+    async with setup_workspace_lock(tmp_path / str(agent_id)):
+        with pytest.raises(WorkspaceLockTimeoutError):
+            async with exclusion.guest_write_section(agent_id):
+                pytest.fail("a contended writer must not enter")
+
+    # Then every poll of the flock ran with the pool slot free, after one committed gate scope
+    assert waits
+    assert set(waits) == {0}
+    assert (guest_write_pool.active, guest_write_pool.checkouts, guest_write_pool.releases) == (0, 1, 1)
+    assert (guest_write_pool.raw.commits, guest_write_pool.raw.rollbacks) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_guest_write_section_checks_in_short_scopes_around_the_flock(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given gate checks that register callbacks with the scope they run in
+    effects: list[tuple[str, int, int]] = []
+
+    def after_commit(name: str) -> None:
+        session_module.run_after_commit(
+            lambda: effects.append((name, guest_write_pool.raw.commits, guest_write_pool.active))
+        )
+
+    checks = iter(["before the lock", "under the lock"])
+
+    async def gate(_agent_id: UUID) -> None:
+        after_commit(next(checks))
+
+    async def transfer(_agent_id: UUID) -> None:
+        after_commit("transfer")
+
+    monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion, "assert_transfer_ready", transfer)
+
+    # When the section runs its body
+    async with exclusion.guest_write_section(uuid4()):
+        effects.append(("body", guest_write_pool.raw.commits, guest_write_pool.active))
+
+    # Then each callback fires only after its own scope commits, and the body holds no checkout
+    assert effects == [("before the lock", 1, 1), ("under the lock", 2, 1), ("transfer", 2, 1), ("body", 2, 0)]
+    assert (guest_write_pool.checkouts, guest_write_pool.releases) == (2, 2)
+
+
+@pytest.mark.asyncio
+async def test_guest_write_exclusion_authorizes_in_one_scope_then_holds_no_checkout(
+    guest_write_pool: CountingPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an access check that must run inside a scope
+    seen: list[int] = []
+
+    async def access(_user: UserRecord, _agent_id: UUID) -> tuple[None, str]:
+        seen.append(guest_write_pool.active)
+        return None, "use"
+
+    monkeypatch.setattr(exclusion, "check_agent_access", access)
+
+    # When the dependency is suspended at its yield, as it is while the handler runs
+    dependency = exclusion.guest_write_exclusion(uuid4(), UserRecord(id=uuid4()))
+    await anext(dependency)
+
+    # Then authorization held the slot and the handler does not
+    assert seen == [1]
+    assert guest_write_pool.active == 0
+    await dependency.aclose()
+    assert (guest_write_pool.checkouts, guest_write_pool.releases) == (3, 3)

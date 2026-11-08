@@ -15,6 +15,7 @@ from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL
 from app.dao.base import BaseDAO
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.projection_contracts import AgentNameAvatarProjection
+from app.db.session import long_running_statement
 from app.records.agent import AgentPermissionRecord, AgentRecord
 
 __all__ = [
@@ -947,8 +948,9 @@ class AgentDAO(BaseDAO[AgentRecord]):
             from app.dao.whatsapp_personal_dao import revoke
 
             await revoke(agent_id, purge=True)
-            await execute_cleanup(db, AGENT_DELETE_CLEANUP_SQL, params)
-            await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)
+            async with long_running_statement(db):
+                await execute_cleanup(db, AGENT_DELETE_CLEANUP_SQL, params)
+                await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)
             memo_drop("agent", agent_id)
             await drop_agent_acl_version(agent_id)
 

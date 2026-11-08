@@ -192,12 +192,12 @@ async def get_agent_access_level_for_user_id(
     if not user_id:
         return None
 
-    observed_ver = await access_cache.read_acl_version(agent.id)
+    snapshot = await access_cache.read_acl_snapshot(user_id, agent.id)
     user = await user_dao.get(user_id)
     if not user or not user.is_active:
         return None
 
-    cached = await access_cache.get_cached_level(user, agent.id)
+    cached = await access_cache.get_cached_level(user, agent.id, snapshot)
     if cached is not None:
         return cached
 
@@ -209,7 +209,7 @@ async def get_agent_access_level_for_user_id(
         return None
     level = await compute_agent_access_level(user, current_agent)
     if level is not None:
-        await access_cache.set_cached_level(user, agent.id, level, observed_ver=observed_ver)
+        await access_cache.set_cached_level(user, agent.id, level, observed_ver=snapshot.version)
     return level
 
 
@@ -406,7 +406,7 @@ async def check_agent_access(
         _reject_expired_use(memo[0], memo[1])
         return memo
 
-    observed_ver = await access_cache.read_acl_version(agent_id)
+    snapshot = access_cache.NO_ACL_SNAPSHOT if fresh else await access_cache.read_acl_snapshot(user_id, agent_id)
     current_user = await user_dao.get(user_id)
     if current_user is None or not current_user.is_active:
         raise HTTPException(403, "User is inactive")
@@ -418,7 +418,7 @@ async def check_agent_access(
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    cached = None if fresh else await access_cache.get_cached_level(user, agent_id)
+    cached = None if fresh else await access_cache.get_cached_level(user, agent_id, snapshot)
     if cached is not None:
         _reject_expired_use(agent, cached)
         access_cache.memo_set(user_id, agent_id, agent, cached)
@@ -430,7 +430,7 @@ async def check_agent_access(
     _reject_expired_use(agent, level)
 
     if not fresh:
-        await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed_ver)
+        await access_cache.set_cached_level(user, agent_id, level, observed_ver=snapshot.version)
         access_cache.memo_set(user_id, agent_id, agent, level)
     return agent, level
 

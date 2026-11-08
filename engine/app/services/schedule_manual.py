@@ -16,7 +16,7 @@ from app.services.llm import call_agent_llm_with_tools
 from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.schedule_lease import in_fresh_schedule_context
 from app.services.schedule_manual_lease import ManualScheduleLeaseHold
-from app.services.scheduler_tasks import schedule_execution
+from app.services.scheduler_tasks import free_schedule_capacity, schedule_execution
 
 
 async def execute_manual_run(run: ScheduleManualRunRecord) -> None:
@@ -96,12 +96,22 @@ async def execute_manual_run(run: ScheduleManualRunRecord) -> None:
         logger.bind(run_id=str(run.id)).exception("Manual schedule recovery failed")
 
 
-async def recover_manual_runs() -> None:
+async def recover_manual_runs(limit: int | None = None) -> None:
+    """Claim at most ``limit`` runs (default: this worker's free capacity) and release any that cannot launch."""
     new_trace_id()
+    budget = free_schedule_capacity() if limit is None else limit
+    if budget < 1:
+        return
     try:
         async with connection_ctx():
-            runs = await schedule_manual_run_dao.claim_pending(datetime.now(UTC))
-            for run in runs:
-                schedule_execution(partial(execute_manual_run, run))
+            runs = await schedule_manual_run_dao.claim_pending(datetime.now(UTC), budget)
+            launches = [(run, schedule_execution(partial(execute_manual_run, run))) for run in runs]
+        unlaunched = [run for run, launched in launches if launched.done() and not launched.result()]
+        if unlaunched:
+            logger.warning("Releasing {} manual schedule claims that could not launch", len(unlaunched))
+            async with connection_ctx():
+                for run in unlaunched:
+                    if run.lease_token is not None:
+                        _ = await schedule_manual_run_dao.release_unstarted(run.id, run.lease_token)
     except Exception:
         logger.exception("Manual schedule claim failed")

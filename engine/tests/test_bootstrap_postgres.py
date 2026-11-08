@@ -1,17 +1,24 @@
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
+from psycopg.errors import QueryCanceled
 from psycopg.rows import DictRow, dict_row
 
+from app.config import get_settings
+from app.core.json_types import int_from_row
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.connection import DbConnection
-from app.db.errors import CheckViolationError, ForeignKeyViolationError, UniqueViolationError
-from app.db.pool import EnginePool, close_pool, get_pool, init_pool
+from app.db.errors import CheckViolationError, DbError, ForeignKeyViolationError, UniqueViolationError
+from app.db.pool import EnginePool, close_pool, durable_pool, get_pool, init_pool
+from app.db.session import connection_ctx
+from app.main import app
 from app.scripts import bootstrap_db
 
 
@@ -506,3 +513,142 @@ async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_pla
     assert [claimed.reply_binding_id] == [row["id"] for row in binding]
     created = await gateway_message_dao.create(obj_in={"agent_id": agent_id, "content": "New"})
     assert (created.content, created.reply_binding_id) == ("New", None)
+
+
+_LIMIT_ENV = {
+    "DATABASE_STATEMENT_TIMEOUT_MS": "200",
+    "DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "5000",
+    "DATABASE_DURABLE_POOL_MAX_SIZE": "3",
+}
+_SLOW_SECONDS = 1.0
+
+
+@pytest.fixture
+def db_limits(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[Mapping[str, str]], None]]:
+    def apply(env: Mapping[str, str]) -> None:
+        for name in _LIMIT_ENV:
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+    yield apply
+    get_settings.cache_clear()
+
+
+@dataclass(frozen=True, slots=True)
+class _Checkout:
+    pid: int
+    limits: tuple[str, str]
+
+
+async def _checkout(pool: EnginePool) -> _Checkout:
+    async with pool.connection() as raw:
+        db = DbConnection(raw)
+        return _Checkout(
+            int_from_row(await db.fetchval("SELECT pg_backend_pid()")),
+            (
+                str(await db.fetchval("SHOW statement_timeout")),
+                str(await db.fetchval("SHOW idle_in_transaction_session_timeout")),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("env", "limits", "durable_size"),
+    [
+        pytest.param({}, ("30s", "1min"), 4, id="defaults"),
+        pytest.param(_LIMIT_ENV, ("200ms", "5s"), 3, id="configured"),
+    ],
+)
+async def test_both_pools_apply_limits_on_fresh_reused_and_replaced_connections(
+    schema_db: DbConnection,
+    db_limits: Callable[[Mapping[str, str]], None],
+    env: Mapping[str, str],
+    limits: tuple[str, str],
+    durable_size: int,
+) -> None:
+    # Given the main pool (one connection) and the durable pool opened under the environment's settings.
+    db_limits(env)
+    main = await bootstrap_db.init_pool()
+    durable = await durable_pool()
+    # Then the durable pool sizes itself from its own setting instead of copying the main pool.
+    assert (main.max_size, durable.max_size) == (1, durable_size)
+    for pool in (main, durable):
+        # When the pool serves a fresh connection, the same one again, then a replacement after a drain.
+        fresh = await _checkout(pool)
+        reused = await _checkout(pool)
+        await pool.drain()
+        replaced = await _checkout(pool)
+        # Then the server reports the configured limits on every one of them.
+        assert fresh.pid == reused.pid != replaced.pid
+        assert (fresh.limits, reused.limits, replaced.limits) == (limits, limits, limits)
+
+
+_SLOW_SEED_TRIGGER = (
+    "CREATE TABLE slow_seed_hits (hit integer NOT NULL)",
+    (
+        "CREATE FUNCTION slow_seed() RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "BEGIN PERFORM pg_sleep(1); INSERT INTO slow_seed_hits VALUES (1); RETURN NEW; END $$"
+    ),
+    "CREATE TRIGGER slow_seed BEFORE INSERT ON tavily_key_ring_state FOR EACH ROW EXECUTE FUNCTION slow_seed()",
+)
+_SEED_KEY_RING = "INSERT INTO tavily_key_ring_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING"
+
+
+async def test_bootstrap_completes_under_tiny_limit_while_a_baseline_statement_outlasts_it(
+    schema_db: DbConnection, db_limits: Callable[[Mapping[str, str]], None]
+) -> None:
+    # Given a 200 ms statement limit, an initialized schema, and a trigger making the baseline's seed insert take 1 s.
+    db_limits(_LIMIT_ENV)
+    await bootstrap_db.main()
+    for statement in _SLOW_SEED_TRIGGER:
+        await schema_db.execute(statement)
+    pool = await bootstrap_db.init_pool()
+    with pytest.raises(QueryCanceled):
+        async with pool.connection() as raw:
+            await raw.execute(_SEED_KEY_RING)
+    await close_pool()
+    assert await schema_db.fetchall("SELECT hit FROM slow_seed_hits") == []
+    # When bootstrap reruns over it.
+    await bootstrap_db.main()
+    # Then it completes, because the slow seed statement ran under the bootstrap override.
+    assert await schema_db.fetchall("SELECT hit FROM slow_seed_hits") == [{"hit": 1}]
+
+
+async def _slow_through_dao() -> None:
+    async with connection_ctx() as db:
+        await db.execute("SELECT pg_sleep(%s)", (_SLOW_SECONDS,))
+
+
+async def _slow_through_pool() -> None:
+    async with get_pool().connection() as raw:
+        await raw.execute("SELECT pg_sleep(%s)", (_SLOW_SECONDS,))
+
+
+@pytest.mark.parametrize("slow_route", [_slow_through_dao, _slow_through_pool], ids=["dao", "direct-checkout"])
+async def test_cancelled_statement_is_a_retryable_503_through_the_real_app(
+    schema_db: DbConnection,
+    db_limits: Callable[[Mapping[str, str]], None],
+    slow_route: Callable[[], object],
+) -> None:
+    # Given the real app on a pool with a 200 ms statement limit and a route sleeping 1 s.
+    db_limits(_LIMIT_ENV)
+    _ = await bootstrap_db.init_pool()
+    routes = list(app.router.routes)
+    app.add_api_route("/api/qa/slow", slow_route, methods=["GET"])
+    try:
+        # When the server cancels the statement.
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            cancelled = await client.get("/api/qa/slow")
+            # Then the client is told to retry, and the pool keeps serving afterwards.
+            health = await client.get("/api/health")
+    finally:
+        app.router.routes[:] = routes
+    assert cancelled.status_code == 503
+    assert int(cancelled.headers["Retry-After"]) > 0
+    assert health.status_code == 200
+    with pytest.raises(DbError) as raised:
+        async with connection_ctx() as db:
+            await db.execute("SELECT pg_sleep(%s)", (_SLOW_SECONDS,))
+    assert isinstance(raised.value.orig, QueryCanceled)

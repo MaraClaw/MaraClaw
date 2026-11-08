@@ -1,21 +1,25 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import TypeAdapter
 
+from app.config import get_settings
+from app.core.json_types import uuid_from_row
 from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao as runs
 from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
-from app.services import schedule_manual, scheduler_tasks
+from app.services import schedule_manual, scheduler, scheduler_tasks
 from app.services.llm.background_guard import BackgroundCallGuard, BackgroundCallOutcome
 from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
+    add_due_schedules,
+    leased_ids,
     live_schedule,
     manual_schedule,
 )
@@ -293,3 +297,89 @@ async def test_live_cancel_fences_worker(
     inference.assert_not_awaited()
     assert await agent_schedule_dao.get(manual_schedule.id) == manual_schedule
     assert len(await agent_activity_log_dao.list_schedule_history(run.agent_id, run.schedule_id)) == 1
+
+
+async def accept_many(schedule: AgentScheduleRecord, count: int) -> list[UUID]:
+    ids: list[UUID] = []
+    for index in range(count):
+        accepted = await runs.accept(schedule.id, schedule.created_by, f"burst-{index}")
+        assert accepted is not None
+        ids.append(accepted.id)
+    return ids
+
+
+async def leased_runs() -> set[UUID]:
+    async with connection_ctx() as db:
+        rows = await db.fetchall("SELECT id FROM agent_schedule_manual_runs WHERE lease_token IS NOT NULL")
+    return {uuid_from_row(row["id"]) for row in rows}
+
+
+async def test_live_manual_claims_are_capped_ordered_and_disjoint_across_workers(
+    manual_schedule: AgentScheduleRecord,
+) -> None:
+    # Given 200 accepted manual runs.
+    accepted = await accept_many(manual_schedule, 200)
+    # When two workers claim ten at once, then a third ticks.
+    first, second = await asyncio.gather(
+        runs.claim_pending(datetime.now(UTC), 10), type(runs)().claim_pending(datetime.now(UTC), 10)
+    )
+    third = await runs.claim_pending(datetime.now(UTC), 10)
+    # Then each claim holds exactly ten distinct runs, and no row is leased twice.
+    claimed = [run.id for run in (*first, *second, *third)]
+    assert [len(first), len(second), len(third)] == [10, 10, 10]
+    assert len(set(claimed)) == 30
+    assert await leased_runs() == set(claimed)
+    assert set(claimed) <= set(accepted)
+
+
+async def test_live_manual_release_is_token_safe_and_only_for_unstarted_runs(
+    manual_schedule: AgentScheduleRecord,
+) -> None:
+    run = await accept_claim(manual_schedule)
+    assert run.lease_token is not None
+    assert not await runs.release_unstarted(run.id, uuid4())
+    assert await runs.get(run.id) is not None
+    assert await runs.start(run.id, run.lease_token, datetime.now(UTC))
+    assert not await runs.release_unstarted(run.id, run.lease_token)
+    other = await runs.accept(manual_schedule.id, manual_schedule.created_by, "other")
+    assert other is not None
+    (claimed,) = await runs.claim_pending(datetime.now(UTC), 1)
+    assert claimed.id == other.id
+    assert claimed.lease_token is not None
+    assert await runs.release_unstarted(claimed.id, claimed.lease_token)
+    released = await runs.get(claimed.id)
+    assert released is not None
+    assert released.lease_token is None
+    assert released.created_at == other.created_at
+    (again,) = await runs.claim_pending(datetime.now(UTC), 1)
+    assert again.id == claimed.id
+    assert again.lease_token != claimed.lease_token
+
+
+async def test_live_worker_leases_exactly_its_cap_and_splits_it_between_manual_and_periodic(
+    manual_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given 200 due manual runs and 200 due periodic schedules, a cap of ten, and executions that stay running.
+    monkeypatch.setattr(get_settings(), "SCHEDULE_MAX_CONCURRENT_EXECUTIONS", 10)
+    monkeypatch.setattr("app.services.audit_logger.write_audit_log", AsyncMock())
+    await accept_many(manual_schedule, 200)
+    await add_due_schedules(manual_schedule, 199)
+    gate = asyncio.Event()
+
+    async def hold(_claim: object) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(scheduler, "_execute_periodic_schedule", hold)
+    monkeypatch.setattr(schedule_manual, "execute_manual_run", hold)
+    monkeypatch.setattr(scheduler, "_manual_first", True)
+    # When a round runs and then another while the worker is full.
+    await scheduler._dispatch_round()
+    manual_leased, periodic_leased = await leased_runs(), await leased_ids()
+    await scheduler._dispatch_round()
+    # Then it leased exactly ten in total, five of each class, and the full worker claimed nothing more.
+    assert (len(manual_leased), len(periodic_leased)) == (5, 5)
+    assert len(scheduler_tasks._tasks) == 10
+    assert await leased_runs() == manual_leased
+    assert await leased_ids() == periodic_leased
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(*tuple(scheduler_tasks._tasks)), timeout=5)

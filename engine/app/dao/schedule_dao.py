@@ -93,54 +93,76 @@ class AgentScheduleDAO(BaseDAO[AgentScheduleRecord]):
             return [AgentScheduleRecord.from_row(row) for row in rows]
 
     async def claim_due(
-        self, now: datetime, compute_next_run: Callable[[str, datetime, str], datetime | None]
+        self,
+        now: datetime,
+        compute_next_run: Callable[[str, datetime, str], datetime | None],
+        limit: int | None = None,
     ) -> Sequence[AgentScheduleRecord]:
-        """Persist a fresh occurrence or reclaim its expired lease under the row lock."""
+        """Persist up to ``limit`` fresh occurrences or expired leases, oldest due first, under the row lock.
+
+        Rows with an unparseable cron are disabled without using the limit, so they never crowd out valid work.
+        """
         claimed: list[AgentScheduleRecord] = []
         async with self.session() as db:
-            rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM agent_schedules "
-                "WHERE is_enabled IS TRUE AND ("
-                "(pending_due_at IS NULL AND next_run_at <= %(now)s "
-                "AND (ends_at IS NULL OR next_run_at < ends_at)) OR "
-                "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)) FOR UPDATE SKIP LOCKED",
-                {"now": now},
-            )
-            for row in rows:
-                schedule = AgentScheduleRecord.from_row(row)
-                values: dict[str, object] = {
-                    "id": schedule.id,
-                    "lease_token": uuid4(),
-                    "lease_expires_at": now + _LEASE_DURATION,
-                }
-                assignments = "lease_token = %(lease_token)s, lease_expires_at = %(lease_expires_at)s"
-                if schedule.pending_due_at is None:
-                    next_run = compute_next_run(schedule.cron_expr, now, schedule.timezone)
-                    if next_run is None:
-                        await db.execute(
-                            f"UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL, {_CLEAR_SLOT} "
-                            "WHERE id = %(id)s",
-                            {"id": schedule.id},
-                        )
-                        logger.bind(schedule_id=str(schedule.id)).warning(
-                            "Disabled schedule with invalid cron expression"
-                        )
-                        continue
-                    assignments += (
-                        ", pending_due_at = next_run_at, pending_instruction = instruction, "
-                        "pending_notify_on_failure = notify_on_failure, pending_started_at = NULL, "
-                        "next_run_at = %(next_run_at)s"
-                    )
-                    values["next_run_at"] = (
-                        next_run if schedule.ends_at is None or next_run < schedule.ends_at else None
-                    )
-                claimed_row = await db.fetchone(
-                    f"UPDATE agent_schedules SET {assignments} WHERE id = %(id)s RETURNING {self._select_list()}",
-                    values,
+            while limit is None or len(claimed) < limit:
+                wanted = None if limit is None else limit - len(claimed)
+                rows = await db.fetchall(
+                    f"SELECT {self._select_list()} FROM agent_schedules "
+                    "WHERE is_enabled IS TRUE AND ("
+                    "(pending_due_at IS NULL AND next_run_at <= %(now)s "
+                    "AND (ends_at IS NULL OR next_run_at < ends_at)) OR "
+                    "(pending_due_at IS NOT NULL AND lease_expires_at <= %(now)s)) "
+                    "ORDER BY COALESCE(pending_due_at, next_run_at), id LIMIT %(limit)s FOR UPDATE SKIP LOCKED",
+                    {"now": now, "limit": wanted},
                 )
-                if claimed_row is not None:
-                    claimed.append(AgentScheduleRecord.from_row(claimed_row))
+                for row in rows:
+                    schedule = AgentScheduleRecord.from_row(row)
+                    values: dict[str, object] = {
+                        "id": schedule.id,
+                        "lease_token": uuid4(),
+                        "lease_expires_at": now + _LEASE_DURATION,
+                    }
+                    assignments = "lease_token = %(lease_token)s, lease_expires_at = %(lease_expires_at)s"
+                    if schedule.pending_due_at is None:
+                        next_run = compute_next_run(schedule.cron_expr, now, schedule.timezone)
+                        if next_run is None:
+                            await db.execute(
+                                f"UPDATE agent_schedules SET is_enabled = FALSE, next_run_at = NULL, {_CLEAR_SLOT} "
+                                "WHERE id = %(id)s",
+                                {"id": schedule.id},
+                            )
+                            logger.bind(schedule_id=str(schedule.id)).warning(
+                                "Disabled schedule with invalid cron expression"
+                            )
+                            continue
+                        assignments += (
+                            ", pending_due_at = next_run_at, pending_instruction = instruction, "
+                            "pending_notify_on_failure = notify_on_failure, pending_started_at = NULL, "
+                            "next_run_at = %(next_run_at)s"
+                        )
+                        values["next_run_at"] = (
+                            next_run if schedule.ends_at is None or next_run < schedule.ends_at else None
+                        )
+                    claimed_row = await db.fetchone(
+                        f"UPDATE agent_schedules SET {assignments} WHERE id = %(id)s RETURNING {self._select_list()}",
+                        values,
+                    )
+                    if claimed_row is not None:
+                        claimed.append(AgentScheduleRecord.from_row(claimed_row))
+                if wanted is None or len(rows) < wanted:
+                    break
         return claimed
+
+    async def release_unstarted_occurrence(self, schedule_id: UUID, token: UUID, now: datetime) -> bool:
+        """Expire a claim that never launched so a peer can take it; the occurrence slot stays intact."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agent_schedules SET lease_expires_at = %(now)s "
+                "WHERE id = %(id)s AND pending_due_at IS NOT NULL AND lease_token = %(token)s "
+                "AND pending_started_at IS NULL RETURNING id",
+                {"id": schedule_id, "token": token, "now": now},
+            )
+            return row is not None
 
     async def renew_occurrence(self, schedule_id: UUID, token: UUID, now: datetime) -> bool:
         async with self.session() as db:
