@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.test_redis_cache import FakeRedis
 
 from app.api import skills
+from app.core import redis_cache
 from app.services import agent_context, agent_context_cache, agent_manager, agent_tools
 from app.services.agent_tool_exec import clawhub
 from app.services.skill_provider import SkillFilePayload
@@ -203,41 +205,26 @@ async def test_install_supports_storage_sharing_guest_tree(
     assert _tree(ws / "skills" / "reporting") == expected
 
 
-class _RedisValues:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    async def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    async def set(self, key: str, value: str, *, ex: int) -> bool:
-        self.values[key] = value
-        return True
-
-    async def delete(self, *keys: str) -> int:
-        for key in keys:
-            self.values.pop(key, None)
-        return len(keys)
-
-    async def incr(self, key: str) -> int:
-        value = int(self.values.get(key, "0")) + 1
-        self.values[key] = str(value)
-        return value
-
-
 async def test_success_invalidates_cached_skills_index(
     monkeypatch: pytest.MonkeyPatch, storage: LocalStorageBackend, tmp_path: Path
 ) -> None:
     # Given a cached skills index at the current version.
     agent_id = uuid.uuid4()
+    client = FakeRedis()
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
-    monkeypatch.setattr(agent_context_cache, "get_redis", AsyncMock(return_value=_RedisValues()))
-    await agent_context_cache.set_cached_text(agent_id, "skills", "cached-index", observed_ver="0")
+    monkeypatch.setattr(agent_context_cache, "get_redis", AsyncMock(return_value=client))
+    monkeypatch.setattr(redis_cache, "_client", AsyncMock(return_value=client))
+    _, observed = await agent_context_cache.read_cached_text(agent_id, "skills")
+    await agent_context_cache.set_cached_text(agent_id, "skills", "cached-index", observed_ver=observed)
+    assert await agent_context_cache.get_cached_text(agent_id, "skills") == "cached-index"
 
     # When a complete skill is installed.
     result = await clawhub._install_skill(agent_id, tmp_path / "live" / str(agent_id), {"source": "reporting"})
 
     # Then stale fills cannot replace the invalidated index.
     assert result.startswith("✅")
-    await agent_context_cache.set_cached_text(agent_id, "skills", "stale-index", observed_ver="0")
-    assert await agent_context_cache.read_cached_text(agent_id, "skills") == (None, "1")
+    _, current = await agent_context_cache.read_cached_text(agent_id, "skills")
+    assert current
+    assert current != observed
+    await agent_context_cache.set_cached_text(agent_id, "skills", "stale-index", observed_ver=observed)
+    assert await agent_context_cache.read_cached_text(agent_id, "skills") == (None, current)

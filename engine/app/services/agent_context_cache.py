@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Awaitable
-from typing import cast
 
 from app.config import get_settings
 from app.core.events import get_redis
 from app.core.json_types import json_as_str, json_loads_object
 from app.core.logging import logger
+from app.core.redis_cache import bump_version, cache_delete, has_pending_snapshot_writes
 
 _DEFAULT_TTL = 60
 
@@ -38,26 +37,30 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
     try:
         data = json_loads_object(raw)
     except TypeError, ValueError:
-        return raw
+        return None
     if data and "v" in data:
         if str(data.get("ver") or "0") != current_ver:
             return None
         return json_as_str(data.get("v"))
-    return raw
+    return None
 
 
 async def read_cached_text(agent_id: uuid.UUID, kind: str) -> tuple[str | None, str]:
     """Return ``(text, observed_ver)``. Text is None on miss / Redis error."""
-    if _ttl() <= 0:
-        return None, "0"
+    if _ttl() <= 0 or has_pending_snapshot_writes():
+        return None, ""
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_wait())
+        _ = await asyncio.wait_for(
+            client.set(_ver_key(agent_id, kind), uuid.uuid4().hex, ex=max(_ttl() * 40, 3600), nx=True),
+            timeout=_wait(),
+        )
         ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id, kind)), timeout=_wait())
         value = await asyncio.wait_for(client.get(_key(agent_id, kind)), timeout=_wait())
     except Exception as exc:
         logger.debug("agent_context_cache get skipped: {}", type(exc).__name__)
-        return None, "0"
-    current = str(ver_raw or "0")
+        return None, ""
+    current = str(ver_raw or "")
     if isinstance(value, bytes):
         value = value.decode()
     return _decode_payload(value if isinstance(value, str) else None, current), current
@@ -75,7 +78,7 @@ async def set_cached_text(
     *,
     observed_ver: str | None = None,
 ) -> None:
-    if _ttl() <= 0:
+    if _ttl() <= 0 or has_pending_snapshot_writes() or not bool(observed_ver):
         return
     max_bytes = int(getattr(get_settings(), "REDIS_CACHE_MAX_VALUE_BYTES", 65536) or 65536)
     if len(text.encode()) > max_bytes:
@@ -84,8 +87,8 @@ async def set_cached_text(
     try:
         client = await asyncio.wait_for(get_redis(), timeout=_wait())
         ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id, kind)), timeout=_wait())
-        current = str(ver_raw or "0")
-        if observed_ver is not None and current != observed_ver:
+        current = str(ver_raw or "")
+        if current != observed_ver:
             logger.debug("agent_context_cache set skipped (ver)")
             return
         payload = json.dumps({"ver": current, "v": text}, separators=(",", ":"))
@@ -98,16 +101,9 @@ async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None)
     kinds = (kind,) if kind not in (None, "") else ("soul", "memory", "skills")
     if _ttl() <= 0:
         return
-    try:
-        client = await asyncio.wait_for(get_redis(), timeout=_wait())
-        _ = await asyncio.wait_for(
-            client.delete(*(_key(agent_id, item) for item in kinds)),
-            timeout=_wait(),
-        )
-        for item in kinds:
-            _ = await asyncio.wait_for(cast("Awaitable[int]", client.incr(_ver_key(agent_id, item))), timeout=_wait())
-    except Exception as exc:
-        logger.debug("agent_context_cache invalidate skipped: {}", type(exc).__name__)
+    for item in kinds:
+        await bump_version(_ver_key(agent_id, item), ttl=_ttl() * 40)
+        await cache_delete(_key(agent_id, item), defer_until_commit=True)
 
 
 def context_kind_for_path(path: str) -> str | None:

@@ -1,12 +1,13 @@
 from base64 import b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
-from typing import ClassVar, Self
+from typing import ClassVar, Literal, Self
 from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
+from app.core.domain.notifications import BroadcastJobStatus
 from app.core.notification_kinds import NotificationKind
 from app.records.broadcast_history import BroadcastHistoryRecord
 from app.records.notification import NotificationRecord
@@ -92,6 +93,28 @@ class NotificationBroadcastResponse(NotificationReadResponse):
     users_notified: int
     agents_notified: int
     emails_sent: int
+
+
+class NotificationBroadcastJobAcceptanceResponse(TypedDict):
+    broadcast_id: UUID
+    status: Literal["accepted"]
+    accepted_at: AwareDatetime
+    users_total: int
+    agents_total: int
+
+
+class NotificationBroadcastJobStatusResponse(TypedDict):
+    broadcast_id: UUID
+    status: BroadcastJobStatus
+    accepted_at: AwareDatetime
+    completed_at: AwareDatetime | None
+    users_total: int
+    agents_total: int
+    processed: int
+    users_notified: int
+    agents_notified: int
+    skipped: int
+    emails_queued: int
 
 
 class NotificationBroadcastHistoryItem(TypedDict):

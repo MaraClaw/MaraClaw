@@ -16,6 +16,7 @@ from uuid import uuid4
 from app.config import get_settings
 from app.core.cache_contracts import RedisValueRead
 from app.core.logging import logger
+from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
 _COOLDOWN_SECONDS = 2.0
 _VERSION_MIN_TTL = 3600
@@ -206,6 +207,16 @@ async def _incr_version_now(version_key: str, *, ttl: int | None = None) -> None
 def has_pending_snapshot_writes() -> bool:
     pending = _deferred_versions.get()
     return pending is not None and bool(pending.incrs or pending.deletes)
+
+
+def pending_snapshot_invalidations() -> tuple[CacheInvalidation, ...]:
+    """Snapshot deferred intent without mutating the request's dirty-read fence."""
+    pending = _deferred_versions.get()
+    if pending is None:
+        return ()
+    return tuple(CacheInvalidation(key, CacheInvalidationKind.VERSION) for key in pending.incrs) + tuple(
+        CacheInvalidation(key, CacheInvalidationKind.DELETE) for key in pending.deletes
+    )
 
 
 def begin_deferred_versions() -> Token[_DeferredVersions | None]:

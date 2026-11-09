@@ -9,8 +9,10 @@ from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
+from app.dao.auth_email_dao import auth_email_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.broadcast_history_dao import broadcast_history_dao
+from app.dao.broadcast_job_dao import broadcast_job_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
@@ -84,8 +86,10 @@ __all__ = [
     "agent_trigger_dao",
     "approval_request_dao",
     "audit_log_dao",
+    "auth_email_dao",
     "broadcast_email_dao",
     "broadcast_history_dao",
+    "broadcast_job_dao",
     "broadcast_submission_dao",
     "channel_config_dao",
     "channel_event_receipt_dao",

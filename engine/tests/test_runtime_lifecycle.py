@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 
+import anyio
 import pytest
 from fastapi import FastAPI
 
@@ -176,7 +177,10 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         agent_setup,
         agent_start_reconciler,
         audit_logger,
+        auth_email_worker,
         broadcast_email_worker,
+        broadcast_fanout_worker,
+        cache_invalidation_worker,
         gateway_report_relay,
         heartbeat,
         openclaw_dispatch_reconciler,
@@ -230,6 +234,20 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     start_reconciler_stopped = asyncio.Event()
     burst_started = asyncio.Event()
     burst_stopped = asyncio.Event()
+    new_workers = ("cache-invalidation-recovery", "auth_email", "broadcast_fanout")
+    worker_started = {name: asyncio.Event() for name in new_workers}
+    worker_stopped = {name: asyncio.Event() for name in new_workers}
+
+    def required_worker(name: str) -> Callable[[], Awaitable[None]]:
+        async def run() -> None:
+            worker_started[name].set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await anyio.lowlevel.checkpoint()
+                worker_stopped[name].set()
+
+        return run
 
     async def reconcile_starts() -> None:
         start_reconciler_started.set()
@@ -252,9 +270,15 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
         assert start_reconciler_stopped.is_set() == role_enabled(roles, "worker")
         assert burst_stopped.is_set() == role_enabled(roles, "worker")
+        assert all(event.is_set() == role_enabled(roles, "worker") for event in worker_stopped.values())
         events.append("database")
 
+    async def close_redis() -> None:
+        assert all(event.is_set() == role_enabled(roles, "worker") for event in worker_stopped.values())
+        events.append("redis")
+
     monkeypatch.setattr(lifecycle, "close_pool", close_pool)
+    monkeypatch.setattr(lifecycle, "close_redis", close_redis)
     schedule_started = asyncio.Event()
 
     async def execution() -> None:
@@ -284,6 +308,11 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", broadcast)
+    monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", required_worker("auth_email"))
+    monkeypatch.setattr(broadcast_fanout_worker, "start_broadcast_fanout_worker", required_worker("broadcast_fanout"))
+    monkeypatch.setattr(
+        cache_invalidation_worker, "start_cache_invalidation_worker", required_worker("cache-invalidation-recovery")
+    )
     monkeypatch.setattr(organization_admission_email_worker, "start_organization_admission_email_worker", loop)
     monkeypatch.setattr(readiness, "ping_pool", probe)
     monkeypatch.setattr(readiness, "ping_redis", probe)
@@ -306,6 +335,11 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     scheduler_tasks.schedule_execution(execution)
     await asyncio.wait_for(schedule_started.wait(), timeout=1)
     if role_enabled(roles, "worker"):
+        for name in new_workers:
+            await asyncio.wait_for(worker_started[name].wait(), timeout=1)
+            worker_task, worker_finite = runtime.tasks.required[name]
+            assert not worker_finite
+            assert not worker_task.done()
         await asyncio.wait_for(burst_started.wait(), timeout=1)
         start_task, start_finite = runtime.tasks.required["agent_start_reconciler"]
         await asyncio.wait_for(start_reconciler_started.wait(), timeout=1)
@@ -356,6 +390,12 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert start_reconciler_started.is_set() == role_enabled(roles, "worker")
     assert start_reconciler_stopped.is_set() == role_enabled(roles, "worker")
     assert ("broadcast_email" in names) == role_enabled(roles, "worker")
+    for name in new_workers:
+        assert (name in names) == role_enabled(roles, "worker")
+        assert worker_started[name].is_set() == role_enabled(roles, "worker")
+        assert worker_stopped[name].is_set() == role_enabled(roles, "worker")
+        if role_enabled(roles, "worker"):
+            assert runtime.tasks.required[name][0].cancelled()
     assert ("organization_admission_email" in names) == role_enabled(roles, "worker")
     assert broadcast_stopped.is_set() == role_enabled(roles, "worker")
     assert ("agent_scheduler" in names) == role_enabled(roles, "worker")
@@ -662,8 +702,10 @@ async def test_repeated_lifespans_reopen_producer_gates(monkeypatch: pytest.Monk
         assert producer_gates() == {"trigger": False, "heartbeat": False, "wake": False}
 
 
+@pytest.mark.parametrize("budget_seconds", [90, 300])
 async def test_worker_start_registers_progress_budgets_through_the_injected_clock(
     monkeypatch: pytest.MonkeyPatch,
+    budget_seconds: int,
 ) -> None:
     # Given a worker runtime on a fake clock whose budgeted loops beat only when told to.
     from app.process_roles import parse_process_roles
@@ -672,7 +714,10 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         agent_setup,
         agent_start_reconciler,
         audit_logger,
+        auth_email_worker,
         broadcast_email_worker,
+        broadcast_fanout_worker,
+        cache_invalidation_worker,
         gateway_report_relay,
         heartbeat,
         openclaw_delayed_replies,
@@ -707,7 +752,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == 7:
+            if len(beaten) == 10:
                 all_beaten.set()
             await asyncio.Event().wait()
 
@@ -729,6 +774,11 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", budgeted("openclaw_dispatch")
     )
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", budgeted("broadcast_email"))
+    monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", budgeted("auth_email"))
+    monkeypatch.setattr(broadcast_fanout_worker, "start_broadcast_fanout_worker", budgeted("broadcast_fanout"))
+    monkeypatch.setattr(
+        cache_invalidation_worker, "start_cache_invalidation_worker", budgeted("cache-invalidation-recovery")
+    )
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", budgeted("openclaw_update"))
     monkeypatch.setattr(
         organization_admission_email_worker,
@@ -753,6 +803,9 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert set(runtime.tasks.progress) == {
             "trigger_daemon",
             "broadcast_email",
+            "auth_email",
+            "broadcast_fanout",
+            "cache-invalidation-recovery",
             "organization_admission_email",
             "openclaw_update",
             "agent_start_reconciler",
@@ -760,7 +813,19 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
             "openclaw_dispatch",
         }
         assert await runtime.readiness.check()
-        now += 301
+        now = budget_seconds
+        boundary_workers = (
+            ("broadcast_fanout",) if budget_seconds == 90 else ("cache-invalidation-recovery", "auth_email")
+        )
+        assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
+        now += 1
+        expected_stale = {"broadcast_fanout"}
+        if budget_seconds == 300:
+            expected_stale.update({"cache-invalidation-recovery", "auth_email"})
+        assert all(runtime.tasks.progress[name].stale() for name in expected_stale)
+        if budget_seconds == 90:
+            assert not runtime.tasks.progress["cache-invalidation-recovery"].stale()
+            assert not runtime.tasks.progress["auth_email"].stale()
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())

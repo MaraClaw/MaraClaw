@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
+from anyio import CancelScope
 from psycopg.pq import TransactionStatus
 
 from app.config import get_settings
@@ -79,6 +80,10 @@ async def _flush_cache_invalidations() -> None:
 
 
 async def _commit_and_flush(db: DbConnection) -> None:
+    from app.core.access_cache import pending_acl_invalidations
+    from app.core.redis_cache import pending_snapshot_invalidations
+    from app.dao.cache_invalidation_dao import cache_invalidation_dao
+
     # Detach in place so later registrations stay on the scope's batch.
     batch = _completion_ctx.get()
     pending = None
@@ -86,10 +91,15 @@ async def _commit_and_flush(db: DbConnection) -> None:
         pending = _CompletionBatch(batch.callbacks)
         batch.callbacks = []
     try:
+        await cache_invalidation_dao.capture(db, (*pending_acl_invalidations(), *pending_snapshot_invalidations()))
         await db.commit()
     except BaseException:
-        if pending is not None:
-            _dispatch_completion(pending)
+        try:
+            with CancelScope(shield=True):
+                await db.rollback()
+        finally:
+            if pending is not None:
+                _dispatch_completion(pending)
         raise
     if pending is not None:
         pending.committed = True
@@ -111,10 +121,13 @@ async def _own_transaction(db: DbConnection) -> AsyncGenerator[DbConnection]:
     ver_token = begin_deferred_versions()
     try:
         yield db
-        await _commit_and_flush(db)
-    except Exception:
-        await db.rollback()
+    except BaseException:
+        # Explicit connections have no pool checkout to roll back cancelled work for them.
+        with CancelScope(shield=True):
+            await db.rollback()
         raise
+    else:
+        await _commit_and_flush(db)
     finally:
         batch = _completion_ctx.get()
         if batch is not None:

@@ -2,14 +2,12 @@
 
 import uuid
 from copy import copy, deepcopy
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ValidationError
 from redis.exceptions import RedisError
 
-from app.api.background_tasks import schedule_background_task
 from app.config import Settings
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_as_str, object_mapping_from
@@ -151,10 +149,9 @@ async def _send_verification_email_task(
     settings: Settings,
     request: Request | None = None,
 ) -> None:
-    """Helper to create verification token and add email task to background tasks."""
-    # Keep caller compatibility; delivery uses the commit-aware task scheduler.
+    """Accept durable verification mail while preserving producer failure responses."""
     _ = background_tasks, settings
-    from app.services.email_verification_service import email_verification_service
+    from app.services.auth_email_preparation import prepare_verification
     from app.services.system_email_service import resolve_email_config_async
 
     email_config = await resolve_email_config_async()
@@ -163,44 +160,13 @@ async def _send_verification_email_task(
         return
 
     try:
-        from app.services.frontend_origin import resolve_frontend_base_url
-
-        base_url = await resolve_frontend_base_url(request)
-        if user.identity_id is None:
-            logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
-            return
-        identity = await identity_dao.get(user.identity_id)
-
-        if not identity:
-            logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
-            return
-        if identity.email in (None, ""):
-            logger.warning(f"No email found for user {user.id}. Cannot send verification.")
-            return
-
-        raw_code, expires_at = await email_verification_service.create_email_verification_token(
-            identity.id, identity.email
-        )
-        expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
-        verification_url = await email_verification_service.build_email_verification_url(base_url, raw_code)
-
-        schedule_background_task(
-            email_verification_service.send_verification_email(
-                identity.email,
-                user.display_name or identity.email or "User",
-                raw_code,
-                expiry_minutes,
-                verification_url,
-            ),
-            description="verification email",
-        )
+        await prepare_verification(user, request)
     except PublicBaseUrlNotConfiguredError:
         logger.warning(
             f"Skipping verification email: PUBLIC_BASE_URL and allowlisted origin unavailable, user_id={user.id}"
         )
     except Exception as exc:
-        logger.error(f"Failed to create verification token for {user.email}: {exc}")
-        logger.warning(f"Failed to send verification email for {user.email}: {exc}")
+        logger.warning("Verification email preparation failed: {}", type(exc).__name__)
 
 
 def _suggested_org(tenant: TenantRecord | None) -> SuggestedOrg | None:
@@ -429,6 +395,7 @@ async def register_init_flow(
         if not identity.email_verified:
             await _send_verification_email_task(user, background_tasks, settings, request)
 
+    await flush_request_transaction()
     # 5. Generate token outside transaction
     token = await create_access_token(str(user.id), user.role)
 
@@ -518,6 +485,7 @@ async def login_flow(
                 if user:
                     await _send_verification_email_task(user, background_tasks, get_settings(), request)
 
+            await flush_request_transaction()
             # Consistent with identity-first flow: Return 403 Forbidden with verification intent
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -638,8 +606,8 @@ async def forgot_password(
     }
 
     try:
+        from app.services.auth_email_preparation import prepare_reset
         from app.services.password_reset_service import build_password_reset_url, create_password_reset_token
-        from app.services.system_email_service import send_password_reset_email
 
         async with connection_ctx():
             identity = await identity_dao.get_by_email(data.email)
@@ -647,15 +615,12 @@ async def forgot_password(
                 return generic_response
             raw_token, expires_at = await create_password_reset_token(identity.id)
             reset_url = await build_password_reset_url(raw_token, request)
-            expiry_minutes = int((expires_at - datetime.now(UTC)).total_seconds() // 60)
-            schedule_background_task(
-                send_password_reset_email(identity.email, identity.email or "User", reset_url, expiry_minutes),
-                description="password reset email",
-            )
+            await prepare_reset(identity, raw_token, url=reset_url, expires_at=expires_at)
+        await flush_request_transaction()
     except PublicBaseUrlNotConfiguredError:
         logger.warning("Skipping password reset email: PUBLIC_BASE_URL and allowlisted origin unavailable")
     except Exception as exc:
-        logger.warning(f"Failed to process password reset email for {data.email}: {exc}")
+        logger.warning("Password reset email preparation failed: {}", type(exc).__name__)
 
     return generic_response
 
@@ -1384,4 +1349,5 @@ async def resend_verification(
         if user:
             await _send_verification_email_task(user, background_tasks, settings, request)
 
+    await flush_request_transaction()
     return generic_response

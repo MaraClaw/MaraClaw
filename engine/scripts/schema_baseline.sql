@@ -1921,6 +1921,46 @@ CREATE INDEX IF NOT EXISTS ix_broadcast_history_tenant_published
     ON broadcast_history (tenant_id, published_at DESC, broadcast_id DESC);
 CREATE INDEX IF NOT EXISTS ix_broadcast_history_sender ON broadcast_history (sender_id);
 
+-- Accepted drafts and fixed recipient ordinals. Target IDs intentionally have no FK: deletion is a skipped slot.
+CREATE TABLE IF NOT EXISTS broadcast_jobs (
+    broadcast_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    sender_scope_id UUID NOT NULL,
+    sender_name VARCHAR(100) NOT NULL,
+    idempotency_key TEXT NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    title VARCHAR(200) NOT NULL,
+    body VARCHAR(1000) NOT NULL,
+    send_email BOOLEAN NOT NULL,
+    accepted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT clock_timestamp(),
+    completed_at TIMESTAMP WITH TIME ZONE,
+    users_total INTEGER NOT NULL DEFAULT 0 CHECK (users_total >= 0),
+    agents_total INTEGER NOT NULL DEFAULT 0 CHECK (agents_total >= 0),
+    cursor BIGINT NOT NULL DEFAULT 0 CHECK (cursor >= 0),
+    users_notified INTEGER NOT NULL DEFAULT 0 CHECK (users_notified >= 0),
+    agents_notified INTEGER NOT NULL DEFAULT 0 CHECK (agents_notified >= 0),
+    skipped INTEGER NOT NULL DEFAULT 0 CHECK (skipped >= 0),
+    emails_queued INTEGER NOT NULL DEFAULT 0 CHECK (emails_queued >= 0),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed')),
+    UNIQUE (tenant_id, sender_scope_id, idempotency_key),
+    CHECK (cursor = users_notified + agents_notified + skipped),
+    CHECK (cursor <= users_total + agents_total),
+    CHECK ((status = 'completed') = (completed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_pending
+    ON broadcast_jobs (accepted_at, broadcast_id) WHERE status <> 'completed';
+CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_sender ON broadcast_jobs (sender_id);
+CREATE TABLE IF NOT EXISTS broadcast_job_recipients (
+    broadcast_id UUID NOT NULL REFERENCES broadcast_jobs(broadcast_id) ON DELETE CASCADE,
+    ordinal BIGINT NOT NULL CHECK (ordinal > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('user', 'agent')),
+    target_id UUID NOT NULL,
+    to_email TEXT,
+    notification_id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+    PRIMARY KEY (broadcast_id, ordinal),
+    UNIQUE (broadcast_id, kind, target_id)
+);
+
 CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	id UUID NOT NULL,
 	request_id UUID NOT NULL,
@@ -2303,5 +2343,42 @@ CREATE TABLE IF NOT EXISTS agent_deletion_request_approvals (
 );
 CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_approvals_reviewer
     ON agent_deletion_request_approvals(reviewer_id);
+
+-- Cache invalidation replay: transaction-captured, coalesced intent (cache-only section).
+CREATE TABLE IF NOT EXISTS cache_invalidations (
+    cache_key TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('acl_bump', 'acl_drop', 'version', 'delete')),
+    revision UUID NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    lease_token UUID,
+    lease_expires_at TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_cache_invalidations_available
+    ON cache_invalidations (available_at, cache_key);
+
+-- Authentication email durable delivery (auth-email-only).
+CREATE TABLE IF NOT EXISTS auth_email_jobs (
+    id UUID PRIMARY KEY,
+    identity_id UUID NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('verification','password_reset')),
+    expires_at TIMESTAMPTZ NOT NULL,
+    payload BYTEA,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claim_token UUID,
+    lease_expires_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    settled_at TIMESTAMPTZ,
+    CHECK ((claim_token IS NULL) = (lease_expires_at IS NULL)),
+    CHECK ((status='pending' AND payload IS NOT NULL AND settled_at IS NULL)
+        OR (status<>'pending' AND payload IS NULL AND settled_at IS NOT NULL AND claim_token IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_auth_email_jobs_due
+    ON auth_email_jobs(available_at,id) WHERE status='pending';
 
 COMMIT;

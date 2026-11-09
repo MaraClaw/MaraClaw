@@ -113,9 +113,21 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
                 agent_start_reconciler_loop,
             )
+            from app.services.auth_email_worker import (
+                PROGRESS_BUDGET_SECONDS as AUTH_EMAIL_BUDGET_SECONDS,
+                start_auth_email_worker,
+            )
             from app.services.broadcast_email_worker import (
                 PROGRESS_BUDGET_SECONDS as BROADCAST_EMAIL_BUDGET_SECONDS,
                 start_broadcast_email_worker,
+            )
+            from app.services.broadcast_fanout_worker import (
+                PROGRESS_BUDGET_SECONDS as BROADCAST_FANOUT_BUDGET_SECONDS,
+                start_broadcast_fanout_worker,
+            )
+            from app.services.cache_invalidation_worker import (
+                PROGRESS_BUDGET_SECONDS as CACHE_INVALIDATION_BUDGET_SECONDS,
+                start_cache_invalidation_worker,
             )
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.heartbeat import start_heartbeat
@@ -153,6 +165,24 @@ class Runtime:
                 agent_start_reconciler_loop(),
                 requirement="loop",
                 progress_budget_seconds=AGENT_START_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "cache-invalidation-recovery",
+                start_cache_invalidation_worker(),
+                requirement="loop",
+                progress_budget_seconds=CACHE_INVALIDATION_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "auth_email",
+                start_auth_email_worker(),
+                requirement="loop",
+                progress_budget_seconds=AUTH_EMAIL_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "broadcast_fanout",
+                start_broadcast_fanout_worker(),
+                requirement="loop",
+                progress_budget_seconds=BROADCAST_FANOUT_BUDGET_SECONDS,
             )
             self.tasks.start(
                 "broadcast_email",

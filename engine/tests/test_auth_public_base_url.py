@@ -10,6 +10,7 @@ from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
 from app.config import Settings
+from app.dao.auth_email_dao import auth_email_dao
 from app.db import session
 from app.main import app
 from app.records.identity import IdentityRecord
@@ -60,7 +61,7 @@ async def test_registration_succeeds_and_logs_skipped_verification_without_trust
     monkeypatch.setattr(email_verification_service, "create_email_verification_token", create_verification)
     schedule = Mock()
     warning = Mock()
-    monkeypatch.setattr(auth, "schedule_background_task", schedule)
+    monkeypatch.setattr(auth_email_dao, "enqueue", schedule)
     monkeypatch.setattr(auth.logger, "warning", warning)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.example") as client:
@@ -86,7 +87,7 @@ async def test_forgot_password_stays_generic_without_public_base(monkeypatch, mi
     create_token = AsyncMock(return_value=("reset-token", datetime.now(UTC) + timedelta(minutes=15)))
     monkeypatch.setattr(password_reset_service, "create_password_reset_token", create_token)
     schedule = Mock()
-    monkeypatch.setattr(auth, "schedule_background_task", schedule)
+    monkeypatch.setattr(auth_email_dao, "enqueue", schedule)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.example") as client:
         response = await client.post("/api/auth/forgot-password", json={"email": identity.email})

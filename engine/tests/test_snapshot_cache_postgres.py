@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from tests.test_redis_cache import FakeRedis
 
 from app.api import auth
@@ -16,9 +19,11 @@ from app.core.security import create_access_token
 from app.dao.identity_dao import identity_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db import session
 from app.db.connection import DbConnection, Params, Row
 from app.db.session import bind_crud_connection, connection_ctx
 from app.records.user import UserRecord
+from app.services import cache_invalidation_worker as worker
 
 if TYPE_CHECKING:
     from tenant_deletion_pg_fixtures import DeletionPostgres
@@ -240,3 +245,47 @@ async def test_identity_write_interleaving_refuses_unobserved_session_fill(
     assert fresh.identity is not None
     assert fresh.identity.password_hash == "hash"
     assert await user_dao.get_with_identity(actor.id) is cached
+
+
+@pytest.mark.parametrize("kind", ["user", "tenant"])
+async def test_recovered_generation_rejects_late_real_redis_snapshot_fill(
+    deletion_pg: DeletionPostgres, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    url = os.environ.get("MARACLAW_TEST_REDIS_URL", "")
+    if not url:
+        pytest.skip("MARACLAW_TEST_REDIS_URL required for real stale-fill interleaving")
+    async with Redis.from_url(url, decode_responses=True) as client:
+
+        async def real_client() -> Redis:
+            return client
+
+        monkeypatch.setattr(redis_cache, "_client", real_client)
+        monkeypatch.setattr(worker, "get_cache_redis", real_client)
+        monkeypatch.setattr(session, "_flush_cache_invalidations", AsyncMock())
+        row_memo.clear_row_memo()
+        if kind == "user":
+            user = await user_dao.get_with_identity(deletion_pg.actor.id)
+            assert user is not None
+            key = redis_cache.cache_key("sess", "v1", user.id)
+            old_payload = await client.get(key)
+            async with connection_ctx():
+                await user_dao.update(db_obj=user, obj_in={"display_name": "Committed"})
+        else:
+            tenant = await tenant_dao.get(deletion_pg.tenant_id)
+            assert tenant is not None
+            key = redis_cache.cache_key("tenant", "v1", tenant.id)
+            old_payload = await client.get(key)
+            async with connection_ctx():
+                await tenant_dao.update(db_obj=tenant, obj_in={"name": "Committed"})
+        assert old_payload is not None
+        assert await worker.replay_cache_invalidations() >= 2
+        await client.set(key, old_payload, ex=60)
+        row_memo.clear_row_memo()
+        if kind == "user":
+            current_user = await user_dao.get_with_identity(deletion_pg.actor.id)
+            assert current_user is not None
+            assert current_user.display_name == "Committed"
+        else:
+            current_tenant = await tenant_dao.get(deletion_pg.tenant_id)
+            assert current_tenant is not None
+            assert current_tenant.name == "Committed"

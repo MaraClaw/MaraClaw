@@ -460,6 +460,38 @@ async def test_resend_verification_keeps_acknowledgement_when_email_preparation_
     }
 
 
+@pytest.mark.parametrize("path", ["/auth/forgot-password", "/auth/resend-verification"])
+async def test_durable_acceptance_failure_preserves_generic_acknowledgements(app, monkeypatch, path):
+    from datetime import UTC, datetime, timedelta
+
+    from app.dao.auth_email_dao import auth_email_dao
+    from app.services.email_verification_service import email_verification_service
+
+    identity = IdentityRecord(id=uuid4(), email="member@example.com")
+    user = UserRecord(id=uuid4(), identity_id=identity.id, identity=identity)
+    monkeypatch.setattr(system_email_service, "resolve_email_config_async", AsyncMock(return_value=object()))
+    monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
+    monkeypatch.setattr(auth.user_dao, "get_representative_user_for_identity", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        "app.services.frontend_origin.resolve_frontend_base_url", AsyncMock(return_value="https://trusted.example")
+    )
+    prepared = ("credential", datetime.now(UTC) + timedelta(minutes=30))
+    monkeypatch.setattr(email_verification_service, "create_email_verification_token", AsyncMock(return_value=prepared))
+    monkeypatch.setattr(
+        "app.services.password_reset_service.create_password_reset_token", AsyncMock(return_value=prepared)
+    )
+    accept = AsyncMock(side_effect=RuntimeError("private credential-bearing backend error"))
+    monkeypatch.setattr(auth_email_dao, "enqueue", accept)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(path, json={"email": identity.email})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert "If an account with that email exists" in response.json()["message"]
+    assert "private" not in response.text
+    accept.assert_awaited_once()
+
+
 @pytest.mark.parametrize("fields", [{}, {"user": None, "identity": None, "suggested_org": None}])
 def test_token_union_preserves_coercion_defaults_and_ignored_fields(fields: dict[str, object]) -> None:
     adapter = TypeAdapter(TokenResponse | MultiTenantResponse)

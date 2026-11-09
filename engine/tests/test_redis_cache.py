@@ -289,6 +289,24 @@ async def test_deferred_flush_with_nothing_queued_sends_no_pipeline(fake_cache: 
 
 
 @pytest.mark.asyncio
+async def test_durable_capture_snapshot_preserves_dirty_fence_and_deduplicates(fake_cache: FakeRedis) -> None:
+    token = redis_cache.begin_deferred_versions()
+    try:
+        for _ in range(2):
+            await redis_cache.bump_version("ver:durable")
+            await redis_cache.cache_delete("snap:durable", defer_until_commit=True)
+        captured = redis_cache.pending_snapshot_invalidations()
+        assert {(op.key, op.kind) for op in captured} == {("ver:durable", "version"), ("snap:durable", "delete")}
+        assert redis_cache.pending_snapshot_invalidations() == captured
+        assert redis_cache.has_pending_snapshot_writes()
+        assert fake_cache.pipelines == []
+        await redis_cache.flush_deferred_versions()
+        assert redis_cache.pending_snapshot_invalidations() == ()
+    finally:
+        redis_cache.end_deferred_versions(token)
+
+
+@pytest.mark.asyncio
 async def test_open_circuit_never_suppresses_a_version_flush(fake_cache: FakeRedis) -> None:
     # Given a tripped read circuit
     token = redis_cache.begin_deferred_versions()
