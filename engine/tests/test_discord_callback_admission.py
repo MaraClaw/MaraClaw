@@ -1,13 +1,15 @@
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import discord
 import pytest
+from fastapi import HTTPException
 
-from app.dao.channel_config_dao import channel_config_dao
 from app.services.channels import submissions
+from stream_source_fixtures import connection_config
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
@@ -15,8 +17,9 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
     from app.services import discord_gateway
 
     manager, agent_id = discord_gateway.DiscordGatewayManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "discord", credential="token")
     connected, started, refused, release = (asyncio.Event() for _ in range(4))
-    clients, configs, entered, committed, typing, replies = [], [], [], [], [], []
+    clients, entered, committed, typing, replies = [], [], [], [], []
     reply_release = asyncio.Event()
     deliveries, runners = [], []
     failing = outcome == "failure"
@@ -26,10 +29,6 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
         clients.append(client)
         connected.set()
         await asyncio.Event().wait()
-
-    async def config(**kwargs):
-        configs.append(kwargs)
-        return SimpleNamespace(id=uuid4())
 
     async def accept(event):
         entered.append(event)
@@ -64,7 +63,6 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
     monkeypatch.setattr(discord_gateway, "_HAS_DISCORD", True)
     monkeypatch.setattr(discord_gateway, "_get_discord_module", lambda: discord)
     monkeypatch.setattr(discord.Client, "start", start)
-    monkeypatch.setattr(channel_config_dao, "get_for_agent", config)
     monkeypatch.setattr(submissions, "accept_channel_event", accept)
     try:
         await manager.start_client(agent_id, "token")
@@ -87,7 +85,7 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
         await asyncio.wait_for(refused.wait(), 1)
         await asyncio.wait_for(asyncio.gather(*deliveries[9:]), 1)
         assert sum(not task.done() for task in deliveries) == 9
-        assert len(entered) == len(configs) == len(typing) == 8
+        assert len(entered) == len(typing) == 8
         assert committed == []
         assert all("capacity is full" in content for content in replies)
         assert len(replies) == 1
@@ -111,7 +109,7 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
         with pytest.raises(asyncio.CancelledError):
             await old_handler(message("stale"))
         await clients[-1].on_message(message("fresh"))
-        assert len(entered) == len(configs) == len(typing) == 9
+        assert len(entered) == len(typing) == 9
     finally:
         reply_release.set()
         release.set()
@@ -120,4 +118,65 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
             if not runner.done():
                 runner.cancel()
         await asyncio.gather(*runners, return_exceptions=True)
+        assert all(client.is_closed() for client in clients)
+
+
+@pytest.mark.parametrize("mutation", ["secret", "mode", "recreated", "during_processing"])
+async def test_connected_gateway_revokes_typing_and_error_replies_before_new_effects(monkeypatch, mutation):
+    from app.services import discord_gateway
+
+    manager, agent_id = discord_gateway.DiscordGatewayManager(), uuid4()
+    config = connection_config(monkeypatch, agent_id, "discord", credential="token")
+    connected = asyncio.Event()
+    clients, typing = [], []
+    reply = AsyncMock()
+
+    async def start(client, token, *, reconnect):
+        await client._async_setup_hook()
+        clients.append(client)
+        connected.set()
+        await asyncio.Event().wait()
+
+    @asynccontextmanager
+    async def show_typing():
+        typing.append(True)
+        yield
+
+    async def interrupted(event):
+        config.app_secret = "rotated"
+        raise RuntimeError("database interrupted")
+
+    accept = AsyncMock(side_effect=interrupted)
+    monkeypatch.setattr(discord_gateway, "_get_discord_module", lambda: discord)
+    monkeypatch.setattr(discord.Client, "start", start)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    try:
+        await manager.start_client(agent_id, "token")
+        await asyncio.wait_for(connected.wait(), 1)
+        match mutation:
+            case "secret":
+                config.app_secret = "rotated"
+            case "mode":
+                config.extra_config = {"connection_mode": "webhook"}
+            case "recreated":
+                config.id = uuid4()
+            case "during_processing":
+                pass
+        message = SimpleNamespace(
+            id=1,
+            author=SimpleNamespace(id=1, name="sender"),
+            guild=None,
+            mentions=[],
+            content="hello",
+            channel=SimpleNamespace(id=2, typing=show_typing),
+            reply=reply,
+        )
+        with suppress(HTTPException):
+            await clients[-1].on_message(message)
+        assert typing == ([True] if mutation == "during_processing" else [])
+        assert accept.await_count == (1 if mutation == "during_processing" else 0)
+        reply.assert_not_awaited()
+        assert not manager._tasks[agent_id].done()
+    finally:
+        await manager.stop_all()
         assert all(client.is_closed() for client in clients)

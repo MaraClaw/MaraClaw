@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.core.json_types import JsonObject, json_loads_object
+from app.dao.channel_credentials import channel_credentials
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
@@ -281,15 +282,18 @@ async def test_config_lookup_closes_before_send(monkeypatch) -> None:
 
     class Connection:
         async def fetchone(self, *args: object, **kwargs: object) -> dict[str, object]:
-            return {
-                "id": uuid4(),
-                "agent_id": agent.id,
-                "channel_type": "slack",
-                "app_secret": "secret",
-                "app_id": None,
-                "encrypt_key": None,
-                "verification_token": None,
-            }
+            return channel_credentials(
+                {
+                    "id": uuid4(),
+                    "agent_id": agent.id,
+                    "channel_type": "slack",
+                    "app_secret": "secret",
+                    "app_id": None,
+                    "encrypt_key": None,
+                    "verification_token": None,
+                },
+                "seal",
+            )
 
     @asynccontextmanager
     async def db_session() -> AsyncGenerator[Connection]:

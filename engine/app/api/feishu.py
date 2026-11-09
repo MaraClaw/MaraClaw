@@ -32,7 +32,6 @@ from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_bo
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.task_dao import task_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatMessageRecord
@@ -40,12 +39,16 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
+from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.llm_bridge import _load_agent_and_model
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note, too_large_reply
+from app.services.channels.redact import channel_config_out
+from app.services.channels.stream_source import StreamSource
 from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
-from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
+from app.services.sso_scan_authority import capture_scan_authority
+from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
 from app.services.storage import agent_upload_key, get_storage_backend, store_agent_upload
 
 router = APIRouter(tags=["feishu"])
@@ -336,9 +339,6 @@ async def _save_feishu_tool_call(
 @router.get("/auth/feishu/callback")
 async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResponse:
     """Handle Feishu OAuth callback - exchange code for user session."""
-    from app.config import get_settings
-    from app.services.auth_provider import FeishuAuthProvider
-
     sid = parse_scan_state(state)
     if sid is None:
         return HTMLResponse("Auth failed: invalid SSO session")
@@ -347,21 +347,8 @@ async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResp
         session = await load_authorizable_session(sid)
         if session is None:
             return HTMLResponse("Auth failed: invalid SSO session")
-        tenant_id = session.tenant_id
-        settings = get_settings()
-        feishu_config: JsonObject = {
-            "app_id": settings.FEISHU_APP_ID,
-            "app_secret": settings.FEISHU_APP_SECRET,
-        }
-
-        provider = None
-        if tenant_id:
-            provider = await identity_provider_dao.get_by_type_and_tenant("feishu", tenant_id)
-
-        auth_provider = FeishuAuthProvider(provider=provider, config=feishu_config)
-
-        tenant_id_str = str(tenant_id) if tenant_id else None
-        _ = await auth_provider._ensure_provider(tenant_id_str)
+        authority = await capture_scan_authority("feishu", session)
+        auth_provider = authority.adapter()
 
         token_data = await auth_provider.exchange_code_for_token(code)
         access_token = token_data.get("access_token")
@@ -370,10 +357,7 @@ async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResp
             return HTMLResponse("Auth failed: Token exchange error")
         user_info = await auth_provider.get_user_info(access_token)
 
-        user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=tenant_id_str)
-
-        if not await authorize_scan_session(sid, user=user, provider_type="feishu"):
-            return HTMLResponse("Auth failed: invalid SSO session")
+        await finalize_scan_login(authority, user_info)
 
     except Exception:
         logger.error("Feishu login error")
@@ -403,7 +387,7 @@ async def configure_channel(
     extra_config = data.extra_config or {}
     if extra_config.get("connection_mode", "webhook") != "websocket" and not (data.verification_token or "").strip():
         raise HTTPException(status_code=422, detail="verification_token is required for webhook mode")
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -428,7 +412,7 @@ async def configure_channel(
         else:
             schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
 
-        return ChannelConfigOut.model_validate(config)
+        return channel_config_out(config)
 
     config = await channel_config_dao.create(
         obj_in={
@@ -451,7 +435,7 @@ async def configure_channel(
             feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
         )
 
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/channel", response_model=ChannelConfigOut)
@@ -460,10 +444,10 @@ async def get_channel_config(
 ) -> ChannelConfigOut:
     """Get Feishu channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    config = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/channel/webhook-url", response_model=None)
@@ -481,7 +465,7 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    config = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
     _ = await channel_config_dao.delete(record_id=config.id)
@@ -522,13 +506,20 @@ async def feishu_event_webhook(
     return await process_feishu_event(agent_id, body)
 
 
-async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObject:
+async def process_feishu_event(
+    agent_id: uuid.UUID, body: JsonObject, *, source: StreamSource | None = None
+) -> JsonObject:
     """Core logic to process feishu events from both webhook and WS client.
 
     Manages its own short-lived database transactions to avoid holding connections
     open during slow LLM/HTTP operations.
     """
     import json as _json
+
+    from app.services.channels.stream_source import authorize_stream_source
+
+    if source is not None:
+        await authorize_stream_source(source)
 
     header = _json_object(body.get("header"))
     logger.info(
@@ -545,9 +536,11 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
     from app.services.channels.feishu_submissions import accept_feishu_event
 
     if json_as_str_or(header.get("event_type")) == "im.message.receive_v1" and await accept_feishu_event(
-        config, _json_object(body.get("event"))
+        config, _json_object(body.get("event")), source=source
     ):
         return {"code": 0, "msg": "ok"}
+    if source is not None:
+        return {"code": 0, "msg": "unsupported native event"}
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     app_id = config.app_id
     app_secret = config.app_secret

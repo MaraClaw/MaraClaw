@@ -1,5 +1,6 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import anyio
@@ -8,8 +9,12 @@ from lark_oapi.ws.client import Client
 from lark_oapi.ws.pb.pbbp2_pb2 import Frame
 
 from app.api import feishu
+from app.dao.channel_config_dao import channel_config_dao
+from app.services.channels import feishu_submissions
 from app.services.channels.feishu_ws_acceptance import accept_event_frame
+from app.services.channels.stream_source import stream_source
 from app.services.feishu_ws import FeishuWSManager
+from stream_source_fixtures import connection_config
 
 
 def event_frame(payload, *, total=1, sequence=0, kind="event"):
@@ -29,12 +34,14 @@ async def test_sdk_frame_ack_waits_for_native_acceptance(monkeypatch, fails, mul
     started, release = anyio.Event(), anyio.Event()
     acknowledgements, committed = [], []
     agent_id = uuid4()
+    config = connection_config(monkeypatch, agent_id, "feishu")
     payload = json.dumps(
         {"header": {"event_type": "im.message.receive_v1"}, "event": {"message": {"message_id": "native-id"}}}
     ).encode()
 
-    async def accept(agent, body):
+    async def accept(agent, body, *, source):
         assert agent == agent_id
+        assert source == stream_source(config)
         started.set()
         await release.wait()
         if fails:
@@ -52,7 +59,7 @@ async def test_sdk_frame_ack_waits_for_native_acceptance(monkeypatch, fails, mul
     monkeypatch.setattr(feishu, "process_feishu_event", accept)
 
     async def receive(body):
-        await manager._async_handle_message(agent_id, body)
+        await manager._async_handle_message(stream_source(config), body)
 
     if multipart:
         split = len(payload) // 2
@@ -78,6 +85,8 @@ async def test_manager_installs_awaited_handler_on_sdk_data_frames(monkeypatch):
     manager = FeishuWSManager()
     client = Client("app", "secret")
     connected = anyio.Event()
+    agent_id = uuid4()
+    connection_config(monkeypatch, agent_id, "feishu")
 
     async def connect():
         connected.set()
@@ -106,7 +115,7 @@ async def test_manager_installs_awaited_handler_on_sdk_data_frames(monkeypatch):
     monkeypatch.setattr(client, "_write_message", write)
     # When
     try:
-        await manager.start_client(uuid4(), "app", "secret")
+        await manager.start_client(agent_id, "app", "secret")
         await connected.wait()
         body = {"header": {"event_type": "im.message.receive_v1"}, "event": {}}
         await client._handle_message(event_frame(json.dumps(body).encode()).SerializeToString())
@@ -121,6 +130,7 @@ async def test_manager_installs_awaited_handler_on_sdk_data_frames(monkeypatch):
 async def live_frame_adapter(monkeypatch):
     manager, agent_id, clients = FeishuWSManager(), uuid4(), []
     connected = asyncio.Event()
+    connection_config(monkeypatch, agent_id, "feishu")
 
     def construct(*args, **kwargs):
         client = Client("app", "secret")
@@ -159,7 +169,7 @@ async def test_actual_frame_burst_refuses_before_enrichment_and_restarts_fresh(
     entered, committed, acknowledgements = [], [], []
     failing = outcome == "failure"
 
-    async def enrich(agent, body):
+    async def enrich(agent, body, *, source):
         entered.append(body)
         if len(entered) == 8:
             started.set()
@@ -223,7 +233,7 @@ async def test_nested_actual_frame_ownership_joins_blocked_ack_write(monkeypatch
     manager, agent_id, clients, _ = live_frame_adapter
     writing, cleaned = asyncio.Event(), asyncio.Event()
 
-    async def accept(agent, body):
+    async def accept(agent, body, *, source):
         return None
 
     async def write(data):
@@ -245,3 +255,39 @@ async def test_nested_actual_frame_ownership_joins_blocked_ack_write(monkeypatch
     finally:
         callback.cancel()
         await asyncio.gather(callback, return_exceptions=True)
+
+
+@pytest.mark.parametrize("mutation", ["secret", "mode", "recreated"])
+async def test_live_sdk_frames_reject_revoked_sources_without_waiting_for_shutdown(
+    monkeypatch, live_frame_adapter, mutation
+):
+    manager, agent_id, clients, _ = live_frame_adapter
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=feishu.ChannelType.FEISHU)
+    assert config is not None
+    original = stream_source(config)
+    accept = AsyncMock(return_value=True)
+    monkeypatch.setattr(feishu_submissions, "accept_feishu_event", accept)
+    acknowledgements = []
+
+    async def write(data):
+        frame = Frame()
+        frame.ParseFromString(data)
+        acknowledgements.append(json.loads(frame.payload)["code"])
+
+    client = clients[-1]
+    monkeypatch.setattr(client, "_write_message", write)
+    payload = json.dumps({"header": {"event_type": "im.message.receive_v1"}, "event": {}}).encode()
+    await client._handle_message(event_frame(payload).SerializeToString())
+    assert accept.await_args is not None
+    assert accept.await_args.kwargs["source"] == original
+    match mutation:
+        case "secret":
+            config.app_secret = "rotated"
+        case "mode":
+            config.extra_config = {"connection_mode": "webhook"}
+        case "recreated":
+            config.id = uuid4()
+    await client._handle_message(event_frame(payload).SerializeToString())
+    assert acknowledgements == [200, 500]
+    accept.assert_awaited_once()
+    assert not manager._tasks[agent_id].done()

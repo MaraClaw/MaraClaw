@@ -32,6 +32,7 @@ from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
 from app.schemas.whatsapp_personal import WhatsAppChannelOut
+from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.redact import channel_config_out
 from app.services.channels.whatsapp_window import provider_timestamp, utcnow
 
@@ -149,7 +150,7 @@ async def configure_whatsapp_channel(
         )
 
     extra_config: JsonObject = {"api_version": api_version}
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.WHATSAPP)
     if existing and (existing.extra_config or {}).get("mode") == "personal_qr":
         from app.dao.whatsapp_personal_dao import revoke
         from app.services.channels.whatsapp_personal_access import personal_owner
@@ -168,7 +169,7 @@ async def configure_whatsapp_channel(
                 "is_configured": True,
             },
         )
-        return ChannelConfigOut.model_validate(config or existing)
+        return channel_config_out(config or existing)
 
     config = await channel_config_dao.create(
         obj_in={
@@ -182,7 +183,7 @@ async def configure_whatsapp_channel(
             "is_configured": True,
         }
     )
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/whatsapp-channel", response_model=WhatsAppChannelOut)
@@ -190,7 +191,7 @@ async def get_whatsapp_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> WhatsAppChannelOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
+    config = await get_channel_config_metadata(agent_id, ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
     safe = channel_config_out(config)
@@ -214,7 +215,7 @@ async def delete_whatsapp_channel(agent_id: uuid.UUID, current_user: UserRecord 
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
 
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
+    config = await get_channel_config_metadata(agent_id, ChannelType.WHATSAPP)
     if not config:
         raise HTTPException(status_code=404, detail="WhatsApp not configured")
     if (config.extra_config or {}).get("mode") == "personal_qr":

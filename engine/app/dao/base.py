@@ -42,6 +42,16 @@ class BaseDAO[RecordT]:
             return ", ".join(f"{alias}.{col}" for col in self.columns)
         return ", ".join(self.columns)
 
+    def _from_row(self, row: Mapping[str, object]) -> RecordT:
+        """Materialize a runtime row, including DAO-owned storage transforms."""
+        return self.record_factory(row)
+
+    def _deleted_row(self, row: Mapping[str, object]) -> RecordT:
+        return self._from_row(row)
+
+    def _updated_row(self, row: Mapping[str, object]) -> RecordT:
+        return self._from_row(row)
+
     async def get(self, record_id: UUID) -> RecordT | None:
         """Fetch one row by primary key."""
         async with self.session() as db:
@@ -49,7 +59,7 @@ class BaseDAO[RecordT]:
                 f"SELECT {self._select_list()} FROM {self.table} WHERE {self.pk} = %(id)s",
                 {"id": record_id},
             )
-            return self.record_factory(row) if row is not None else None
+            return self._from_row(row) if row is not None else None
 
     async def get_many(self, ids: Sequence[UUID]) -> list[RecordT]:
         """Fetch rows whose primary keys are in ``ids`` (order not preserved)."""
@@ -60,7 +70,7 @@ class BaseDAO[RecordT]:
                 f"SELECT {self._select_list()} FROM {self.table} WHERE {self.pk} = ANY(%(ids)s)",
                 {"ids": list(ids)},
             )
-            return [self.record_factory(row) for row in rows]
+            return [self._from_row(row) for row in rows]
 
     async def is_empty(self) -> bool:
         """Return True when the table has no rows."""
@@ -75,7 +85,7 @@ class BaseDAO[RecordT]:
                 f"SELECT {self._select_list()} FROM {self.table} ORDER BY {self.pk} OFFSET %(skip)s LIMIT %(limit)s",
                 {"skip": skip, "limit": limit},
             )
-            return [self.record_factory(row) for row in rows]
+            return [self._from_row(row) for row in rows]
 
     def _record_defaults(self) -> dict[str, object]:
         """Return dataclass field defaults for columns this DAO owns."""
@@ -122,7 +132,7 @@ class BaseDAO[RecordT]:
             )
             if row is None:
                 raise RuntimeError(f"INSERT into {self.table} returned no row")
-            return self.record_factory(row)
+            return self._from_row(row)
 
     async def update(self, *, db_obj: RecordT, obj_in: Mapping[str, object]) -> RecordT:
         """Update columns on an existing record and return the refreshed row."""
@@ -149,7 +159,7 @@ class BaseDAO[RecordT]:
             )
             if row is None:
                 return db_obj
-            return self.record_factory(row)
+            return self._updated_row(row)
 
     async def delete(self, *, record_id: UUID) -> RecordT | None:
         """Delete by primary key and return the deleted row when present."""
@@ -158,7 +168,7 @@ class BaseDAO[RecordT]:
                 f"DELETE FROM {self.table} WHERE {self.pk} = %(id)s RETURNING {self._select_list()}",
                 {"id": record_id},
             )
-            return self.record_factory(row) if row is not None else None
+            return self._deleted_row(row) if row is not None else None
 
 
 def as_uuid(value: object) -> UUID | None:

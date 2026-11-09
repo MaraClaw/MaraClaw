@@ -27,6 +27,8 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import DiscordInteractionResponse, WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
+from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.redact import channel_config_out
 
 router = APIRouter(tags=["discord"])
 
@@ -75,7 +77,7 @@ async def configure_discord_channel(
 
     extra_config: JsonObject = {"connection_mode": connection_mode}
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.DISCORD)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -113,7 +115,7 @@ async def configure_discord_channel(
         except Exception as e:
             logger.warning(f"[Discord] Could not register slash commands: {e}")
 
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/discord-channel", response_model=ChannelConfigOut)
@@ -121,10 +123,10 @@ async def get_discord_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
+    config = await get_channel_config_metadata(agent_id, ChannelType.DISCORD)
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/discord-channel/webhook-url", response_model=None)
@@ -140,7 +142,7 @@ async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord =
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
+    config = await get_channel_config_metadata(agent_id, ChannelType.DISCORD)
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
     try:

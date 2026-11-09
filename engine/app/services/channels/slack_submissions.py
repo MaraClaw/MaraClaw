@@ -1,9 +1,8 @@
 import json
 import re
 
-import httpx
-
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from
+from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
 from app.services.storage import store_agent_upload
 
@@ -43,7 +42,7 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
         try:
             limit = budget.limit_for(filename)
             async with (
-                httpx.AsyncClient(timeout=30, follow_redirects=True) as client,
+                public_http_client(timeout=30, follow_redirects=True, origin="https://files.slack.com") as client,
                 client.stream("GET", url, headers={"Authorization": f"Bearer {config.app_secret or ''}"}) as response,
             ):
                 data = await read_capped(response, limit)

@@ -19,6 +19,7 @@ from app.dao.participant_dao import participant_dao
 from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
+from app.records.chat import ChatMessageRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.schemas.chat_wire import ChatEventType
 from app.services.channels.types import normalize_channel_type
@@ -110,40 +111,60 @@ async def record_report(
                 participant_id=participant.id if participant else None,
             )
             assistant_message_id = inserted.id
-        _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": at})
-        if won.conversation_id not in (None, ""):
-            try:
-                session_id = UUID(won.conversation_id)
-            except ValueError:
-                session_id = None
-            if session_id is not None:
-                session = await chat_session_dao.get(session_id)
-                if (
-                    session is not None
-                    and session.agent_id == agent.id
-                    and normalize_channel_type(session.source_channel) not in (None, "", "web", "agent", "shared")
-                ):
-                    _ = await gateway_report_delivery_dao.create_intent(
-                        message_id=won.id,
-                        destination_kind="im",
-                        destination_id=session.id,
-                        tenant_id=agent.tenant_id,
-                    )
-                    wake_gateway_report_relay()
-        if won.sender_agent_id is not None:
-            sender = await agent_dao.get(won.sender_agent_id)
-            if sender is not None and sender.tenant_id == agent.tenant_id:
+        await _finalize_report(agent, won, at)
+    return RecordedReport(message=won, assistant_message_id=assistant_message_id)
+
+
+async def adopt_recovered_report(
+    agent: AgentRecord, claimed: GatewayMessageRecord, assistant: ChatMessageRecord
+) -> RecordedReport | None:
+    """Adopt an authorized published assistant under the caller's session/binding locks; never insert chat."""
+    at = _utcnow()
+    async with connection_ctx():
+        if claimed.conversation_id == str(shared_session_id(agent.id)):
+            _ = await gateway_message_dao.lock_shared_lane(agent.id, shared_session_id(agent.id))
+            _ = await personal_burst_dispatch_dao.mark_completed(claimed.id)
+        won = await gateway_message_dao.complete_recovered(claimed, assistant.content, at)
+        if won is None:
+            return None
+        await _finalize_report(agent, won, at)
+        return RecordedReport(won, assistant.id)
+
+
+async def _finalize_report(agent: AgentRecord, won: GatewayMessageRecord, at: datetime) -> None:
+    _ = await agent_dao.update(db_obj=agent, obj_in={"openclaw_last_seen": at})
+    if won.conversation_id not in (None, ""):
+        try:
+            session_id = UUID(won.conversation_id)
+        except ValueError:
+            session_id = None
+        if session_id is not None:
+            session = await chat_session_dao.get(session_id)
+            if (
+                session is not None
+                and session.agent_id == agent.id
+                and normalize_channel_type(session.source_channel) not in (None, "", "web", "agent", "shared")
+            ):
                 _ = await gateway_report_delivery_dao.create_intent(
                     message_id=won.id,
-                    destination_kind="agent",
-                    destination_id=sender.id,
+                    destination_kind="im",
+                    destination_id=session.id,
                     tenant_id=agent.tenant_id,
                 )
                 wake_gateway_report_relay()
-        from app.services.openclaw_routing import wake_shared_lane
+    if won.sender_agent_id is not None:
+        sender = await agent_dao.get(won.sender_agent_id)
+        if sender is not None and sender.tenant_id == agent.tenant_id:
+            _ = await gateway_report_delivery_dao.create_intent(
+                message_id=won.id,
+                destination_kind="agent",
+                destination_id=sender.id,
+                tenant_id=agent.tenant_id,
+            )
+            wake_gateway_report_relay()
+    from app.services.openclaw_routing import wake_shared_lane
 
-        wake_shared_lane(agent, won.id)
-    return RecordedReport(message=won, assistant_message_id=assistant_message_id)
+    wake_shared_lane(agent, won.id)
 
 
 async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:

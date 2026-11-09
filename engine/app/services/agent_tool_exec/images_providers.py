@@ -7,6 +7,7 @@ from app.core.json_types import (
     json_object_from,
     object_list_from_row,
 )
+from app.services.agent_tool_exec.image_downloads import download_image
 
 
 class _JsonResponse(Protocol):
@@ -66,9 +67,7 @@ async def _generate_image_siliconflow(api_key: str, model: str, base_url: str, p
         image_data = _first_image(data)
         image_url = json_as_str(image_data.get("url"))
         if image_url not in (None, ""):
-            img_resp: httpx.Response = await client.get(image_url, timeout=60)
-            _ = img_resp.raise_for_status()
-            return img_resp.content
+            return await download_image(image_url)
 
         b64 = json_as_str(image_data.get("b64_json"))
         if b64 not in (None, ""):
@@ -113,9 +112,7 @@ async def _generate_image_openai(api_key: str, model: str, base_url: str, prompt
 
         image_url = json_as_str(image_data.get("url"))
         if image_url not in (None, ""):
-            img_resp: httpx.Response = await client.get(image_url, timeout=60)
-            _ = img_resp.raise_for_status()
-            return img_resp.content
+            return await download_image(image_url)
 
         raise ValueError(f"No b64_json or URL in OpenAI response: {data}")
 
@@ -311,8 +308,6 @@ async def _generate_image_grok(api_key: str, model: str, base_url: str, prompt: 
 
         image_url = json_as_str(image_data.get("url"))
         if image_url not in (None, ""):
-            img_resp: httpx.Response = await client.get(image_url, timeout=60)
-            _ = img_resp.raise_for_status()
-            return img_resp.content
+            return await download_image(image_url)
 
         raise ValueError(f"No b64_json or URL in Grok Imagine response: {data}")

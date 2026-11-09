@@ -28,6 +28,14 @@ def _mask(value: str | None, *, present_label: str = "***") -> str | None:
     return present_label
 
 
+def _redact_nested(value: object) -> object:
+    if isinstance(value, dict):
+        return redact_extra_config(dict[str, object](value))
+    if isinstance(value, list):
+        return [_redact_nested(item) for item in value]
+    return value
+
+
 def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | None:
     if extra is None:
         return None
@@ -40,7 +48,7 @@ def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | 
                 # SA JSON: keep non-secret metadata only
                 secret_obj = dict[str, object](value)
                 meta: dict[str, Any] = {
-                    k: v
+                    k: _redact_nested(v)
                     for k, v in secret_obj.items()
                     if k
                     in {
@@ -57,7 +65,7 @@ def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | 
             else:
                 out[key] = True if value else None
         else:
-            out[key] = value
+            out[key] = _redact_nested(value)
     return out
 
 

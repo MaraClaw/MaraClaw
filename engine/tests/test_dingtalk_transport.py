@@ -11,11 +11,13 @@ from websockets.asyncio.server import serve
 from app.api import dingtalk
 from app.services.channels import dingtalk_stream_transport
 from app.services.dingtalk_stream import DingTalkStreamManager
+from stream_source_fixtures import connection_config
 
 
 @pytest.mark.parametrize("phase", ["open", "receive", "callback"])
 async def test_real_sdk_transport_stops_joins_and_restarts_during_connection_or_acceptance(monkeypatch, phase):
     manager, agent_id = DingTalkStreamManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "dingtalk")
     loop = asyncio.get_running_loop()
     opening, connected, accepting, acknowledged = (asyncio.Event() for _ in range(4))
     control_ack = asyncio.Event()
@@ -130,6 +132,7 @@ async def test_connection_recovers_after_more_than_six_transient_failures(monkey
 
 async def test_overlapping_stop_and_restart_wait_for_old_callback_cleanup_before_transport_teardown(monkeypatch):
     manager, agent_id = DingTalkStreamManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "dingtalk")
     loop = asyncio.get_running_loop()
     started, cleaning, release, fresh = (asyncio.Event() for _ in range(4))
     clients, stop_calls, operations = [], [], []
@@ -202,6 +205,7 @@ async def test_overlapping_stop_and_restart_wait_for_old_callback_cleanup_before
 
 async def test_restart_joins_old_worker_before_replacing_its_stop_event(monkeypatch):
     manager, agent_id = DingTalkStreamManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "dingtalk")
     loop = asyncio.get_running_loop()
     returned, joining, fresh = (asyncio.Event() for _ in range(3))
     finish = threading.Event()

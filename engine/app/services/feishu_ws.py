@@ -19,6 +19,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.runtime.callbacks import CallbackAdmission
 from app.runtime.tasks import cancel_tasks, is_async_callback
 from app.services.channels.feishu_ws_acceptance import EventFrame, accept_event_frame
+from app.services.channels.stream_source import StreamSource, acquire_stream_source
 
 try:
     import lark_oapi as _lark_mod
@@ -252,8 +253,9 @@ class FeishuWSManager:
             raise RuntimeError("lark-oapi EventDispatcherHandler.builder returned an unexpected object")
         return started.register_p2_customized_event("im.message.receive_v1", handle_message).build()
 
-    async def _async_handle_message(self, agent_id: uuid.UUID, data: object) -> None:
+    async def _async_handle_message(self, source: StreamSource, data: object) -> None:
         """Handle im.message.receive_v1 events from Feishu WebSocket asynchronously."""
+        agent_id = source.agent_id
         try:
             body_dict = _feishu_event_body(data)
             if body_dict is None:
@@ -266,7 +268,7 @@ class FeishuWSManager:
             # Import here to avoid circular dependencies
             from app.api.feishu import process_feishu_event
 
-            _handled: JsonObject = await process_feishu_event(agent_id, body_dict)
+            _handled: JsonObject = await process_feishu_event(agent_id, body_dict, source=source)
             del _handled
 
         except Exception as e:
@@ -309,6 +311,8 @@ class FeishuWSManager:
             logger.warning(f"[Feishu WS] Missing app_id or app_secret for {agent_id}, skipping")
             return
 
+        source = await acquire_stream_source(agent_id, ChannelType.FEISHU, (app_id, app_secret))
+
         logger.info(f"[Feishu WS] Starting async WS client for agent {agent_id} (App ID: {app_id})")
 
         self._main_loop = asyncio.get_running_loop()
@@ -350,7 +354,7 @@ class FeishuWSManager:
         callbacks = self._callbacks[agent_id] = CallbackAdmission()
 
         async def accept(body: JsonObject) -> None:
-            await callbacks.run(self._async_handle_message, agent_id, body)
+            await callbacks.run(self._async_handle_message, source, body)
 
         async def handle_data_frame(frame: EventFrame) -> None:
             await accept_event_frame(client, frame, accept)

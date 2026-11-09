@@ -30,6 +30,7 @@ from app.core.json_types import (
     json_value_from_response,
     object_list_from_row,
 )
+from app.core.outbound_transport import public_http_client
 from app.core.security import create_access_token
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
 from app.records.user import UserRecord
@@ -593,14 +594,13 @@ class FeishuService:
         """
         if max_bytes is None:
             max_bytes = IMAGE_UPLOAD_MAX_BYTES if resource_type == "image" else MAX_INPUT_BYTES
-        async with httpx.AsyncClient(timeout=30) as client:
-            typed_client: httpx.AsyncClient = client
+        async with public_http_client(timeout=30, origin="https://open.feishu.cn") as client:
             try:
                 app_token = await get_feishu_app_token(app_id, app_secret)
             except ImTokenRefusedError as refused:
                 _ = refused.response.raise_for_status()
                 app_token = ""
-            async with typed_client.stream(
+            async with client.stream(
                 "GET",
                 f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
                 params={"type": resource_type},

@@ -2,7 +2,7 @@
 
 Provides endpoints for managing encrypted session cookies
 per agent. Sensitive fields (cookies_json) are encrypted at rest
-using AES-256-CBC and are NEVER returned in API responses.
+using record-bound authenticated encryption and are NEVER returned in API responses.
 """
 
 import json
@@ -13,10 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import TypedDict
 
 from app.api.agent_credential_validation import CredentialSafeRoute
-from app.config import get_settings
 from app.core.json_types import json_as_str, json_loads_value, object_mapping_from
 from app.core.permissions import check_agent_access
-from app.core.security import encrypt_data, get_current_user
+from app.core.security import get_current_user
 from app.dao.agent_credential_dao import (
     CredentialChanges,
     CredentialRevisionConflictError,
@@ -84,7 +83,7 @@ async def list_credentials(
             detail="Manage access required to view credentials",
         )
 
-    credentials = await agent_credential_dao.list_for_agent(agent_id)
+    credentials = await agent_credential_dao.list_metadata_for_agent(agent_id)
     return [_to_response(c) for c in credentials]
 
 
@@ -102,8 +101,6 @@ async def create_credential(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Manage access required to create credentials",
         )
-
-    settings = get_settings()
 
     # Validate cookies_json format if provided
     if data.cookies_json not in (None, ""):
@@ -127,7 +124,7 @@ async def create_credential(
 
     # Encrypt sensitive fields
     if data.cookies_json not in (None, ""):
-        obj_in["cookies_json"] = encrypt_data(data.cookies_json, settings.SECRET_KEY)
+        obj_in["cookies_json"] = data.cookies_json
         obj_in["cookies_updated_at"] = datetime.now(UTC)
 
     cred = await agent_credential_dao.create(obj_in=obj_in)
@@ -154,11 +151,10 @@ async def update_credential(
             detail="Manage access required to update credentials",
         )
 
-    cred = await agent_credential_dao.get_for_agent(credential_id, agent_id)
+    cred = await agent_credential_dao.get_metadata_for_agent(credential_id, agent_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    settings = get_settings()
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
     obj_in: CredentialChanges = {}
 
@@ -188,7 +184,7 @@ async def update_credential(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid cookies_json format: expected a JSON array",
                 ) from e
-            obj_in["cookies_json"] = encrypt_data(cookies_json, settings.SECRET_KEY)
+            obj_in["cookies_json"] = cookies_json
             obj_in["cookies_updated_at"] = datetime.now(UTC)
             # Reset status to active when cookies are updated
             obj_in["status"] = "active"
@@ -217,7 +213,7 @@ async def delete_credential(
             detail="Manage access required to delete credentials",
         )
 
-    cred = await agent_credential_dao.get_for_agent(credential_id, agent_id)
+    cred = await agent_credential_dao.get_metadata_for_agent(credential_id, agent_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 

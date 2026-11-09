@@ -12,8 +12,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import enterprise as enterprise_api
-from app.config import get_settings
-from app.core.security import encrypt_data
+from app.core.stored_credentials import seal_credential
+from app.dao.credential_contexts import model_key_context
 from app.records.llm import LLMModelRecord
 from app.schemas.schemas import LLMModelCreate, LLMModelUpdate
 from app.services import enterprise_llm as pool
@@ -37,7 +37,7 @@ def _model(**kwargs) -> LLMModelRecord:
         "id": uuid.uuid4(),
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "api_key_encrypted": encrypt_data("secret-key-9999", get_settings().SECRET_KEY),
+        "api_key_encrypted": "",
         "label": "Claude",
         "tenant_id": _TENANT,
         "base_url": "https://api.anthropic.com",
@@ -51,7 +51,10 @@ def _model(**kwargs) -> LLMModelRecord:
         "updated_at": _NOW,
     }
     defaults.update(kwargs)
-    return LLMModelRecord(**defaults)
+    model = LLMModelRecord(**defaults)
+    if "api_key_encrypted" not in kwargs:
+        model.api_key_encrypted = seal_credential("secret-key-9999", model_key_context(model.tenant_id, model.id))
+    return model
 
 
 def test_member_is_not_pool_admin():
@@ -193,7 +196,6 @@ async def test_list_models_member_without_tenant_is_empty():
 @pytest.mark.asyncio
 async def test_add_model_org_admin_own_tenant_only(monkeypatch):
     created = _model()
-    monkeypatch.setattr(enterprise_api, "encrypt_data", lambda value, _key: f"enc:{value}")
     create = AsyncMock(return_value=created)
     monkeypatch.setattr(enterprise_api.llm_model_dao, "create", create)
     monkeypatch.setattr(

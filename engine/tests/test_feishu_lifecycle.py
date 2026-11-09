@@ -17,7 +17,8 @@ async def test_restart_waits_for_retiring_actual_frame_cleanup(monkeypatch, live
     started, cleaning, release = (asyncio.Event() for _ in range(3))
     committed, acknowledgements, operations = [], [], []
 
-    async def accept(agent, body):
+    async def accept(agent, body, *, source):
+        assert source.agent_id == agent
         if not started.is_set():
             started.set()
             try:

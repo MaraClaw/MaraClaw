@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.dao.user_dao import user_dao
 from app.db import session as db_session
+from app.db.connection import DbConnection
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.sso_scan_session import SSOScanSessionRecord
 from app.records.user import UserRecord
@@ -49,6 +51,10 @@ class CallbackFlow:
     lose_authorization: bool = False
     user_info_calls: int = 0
     identity_present: bool = True
+    committed: list[str] = field(default_factory=list)
+    provider_removed: bool = False
+    provider_change: str = ""
+    tenant_active: bool = True
 
     def state(self, session_id: UUID | None = None) -> str:
         sid = session_id or self.row.id
@@ -110,6 +116,15 @@ def flow(provider_type: str, monkeypatch: pytest.MonkeyPatch) -> CallbackFlow:
         result.fail_at("lookup")
         return result.provider
 
+    async def locked_provider(db: DbConnection, provider_id: UUID) -> IdentityProviderRecord | None:
+        assert db_session.get_connection() is db
+        assert provider_id == result.provider.id
+        return None if result.provider_removed else result.provider
+
+    async def tenant_active(_db: DbConnection, sql: str, params: object = None) -> bool:
+        assert sql == "SELECT is_active FROM tenants WHERE id = %(id)s"
+        return result.tenant_active
+
     async def get_provider_by_type(_provider_type: str, _tenant_id: UUID | None) -> IdentityProviderRecord:
         result.lookups.append("provider_type")
         result.fail_at("lookup")
@@ -122,13 +137,30 @@ def flow(provider_type: str, monkeypatch: pytest.MonkeyPatch) -> CallbackFlow:
         return PROVIDER_CLASSES[provider_type](provider=result.provider)
 
     async def exchange(_self: BaseAuthProvider, code: str, redirect_uri: str | None = None) -> AuthProviderPayload:
+        assert db_session.get_connection() is None
         result.exchanges.append(code)
         result.fail_at("exchange")
         return result.token_data
 
     async def user_info(_self: BaseAuthProvider, _access_token: str) -> ExternalUserInfo:
+        assert db_session.get_connection() is None
         result.user_info_calls += 1
         result.fail_at("profile")
+        match result.provider_change:
+            case "active":
+                result.provider.is_active = False
+            case "sso":
+                result.provider.sso_login_enabled = False
+            case "config":
+                result.provider.config["client_secret"] = "rotated"
+            case "tenant":
+                result.provider.tenant_id = uuid4()
+            case "type":
+                result.provider.provider_type = "another"
+            case "delete":
+                result.provider_removed = True
+            case "":
+                pass
         return ExternalUserInfo(
             provider_type=provider_type,
             provider_user_id="external" if result.identity_present else None,
@@ -141,6 +173,8 @@ def flow(provider_type: str, monkeypatch: pytest.MonkeyPatch) -> CallbackFlow:
     ) -> tuple[UserRecord, bool]:
         result.fail_at("resolve")
         assert tenant_id == (str(result.row.tenant_id) if result.row.tenant_id else None)
+        for write in ("identity", "membership", "admission"):
+            db_session.run_after_commit(lambda write=write: result.committed.append(write))
         return result.user, False
 
     async def fresh_user(_user_id: UUID, *, fresh: bool = False) -> UserRecord:
@@ -158,9 +192,12 @@ def flow(provider_type: str, monkeypatch: pytest.MonkeyPatch) -> CallbackFlow:
     monkeypatch.setattr(sso_scan_session_dao, "authorize", authorize)
     monkeypatch.setattr(sso_scan_session_dao, "update", forbidden_update)
     monkeypatch.setattr(identity_provider_dao, "get", get_provider_by_id)
+    monkeypatch.setattr(identity_provider_dao, "get_for_update", locked_provider)
+    monkeypatch.setattr(identity_provider_dao, "get_revision", AsyncMock(return_value="captured-revision"))
     monkeypatch.setattr(identity_provider_dao, "get_by_type_and_tenant", get_provider_by_type)
     monkeypatch.setattr(auth_provider_registry, "get_provider", registry_provider)
     monkeypatch.setattr(user_dao, "get_with_identity", fresh_user)
+    monkeypatch.setattr(DbConnection, "fetchval", tenant_active)
     monkeypatch.setattr(google_workspace, "get_google_redirect_uri", redirect)
     monkeypatch.setattr(security, "create_access_token", mint)
     monkeypatch.setattr(sso_scan_sessions, "create_access_token", mint)
@@ -383,3 +420,37 @@ def test_google_tampered_signed_state_stops_before_lookup(client: TestClient, fl
     assert "failed" in html.lower()
     assert flow.lookups == []
     assert flow.exchanges == []
+
+
+@pytest.mark.parametrize("provider_type", ["feishu", "dingtalk", "wecom"])
+@pytest.mark.parametrize("change", ["active", "sso", "config", "tenant", "type", "delete"])
+def test_changed_provider_rejects_without_account_writes(client: TestClient, flow: CallbackFlow, change: str) -> None:
+    flow.provider_change = change
+
+    _, html = callback(client, flow, flow.state())
+
+    assert "failed" in html.lower()
+    assert flow.exchanges == ["authorization-code"]
+    assert flow.committed == []
+    assert flow.writes == []
+
+
+@pytest.mark.parametrize("provider_type", ["feishu", "dingtalk", "wecom"])
+@pytest.mark.parametrize("condition", ["lost_transition", "inactive_user", "inactive_identity", "inactive_tenant"])
+def test_final_rejection_rolls_back_account_writes(client: TestClient, flow: CallbackFlow, condition: str) -> None:
+    match condition:
+        case "lost_transition":
+            flow.lose_authorization = True
+        case "inactive_user":
+            flow.user.is_active = False
+        case "inactive_identity":
+            assert flow.user.identity is not None
+            flow.user.identity.is_active = False
+        case "inactive_tenant":
+            flow.tenant_active = False
+
+    _, html = callback(client, flow, flow.state())
+
+    assert "failed" in html.lower()
+    assert flow.committed == []
+    assert flow.writes == []

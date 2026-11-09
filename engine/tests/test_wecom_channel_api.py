@@ -88,6 +88,7 @@ def test_parse_wecom_xml_rejects_doctype_payload():
 async def test_get_wecom_channel_reports_runtime_websocket_status(monkeypatch):
     agent_id = uuid.uuid4()
     config = make_channel(agent_id, connection_mode="websocket")
+    config.extra_config["nested"] = [{"bot_token": "nested-secret", "public": "visible"}]
 
     async def fake_check_agent_access(_user, _agent_id):
         return AgentRecord(id=agent_id, name="Agent", creator_id=uuid.uuid4()), None
@@ -111,6 +112,9 @@ async def test_get_wecom_channel_reports_runtime_websocket_status(monkeypatch):
     )
 
     assert result.is_connected is True
+    assert result.extra_config is not None
+    assert result.extra_config["nested"] == [{"bot_token": True, "public": "visible"}]
+    assert "nested-secret" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio

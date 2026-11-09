@@ -10,6 +10,9 @@ import pytest
 
 from app.services import agent_tools
 from app.services.agent_tool_exec import images
+from provider_download_fixtures import download_wire, response_bytes
+
+__all__ = ["download_wire"]
 
 
 class FakeResponse:
@@ -157,12 +160,12 @@ async def test_upload_image_rejects_escape(monkeypatch, tmp_path, kind):
 
 
 @pytest.mark.asyncio
-async def test_siliconflow_generates_then_downloads_url_with_expected_timeouts(monkeypatch):
+async def test_siliconflow_generates_then_downloads_url_with_expected_timeouts(monkeypatch, download_wire):
+    download_wire.responses = [response_bytes(b"siliconflow-bytes")]
     fake_httpx = install_fake_httpx(
         monkeypatch,
         [
             FakeResponse(200, {"data": [{"url": "https://images.test/generated.png"}]}),
-            FakeResponse(200, content=b"siliconflow-bytes"),
         ],
     )
 
@@ -181,7 +184,6 @@ async def test_siliconflow_generates_then_downloads_url_with_expected_timeouts(m
                 "headers": {"Authorization": "Bearer key", "Content-Type": "application/json"},
             },
         ),
-        ("GET", "https://images.test/generated.png", {"timeout": 120}, {"timeout": 60}),
     ]
 
 

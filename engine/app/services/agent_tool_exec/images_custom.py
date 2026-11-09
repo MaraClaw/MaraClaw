@@ -1,6 +1,5 @@
 import importlib
 import json
-from typing import Protocol, TypeIs
 
 from app.core.json_types import (
     JsonObject,
@@ -14,22 +13,8 @@ from app.core.json_types import (
     json_value_from_response,
 )
 from app.services import agent_tools
+from app.services.agent_tool_exec.image_downloads import download_image
 from app.services.agent_tool_exec.registry import ToolArgumentValue
-
-
-class _ImageHttpResponse(Protocol):
-    def raise_for_status(self) -> object: ...
-
-    @property
-    def content(self) -> bytes: ...
-
-
-class _ImageHttpClient(Protocol):
-    async def get(self, url: str) -> _ImageHttpResponse: ...
-
-
-def _is_image_http_client(value: object) -> TypeIs[_ImageHttpClient]:
-    return callable(getattr(value, "get", None))
 
 
 def _json_path_get(data: JsonValue, path: str) -> JsonValue:
@@ -175,6 +160,7 @@ def _find_first_image_reference(data: JsonValue) -> JsonValue:
 async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: object) -> bytes:
     import base64
 
+    del client
     if isinstance(image_ref, dict):
         image_ref = image_ref.get("url") or image_ref.get("b64_json") or image_ref.get("image_base64")
 
@@ -188,11 +174,7 @@ async def _custom_image_reference_to_bytes(image_ref: JsonValue, client: object)
         return base64.b64decode(encoded)
 
     if image_ref.startswith(("http://", "https://")):
-        if not _is_image_http_client(client):
-            raise TypeError("HTTP client is unavailable")
-        img_resp = await client.get(image_ref)
-        img_resp.raise_for_status()
-        return img_resp.content
+        return await download_image(image_ref)
 
     return base64.b64decode(image_ref)
 

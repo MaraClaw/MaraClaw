@@ -1,6 +1,14 @@
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
 import pytest
 
+from app.api import atlassian as atlassian_api
+from app.config import get_settings
 from app.core.json_types import JsonObject, JsonValue
+from app.core.security import encrypt_data
+from app.records.channel_config import ChannelConfigRecord
+from app.records.user import UserRecord
 from app.services import atlassian_mcp_tools as atlassian
 
 
@@ -151,3 +159,28 @@ def test_normalize_tool_when_input_schema_is_invalid(invalid_schema: JsonValue):
         "description": "Search Jira issues",
         "parameters_schema": {"type": "object", "properties": {}},
     }
+
+
+async def test_saved_channel_check_uses_original_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent_id = uuid4()
+    config = ChannelConfigRecord(
+        id=uuid4(),
+        agent_id=agent_id,
+        is_configured=True,
+        app_secret=encrypt_data("atlassian-wire-key", get_settings().SECRET_KEY),
+    )
+    monkeypatch.setattr(atlassian_api, "check_agent_access", AsyncMock())
+    monkeypatch.setattr(atlassian_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    supplied_keys: list[str | None] = []
+
+    class Client:
+        def __init__(self, url: str, *, api_key: str | None) -> None:
+            supplied_keys.append(api_key)
+
+        async def list_tools(self) -> list[JsonObject]:
+            return [{"name": "jira_search"}]
+
+    monkeypatch.setattr("app.services.mcp_client.MCPClient", Client)
+    result = await atlassian_api.check_atlassian_channel(agent_id, UserRecord(id=uuid4()))
+    assert result["ok"] is True
+    assert supplied_keys == ["atlassian-wire-key"]

@@ -6,13 +6,17 @@ import pytest
 from tests.channel_submission_fixtures import channel_db, receipt_db
 
 __all__ = ["channel_db", "receipt_db"]
+from fastapi import HTTPException
 from tests.test_channel_event_receipts_postgres import counts
 
+from app.core.json_types import int_from_row
+from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.db.session import get_connection, transaction
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.services.channels import submissions
 from app.services.channels.submissions import ChannelEventConflictError, accept_channel_event
+from stream_submission_fixtures import stream_fixture
 
 
 async def test_distinct_native_events_serialize_first_conversation_creation(channel_db, monkeypatch):
@@ -122,3 +126,64 @@ async def test_receipt_identity_mismatch_is_a_typed_conflict(channel_db, field):
             await accept_channel_event(fixture.event)
     # Then mismatched ownership never becomes a replay or a second charge.
     assert (await counts(fixture))["charged"] == 1
+
+
+@pytest.mark.parametrize("first", ["admission", "revocation"])
+@pytest.mark.parametrize("mutation", ["rotate", "delete"])
+@pytest.mark.parametrize("replay", [False, True])
+async def test_stream_source_lock_lasts_until_outer_owner_commit(channel_db, monkeypatch, first, mutation, replay):
+    fixture = await stream_fixture(channel_db)
+    db = fixture.db
+    if replay:
+        async with transaction(db.first):
+            await accept_channel_event(fixture.event)
+    before = await counts(fixture)
+    held, attempted, release = anyio.Event(), anyio.Event(), anyio.Event()
+    accepted, failures = [], []
+    original_lock = submissions.lock_channel_source
+
+    async def lock(config_id):
+        if get_connection() is db.second:
+            attempted.set()
+        return await original_lock(config_id)
+
+    async def operate(connection, admission):
+        try:
+            async with transaction(connection):
+                if connection is db.second:
+                    attempted.set()
+                if admission:
+                    accepted.append(await accept_channel_event(fixture.event))
+                elif mutation == "rotate":
+                    await channel_config_dao.update(db_obj=fixture.config, obj_in={"app_secret": "rotated"})
+                else:
+                    await connection.execute("DELETE FROM channel_configs WHERE id = %(id)s", {"id": fixture.config.id})
+                if connection is db.first:
+                    held.set()
+                    await release.wait()
+        except HTTPException as error:
+            failures.append(error.status_code)
+
+    monkeypatch.setattr(submissions, "lock_channel_source", lock)
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(operate, db.first, first == "admission")
+            await held.wait()
+            tasks.start_soon(operate, db.second, first == "revocation")
+            await attempted.wait()
+            while True:
+                row = await db.first.fetchone(
+                    "SELECT pg_blocking_pids(%(pid)s) AS blockers", {"pid": db.second.raw.info.backend_pid}
+                )
+                if row and db.first.raw.info.backend_pid in row["blockers"]:
+                    break
+                await anyio.lowlevel.checkpoint()
+            release.set()
+    after = await counts(fixture)
+    delta = 1 if first == "admission" and not replay else 0
+    for field in ("messages", "enqueued", "intents", "charged"):
+        assert after[field] == int_from_row(before[field]) + delta
+    assert after["creator_charged"] == before["creator_charged"] == 0
+    assert after["receipts"] == (0 if mutation == "delete" else int_from_row(before["receipts"]) + delta)
+    assert failures == ([403] if first == "revocation" else [])
+    assert [result.replayed for result in accepted] == ([replay] if first == "admission" else [])

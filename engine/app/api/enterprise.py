@@ -23,7 +23,8 @@ from app.core.json_types import (
     object_mapping_from,
 )
 from app.core.logging import logger
-from app.core.security import encrypt_data, get_current_admin, get_current_user
+from app.core.security import get_current_admin, get_current_user
+from app.core.stored_credentials import StoredCredentialError
 from app.dao.agent_dao import agent_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
@@ -360,7 +361,11 @@ async def _list_llm_models(tenant_id: str | None, current_user: UserRecord) -> l
             secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
 
     models_out = []
-    for m in await llm_model_dao.list_for_tenant(tid):
+    try:
+        models = await llm_model_dao.list_for_tenant(tid)
+    except StoredCredentialError:
+        models = await llm_model_dao.list_metadata_for_tenant(tid)
+    for m in models:
         if not admin and not m.enabled:
             continue
         models_out.append(
@@ -390,7 +395,7 @@ async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_us
         obj_in={
             "provider": data.provider,
             "model": data.model,
-            "api_key_encrypted": encrypt_data(data.api_key, settings.SECRET_KEY),
+            "api_key_encrypted": data.api_key,
             "base_url": data.base_url,
             "label": data.label,
             "temperature": data.temperature,
@@ -601,7 +606,10 @@ async def remove_llm_model(
 
 async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: UserRecord) -> None:
     """Remove an LLM model from the pool."""
-    model = await llm_model_dao.get(model_id)
+    try:
+        model = await llm_model_dao.get(model_id)
+    except StoredCredentialError:
+        model = await llm_model_dao.get_metadata(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
     assert_can_manage_model(current_user, model)
@@ -656,7 +664,10 @@ async def update_llm_model(
 
 async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_user: UserRecord) -> LLMModelOut:
     """Update an existing LLM model in the pool (org/platform admin)."""
-    model = await llm_model_dao.get(model_id)
+    try:
+        model = await llm_model_dao.get(model_id)
+    except StoredCredentialError:
+        model = await llm_model_dao.get_metadata(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
     assert_can_manage_model(current_user, model)
@@ -678,7 +689,7 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
         and data.api_key.strip()
         and not data.api_key.startswith("****")
     ):
-        updates["api_key_encrypted"] = encrypt_data(data.api_key.strip(), settings.SECRET_KEY)
+        updates["api_key_encrypted"] = data.api_key.strip()
     if data.temperature is not None:
         updates["temperature"] = data.temperature
     if data.max_tokens_per_day is not None:

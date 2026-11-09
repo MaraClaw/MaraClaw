@@ -9,11 +9,13 @@ import pytest
 from app.api import dingtalk
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
 from app.services.dingtalk_stream import DingTalkStreamManager
+from stream_source_fixtures import connection_config
 
 
 @pytest.mark.parametrize("cancel_sdk", [False, True])
 async def test_sdk_burst_racing_shutdown_never_starts_pending_application_work(monkeypatch, cancel_sdk):
     manager, agent_id = DingTalkStreamManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "dingtalk")
     refused = threading.Event()
     acknowledgements, entered = [], []
 

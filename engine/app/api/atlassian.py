@@ -21,6 +21,7 @@ from app.services.atlassian_mcp_tools import (
     _preview_atlassian_tools,
     _sync_atlassian_tools_for_agent,
 )
+from app.services.channels.config import get_channel_config_metadata
 
 router = APIRouter(tags=["atlassian"])
 
@@ -52,7 +53,7 @@ async def configure_atlassian_channel(
 
     encrypted_key = encrypt_data(api_key, get_settings().SECRET_KEY)
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.ATLASSIAN)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -88,7 +89,7 @@ async def get_atlassian_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AtlassianChannelResponse:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
+    config = await get_channel_config_metadata(agent_id, ChannelType.ATLASSIAN)
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
     return _serialize(config)
@@ -99,7 +100,7 @@ async def delete_atlassian_channel(agent_id: uuid.UUID, current_user: UserRecord
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
+    config = await get_channel_config_metadata(agent_id, ChannelType.ATLASSIAN)
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
     _ = await channel_config_dao.delete(record_id=config.id)
@@ -111,14 +112,14 @@ async def check_atlassian_channel(
 ) -> AtlassianTestResponse:
     """Test connectivity to Atlassian Rovo MCP and list available tools."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ATLASSIAN)
-    if not config or config.app_secret in (None, ""):
+    api_key = await get_atlassian_api_key_for_agent(agent_id)
+    if api_key in (None, ""):
         raise HTTPException(status_code=400, detail="Atlassian not configured")
 
     from app.services.mcp_client import MCPClient
 
     try:
-        client = MCPClient(ATLASSIAN_MCP_URL, api_key=config.app_secret)
+        client = MCPClient(ATLASSIAN_MCP_URL, api_key=api_key)
         tools = await client.list_tools()
         tool_previews = _preview_atlassian_tools(tools)
         return {
@@ -153,7 +154,4 @@ async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID) -> str | None:
     if not config or not config.is_configured or config.app_secret in (None, ""):
         return None
 
-    try:
-        return decrypt_data(config.app_secret, get_settings().SECRET_KEY)
-    except Exception:
-        return config.app_secret
+    return decrypt_data(config.app_secret, get_settings().SECRET_KEY)

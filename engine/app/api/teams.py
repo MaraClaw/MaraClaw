@@ -30,6 +30,8 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
+from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.redact import channel_config_out
 from app.services.channels.teams_auth import (
     TeamsAuthenticationError,
     authenticate_teams_activity,
@@ -325,7 +327,7 @@ async def configure_teams_channel(
             status_code=422, detail="app_id is required; app_secret is required without managed identity"
         )
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.MICROSOFT_TEAMS)
     if existing:
         extra = json_object_from(existing.extra_config)
         if tenant_id:
@@ -342,7 +344,7 @@ async def configure_teams_channel(
             obj_in["app_id"] = app_id
             obj_in["app_secret"] = app_secret
         config = await channel_config_dao.update(db_obj=existing, obj_in=obj_in)
-        return ChannelConfigOut.model_validate(config or existing)
+        return channel_config_out(config or existing)
 
     extra_config: JsonObject = {}
     if tenant_id:
@@ -360,7 +362,7 @@ async def configure_teams_channel(
             "extra_config": extra_config,
         }
     )
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/teams-channel", response_model=ChannelConfigOut)
@@ -369,10 +371,10 @@ async def get_teams_channel(
 ) -> ChannelConfigOut:
     """Get Microsoft Teams channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
+    config = await get_channel_config_metadata(agent_id, ChannelType.MICROSOFT_TEAMS)
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/teams-channel/webhook-url", response_model=None)
@@ -395,7 +397,7 @@ async def delete_teams_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.MICROSOFT_TEAMS)
+    config = await get_channel_config_metadata(agent_id, ChannelType.MICROSOFT_TEAMS)
     if not config:
         raise HTTPException(status_code=404, detail="Microsoft Teams not configured")
     _ = await channel_config_dao.delete(record_id=config.id)

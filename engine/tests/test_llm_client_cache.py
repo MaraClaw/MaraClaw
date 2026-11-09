@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
 from app.config import get_settings
 from app.core.security import encrypt_data
+from app.core.stored_credentials import seal_credential
+from app.dao.credential_contexts import model_key_context
 from app.services.llm import create_llm_client, create_llm_client_from_model
 from app.services.llm.client_cache import reset_llm_client_cache
 from app.services.llm.http_pool import acquire_httpx
@@ -34,9 +37,9 @@ def test_create_llm_client_reuses_same_wrapper_for_identical_config():
 
 def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
     row = SimpleNamespace(
-        id="11111111-1111-1111-1111-111111111111",
+        id=UUID("11111111-1111-1111-1111-111111111111"),
         auth_kind="api_key",
-        api_key_encrypted=encrypt_data("key", get_settings().SECRET_KEY),
+        api_key_encrypted=seal_credential("key", model_key_context(None, UUID("11111111-1111-1111-1111-111111111111"))),
         oauth_account_id=None,
         provider="openai",
         model="gpt-6.1-sol",
@@ -46,7 +49,7 @@ def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
     first = create_llm_client_from_model(row)
     second = create_llm_client_from_model(row)
     rotated = SimpleNamespace(
-        **{**row.__dict__, "api_key_encrypted": encrypt_data("key-rotated", get_settings().SECRET_KEY)}
+        **{**row.__dict__, "api_key_encrypted": seal_credential("key-rotated", model_key_context(None, row.id))}
     )
     third = create_llm_client_from_model(rotated)
     assert first is second

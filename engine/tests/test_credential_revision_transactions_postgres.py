@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.config import get_settings
-from app.core.security import encrypt_data
+from app.core.stored_credentials import open_credential
 from app.dao.agent_credential_dao import CredentialRevisionConflictError, agent_credential_dao as credentials
+from app.dao.credential_contexts import cookie_context
 from app.db.connection import DbConnection
 from app.db.session import transaction
 from app.records.agent_credential import AgentCredentialRecord, CredentialRevision
@@ -95,16 +95,16 @@ async def test_edit_restores_revision_cookies_and_evidence_when_owning_transacti
     injected_at = datetime(2026, 1, 1, tzinfo=UTC)
     assert await credentials.publish_injection(target, injected_at)
     before = await persisted_credential(db, credential)
-    replacement = encrypt_data(
-        json.dumps([{"name": "session", "value": "uncommitted-cookie"}]), get_settings().SECRET_KEY
-    )
+    replacement = json.dumps([{"name": "session", "value": "uncommitted-cookie"}])
     assert replacement != before.cookies_json
 
     async def aborted_edit() -> None:
         async with transaction() as owner:
             assert owner.raw is not db.raw
             edited = await credentials.edit(target, {"cookies_json": replacement})
-            assert (edited.revision, edited.cookies_json, edited.last_injected_at) == (2, replacement, None)
+            assert (edited.revision, edited.last_injected_at) == (2, None)
+            assert edited.cookies_json is not None
+            assert open_credential(edited.cookies_json, cookie_context(edited.agent_id, edited.id)) == replacement
             raise TransactionAbortedError
 
     with pytest.raises(TransactionAbortedError):

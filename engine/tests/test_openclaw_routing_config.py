@@ -8,7 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import get_settings
-from app.core.security import encrypt_data
+from app.core.stored_credentials import seal_credential
+from app.dao.credential_contexts import model_key_context
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services import agent_manager as manager_module
@@ -18,7 +19,8 @@ from app.services.openclaw_guest_config import GuestConfigWriteError, apply_gues
 
 
 def model(name: str, provider: str = "anthropic", key: str = "sk-test") -> LLMModelRecord:
-    return LLMModelRecord(uuid4(), provider, name, encrypt_data(key, get_settings().SECRET_KEY), name)
+    model_id = uuid4()
+    return LLMModelRecord(model_id, provider, name, seal_credential(key, model_key_context(None, model_id)), name)
 
 
 @pytest.mark.parametrize(
@@ -198,7 +200,9 @@ def test_write_rotates_credentials_without_changing_model(manager: AgentManager)
     primary = model("opus", key="sk-old")
     path = manager.write_guest_config(agent, primary=primary, selected=primary)
     assert path is not None
-    rotated = replace(primary, api_key_encrypted=encrypt_data("sk-new", get_settings().SECRET_KEY))
+    rotated = replace(
+        primary, api_key_encrypted=seal_credential("sk-new", model_key_context(primary.tenant_id, primary.id))
+    )
     assert manager.write_guest_config(agent, primary=rotated, selected=rotated) == path
     assert "sk-new" in path.read_text(encoding="utf-8")
 

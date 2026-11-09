@@ -49,7 +49,22 @@ the next queue head wakes) only on exact guest evidence read by
 that run (status `done`, captured evidence once, no active recovery run) plus exactly
 one `session_pending_inputs` row for the run and `<message UUID>:user` key in state
 `interrupted` with no consumed event, under the claim's reply binding, which must
-still be current at settlement. Delivered input is never released or resubmitted;
+still be current at settlement. A second conclusive case, read by
+`openclaw_recovered_inputs`, links the current binding's exact session key and a
+`done` tombstone's unique captured clean source evidence to `transcriptRunId` and
+exactly one assistant `stop`/`end_turn` event. Source, delivery and recovery markers
+must be inactive. Tombstone and event share one contained, bounded, read-only live-WAL
+SQLite snapshot; event lookup ignores the advanced reply cursor and never rewinds it.
+`openclaw_recovered_dispatch` then reauthorizes tenant/users, agent, session and
+binding in that lock order and adopts only the exact `(binding, event)` receipt's
+existing deterministic assistant, matching agent, user and conversation, with no
+pending media text or publication. Completion fences the captured `delivered_at`,
+binding, message, agent and `delivered` status. It reuses report finalization and
+the existing assistant content/attachments without inserting another chat message.
+The completion notification closes the original turn using that existing assistant ID.
+The independent delayed-reply worker never settles native input;
+incomplete receipts wait for that worker and a later dispatch scan.
+Delivered input is never released or resubmitted;
 absent, ambiguous, malformed or unreadable evidence leaves it `delivered`. Ordinary conversations use
 `openclaw_native_claims.claim_ordinary_turn` under shared tenant/owner locks plus
 the exclusive agent lock and retain their own FIFO lanes; a delivered predecessor

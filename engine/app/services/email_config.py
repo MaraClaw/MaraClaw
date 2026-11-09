@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.core.json_types import JsonObject, json_object_from
+from app.core.stored_credentials import PreservedCredential
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tenant_email_dao import tenant_email_dao
 from app.schemas.tenant_email import TenantEmailSettings, TenantEmailUpdate
@@ -30,6 +31,8 @@ class SystemEmailConfig:
 
 
 def load_settings(value: JsonObject) -> TenantEmailSettings:
+    if isinstance(value.get("password"), PreservedCredential):
+        return TenantEmailSettings.model_validate({**value, "password": ""})
     return TenantEmailSettings.model_validate(decrypt_sensitive_fields(value))
 
 
@@ -37,6 +40,8 @@ def stored_settings(data: TenantEmailUpdate, previous: JsonObject, *, public_onl
     value = json_object_from(data.model_dump(mode="json", exclude={"password"}))
     value["password"] = data.password or previous.get("password") or ""
     value["public_only"] = public_only
+    if isinstance(value["password"], PreservedCredential):
+        return value
     return encrypt_sensitive_fields(value)
 
 
@@ -57,8 +62,8 @@ def transport(settings: TenantEmailSettings, *, include_disabled: bool = False) 
 
 
 async def saved_transport(tenant_id: UUID, *, include_disabled: bool = False) -> SystemEmailConfig | None:
-    value = await tenant_email_dao.get(tenant_id)
     try:
+        value = await tenant_email_dao.get(tenant_id)
         return transport(load_settings(value), include_disabled=include_disabled)
     except ValidationError, ValueError:
         return None

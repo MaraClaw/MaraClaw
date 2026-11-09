@@ -15,6 +15,7 @@ from app.core.row_memo import clear_entity_memo
 from app.core.security import load_user_principal
 from app.dao import agent_dao, channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
+from app.dao.channel_source_lock import lock_channel_source
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
@@ -29,6 +30,7 @@ from app.services.channels.binding import bind_channel_conversation, persist_cha
 from app.services.channels.personal_burst_admission import admit_personal_original, stored_personal_outcome
 from app.services.channels.personal_burst_original import PERSONAL_REPLY_TITLE, PersonalOriginal, personal_route
 from app.services.channels.personal_burst_outcome import PersonalAdmission, PersonalReplayed
+from app.services.channels.stream_source import STREAM_MODES, StreamSource, check_stream_source, connection_mode
 from app.services.channels.types import normalize_channel_type
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_model_selection import prepare_shared_openclaw_message
@@ -55,6 +57,7 @@ class ChannelEvent:
     provider_account_id: str | None = None
     provider_timestamp_source: str | None = None
     personal_source: PersonalSource | None = None
+    stream_source: StreamSource | None = None
 
     def fingerprint(self) -> str:
         payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
@@ -110,7 +113,11 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
         if event.provider != "whatsapp" or event.config_id != event.personal_source.config_id or event.is_group:
             raise HTTPException(403, "Invalid personal source")
         return await resolve_personal_sender(event.personal_source, event.agent_id)
-    config = await channel_config_dao.get(event.config_id)
+    config = (
+        await lock_channel_source(event.config_id)
+        if event.stream_source is not None
+        else await channel_config_dao.get(event.config_id)
+    )
     if (
         config is None
         or not config.is_configured
@@ -119,6 +126,10 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
         or (event.provider == "whatsapp" and (config.extra_config or {}).get("mode") == "personal_qr")
     ):
         raise HTTPException(403, "Channel configuration is unavailable")
+    if event.stream_source is not None:
+        check_stream_source(config, event.stream_source)
+    elif connection_mode(config) == STREAM_MODES.get(config.channel_type):
+        raise HTTPException(403, "Connector source is required")
     agent = await agent_dao.get(event.agent_id)
     if agent is None or agent.tenant_id is None:
         raise HTTPException(403, "Agent is unavailable")

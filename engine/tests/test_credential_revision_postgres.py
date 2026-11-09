@@ -8,13 +8,13 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.api import agent_credentials as api
-from app.config import get_settings
-from app.core.security import encrypt_data
+from app.core.stored_credentials import open_credential
 from app.dao.agent_credential_dao import (
     CredentialChanges,
     CredentialRevisionConflictError,
     agent_credential_dao as credentials,
 )
+from app.dao.credential_contexts import cookie_context
 from app.db.connection import DbConnection
 from app.db.errors import CheckViolationError
 from app.db.pool import close_pool, get_pool, init_pool
@@ -39,9 +39,7 @@ async def credential(db: DbConnection) -> AgentCredentialRecord:
             "agent_id": agent_id,
             "platform": "portal.example",
             "display_name": "original",
-            "cookies_json": encrypt_data(
-                json.dumps([{"name": "session", "value": COOKIE_SECRET}]), get_settings().SECRET_KEY
-            ),
+            "cookies_json": json.dumps([{"name": "session", "value": COOKIE_SECRET}]),
         }
     )
 
@@ -147,14 +145,17 @@ async def test_capture_cannot_restore_a_revision_changed_during_export(
         assert current is not None
         assert current.revision == 2
         assert current.last_injected_at is None
-        assert (
-            getattr(current, {"metadata": "display_name", "cookies": "cookies_json", "status": "status"}[mutation])
-            == {
-                "metadata": "newer",
-                "cookies": "newer-encrypted-value",
-                "status": "inactive",
-            }[mutation]
-        )
+        if mutation == "cookies":
+            assert current.cookies_json is not None
+            assert (
+                open_credential(current.cookies_json, cookie_context(current.agent_id, current.id))
+                == "newer-encrypted-value"
+            )
+        else:
+            assert (
+                getattr(current, {"metadata": "display_name", "status": "status"}[mutation])
+                == {"metadata": "newer", "status": "inactive"}[mutation]
+            )
 
 
 @pytest.mark.parametrize("mutation", ["metadata", "cookies", "status", "delete"])

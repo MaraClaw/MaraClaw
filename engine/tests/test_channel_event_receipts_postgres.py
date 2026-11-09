@@ -18,6 +18,7 @@ from app.services.channels import submissions
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError, accept_channel_event
 from app.services.quota_guard import AgentExpired, QuotaExceeded
 from app.services.shared_chat import shared_session_id
+from stream_submission_fixtures import stream_fixture
 
 
 async def counts(fixture: ChannelDatabase):
@@ -33,6 +34,37 @@ async def counts(fixture: ChannelDatabase):
         )
         assert result is not None
         return result
+
+
+async def test_stream_replay_conflict_and_restored_authority_keep_original_charge(channel_db):
+    fixture = await stream_fixture(channel_db)
+    async with transaction(fixture.db.first):
+        accepted = await accept_channel_event(fixture.event)
+    assert not accepted.replayed
+    async with transaction(fixture.db.second):
+        assert (await accept_channel_event(fixture.event)).replayed
+    with pytest.raises(ChannelEventConflictError):
+        async with transaction(fixture.db.second):
+            await accept_channel_event(replace(fixture.event, text="different native text"))
+    async with transaction(fixture.db.first):
+        await fixture.db.first.execute("UPDATE channel_configs SET is_configured = FALSE")
+    for operation in (submissions.is_channel_event_replay, accept_channel_event):
+        with pytest.raises(HTTPException) as refused:
+            async with transaction(fixture.db.second):
+                await operation(fixture.event)
+        assert refused.value.status_code == 403
+    async with transaction(fixture.db.first):
+        await fixture.db.first.execute("UPDATE channel_configs SET is_configured = TRUE")
+    async with transaction(fixture.db.second):
+        assert (await accept_channel_event(fixture.event)).replayed
+    assert await counts(fixture) == {
+        "receipts": 1,
+        "messages": 1,
+        "enqueued": 1,
+        "intents": 1,
+        "charged": 1,
+        "creator_charged": 0,
+    }
 
 
 async def test_native_replay_serializes_before_session_locks(channel_db, monkeypatch):

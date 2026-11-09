@@ -100,7 +100,10 @@ def serialize_llm_model(
         if is_subscription_row(model):
             out.api_key_masked = ""
             return out
-        key = get_model_api_key(model)
+        try:
+            key = get_model_api_key(model)
+        except ValueError:
+            key = ""
         out.api_key_masked = f"****{key[-4:]}" if len(key) > 4 else "****"
         return out
     out.api_key_masked = ""

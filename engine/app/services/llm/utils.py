@@ -10,11 +10,14 @@ from their owning modules for convenient access.
 
 from collections.abc import Iterable
 from typing import Protocol, overload
+from uuid import UUID
 
 from app.config import get_settings
 from app.core.json_types import json_as_str, json_as_str_or, json_loads_object
 from app.core.logging import logger
 from app.core.security import decrypt_data
+from app.core.stored_credentials import StoredCredentialError, open_credential
+from app.dao.credential_contexts import model_key_context
 from app.records.chat import ChatMessageRecord
 from app.records.llm import LLMModelRecord
 
@@ -51,8 +54,13 @@ def get_model_api_key(model: _EncryptedModel) -> str:
     raw = model.api_key_encrypted or ""
     if not raw:
         return ""
-    settings = get_settings()
-    return decrypt_data(raw, settings.SECRET_KEY)
+    if getattr(model, "auth_kind", "api_key") in ("grok_subscription", "chatgpt_subscription"):
+        return decrypt_data(raw, get_settings().SECRET_KEY)
+    model_id = getattr(model, "id", None)
+    tenant_id = getattr(model, "tenant_id", None)
+    if not isinstance(model_id, UUID) or (tenant_id is not None and not isinstance(tenant_id, UUID)):
+        raise StoredCredentialError
+    return open_credential(raw, model_key_context(tenant_id, model_id))
 
 
 @overload
@@ -112,6 +120,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
         raw_timeout = model.request_timeout
         resolved_timeout = float(raw_timeout) if raw_timeout not in (None, 0) else 120.0
     enc = getattr(model, "api_key_encrypted", None) or ""
+    api_key = get_model_api_key(model)
     cache_key = (
         "from_model",
         str(getattr(model, "id", "") or ""),
@@ -133,7 +142,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
             codex_request_headers,
         )
 
-        access = get_model_api_key(model)
+        access = api_key
         account_id = (getattr(model, "oauth_account_id", None) or "").strip() or account_id_from_jwt(access)
         built = OpenAIResponsesClient(
             api_key=access,
@@ -146,7 +155,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
         return cache_put(cache_key, built)
     built = create_llm_client(
         provider=getattr(model, "provider", "") or "",
-        api_key=get_model_api_key(model),
+        api_key=api_key,
         model=getattr(model, "model", None) or "",
         base_url=getattr(model, "base_url", None),
         timeout=resolved_timeout,

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.core.domain.channels import ChannelType
 from app.core.permissions import check_agent_access, is_agent_creator
+from app.core.stored_credentials import PreservedCredential, StoredCredentialError
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
@@ -26,6 +27,21 @@ async def require_channel_creator(current_user: UserRecord, agent_id: uuid.UUID)
 async def get_channel_config(agent_id: uuid.UUID, channel_type: str) -> ChannelConfigRecord | None:
     stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
     return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=stored)
+
+
+async def get_channel_config_metadata(agent_id: uuid.UUID, channel_type: str) -> ChannelConfigRecord | None:
+    stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
+    try:
+        return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=stored)
+    except StoredCredentialError:
+        return await channel_config_dao.get_metadata_for_agent(agent_id=agent_id, channel_type=stored)
+
+
+async def require_channel_config_metadata(agent_id: uuid.UUID, channel_type: str) -> ChannelConfigRecord:
+    config = await get_channel_config_metadata(agent_id, channel_type)
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"{channel_type} not configured")
+    return config
 
 
 async def require_channel_config(agent_id: uuid.UUID, channel_type: str) -> ChannelConfigRecord:
@@ -48,7 +64,7 @@ async def upsert_channel_config(
 ) -> ChannelConfigRecord:
     """Create or update a channel_config row for an agent."""
     stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=stored)
+    existing = await get_channel_config_metadata(agent_id, stored)
     payload: dict[str, Any] = {
         "app_id": app_id,
         "app_secret": app_secret,
@@ -78,7 +94,7 @@ async def upsert_channel_config(
 
 
 async def delete_channel_config(agent_id: uuid.UUID, channel_type: str) -> None:
-    config = await require_channel_config(agent_id, channel_type)
+    config = await require_channel_config_metadata(agent_id, channel_type)
     await _drop_im_tokens_for_config(config.channel_type, config.app_id, config.app_secret)
     _ = await channel_config_dao.delete(record_id=config.id)
 
@@ -88,7 +104,7 @@ async def _drop_im_tokens_for_config(
     app_id: str | None,
     app_secret: str | None,
 ) -> None:
-    if app_id in (None, ""):
+    if app_id in (None, "") or isinstance(app_secret, PreservedCredential):
         return
     from app.services.im_token_cache import drop_cached_im_token
 

@@ -17,7 +17,7 @@ from tests.analytics_response_fixtures import (
 from typing_extensions import TypeForm
 
 from app.api import admin_search_analytics as analytics_api, atlassian as atlassian_api, tools as tools_api
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.core.domain.channels import ChannelType
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_object_from
@@ -370,7 +370,12 @@ async def test_atlassian_test_wire_keeps_preview_limit_dynamic_name_and_failure_
     monkeypatch: pytest.MonkeyPatch, tool_state: ToolState, failure: bool
 ) -> None:
     user, agent, _tool, _assignment = tool_state
-    config = ChannelConfigRecord(id=uuid4(), agent_id=agent.id, app_secret="never-return-this")
+    config = ChannelConfigRecord(
+        id=uuid4(),
+        agent_id=agent.id,
+        is_configured=True,
+        app_secret=encrypt_data("never-return-this", get_settings().SECRET_KEY),
+    )
 
     async def channel(**_kwargs: object) -> ChannelConfigRecord:
         return config

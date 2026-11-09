@@ -15,6 +15,7 @@ from app.services.wecom_stream import (
     _extract_wecom_chat_type,
     _extract_wecom_sender_id,
 )
+from stream_source_fixtures import connection_config
 
 
 def test_extract_wecom_context_from_official_sdk_shape():
@@ -196,6 +197,7 @@ async def test_stream_client_constructs_sdk_options(monkeypatch: pytest.MonkeyPa
     agent_id = uuid.uuid4()
 
     # When: the manager starts the SDK client
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.sleep(0)
     assert client is not None
@@ -228,6 +230,7 @@ async def test_sdk_disconnect_does_not_trigger_a_second_manager_connection(monke
     monkeypatch.setattr(wecom_stream.asyncio, "sleep", advance_without_waiting)
     manager = WeComStreamManager()
     agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.wait_for(client.initial_connection.wait(), timeout=0.1)
 
@@ -263,6 +266,7 @@ async def test_initial_connection_failure_is_retried_by_manager(monkeypatch: pyt
     agent_id = uuid.uuid4()
 
     # When: the stream client starts
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.wait_for(client.initial_connection.wait(), timeout=0.1)
 
@@ -285,6 +289,7 @@ async def test_stale_stream_task_cannot_remove_or_disconnect_replacement_state(m
     monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
     manager = WeComStreamManager()
     agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.wait_for(old_client.initial_connection.wait(), timeout=0.1)
     old_task = manager._tasks[agent_id]
@@ -324,6 +329,7 @@ async def test_stream_task_failure_is_observed_and_logged(monkeypatch: pytest.Mo
     agent_id = uuid.uuid4()
 
     # When: the manager starts the failing task
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     task = manager._tasks[agent_id]
     with pytest.raises(RuntimeError, match="fatal stream failure"):
@@ -348,6 +354,7 @@ async def test_stream_task_cancellation_is_not_logged_as_failure(monkeypatch: py
     monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
     manager = WeComStreamManager()
     agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.wait_for(client.initial_connection.wait(), timeout=0.1)
 
@@ -372,6 +379,7 @@ async def test_non_stopping_start_retains_existing_live_task(monkeypatch: pytest
     monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
     manager = WeComStreamManager()
     agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
     await manager.start_client(agent_id, "bot", "secret")
     await asyncio.wait_for(client.initial_connection.wait(), timeout=0.1)
     owner = manager._tasks[agent_id]
