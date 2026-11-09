@@ -178,6 +178,7 @@ class BaseAuthProvider(ABC):
             self.provider_type,
             tenant_id=scope,
             identity_data=dict(user_info.raw_data) if user_info.raw_data else None,
+            provider=provider,
         )
 
         is_new = False
@@ -220,6 +221,7 @@ class BaseAuthProvider(ABC):
             provider_user_id,
             dict(user_info.raw_data) if user_info.raw_data else None,
             tenant_id=scope,
+            provider=provider,
         )
         _ = await registration_service.ensure_web_org_member(user)
         return user, is_new

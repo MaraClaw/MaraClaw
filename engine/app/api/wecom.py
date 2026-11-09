@@ -42,9 +42,9 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 from app.services import im_token_cache
-from app.services.auth_registry import auth_provider_registry
 from app.services.platform_service import platform_service
-from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
+from app.services.sso_scan_authority import capture_scan_authority
+from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
 from app.services.wecom_service import get_wecom_access_token
 from app.services.wecom_stream import wecom_stream_manager
 
@@ -566,14 +566,8 @@ async def wecom_callback(code: str, state: str | None = None) -> HTMLResponse:
         session = await load_authorizable_session(sid)
         if session is None:
             return HTMLResponse("Auth failed: invalid SSO session")
-        tenant_id = session.tenant_id
-        provider = await identity_provider_dao.get_by_type_and_tenant("wecom", tenant_id)
-        if not provider:
-            return HTMLResponse("Auth failed: WeCom provider not configured for this tenant")
-        provider_tenant_id = str(tenant_id) if tenant_id else (str(provider.tenant_id) if provider.tenant_id else None)
-        auth_provider = await auth_provider_registry.get_provider("wecom", provider_tenant_id)
-        if not auth_provider:
-            return HTMLResponse("Auth failed: WeCom provider unavailable")
+        authority = await capture_scan_authority("wecom", session)
+        auth_provider = authority.adapter()
 
         token_data = await auth_provider.exchange_code_for_token(code)
         access_token_str = token_data.get("access_token")
@@ -584,9 +578,7 @@ async def wecom_callback(code: str, state: str | None = None) -> HTMLResponse:
         if user_info.provider_user_id in (None, ""):
             return HTMLResponse("Auth failed: No UserId returned")
 
-        user, _is_new = await auth_provider.find_or_create_user(user_info, tenant_id=provider_tenant_id)
-        if not await authorize_scan_session(sid, user=user, provider_type="wecom"):
-            return HTMLResponse("Auth failed: invalid SSO session")
+        await finalize_scan_login(authority, user_info)
     except Exception:
         logger.error("WeCom login/register error")
         return HTMLResponse("Auth failed: Authentication error")

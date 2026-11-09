@@ -32,7 +32,6 @@ from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_bo
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.task_dao import task_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatMessageRecord
@@ -45,7 +44,8 @@ from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, 
 from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
-from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
+from app.services.sso_scan_authority import capture_scan_authority
+from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
 from app.services.storage import agent_upload_key, get_storage_backend, store_agent_upload
 
 router = APIRouter(tags=["feishu"])
@@ -336,9 +336,6 @@ async def _save_feishu_tool_call(
 @router.get("/auth/feishu/callback")
 async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResponse:
     """Handle Feishu OAuth callback - exchange code for user session."""
-    from app.config import get_settings
-    from app.services.auth_provider import FeishuAuthProvider
-
     sid = parse_scan_state(state)
     if sid is None:
         return HTMLResponse("Auth failed: invalid SSO session")
@@ -347,21 +344,8 @@ async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResp
         session = await load_authorizable_session(sid)
         if session is None:
             return HTMLResponse("Auth failed: invalid SSO session")
-        tenant_id = session.tenant_id
-        settings = get_settings()
-        feishu_config: JsonObject = {
-            "app_id": settings.FEISHU_APP_ID,
-            "app_secret": settings.FEISHU_APP_SECRET,
-        }
-
-        provider = None
-        if tenant_id:
-            provider = await identity_provider_dao.get_by_type_and_tenant("feishu", tenant_id)
-
-        auth_provider = FeishuAuthProvider(provider=provider, config=feishu_config)
-
-        tenant_id_str = str(tenant_id) if tenant_id else None
-        _ = await auth_provider._ensure_provider(tenant_id_str)
+        authority = await capture_scan_authority("feishu", session)
+        auth_provider = authority.adapter()
 
         token_data = await auth_provider.exchange_code_for_token(code)
         access_token = token_data.get("access_token")
@@ -370,10 +354,7 @@ async def feishu_oauth_callback(code: str, state: str | None = None) -> HTMLResp
             return HTMLResponse("Auth failed: Token exchange error")
         user_info = await auth_provider.get_user_info(access_token)
 
-        user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=tenant_id_str)
-
-        if not await authorize_scan_session(sid, user=user, provider_type="feishu"):
-            return HTMLResponse("Auth failed: invalid SSO session")
+        await finalize_scan_login(authority, user_info)
 
     except Exception:
         logger.error("Feishu login error")

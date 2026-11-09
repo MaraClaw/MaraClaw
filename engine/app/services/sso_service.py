@@ -12,6 +12,7 @@ from typing import Any, ClassVar, cast
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, tenant_dao, user_dao
 from app.dao.base import as_uuid
+from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
@@ -94,9 +95,11 @@ class SSOService:
         provider_type: str,
         tenant_id: str | None = None,
         identity_data: dict[str, Any] | None = None,
+        *,
+        provider: IdentityProviderRecord | None = None,
     ) -> UserRecord | None:
         """Resolve user from external identity via OrgMember."""
-        provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
+        provider = provider or await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             return None
 
@@ -203,9 +206,11 @@ class SSOService:
         provider_user_id: str,
         identity_data: dict[str, Any] | None = None,
         tenant_id: str | None = None,
+        *,
+        provider: IdentityProviderRecord | None = None,
     ) -> OrgMemberRecord:
         """Link an external identity to an existing user via OrgMember."""
-        provider = await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
+        provider = provider or await identity_provider_dao.get_preferred(provider_type, as_uuid(tenant_id))
         if not provider:
             raise ValueError(f"Provider {provider_type} not found for tenant {tenant_id}")
 

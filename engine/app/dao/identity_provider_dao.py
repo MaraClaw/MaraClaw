@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.core.json_types import int_from_row
 from app.dao.base import BaseDAO
+from app.db.connection import DbConnection
 from app.records.identity import IdentityProviderRecord
 
 _COLUMNS = (
@@ -30,6 +31,21 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
     table: ClassVar[str] = "identity_providers"
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(IdentityProviderRecord.from_row)
+
+    async def get_for_update(self, db: DbConnection, provider_id: UUID) -> IdentityProviderRecord | None:
+        """Hold the exact provider authority until the caller's transaction ends."""
+        row = await db.fetchone(
+            f"SELECT {self._select_list()} FROM identity_providers WHERE id = %(id)s FOR UPDATE",
+            {"id": provider_id},
+        )
+        return self.record_factory(row) if row is not None else None
+
+    async def get_revision(self, provider_id: UUID) -> str | None:
+        async with self.session() as db:
+            revision = await db.fetchval(
+                "SELECT xmin::text FROM identity_providers WHERE id = %(id)s", {"id": provider_id}
+            )
+            return str(revision) if revision is not None else None
 
     async def get_by_type_and_tenant(
         self,

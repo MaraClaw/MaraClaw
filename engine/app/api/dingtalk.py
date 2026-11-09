@@ -18,7 +18,8 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channels.submissions import ChannelEvent, accept_channel_event
-from app.services.sso_scan_sessions import authorize_scan_session, load_authorizable_session, parse_scan_state
+from app.services.sso_scan_authority import capture_scan_authority
+from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
 
 router = APIRouter(tags=["dingtalk"])
 
@@ -185,8 +186,6 @@ async def process_dingtalk_message(
 @router.get("/auth/dingtalk/callback")
 async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str | None = None) -> HTMLResponse:
     """Callback for DingTalk OAuth2 login."""
-    from app.services.auth_registry import auth_provider_registry
-
     sid = parse_scan_state(state)
     if sid is None:
         return HTMLResponse("Auth failed: invalid SSO session")
@@ -195,10 +194,8 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
         session = await load_authorizable_session(sid)
         if session is None:
             return HTMLResponse("Auth failed: invalid SSO session")
-        tenant_id = str(session.tenant_id) if session.tenant_id else None
-        auth_provider = await auth_provider_registry.get_provider("dingtalk", tenant_id)
-        if not auth_provider:
-            return HTMLResponse("Auth failed: DingTalk provider not configured for this tenant")
+        authority = await capture_scan_authority("dingtalk", session)
+        auth_provider = authority.adapter()
 
         token_data = await auth_provider.exchange_code_for_token(auth_code)
         access_token = token_data.get("access_token")
@@ -211,11 +208,7 @@ async def dingtalk_callback(auth_code: str = Query(alias="authCode"), state: str
             logger.error("DingTalk user info missing unionId")
             return HTMLResponse("Auth failed: No unionid returned")
 
-        user, _ = await auth_provider.find_or_create_user(user_info, tenant_id=tenant_id)
-        if not user:
-            return HTMLResponse("Auth failed: User resolution failed")
-        if not await authorize_scan_session(sid, user=user, provider_type="dingtalk"):
-            return HTMLResponse("Auth failed: invalid SSO session")
+        await finalize_scan_login(authority, user_info)
 
     except Exception:
         logger.error("DingTalk login error")
