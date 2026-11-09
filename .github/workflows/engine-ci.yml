@@ -172,6 +172,7 @@ jobs:
       - name: Test agent lifecycle and WhatsApp channels with PostgreSQL
         run: >-
           uv run --no-sync python -m pytest
+          tests/test_db_cancellation_postgres.py
           tests/test_agent_setup_postgres.py
           tests/test_agent_setup_retry_postgres.py
           tests/test_agent_setup_authorization_postgres.py
