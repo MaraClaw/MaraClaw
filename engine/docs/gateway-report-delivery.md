@@ -4,6 +4,16 @@ Native Gateway terminal responses are settled by the engine through
 `settle_native_report` and `record_report`; the independent authenticated
 `POST /api/gateway/report` API also uses `record_report`. The first winning
 completion transaction persists the authoritative result and chat history.
+The dispatch reconciler can also complete a delivered native source by adopting an
+independently persisted successful recovery receipt through `adopt_recovered_report`.
+The current reply binding, exact guest tombstone/transcript event, published receipt
+and existing deterministic assistant must agree; media or publication pending keeps
+the source delivered. Adoption fences the original claim's `delivered_at`, reuses
+the assistant content and ID, and runs the same burst/last-seen/intent/deferred-wake
+finalization without inserting a second assistant. Its completion notification uses
+the original source turn ID and the existing assistant ID. It never replays native
+input. Exact evidence and authorization are specified in
+[`shared-openclaw-runtime.md`](shared-openclaw-runtime.md).
 Other destinations are inferred at completion; shared human IM turns persist
 their independent provider intent atomically at enqueue. Claims require a completed
 source message, so accepted pending turns cannot send early. Worker-enabled processes
