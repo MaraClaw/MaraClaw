@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.records.openclaw_reply_binding import OpenClawReplyBinding
-from app.services import openclaw_delayed_replies as recovery
+from app.services import openclaw_delayed_replies as recovery, openclaw_reply_authorization as authorization
 from app.services.openclaw_transcript import (
     TranscriptQuery,
     TranscriptReply,
@@ -145,12 +145,14 @@ def sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Sweep]:
     monkeypatch.setattr(agents.agent_manager, "_agent_dir", lambda _agent_id: tmp_path)
     monkeypatch.setattr(recovery, "openclaw_reply_dao", replies)
     monkeypatch.setattr(recovery, "connection_ctx", connection)
+    monkeypatch.setattr(authorization, "openclaw_reply_dao", replies)
+    monkeypatch.setattr(authorization, "connection_ctx", connection)
     for name in ("lock_tenants", "lock_user", "lock_agent"):
-        monkeypatch.setattr(recovery, name, lock)
-    monkeypatch.setattr(recovery, "check_agent_access", access)
-    monkeypatch.setattr(recovery, "load_agent_for_new_work", agent_row)
-    monkeypatch.setattr(recovery.chat_session_dao, "lock_for_agent", session_row)
-    monkeypatch.setattr(recovery.user_dao, "get_with_identity", user_row)
+        monkeypatch.setattr(authorization, name, lock)
+    monkeypatch.setattr(authorization, "check_agent_access", access)
+    monkeypatch.setattr(authorization, "load_agent_for_new_work", agent_row)
+    monkeypatch.setattr(authorization.chat_session_dao, "lock_for_agent", session_row)
+    monkeypatch.setattr(authorization.user_dao, "get_with_identity", user_row)
     monkeypatch.setattr(recovery, "response_guard", guard)
     monkeypatch.setattr(recovery, "open_transcript", counted_open)
     monkeypatch.setattr(TranscriptSource, "read", counted_read)
