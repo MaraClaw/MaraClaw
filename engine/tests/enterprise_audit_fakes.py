@@ -1,6 +1,6 @@
 """Transactional SQL fake for LLM audit tests; real DAOs and audit writer remain in use."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict
 from typing import final, override
@@ -28,10 +28,11 @@ class AuditDatabase(CountingRawConnection):
         assert self.model.tenant_id is not None
         self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company")
         self.actor = UserRecord(id=uuid4(), tenant_id=self.tenant.id, role=UserRole.ORG_ADMIN)
-        self.rows: dict[str, dict[UUID, Row]] = {
+        self.rows: dict[str, dict[UUID | str, Row]] = {
             "llm_models": {self.model.id: asdict(self.model)},
             "tenants": {self.tenant.id: asdict(self.tenant)},
             "admin_audit_logs": {},
+            "cache_invalidations": {},
         }
         self._before = deepcopy(self.rows)
         self._savepoint = deepcopy(self.rows)
@@ -77,6 +78,11 @@ class AuditDatabase(CountingRawConnection):
         data = {
             str(key): object_attr(value, "obj") if isinstance(value, Jsonb) else value for key, value in params.items()
         }
+        if query.startswith("INSERT INTO cache_invalidations "):
+            cache_key = data["key"]
+            assert isinstance(cache_key, str)
+            self.rows["cache_invalidations"][cache_key] = deepcopy(data)
+            return None
         row_id = data["id"]
         assert isinstance(row_id, UUID)
         if query.startswith("SELECT "):
@@ -115,6 +121,11 @@ def audit_db(monkeypatch: pytest.MonkeyPatch) -> AuditDatabase:
         assert db.raw is database
         return database.query(query, params)
 
+    async def executemany(db: DbConnection, query: str, params_seq: Sequence[Params]) -> None:
+        assert db.raw is database
+        for params in params_seq:
+            database.query(query, params)
+
     async def agent_mutation(**kwargs: object) -> int:
         return 0
 
@@ -132,4 +143,5 @@ def audit_db(monkeypatch: pytest.MonkeyPatch) -> AuditDatabase:
     monkeypatch.setattr(session, "get_pool", lambda: database.pool)
     monkeypatch.setattr(DbConnection, "execute", execute)
     monkeypatch.setattr(DbConnection, "fetchone", fetchone)
+    monkeypatch.setattr(DbConnection, "executemany", executemany)
     return database

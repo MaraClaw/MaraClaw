@@ -7,6 +7,8 @@ import { createServer } from 'vite'
 
 export const broadcastId = '0d75651c-8c6c-4404-9046-50e1b3ff6dd2'
 export const counts = { ok: true, broadcast_id: broadcastId, users_notified: 7, agents_notified: 3, emails_sent: 5 }
+export const acceptance = { broadcast_id: broadcastId, status: 'accepted', accepted_at: '2026-11-09T04:00:00Z', users_total: 7, agents_total: 3 }
+export const completedJob = { ...acceptance, status: 'completed', completed_at: '2026-11-09T04:00:01Z', processed: 10, users_notified: 7, agents_notified: 3, skipped: 0, emails_queued: 5 }
 export const details = { 400: 'System email is not configured. Please configure it in Platform Settings.', 403: 'Only org admins can send broadcasts', 503: 'Synthetic service unavailable' }
 export const admin = {
   id: '18e275bd-29a0-4adf-a1ab-1cbf787798fb', identity_id: '18e275bd-29a0-4adf-a1ab-1cbf787798fc', email: 'operator@example.test', display_name: 'Operator',
@@ -45,6 +47,7 @@ export async function createBroadcastHarness() {
       receipt: counts, email: { ...emptyStatus, available: true, queued: 5 }, emailHttpStatus: 200, emailGate: null, emailRequests: [],
       cancelResult: { ...emptyStatus, available: true, cancelled: 5, cancelled_now: 5 }, cancelHttpStatus: 200, cancelGate: null, cancelRequests: [],
       history: { items: [], next_cursor: null }, historyStatus: 200, historyGate: null, historyRequests: [],
+      job: null, jobHttpStatus: 200, jobGate: null, jobRequests: [], accepted: acceptance,
     }
     const errors = []
     try {
@@ -67,11 +70,17 @@ export async function createBroadcastHarness() {
           exchange = { cursor: params.get('cursor'), limit: params.get('limit'), status: state.historyStatus, gate: state.historyGate, delivered: Promise.withResolvers() }
           state.historyRequests.push(exchange)
           body = typeof state.history === 'function' ? state.history(exchange.cursor) : state.history
-        } else if (path === '/api/notifications/broadcast' && route.request().method() === 'POST') {
+        } else if (path === '/api/notifications/broadcast/jobs' && route.request().method() === 'POST') {
           const payload = route.request().postDataJSON()
-          exchange = { payload, status: state.status, gate: state.gate, delivered: Promise.withResolvers() }
+          exchange = { payload, key: route.request().headers()['idempotency-key'], status: state.status === 200 ? 202 : state.status, gate: state.gate, delivered: Promise.withResolvers() }
           state.exchanges.push(exchange)
-          body = payload.send_email ? state.receipt : { ...state.receipt, emails_sent: 0 }
+          state.sentEmail = payload.send_email
+          body = { ...state.accepted, users_total: Math.max(state.accepted.users_total, state.receipt.emails_sent) }
+        } else if (path === `/api/notifications/broadcast/jobs/${broadcastId}` && route.request().method() === 'GET') {
+          exchange = { status: state.jobHttpStatus, gate: state.jobGate, delivered: Promise.withResolvers() }
+          state.jobRequests.push(exchange)
+          const users = Math.max(state.receipt.users_notified, state.receipt.emails_sent)
+          body = state.job ?? { ...completedJob, users_total: users, processed: users + state.receipt.agents_notified, users_notified: users, agents_notified: state.receipt.agents_notified, emails_queued: state.sentEmail ? state.receipt.emails_sent : 0 }
         } else if (path === `/api/notifications/broadcast/${broadcastId}/email-status` && route.request().method() === 'GET') {
           exchange = { status: state.emailHttpStatus, gate: state.emailGate, delivered: Promise.withResolvers() }
           state.emailRequests.push(exchange)
@@ -89,7 +98,7 @@ export async function createBroadcastHarness() {
         try {
           if (exchange?.gate) await exchange.gate.promise
           status = exchange?.status ?? status
-          await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(status === 200 ? body : { detail: details[status] }) })
+          await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(status < 300 ? body : { detail: details[status] }) })
         } finally { exchange?.delivered.resolve() }
       })
       await page.goto(`${base}broadcast`)
@@ -108,7 +117,7 @@ export async function createBroadcastHarness() {
       evidence.push(options.name)
       console.log(`PASS ${options.name}`)
     } finally {
-      const requests = [...state.exchanges, ...state.emailRequests, ...state.cancelRequests, ...state.historyRequests]
+      const requests = [...state.exchanges, ...state.jobRequests, ...state.emailRequests, ...state.cancelRequests, ...state.historyRequests]
       for (const exchange of requests) exchange.gate?.resolve()
       await Promise.allSettled(requests.map((exchange) => exchange.delivered.promise))
       if (skillBrowser) { await skillBrowser.close(); closedSkillConnections++ }

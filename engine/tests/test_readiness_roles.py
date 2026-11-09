@@ -31,7 +31,16 @@ async def _background_admission() -> AsyncGenerator[None]:
 )
 @pytest.mark.parametrize(
     "failed_worker",
-    ["trigger_daemon", "agent_setup", "agent_start_reconciler", "openclaw_dispatch", "whatsapp_personal"],
+    [
+        "trigger_daemon",
+        "agent_setup",
+        "agent_start_reconciler",
+        "cache-invalidation-recovery",
+        "auth_email",
+        "broadcast_fanout",
+        "openclaw_dispatch",
+        "whatsapp_personal",
+    ],
 )
 async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
@@ -40,7 +49,10 @@ async def test_actual_start_registers_required_role_evidence(
         agent_setup,
         agent_start_reconciler,
         audit_logger,
+        auth_email_worker,
         broadcast_email_worker,
+        broadcast_fanout_worker,
+        cache_invalidation_worker,
         company_transfer_cleanup,
         gateway_report_relay,
         openclaw_dispatch_reconciler,
@@ -92,6 +104,9 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
     monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
     monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", loop)
+    monkeypatch.setattr(cache_invalidation_worker, "start_cache_invalidation_worker", loop)
+    monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", loop)
+    monkeypatch.setattr(broadcast_fanout_worker, "start_broadcast_fanout_worker", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", loop)
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
@@ -122,9 +137,18 @@ async def test_actual_start_registers_required_role_evidence(
         assert ("openclaw_dispatch" in required) == role_enabled(roles, "worker")
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
+        for worker_name in ("cache-invalidation-recovery", "auth_email", "broadcast_fanout"):
+            assert (worker_name in required) == role_enabled(roles, "worker")
+            if role_enabled(roles, "worker"):
+                task, finite = required[worker_name]
+                assert not finite
+                assert not task.done()
         assert set(runtime.tasks.progress) == (
             {
                 "trigger_daemon",
+                "cache-invalidation-recovery",
+                "auth_email",
+                "broadcast_fanout",
                 "broadcast_email",
                 "organization_admission_email",
                 "openclaw_update",

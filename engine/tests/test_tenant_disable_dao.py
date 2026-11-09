@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Self
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.db import session as session_module
+from app.db.connection import Params
 
 
 class _FakeCursor:
@@ -26,6 +28,10 @@ class _FakeCursor:
 
     async def execute(self, query: str, params: Any = None) -> None:
         self._parent.executed.append((query, params))
+
+    async def executemany(self, query: str, params_seq: Sequence[Params]) -> None:
+        for params in params_seq:
+            await self.execute(query, params)
 
     async def fetchone(self) -> dict[str, object]:
         _query, params = self._parent.executed[-1]

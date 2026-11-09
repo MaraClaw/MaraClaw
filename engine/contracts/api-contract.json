@@ -4028,6 +4028,20 @@
         "title": "Body_upload_tenant_logo_api_tenants__tenant_id__logo_post",
         "type": "object"
       },
+      "BroadcastJobStatus": {
+        "enum": [
+          "pending",
+          "processing",
+          "completed"
+        ],
+        "title": "BroadcastJobStatus",
+        "type": "string",
+        "x-enum-varnames": [
+          "PENDING",
+          "PROCESSING",
+          "COMPLETED"
+        ]
+      },
       "BroadcastRequest": {
         "properties": {
           "body": {
@@ -10743,6 +10757,114 @@
           "next_cursor"
         ],
         "title": "NotificationBroadcastHistoryPageResponse",
+        "type": "object"
+      },
+      "NotificationBroadcastJobAcceptanceResponse": {
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "title": "Accepted At",
+            "type": "string"
+          },
+          "agents_total": {
+            "title": "Agents Total",
+            "type": "integer"
+          },
+          "broadcast_id": {
+            "format": "uuid",
+            "title": "Broadcast Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "accepted",
+            "title": "Status",
+            "type": "string"
+          },
+          "users_total": {
+            "title": "Users Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broadcast_id",
+          "status",
+          "accepted_at",
+          "users_total",
+          "agents_total"
+        ],
+        "title": "NotificationBroadcastJobAcceptanceResponse",
+        "type": "object"
+      },
+      "NotificationBroadcastJobStatusResponse": {
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "title": "Accepted At",
+            "type": "string"
+          },
+          "agents_notified": {
+            "title": "Agents Notified",
+            "type": "integer"
+          },
+          "agents_total": {
+            "title": "Agents Total",
+            "type": "integer"
+          },
+          "broadcast_id": {
+            "format": "uuid",
+            "title": "Broadcast Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "emails_queued": {
+            "title": "Emails Queued",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BroadcastJobStatus"
+          },
+          "users_notified": {
+            "title": "Users Notified",
+            "type": "integer"
+          },
+          "users_total": {
+            "title": "Users Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broadcast_id",
+          "status",
+          "accepted_at",
+          "completed_at",
+          "users_total",
+          "agents_total",
+          "processed",
+          "users_notified",
+          "agents_notified",
+          "skipped",
+          "emails_queued"
+        ],
+        "title": "NotificationBroadcastJobStatusResponse",
         "type": "object"
       },
       "NotificationBroadcastResponse": {
@@ -18608,7 +18730,7 @@
   },
   "info": {
     "title": "MaraClaw",
-    "version": "1.0.6"
+    "version": "1.0.7"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -36649,6 +36771,113 @@
         ]
       }
     },
+    "/api/notifications/broadcast/jobs": {
+      "post": {
+        "operationId": "post_2f6170692f6e6f74696669636174696f6e732f62726f6164636173742f6a6f6273",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BroadcastRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationBroadcastJobAcceptanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Broadcast Job",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/broadcast/jobs/{broadcast_id}": {
+      "get": {
+        "operationId": "get_2f6170692f6e6f74696669636174696f6e732f62726f6164636173742f6a6f62732f7b62726f6164636173745f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broadcast_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Broadcast Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationBroadcastJobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Broadcast Job Status",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/broadcast/{broadcast_id}/cancel-email": {
       "post": {
         "operationId": "post_2f6170692f6e6f74696669636174696f6e732f62726f6164636173742f7b62726f6164636173745f69647d2f63616e63656c2d656d61696c",
@@ -44095,6 +44324,7 @@
       "AssignmentOut",
       "AssignmentsOut",
       "AuthUser",
+      "BroadcastJobStatus",
       "BroadcastRequest",
       "BulkToolUpdateItem",
       "CancelReason",
@@ -44191,6 +44421,8 @@
       "NotificationBroadcastEmailCancellationResponse",
       "NotificationBroadcastEmailStatusResponse",
       "NotificationBroadcastHistoryPageResponse",
+      "NotificationBroadcastJobAcceptanceResponse",
+      "NotificationBroadcastJobStatusResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
       "NotificationPageResponse",
@@ -44376,6 +44608,7 @@
       "AtlassianToolPreview",
       "AttachmentRef",
       "AuthUser",
+      "BroadcastJobStatus",
       "BroadcastRequest",
       "BulkToolUpdateItem",
       "CancelReason",
@@ -44510,6 +44743,8 @@
       "NotificationBroadcastEmailStatusResponse",
       "NotificationBroadcastHistoryItem",
       "NotificationBroadcastHistoryPageResponse",
+      "NotificationBroadcastJobAcceptanceResponse",
+      "NotificationBroadcastJobStatusResponse",
       "NotificationBroadcastResponse",
       "NotificationKind",
       "NotificationPageResponse",

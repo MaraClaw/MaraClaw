@@ -16,6 +16,7 @@ from app.core.events import get_cache_redis
 from app.core.json_types import json_loads_object
 from app.core.logging import logger
 from app.records.agent import AgentRecord
+from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
 _POLICY_VERSION_KEY = "aclver:{agent_id}"
 _DECISION_KEY = "acl:v1:{agent_id}:{user_id}"
@@ -109,15 +110,16 @@ async def read_acl_snapshot(user_id: uuid.UUID, agent_id: uuid.UUID) -> AclSnaps
     try:
         client = await get_cache_redis()
         pipe = client.pipeline()
+        _ = pipe.set(_ver_key(agent_id), uuid.uuid4().hex, ex=max(_ttl_seconds() * 40, 3600), nx=True)
         _ = pipe.get(_ver_key(agent_id))
         _ = pipe.get(_dec_key(agent_id, user_id))
         results = list[object](await pipe.execute())
     except Exception as exc:
         logger.debug("access_cache read skipped: {}", type(exc).__name__)
         return NO_ACL_SNAPSHOT
-    if len(results) < 2:
+    if len(results) < 3:
         return NO_ACL_SNAPSHOT
-    ver_raw, payload = results[0], results[1]
+    ver_raw, payload = results[1], results[2]
     return AclSnapshot(str(ver_raw or "0"), payload if isinstance(payload, (str, bytes, bytearray)) else None)
 
 
@@ -199,6 +201,20 @@ def has_pending_acl_writes() -> bool:
     return pending is not None and bool(pending.bumps or pending.drops)
 
 
+def pending_acl_invalidations() -> tuple[CacheInvalidation, ...]:
+    """Snapshot deferred intent without clearing it before the owning SQL commit."""
+    pending = _deferred_acl.get()
+    if pending is None:
+        return ()
+    return tuple(
+        CacheInvalidation(
+            _ver_key(agent_id),
+            CacheInvalidationKind.ACL_DROP if agent_id in pending.drops else CacheInvalidationKind.ACL_BUMP,
+        )
+        for agent_id in pending.bumps | pending.drops
+    )
+
+
 def begin_deferred_acl() -> Token[_DeferredAcl | None]:
     """Start queuing aclver ops until ``flush_deferred_acl`` / ``end_deferred_acl``."""
     pending = _DeferredAcl()
@@ -222,9 +238,9 @@ async def flush_deferred_acl() -> None:
 
 
 async def bump_agent_acl_version(agent_id: uuid.UUID | None) -> None:
-    """Invalidate all cached decisions for an agent (INCR, no SCAN).
+    """Invalidate all cached decisions for an agent without scanning decisions.
 
-    When a top-level ``connection_ctx`` is open, the INCR is deferred until
+    When a top-level ``connection_ctx`` is open, rotation is deferred until
     that scope commits so concurrent readers cannot cache a grant under the
     new version while the revoke is still uncommitted.
     """
@@ -252,9 +268,10 @@ async def drop_agent_acl_version(agent_id: uuid.UUID | None) -> None:
 
 
 async def _invalidate_now(bumps: Collection[uuid.UUID], drops: Collection[uuid.UUID]) -> None:
-    """One bounded MULTI/EXEC pipeline: DEL the drops, INCR+EXPIRE the bumps.
+    """One bounded MULTI/EXEC pipeline rotates opaque generations, including deletion tombstones.
 
-    INCR and EXPIRE commit together, so no version key is left without a TTL. Invalidations never consult the
+    Each token has a TTL. Dropping retains a tombstone so the missing version cannot reactivate old decisions.
+    Invalidations never consult the
     read circuit; a failure is logged at WARNING and the cache entries age out by TTL.
     """
     if not bumps and not drops:
@@ -263,11 +280,8 @@ async def _invalidate_now(bumps: Collection[uuid.UUID], drops: Collection[uuid.U
     try:
         client = await get_cache_redis()
         pipe = client.pipeline()
-        if drops:
-            _ = pipe.delete(*(_ver_key(agent_id) for agent_id in drops))
-        for agent_id in bumps:
-            _ = pipe.incr(_ver_key(agent_id))
-            _ = pipe.expire(_ver_key(agent_id), ttl)
+        for agent_id in (*bumps, *drops):
+            _ = pipe.set(_ver_key(agent_id), uuid.uuid4().hex, ex=ttl)
         _ = await pipe.execute()
     except Exception as exc:
         logger.warning(

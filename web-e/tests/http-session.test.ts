@@ -191,10 +191,10 @@ for (const kind of ['JSON', 'multipart'] as const) {
     assert.equal(stored(), 'token-a')
   })
 
-  for (const stage of ['fetch', 'body'] as const) {
-    test(`${kind} ignores an aborted late 401 during ${stage} without expiring the current owner`, async () => {
+  for (const status of [200, 401]) for (const stage of ['fetch', 'body'] as const) {
+    test(`${kind} rejects an aborted late ${status} during ${stage} without expiring the current owner`, async () => {
       const pending = Promise.withResolvers<Response>()
-      const response = new DeferredBodyResponse(null, { status: 401 })
+      const response = new DeferredBodyResponse(null, { status })
       const controller = new AbortController()
       const { client, stored } = fixture(() => pending.promise)
       const rejected = assert.rejects(request(client, { signal: controller.signal }), { name: 'AbortError' })

@@ -233,6 +233,11 @@ export type AssignmentsOut = z.infer<typeof AssignmentsOutSchema>;
 export const AuthUserSchema = z.looseObject({ ["avatar_url"]: z.union([z.string(), z.null()]).optional(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["display_name"]: z.string(), ["email"]: z.union([z.string(), z.null()]).optional(), ["email_verified"]: z.boolean().optional(), ["id"]: z.guid(), ["identity_id"]: z.union([z.guid(), z.null()]).optional(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["is_platform_admin"]: z.boolean().optional(), ["must_change_password"]: z.boolean().optional(), ["primary_mobile"]: z.union([z.string(), z.null()]).optional(), ["registration_source"]: z.union([z.string(), z.null()]).optional(), ["role"]: UserRoleSchema, ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["timezone"]: z.union([z.string(), z.null()]).optional(), ["title"]: z.union([z.string(), z.null()]).optional() });
 export type AuthUser = z.infer<typeof AuthUserSchema>;
 
+export const BroadcastJobStatusValues = ["pending","processing","completed"] as const;
+export const BroadcastJobStatus = { PENDING: "pending", PROCESSING: "processing", COMPLETED: "completed" } as const;
+export const BroadcastJobStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("processing"), z.literal("completed")]), z.string());
+export type BroadcastJobStatus = z.infer<typeof BroadcastJobStatusSchema>;
+
 export const BroadcastRequestSchema = z.looseObject({ ["body"]: z.string().refine(value => [...value].length <= 1000).optional(), ["send_email"]: z.boolean().optional(), ["title"]: z.string().refine(value => [...value].length <= 200) });
 export type BroadcastRequest = z.infer<typeof BroadcastRequestSchema>;
 
@@ -689,6 +694,12 @@ export type NotificationBroadcastHistoryItem = z.infer<typeof NotificationBroadc
 
 export const NotificationBroadcastHistoryPageResponseSchema = z.looseObject({ ["items"]: z.array(NotificationBroadcastHistoryItemSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
 export type NotificationBroadcastHistoryPageResponse = z.infer<typeof NotificationBroadcastHistoryPageResponseSchema>;
+
+export const NotificationBroadcastJobAcceptanceResponseSchema = z.looseObject({ ["accepted_at"]: z.iso.datetime({ offset: true, local: true }), ["agents_total"]: z.number().refine(Number.isInteger), ["broadcast_id"]: z.guid(), ["status"]: z.intersection(z.literal("accepted"), z.string()), ["users_total"]: z.number().refine(Number.isInteger) });
+export type NotificationBroadcastJobAcceptanceResponse = z.infer<typeof NotificationBroadcastJobAcceptanceResponseSchema>;
+
+export const NotificationBroadcastJobStatusResponseSchema = z.looseObject({ ["accepted_at"]: z.iso.datetime({ offset: true, local: true }), ["agents_notified"]: z.number().refine(Number.isInteger), ["agents_total"]: z.number().refine(Number.isInteger), ["broadcast_id"]: z.guid(), ["completed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["emails_queued"]: z.number().refine(Number.isInteger), ["processed"]: z.number().refine(Number.isInteger), ["skipped"]: z.number().refine(Number.isInteger), ["status"]: BroadcastJobStatusSchema, ["users_notified"]: z.number().refine(Number.isInteger), ["users_total"]: z.number().refine(Number.isInteger) });
+export type NotificationBroadcastJobStatusResponse = z.infer<typeof NotificationBroadcastJobStatusResponseSchema>;
 
 export const NotificationBroadcastResponseSchema = z.looseObject({ ["agents_notified"]: z.number().refine(Number.isInteger), ["broadcast_id"]: z.guid(), ["emails_sent"]: z.number().refine(Number.isInteger), ["ok"]: z.boolean(), ["users_notified"]: z.number().refine(Number.isInteger) });
 export type NotificationBroadcastResponse = z.infer<typeof NotificationBroadcastResponseSchema>;

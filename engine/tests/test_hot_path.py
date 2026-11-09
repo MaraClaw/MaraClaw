@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core import redis_cache
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
 from app.db import pool as pool_module, session as session_module
@@ -119,11 +120,14 @@ class _FakeRedis:
             raise RuntimeError("redis down")
         return self.store.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
         if self.fail:
             raise RuntimeError("redis down")
         del ex
+        if nx and key in self.store:
+            return False
         self.store[key] = value
+        return True
 
     async def delete(self, *keys: str) -> None:
         if self.fail:
@@ -351,6 +355,7 @@ async def test_build_agent_context_second_call_skips_storage_reads(monkeypatch: 
         return "UTC"
 
     monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
     monkeypatch.setattr(agent_context, "_load_skills_index", fake_skills)
@@ -388,6 +393,7 @@ async def test_build_agent_context_redis_failure_falls_open(monkeypatch: pytest.
         return "UTC"
 
     monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
     monkeypatch.setattr(agent_context, "_load_skills_index", fake_skills)
@@ -421,6 +427,7 @@ async def test_context_cache_invalidates_on_soul_path(monkeypatch: pytest.Monkey
         return "UTC"
 
     monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
     monkeypatch.setattr(agent_context, "_load_skills_index", fake_skills)
@@ -443,6 +450,7 @@ async def test_context_cache_rejects_stale_fill(monkeypatch: pytest.MonkeyPatch)
         return redis
 
     monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
 
     agent_id = uuid4()
@@ -701,6 +709,11 @@ class _AclRedis:
     def pipeline(self) -> Self:
         self._keys: list[str] = []
         return self
+
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        if not nx or key not in self.store:
+            self.store[key] = value
+        self._keys.append("__set_result__")
 
     def get(self, key: str) -> None:
         self._keys.append(key)

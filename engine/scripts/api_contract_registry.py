@@ -22,6 +22,7 @@ from app.core.domain.approvals import ApprovalAction, ApprovalStatus
 from app.core.domain.channels import ChannelType
 from app.core.domain.control import ControlEnvironment, ControlStatus
 from app.core.domain.focus import FocusKind, FocusStatus
+from app.core.domain.notifications import BroadcastJobStatus
 from app.core.domain.okr import KeyResultStatus
 from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.domain.triggers import TriggerExecutionStatus
@@ -103,6 +104,7 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     PermissionGrantScope,
     ApprovalAction,
     ApprovalStatus,
+    BroadcastJobStatus,
     ChannelType,
     ControlEnvironment,
     ControlStatus,

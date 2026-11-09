@@ -73,9 +73,9 @@ export async function uploadChatFile(file: File, agentId: string): Promise<{
   return apiFormRequest('/api/chat/upload', form)
 }
 
-export async function listFiles(agentId: string, path = ''): Promise<FileInfo[]> {
+export async function listFiles(agentId: string, path = '', signal?: AbortSignal): Promise<FileInfo[]> {
   const query = path ? `?path=${encodeURIComponent(path)}` : ''
-  return apiRequest(`/api/agents/${agentId}/files/${query}`)
+  return apiRequest(`/api/agents/${agentId}/files/${query}`, { ...(signal === undefined ? {} : { signal }) })
 }
 
 export async function readFileContent(agentId: string, path: string): Promise<{ path: string; content: string; version_token?: string }> {

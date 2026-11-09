@@ -18,6 +18,7 @@ from psycopg.rows import DictRow
 from tests.test_redis_cache import FakeRedis
 
 from app.core import access_cache, redis_cache
+from app.dao.cache_invalidation_dao import cache_invalidation_dao
 from app.db import pool as pool_module, session as session_module
 from app.db.connection import DbConnection
 from app.db.session import (
@@ -34,6 +35,25 @@ from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_works
 from transaction_pool_fakes import CountingPool
 
 _REAL_FLUSH_VERSIONS = redis_cache.flush_deferred_versions
+
+
+@pytest.mark.asyncio
+async def test_failed_durable_cache_capture_aborts_the_owning_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(cache_invalidation_dao, "capture", AsyncMock(side_effect=ValueError("capture rejected")))
+    publication = AsyncMock()
+    monkeypatch.setattr(session_module, "_flush_cache_invalidations", publication)
+    token = session_module._conn_ctx.set(None)
+    try:
+        with pytest.raises(ValueError, match="capture rejected"):
+            async with connection_ctx():
+                await redis_cache.bump_version("snapshot-version")
+        assert raw.commits == 0
+        assert raw.rollbacks == 1
+        publication.assert_not_awaited()
+    finally:
+        session_module._conn_ctx.reset(token)
 
 
 class _FakeCursor:

@@ -33,6 +33,14 @@ export async function prepareChatSkills(page: Page) {
       return route.fulfill({ json: { status: 'ok' } })
     }
     const path = url.searchParams.get('path') ?? ''
+    if (url.pathname === `/api/agents/${originalAgent.id}/files/page`) {
+      expect(request.method()).toBe('GET')
+      expect([...url.searchParams.keys()]).toEqual(['path', 'limit'])
+      expect(url.searchParams.get('limit')).toBe('100')
+      expect(files.has(path), `Unexpected paged Files path: ${path}`).toBe(true)
+      requests.push(`${url.pathname}:${path}`)
+      return route.fulfill({ json: { items: files.get(path), next_cursor: null } })
+    }
     expect([...url.searchParams.keys()]).toEqual(path ? ['path'] : [])
     requests.push(`${url.pathname}:${path}`)
     if (url.pathname === `/api/agents/${originalAgent.id}/files/content`) {

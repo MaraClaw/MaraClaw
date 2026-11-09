@@ -13,12 +13,14 @@ from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.broadcast_history_dao import broadcast_history_dao
+from app.dao.broadcast_job_dao import broadcast_job_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, flush_request_transaction
 from app.records.broadcast_email import BroadcastEmailStatus, NewBroadcastEmail
 from app.records.broadcast_history import NewBroadcastHistory
+from app.records.broadcast_job import BroadcastJobDraft
 from app.records.broadcast_submission import BroadcastSubmissionRecord
 from app.records.user import UserRecord
 from app.schemas.notification_responses import (
@@ -26,6 +28,8 @@ from app.schemas.notification_responses import (
     NotificationBroadcastEmailCancellationResponse,
     NotificationBroadcastEmailStatusResponse,
     NotificationBroadcastHistoryPageResponse,
+    NotificationBroadcastJobAcceptanceResponse,
+    NotificationBroadcastJobStatusResponse,
     NotificationBroadcastResponse,
     NotificationCursor,
     NotificationPageResponse,
@@ -241,6 +245,50 @@ def _broadcast_tenant(current_user: UserRecord) -> uuid.UUID:
     if not current_user.tenant_id:
         raise HTTPException(400, "No tenant associated with your account")
     return current_user.tenant_id
+
+
+@router.post("/notifications/broadcast/jobs", status_code=202)
+async def create_broadcast_job(
+    req: BroadcastRequest,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=200)],
+    current_user: UserRecord = Depends(get_current_user),
+) -> NotificationBroadcastJobAcceptanceResponse:
+    from app.services.broadcast_jobs import accept_broadcast_job
+
+    tenant_id = _broadcast_tenant(current_user)
+    return await accept_broadcast_job(
+        BroadcastJobDraft(
+            tenant_id=tenant_id,
+            sender_id=current_user.id,
+            sender_name=current_user.display_name or current_user.email or "Admin",
+            idempotency_key=idempotency_key,
+            title=req.title,
+            body=req.body,
+            send_email=req.send_email,
+        )
+    )
+
+
+@router.get("/notifications/broadcast/jobs/{broadcast_id}")
+async def broadcast_job_status(
+    broadcast_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> NotificationBroadcastJobStatusResponse:
+    job = await broadcast_job_dao.get(_broadcast_tenant(current_user), broadcast_id)
+    if job is None:
+        raise HTTPException(404, "Broadcast job not found")
+    return {
+        "broadcast_id": job.broadcast_id,
+        "status": job.status,
+        "accepted_at": job.accepted_at,
+        "completed_at": job.completed_at,
+        "users_total": job.users_total,
+        "agents_total": job.agents_total,
+        "processed": job.cursor,
+        "users_notified": job.users_notified,
+        "agents_notified": job.agents_notified,
+        "skipped": job.skipped,
+        "emails_queued": job.emails_queued,
+    }
 
 
 def _email_status_response(status: BroadcastEmailStatus) -> NotificationBroadcastEmailStatusResponse:

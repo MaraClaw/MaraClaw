@@ -151,8 +151,8 @@ export type PublishedPage = {
   url: string
 }
 
-export async function listPublishedPages(agentId: string): Promise<PublishedPage[]> {
-  return apiRequest(`/api/pages/list?agent_id=${agentId}`)
+export async function listPublishedPages(agentId: string, signal?: AbortSignal): Promise<PublishedPage[]> {
+  return apiRequest(`/api/pages/list?agent_id=${agentId}`, { ...(signal === undefined ? {} : { signal }) })
 }
 
 export async function publishWorkspacePage(agentId: string, path: string): Promise<PublishedPage> {

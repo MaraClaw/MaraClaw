@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import { ZodError } from 'zod'
 
 import { authSession } from '../src/lib/auth-session.ts'
-import { createCredential, listCredentials, updateCredential, controlUnlock } from '../src/lib/control-api.ts'
+import { createCredential, listCredentials, listPublishedPages, updateCredential, controlUnlock } from '../src/lib/control-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { listFiles } from '../src/lib/workspace-api.ts'
+import { DiscoveryBodyResponse } from './discovery-fixture.ts'
 
 const credential = {
   id: '09bc8102-a06b-4cb5-b034-3e32ea78f67a', agent_id: '5458ec51-a954-4306-8626-68e16921d95f', revision: 7,
@@ -122,4 +124,37 @@ for (const operation of ['list', 'edit', 'unlock'] as const) {
     // Then
     await assert.rejects(result, StaleSessionError)
   })
+}
+
+for (const resource of ['files', 'pages'] as const) {
+  const list = (signal?: AbortSignal) => resource === 'files'
+    ? listFiles('agent-a', 'workspace/a & b', signal) : listPublishedPages('agent-a', signal)
+
+  test(`${resource} preserves its discovery URL and returns results with or without a signal`, async (t) => {
+    const controller = new AbortController()
+    const requests: { readonly url: string; readonly signal: AbortSignal | null | undefined }[] = []
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), signal: init?.signal })
+      return Response.json([])
+    })
+    assert.deepEqual(await list(), [])
+    assert.deepEqual(await list(controller.signal), [])
+    const url = resource === 'files' ? '/api/agents/agent-a/files/?path=workspace%2Fa%20%26%20b' : '/api/pages/list?agent_id=agent-a'
+    assert.deepEqual(requests, [{ url, signal: undefined }, { url, signal: controller.signal }])
+  })
+
+  for (const interruption of ['abort', 'replacement'] as const) {
+    test(`${resource} rejects ${interruption} while its response body is pending`, async (t) => {
+      const controller = new AbortController()
+      const body = new DiscoveryBodyResponse()
+      t.mock.method(globalThis, 'fetch', async () => body)
+      const rejected = interruption === 'abort'
+        ? assert.rejects(list(controller.signal), { name: 'AbortError' }) : assert.rejects(list(), StaleSessionError)
+      await body.started.promise
+      if (interruption === 'abort') controller.abort()
+      else authSession.adoptStoredSession(authSession.capture())
+      body.result.resolve('[]')
+      await rejected
+    })
+  }
 }

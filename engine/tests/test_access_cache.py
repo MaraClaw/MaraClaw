@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, Self, override
+from typing import Any, Never, Self, override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,13 +17,17 @@ from app.core.access_cache import bump_agent_acl_version
 from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.users import UserRole
 from app.records.agent import AgentPermissionRecord, AgentRecord
+from app.records.cache_invalidation import CacheInvalidationKind
 from app.records.user import UserRecord
 
 
 class _FakePipeline:
     def __init__(self, parent: FakeRedis) -> None:
         self._parent = parent
-        self._ops: list[tuple[str, str, int]] = []
+        self._ops: list[tuple[str, str, int | tuple[str, int, bool]]] = []
+
+    def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> None:
+        self._ops.append(("set", key, (value, ex, nx)))
 
     def get(self, key: str) -> None:
         self._ops.append(("get", key, 0))
@@ -44,7 +48,16 @@ class _FakePipeline:
             raise RuntimeError("redis down")
         results: list[str | int | bool | None] = []
         for op, key, ttl in self._ops:
-            if op == "get":
+            if op == "set":
+                assert isinstance(ttl, tuple)
+                value, expiry, nx = ttl
+                if nx and key in parent.store:
+                    results.append(False)
+                else:
+                    parent.store[key] = value
+                    parent.ttls[key] = expiry
+                    results.append(True)
+            elif op == "get":
                 results.append(parent.store.get(key))
             elif op == "delete":
                 results.append(parent.store.pop(key, None) is not None)
@@ -53,6 +66,7 @@ class _FakePipeline:
                 parent.store[key] = str(int(parent.store.get(key) or 0) + 1)
                 results.append(int(parent.store[key]))
             else:
+                assert isinstance(ttl, int)
                 parent.ttls[key] = ttl
                 results.append(True)
         return results
@@ -310,7 +324,7 @@ async def test_denied_access_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(HTTPException) as exc:
         await permissions.check_agent_access(user, agent.id)
     assert exc.value.status_code == 403
-    assert fake.store == {}
+    assert not any(key.startswith("acl:v1:") for key in fake.store)
 
 
 @pytest.mark.asyncio
@@ -352,7 +366,7 @@ async def test_permission_delete_bumps_after_commit(monkeypatch: pytest.MonkeyPa
             await agent_permission_dao.delete_for_agent(agent_id)
             assert all(not key.startswith("aclver:") for key in fake.store)
         ver_key = f"aclver:{agent_id}"
-        assert fake.store.get(ver_key) == "1"
+        assert fake.store.get(ver_key) not in (None, "0")
     finally:
         session_module._conn_ctx.reset(token)
 
@@ -370,6 +384,9 @@ class _SessionCursor:
     async def execute(self, query: str, params: object = None) -> None:
         self._parent.executed.append(query)
         del params
+
+    async def executemany(self, query: str, params_seq: object = None) -> None:
+        self._parent.executed.append(query)
 
     async def fetchone(self) -> None:
         return None
@@ -433,7 +450,8 @@ async def test_dirty_acl_inputs_are_never_cached(monkeypatch):
         return fake
 
     monkeypatch.setattr(access_cache, "get_cache_redis", redis)
-    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver="0")
+    observed = await access_cache.read_acl_snapshot(user.id, agent_id)
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.USE, observed_ver=observed.version)
     assert await access_cache.get_cached_level(user, agent_id) == "use"
     token = access_cache.begin_deferred_acl()
     try:
@@ -595,7 +613,7 @@ class _SocketTimeoutRedis(FakeRedis):
         super().__init__()
         self.cancelled = 0
 
-    async def stall(self) -> None:
+    async def stall(self) -> Never:
         self.round_trips += 1
         try:
             await asyncio.sleep(0)
@@ -609,7 +627,7 @@ class _SocketTimeoutRedis(FakeRedis):
         return _StalledPipeline(self)
 
     @override
-    async def eval(self, *_args, **_kwargs):
+    async def eval(self, *_args, **_kwargs) -> Never:
         await self.stall()
 
 
@@ -660,7 +678,8 @@ async def test_cached_decision_is_validated_against_the_loaded_user(monkeypatch:
         return fake
 
     monkeypatch.setattr(access_cache, "get_cache_redis", cache_redis)
-    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.MANAGE, observed_ver="0")
+    observed = await access_cache.read_acl_snapshot(user.id, agent_id)
+    await access_cache.set_cached_level(user, agent_id, PermissionAccessLevel.MANAGE, observed_ver=observed.version)
     snapshot = await access_cache.read_acl_snapshot(user.id, agent_id)
 
     assert await access_cache.get_cached_level(user, agent_id, snapshot) == "manage"
@@ -690,6 +709,11 @@ async def test_deferred_flush_is_one_pipeline_with_ttl_and_drops_win(monkeypatch
         await access_cache.bump_agent_acl_version(both)
         await access_cache.drop_agent_acl_version(dropped)
         await access_cache.drop_agent_acl_version(both)
+        assert {operation.key: operation.kind for operation in access_cache.pending_acl_invalidations()} == {
+            f"aclver:{bumped}": CacheInvalidationKind.ACL_BUMP,
+            f"aclver:{dropped}": CacheInvalidationKind.ACL_DROP,
+            f"aclver:{both}": CacheInvalidationKind.ACL_DROP,
+        }
         assert fake.round_trips == 0
         await access_cache.flush_deferred_acl()
         await access_cache.flush_deferred_acl()
@@ -697,8 +721,11 @@ async def test_deferred_flush_is_one_pipeline_with_ttl_and_drops_win(monkeypatch
         access_cache.end_deferred_acl(token)
 
     assert fake.round_trips == 1
-    assert fake.store == {f"aclver:{bumped}": "1"}
-    assert fake.ttls == {f"aclver:{bumped}": 3600}
+    assert set(fake.store) == {f"aclver:{agent_id}" for agent_id in (bumped, dropped, both)}
+    assert len(set(fake.store.values())) == 3
+    assert fake.store[f"aclver:{dropped}"] != "4"
+    assert fake.store[f"aclver:{both}"] != "7"
+    assert fake.ttls == dict.fromkeys(fake.store, 3600)
 
 
 @pytest.mark.asyncio
@@ -717,7 +744,7 @@ async def test_failed_invalidation_warns_and_ignores_the_read_circuit(monkeypatc
     redis_cache._trip()
     try:
         await access_cache.bump_agent_acl_version(agent_id)
-        assert fake.store[f"aclver:{agent_id}"] == "1"
+        assert fake.store[f"aclver:{agent_id}"] not in ("0", "")
         fake.fail = True
         await access_cache.drop_agent_acl_version(agent_id)
     finally:

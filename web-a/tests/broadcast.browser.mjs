@@ -4,6 +4,7 @@ import { expect } from '@playwright/test'
 import { assertReducedPress } from './company-deletion-browser-evidence.mjs'
 import { admin, compose, createBroadcastHarness, details, flush } from './broadcast-browser-harness.mjs'
 import { runBroadcastEmailCases } from './broadcast-email-browser-cases.mjs'
+import { runBroadcastJobCases } from './broadcast-job-browser-cases.mjs'
 
 const harness = await createBroadcastHarness()
 const { base, output, scenario, capture } = harness
@@ -108,6 +109,7 @@ try {
     await expect(page.getByLabel('Title', { exact: true })).toHaveValue('')
     await expect(page.getByLabel('Also send email')).not.toBeChecked()
     assert.equal(state.exchanges.length, 2)
+    assert.equal(state.exchanges[0].key, state.exchanges[1].key)
   })
 
   for (const status of [403, 503]) await scenario({ name: `HTTP ${status} preserves draft and never retries` }, async (page, state) => {
@@ -127,7 +129,7 @@ try {
     state.status = status; state.gate = Promise.withResolvers()
     await compose(page); await page.getByRole('button', { name: 'Send broadcast', exact: true }).click()
     await expect.poll(() => state.exchanges.length).toBe(1)
-    state.user = { ...admin, id: 'replacement', tenant_id: 'tenant-b' }
+    state.user = { ...admin, id: '28e275bd-29a0-4adf-a1ab-1cbf787798fb', tenant_id: '28e275bd-29a0-4adf-a1ab-1cbf787798fd' }
     if (!sameToken) state.token = 'synthetic-next-token'
     await page.getByRole('button', { name: 'Sign out', exact: true }).click()
     await page.getByLabel('Email', { exact: true }).fill('replacement@example.test')
@@ -176,6 +178,7 @@ try {
     await expect(page.getByLabel('Body (optional)')).toHaveValue(draft.body)
     assert.equal(state.exchanges.length, 0)
   })
+  await runBroadcastJobCases(harness)
   await runBroadcastEmailCases(harness)
   completed = true
 } finally {

@@ -15,6 +15,7 @@ from app.api import auth
 from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
 from app.core import security
+from app.dao.auth_email_dao import auth_email_dao
 from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.user import UserRecord
@@ -61,11 +62,11 @@ async def test_callback_failure_rolls_back_owned_scope(monkeypatch, failure):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [None, RuntimeError, asyncio.CancelledError])
-async def test_reset_email_waits_for_owning_commit(monkeypatch, failure):
+async def test_reset_email_is_durable_before_acknowledgement(monkeypatch, failure):
     start_background_tasks()
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
-    identity = SimpleNamespace(id=uuid4(), email="member@example.com", is_active=True)
+    identity = IdentityRecord(id=uuid4(), email="member@example.com", is_active=True)
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(system_email_service, "resolve_email_config_async", AsyncMock(return_value=object()))
     monkeypatch.setattr(
@@ -74,16 +75,20 @@ async def test_reset_email_waits_for_owning_commit(monkeypatch, failure):
         AsyncMock(return_value=("token", datetime.now(UTC) + timedelta(minutes=30))),
     )
     monkeypatch.setattr(password_reset_service, "build_password_reset_url", AsyncMock(return_value="https://app/reset"))
-    send = AsyncMock()
-    monkeypatch.setattr(system_email_service, "send_password_reset_email", send)
+    accepted = []
+
+    async def enqueue(job):
+        session.run_after_commit(lambda: accepted.append(job))
+
+    monkeypatch.setattr(auth_email_dao, "enqueue", enqueue)
     tasks = BackgroundTasks()
 
     async def run():
         async with session.connection_ctx():
             await auth.forgot_password(
-                ForgotPasswordRequest(email=identity.email), tasks, Request({"type": "http", "headers": []})
+                ForgotPasswordRequest(email=identity.email or ""), tasks, Request({"type": "http", "headers": []})
             )
-            send.assert_not_awaited()
+            assert len(accepted) == 1
             assert tasks.tasks == []
             if failure is not None:
                 raise failure()
@@ -95,7 +100,7 @@ async def test_reset_email_waits_for_owning_commit(monkeypatch, failure):
             await run()
     await drain_background_tasks()
     start_background_tasks()
-    assert send.await_count == (1 if failure is None else 0)
+    assert len(accepted) == 1
     assert pool.active == 0
 
 
@@ -156,14 +161,18 @@ async def test_verification_email_waits_for_owning_commit(monkeypatch, failure):
     monkeypatch.setattr(
         email_verification_service, "build_email_verification_url", AsyncMock(return_value="https://app/verify")
     )
-    send = AsyncMock()
-    monkeypatch.setattr(email_verification_service, "send_verification_email", send)
+    accepted = []
+
+    async def enqueue(job):
+        session.run_after_commit(lambda: accepted.append(job))
+
+    monkeypatch.setattr(auth_email_dao, "enqueue", enqueue)
     tasks = BackgroundTasks()
 
     async def run():
         async with session.connection_ctx():
             await auth._send_verification_email_task(user, tasks, get_settings())
-            send.assert_not_awaited()
+            assert accepted == []
             assert tasks.tasks == []
             if failure is not None:
                 raise failure()
@@ -175,7 +184,7 @@ async def test_verification_email_waits_for_owning_commit(monkeypatch, failure):
             await run()
     await drain_background_tasks()
     start_background_tasks()
-    assert send.await_count == (1 if failure is None else 0)
+    assert len(accepted) == (1 if failure is None else 0)
     assert pool.active == 0
 
 
