@@ -2,6 +2,10 @@ import base64
 from typing import TypedDict
 
 import pytest
+
+from provider_download_fixtures import download_wire, response_bytes
+
+__all__ = ["download_wire"]
 from pydantic import TypeAdapter
 
 from app.core.json_types import JsonValue
@@ -110,26 +114,12 @@ def test_find_first_image_reference_prefers_known_response_paths():
 
 
 @pytest.mark.asyncio
-async def test_custom_image_reference_to_bytes_supports_raw_base64_dict_and_url():
-    class FakeResponse:
-        content = b"downloaded-image"
-
-        def raise_for_status(self):
-            return None
-
-    class FakeClient:
-        def __init__(self):
-            self.calls = []
-
-        async def get(self, url):
-            self.calls.append(url)
-            return FakeResponse()
-
+async def test_custom_image_reference_to_bytes_supports_raw_base64_dict_and_url(download_wire):
+    download_wire.responses = [response_bytes(b"downloaded-image")]
     raw = b"raw-image"
     encoded = base64.b64encode(raw).decode("ascii")
-    client = FakeClient()
+    client = None
 
     assert await _custom_image_reference_to_bytes(encoded, client) == raw
     assert await _custom_image_reference_to_bytes({"image_base64": encoded}, client) == raw
     assert await _custom_image_reference_to_bytes("https://images.test/download.png", client) == b"downloaded-image"
-    assert client.calls == ["https://images.test/download.png"]

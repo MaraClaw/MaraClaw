@@ -92,10 +92,10 @@ async def test_slack_exact_cap_valid_signature_preserves_challenge(monkeypatch):
     assert response.json() == {"challenge": "boundary"}
 
 
-OVERSIZE_IMAGE = {"id": "F1", "name": "photo.png", "url_private_download": "https://files.invalid/photo.png"}
+OVERSIZE_IMAGE = {"id": "F1", "name": "photo.png", "url_private_download": "https://files.slack.com/photo.png"}
 BIG_THEN_SMALL = [
-    {"id": "F1", "name": "big.bin", "url_private_download": "https://files.invalid/big.bin"},
-    {"id": "F2", "name": "small.txt", "url_private_download": "https://files.invalid/small.txt"},
+    {"id": "F1", "name": "big.bin", "url_private_download": "https://files.slack.com/big.bin"},
+    {"id": "F2", "name": "small.txt", "url_private_download": "https://files.slack.com/small.txt"},
 ]
 
 
@@ -221,16 +221,17 @@ def legacy_slack(webhook_pipeline, monkeypatch):
     assert isinstance(slack.store_agent_upload, AsyncMock)
     posted, requested = [], []
 
-    async def deliver(files, serve_file):
+    async def deliver(files, serve_file=None):
         def handler(request):
-            if request.url.host == "files.invalid":
+            if request.url.host == "files.slack.com" and serve_file is not None:
                 requested.append(request.url.path)
                 return serve_file(request)
             if request.url.path.endswith("chat.postMessage"):
                 posted.append(json.loads(request.content)["text"])
             return httpx.Response(200, json={"ok": True})
 
-        serve(monkeypatch, handler)
+        if serve_file is not None:
+            serve(monkeypatch, handler)
         payload = slack_body(files, ts="")
         payload["event"]["text"] = ""
         stamp = str(int(time.time()))

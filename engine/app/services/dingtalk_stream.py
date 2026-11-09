@@ -20,8 +20,10 @@ from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.services.channels import dingtalk_downloads
+from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.document_parser import MAX_INPUT_BYTES
@@ -125,29 +127,6 @@ def _parse_dingtalk_message(payload: object) -> _DingTalkMessage:
 # ─── DingTalk Media Helpers ─────────────────────────────
 
 
-async def _get_media_download_url(access_token: str, download_code: str, robot_code: str) -> str | None:
-    """Get media file download URL from DingTalk API.
-
-    Timeouts, transport errors and 5xx propagate so DingTalk redelivers the message; any other failure is ``None``.
-    """
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            "https://api.dingtalk.com/v1.0/robot/messageFiles/download",
-            headers={"x-acs-dingtalk-access-token": access_token},
-            json={"downloadCode": download_code, "robotCode": robot_code},
-        )
-    if resp.is_server_error:
-        _ = resp.raise_for_status()
-    try:
-        data = json_object_from_response(resp)
-    except ValueError as e:
-        logger.error(f"[DingTalk] Error getting download URL: {e}")
-        return None
-    url = json_as_str(data.get("downloadUrl"))
-    if url not in (None, ""):
-        return url
-    logger.error(f"[DingTalk] Failed to get download URL: {data}")
-    return None
 
 
 async def _download_file(url: str, max_bytes: int) -> bytes | None:
@@ -157,13 +136,13 @@ async def _download_file(url: str, max_bytes: int) -> bytes | None:
     DingTalk redelivers the message; a 4xx (expired or forbidden URL) is reported as ``None``.
     """
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client, client.stream("GET", url) as resp:
-            return await read_capped(resp, max_bytes)
-    except httpx.HTTPStatusError as e:
-        if e.response.is_server_error:
-            raise
-        logger.error(f"[DingTalk] Error downloading file: {e}")
-        return None
+        return await dingtalk_downloads.download_file(url, max_bytes)
+    except httpx.HTTPStatusError as error:
+        raise httpx.HTTPStatusError(
+            "DingTalk temporary download failed", request=error.request, response=error.response
+        ) from None
+    except httpx.RequestError as error:
+        raise type(error)("DingTalk temporary download failed", request=error.request) from None
 
 
 async def download_dingtalk_media(

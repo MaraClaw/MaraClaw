@@ -9,6 +9,8 @@ from app.core.logging.levels import coerce_level
 from app.core.logging.service import get_logging_service
 
 NOISY_CONNECTION_LOGGERS = {
+    "httpx": logging.WARNING,
+    "httpcore": logging.INFO,
     # WebSocket accepted / HTTP access lines from uvicorn.
     "uvicorn.access": logging.WARNING,
     # "connection open" / "connection closed" emitted by websockets.
