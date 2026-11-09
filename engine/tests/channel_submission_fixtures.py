@@ -61,14 +61,18 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
             "VALUES (%(id)s, '15550001', %(provider)s, 'Actual sender', '', 'active', %(tenant)s, %(user)s)",
             {"id": uuid4(), "provider": provider_id, "tenant": tenant_id, "user": sender_id},
         )
-        await db.first.execute(
-            "INSERT INTO channel_configs (id, agent_id, channel_type, app_id, app_secret, encrypt_key, "
-            "is_configured, is_connected) VALUES (%(id)s, %(agent)s, 'whatsapp', 'phone-account', "
-            "'access-token', 'app-secret', TRUE, FALSE)",
-            {"id": config_id, "agent": db.agent.id},
+        config = await channel_config_dao.create(
+            obj_in={
+                "id": config_id,
+                "agent_id": db.agent.id,
+                "channel_type": "whatsapp",
+                "app_id": "phone-account",
+                "app_secret": "access-token",
+                "encrypt_key": "app-secret",
+                "is_configured": True,
+                "is_connected": False,
+            }
         )
-        config = await channel_config_dao.get(config_id)
-        assert config is not None
 
     async def prepare(*, agent: AgentRecord, content: str, history):
         return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "channel-qa")

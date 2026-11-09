@@ -10,6 +10,8 @@ from typing import ClassVar
 
 import pytest
 
+from stream_source_fixtures import connection_config
+
 type EventHandler = Callable[..., Awaitable[None]]
 
 
@@ -102,6 +104,7 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
     monkeypatch.setattr(discord_gateway, "logger", test_logger)
 
     absent_agent_id = uuid.uuid4()
+    connection_config(monkeypatch, absent_agent_id, "discord", credential="token")
     FakeClient.initial_user = None
     absent_manager = discord_gateway.DiscordGatewayManager()
     await absent_manager.start_client(absent_agent_id, "token")
@@ -119,6 +122,7 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
     await absent_task
 
     present_agent_id = uuid.uuid4()
+    connection_config(monkeypatch, present_agent_id, "discord", credential="token")
     FakeClient.initial_user = FakeUser(name="Mara", discriminator="0001", id=42)
     present_manager = discord_gateway.DiscordGatewayManager()
     await present_manager.start_client(present_agent_id, "token")

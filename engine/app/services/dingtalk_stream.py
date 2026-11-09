@@ -24,6 +24,7 @@ from app.services.channels import dingtalk_downloads
 from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note
+from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.document_parser import MAX_INPUT_BYTES
@@ -127,8 +128,6 @@ def _parse_dingtalk_message(payload: object) -> _DingTalkMessage:
 # ─── DingTalk Media Helpers ─────────────────────────────
 
 
-
-
 async def _download_file(url: str, max_bytes: int) -> bytes | None:
     """Stream a file from a URL and return its bytes.
 
@@ -146,7 +145,12 @@ async def _download_file(url: str, max_bytes: int) -> bytes | None:
 
 
 async def download_dingtalk_media(
-    app_key: str, app_secret: str, download_code: str, *, max_bytes: int = MAX_INPUT_BYTES
+    app_key: str,
+    app_secret: str,
+    download_code: str,
+    *,
+    max_bytes: int = MAX_INPUT_BYTES,
+    source: StreamSource | None = None,
 ) -> bytes | None:
     """Download a media file from DingTalk using downloadCode.
 
@@ -154,13 +158,21 @@ async def download_dingtalk_media(
     Returns None on a permanent failure; raises ``MediaTooLargeError`` when the file passes ``max_bytes`` and lets
     timeouts and 5xx from the URL and download steps propagate.
     """
+    if source is not None:
+        await authorize_stream_source(source)
     access_token = await dingtalk_token_manager.get_token(app_key, app_secret)
     if access_token in (None, ""):
         return None
 
+    if source is not None:
+        await authorize_stream_source(source)
+
     download_url = await _get_media_download_url(access_token, download_code, app_key)
     if download_url in (None, ""):
         return None
+
+    if source is not None:
+        await authorize_stream_source(source)
 
     return await _download_file(download_url, max_bytes)
 
@@ -170,6 +182,7 @@ async def _process_media_message(
     app_key: str,
     app_secret: str,
     agent_id: uuid.UUID,
+    source: StreamSource | None = None,
 ) -> tuple[str, list[str] | None, list[str] | None]:
     """Process a DingTalk message and extract text + media info.
 
@@ -187,14 +200,18 @@ async def _process_media_message(
     budget = MediaBudget()
 
     async def fetch(download_code: str, filename: str) -> bytes | None:
+        if source is not None:
+            await authorize_stream_source(source)
         try:
             data = await download_dingtalk_media(
-                app_key, app_secret, download_code, max_bytes=budget.limit_for(filename)
+                app_key, app_secret, download_code, max_bytes=budget.limit_for(filename), source=source
             )
         except MediaTooLargeError as error:
             budget.spend(error.read)
             raise
         budget.spend(len(data or b""))
+        if source is not None:
+            await authorize_stream_source(source)
         return data
 
     if msgtype == "text":
@@ -546,6 +563,7 @@ class DingTalkStreamManager:
         logger.info(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)")
 
         async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            source = await acquire_stream_source(agent_id, ChannelType.DINGTALK, (app_key, app_secret))
             self._main_loop = asyncio.get_running_loop()
             self._closing = False
             existing = self._threads.get(agent_id)
@@ -562,7 +580,7 @@ class DingTalkStreamManager:
             self._transports[agent_id] = DingTalkTransport(stop_event)
             thread = threading.Thread(
                 target=self._run_client_thread,
-                args=(agent_id, app_key, app_secret, stop_event, callbacks),
+                args=(agent_id, app_key, app_secret, stop_event, callbacks, source),
                 name=f"dingtalk-stream-{str(agent_id)[:8]}",
                 daemon=True,
             )
@@ -577,6 +595,7 @@ class DingTalkStreamManager:
         app_secret: str,
         stop_event: threading.Event,
         callbacks: CallbackAdmission | None = None,
+        source: StreamSource | None = None,
     ):
         """Run the DingTalk Stream client with auto-reconnect."""
         try:
@@ -639,6 +658,24 @@ class DingTalkStreamManager:
 
                     from app.api.dingtalk import process_dingtalk_message
 
+                    if source is None:
+                        raise RuntimeError("DingTalk connection source is required")
+                    native = ChannelEvent(
+                        config_id=source.config_id,
+                        agent_id=agent_id,
+                        provider="dingtalk",
+                        event_key=json.dumps([source.account_id, conversation_id, message_id], separators=(",", ":")),
+                        sender_id=sender_staff_id,
+                        conversation_id=(
+                            f"dingtalk_group_{conversation_id}"
+                            if conversation_type == "2"
+                            else f"dingtalk_p2p_{sender_staff_id}"
+                        ),
+                        text=user_text,
+                        is_group=conversation_type == "2",
+                        stream_source=source,
+                    )
+
                     await manager_self._dispatch(
                         main_loop,
                         lambda: process_dingtalk_message(
@@ -650,6 +687,7 @@ class DingTalkStreamManager:
                             session_webhook=session_webhook,
                             sender_nick=sender_nick,
                             message_id=message_id,
+                            native_event=native,
                         ),
                         admission,
                     )
@@ -669,6 +707,7 @@ class DingTalkStreamManager:
                             session_webhook=session_webhook,
                             sender_nick=sender_nick,
                             message_id=message_id,
+                            source=source,
                         ),
                         admission,
                     )
@@ -747,17 +786,16 @@ class DingTalkStreamManager:
         session_webhook: str,
         sender_nick: str = "",
         message_id: str = "",
+        source: StreamSource | None = None,
     ):
         """Download media, then dispatch to process_dingtalk_message."""
         from app.api.dingtalk import process_dingtalk_message
 
+        if source is None:
+            raise RuntimeError("DingTalk connection source is required")
+        await authorize_stream_source(source)
         native = None
         if message_id:
-            from app.dao.channel_config_dao import channel_config_dao
-
-            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
-            if config is None:
-                return
             body = msg_data.get("content", {})
             parts = [msg_data.get("text", {}).get("content", ""), body.get("recognition", "")]
             media = [
@@ -772,7 +810,7 @@ class DingTalkStreamManager:
                     if code is not None and code != "":
                         media.append(code)
             native = ChannelEvent(
-                config_id=config.id,
+                config_id=source.config_id,
                 agent_id=agent_id,
                 provider="dingtalk",
                 event_key=json.dumps([app_key, conversation_id, message_id], separators=(",", ":")),
@@ -786,6 +824,7 @@ class DingTalkStreamManager:
                 kind=msg_data.get("msgtype", "text"),
                 media_ids=tuple(media),
                 is_group=conversation_type == "2",
+                stream_source=source,
             )
             if await is_channel_event_replay(native):
                 return
@@ -795,11 +834,14 @@ class DingTalkStreamManager:
             app_key=app_key,
             app_secret=app_secret,
             agent_id=agent_id,
+            source=source,
         )
 
         if not user_text:
             logger.info("[DingTalk Stream] Empty content after media processing, skipping")
             return
+
+        await authorize_stream_source(source)
 
         await process_dingtalk_message(
             agent_id=agent_id,

@@ -1,12 +1,16 @@
 import asyncio
 import json
+from contextlib import suppress
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 import wecom_aibot_sdk
+from fastapi import HTTPException
 from wecom_aibot_sdk import WSClient
 
 from app.services import wecom_stream
+from stream_source_fixtures import connection_config
 
 
 class QueueSocket:
@@ -23,6 +27,7 @@ class QueueSocket:
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_actual_sdk_receive_loop_keeps_acks_live_during_a_bounded_message_burst(monkeypatch, outcome):
     manager, agent_id = wecom_stream.WeComStreamManager(), uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
     clients, entered, committed, replies, acks = [], [], [], [], []
     connected, started, refused_acks, release = (asyncio.Event() for _ in range(4))
     reply_started, reply_release, dropped = (asyncio.Event() for _ in range(3))
@@ -144,3 +149,66 @@ async def test_actual_sdk_receive_loop_keeps_acks_live_during_a_bounded_message_
             receive_task = client._ws_manager._receive_task
             assert receive_task is not None
             assert receive_task.done()
+
+
+@pytest.mark.parametrize("mutation", ["secret", "mode", "recreated", "during_processing"])
+async def test_live_connection_revocation_blocks_text_media_welcome_and_error_replies(monkeypatch, mutation):
+    manager, agent_id = wecom_stream.WeComStreamManager(), uuid4()
+    config = connection_config(monkeypatch, agent_id, "wecom")
+    connected = asyncio.Event()
+    clients = []
+    reply, welcome, process = AsyncMock(), AsyncMock(), AsyncMock(return_value="accepted")
+
+    def construct(options):
+        client = WSClient(options)
+
+        async def connect():
+            connected.set()
+
+        monkeypatch.setattr(client, "connect_async", connect)
+        clients.append(client)
+        return client
+
+    async def revoke_while_processing(**kwargs):
+        assert kwargs["source"].config_id == config.id
+        config.extra_config = {**config.extra_config, "bot_secret": "rotated"}
+        raise RuntimeError("processing interrupted")
+
+    monkeypatch.setattr(wecom_aibot_sdk, "WSClient", construct)
+    monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
+    monkeypatch.setattr(wecom_stream, "_reply_stream", reply)
+    monkeypatch.setattr(wecom_stream, "_reply_welcome", welcome)
+    monkeypatch.setattr(wecom_stream, "_process_wecom_stream_message", process)
+    try:
+        await manager.start_client(agent_id, "bot", "secret")
+        await asyncio.wait_for(connected.wait(), 1)
+        client = clients[-1]
+        match mutation:
+            case "secret":
+                config.extra_config = {**config.extra_config, "bot_secret": "rotated"}
+            case "mode":
+                config.extra_config = {"connection_mode": "webhook"}
+            case "recreated":
+                config.id = uuid4()
+            case "during_processing":
+                monkeypatch.setattr(wecom_stream, "_process_wecom_stream_message", revoke_while_processing)
+        for name in ("message.text", "message.image", "message.file", "event.enter_chat"):
+            frame = client._message_handler.parse_frame(
+                {
+                    "headers": {"req_id": name},
+                    "body": {
+                        "msgtype": "text",
+                        "msgid": "native-1",
+                        "from_userid": "sender",
+                        "text": {"content": "hello"},
+                    },
+                }
+            )
+            with suppress(HTTPException):
+                await client._message_handler._event_handlers[name][0](frame)
+        reply.assert_not_awaited()
+        welcome.assert_not_awaited()
+        process.assert_not_awaited()
+        assert not manager._tasks[agent_id].done()
+    finally:
+        await manager.stop_all()

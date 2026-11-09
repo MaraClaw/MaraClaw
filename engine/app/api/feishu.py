@@ -43,6 +43,7 @@ from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.llm_bridge import _load_agent_and_model
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note, too_large_reply
 from app.services.channels.redact import channel_config_out
+from app.services.channels.stream_source import StreamSource
 from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
@@ -505,13 +506,20 @@ async def feishu_event_webhook(
     return await process_feishu_event(agent_id, body)
 
 
-async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObject:
+async def process_feishu_event(
+    agent_id: uuid.UUID, body: JsonObject, *, source: StreamSource | None = None
+) -> JsonObject:
     """Core logic to process feishu events from both webhook and WS client.
 
     Manages its own short-lived database transactions to avoid holding connections
     open during slow LLM/HTTP operations.
     """
     import json as _json
+
+    from app.services.channels.stream_source import authorize_stream_source
+
+    if source is not None:
+        await authorize_stream_source(source)
 
     header = _json_object(body.get("header"))
     logger.info(
@@ -528,9 +536,11 @@ async def process_feishu_event(agent_id: uuid.UUID, body: JsonObject) -> JsonObj
     from app.services.channels.feishu_submissions import accept_feishu_event
 
     if json_as_str_or(header.get("event_type")) == "im.message.receive_v1" and await accept_feishu_event(
-        config, _json_object(body.get("event"))
+        config, _json_object(body.get("event")), source=source
     ):
         return {"code": 0, "msg": "ok"}
+    if source is not None:
+        return {"code": 0, "msg": "unsupported native event"}
     _agent_model, _llm_model, _fallback_model = await _load_agent_and_model(agent_id)
     app_id = config.app_id
     app_secret = config.app_secret

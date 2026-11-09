@@ -23,6 +23,7 @@ from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import cancel_tasks
+from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
 
 
 class _DiscordUserLike(Protocol):
@@ -140,6 +141,7 @@ class DiscordGatewayManager:
         if (sdk := _get_discord_module()) is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
             return
+        source = await acquire_stream_source(agent_id, ChannelType.DISCORD, (bot_token,))
         intents_cls = _mod_attr(sdk, "Intents")
         default_intents = _mod_attr(intents_cls, "default")
         if not callable(default_intents):
@@ -198,19 +200,27 @@ class DiscordGatewayManager:
                 await callbacks.run(process_message, message, user_text)
             except CallbackRefusedError as error:
                 logger.warning("[Discord GW] Message refused for {}: {}", agent_id, error)
-                await callbacks.report_refusal(message.reply, str(error), mention_author=False)
+                reason = str(error)
+
+                async def report() -> None:
+                    await authorize_stream_source(source)
+                    await message.reply(reason, mention_author=False)
+
+                await callbacks.report_refusal(report)
 
         async def process_message(message: _DiscordMessageLike, user_text: str) -> None:
             logger.info(f"[Discord GW] Message for agent {agent_id} from {message.author.name}: {user_text[:80]}")
 
             # Show typing indicator while processing
+            await authorize_stream_source(source)
             async with message.channel.typing():
-                reply = await self._handle_message(agent_id, message, user_text)
+                reply = await self._handle_message(agent_id, message, user_text, source=source)
 
             # Send reply, chunked if needed
             if reply not in (None, ""):
                 chunks = [reply[i : i + DISCORD_MSG_LIMIT] for i in range(0, len(reply), DISCORD_MSG_LIMIT)]
                 for chunk in chunks:
+                    await authorize_stream_source(source)
                     _ = await message.reply(chunk, mention_author=False)
 
         # Run the bot in a background task
@@ -244,22 +254,22 @@ class DiscordGatewayManager:
         agent_id: uuid.UUID,
         message: _DiscordMessageLike,
         user_text: str,
+        *,
+        source: StreamSource | None = None,
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
         try:
-            from app.dao.channel_config_dao import channel_config_dao
             from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
             sender_id = str(message.author.id)
             channel_id = str(message.channel.id)
             conv_id = f"discord_dm_{sender_id}" if message.guild is None else f"discord_{channel_id}_{sender_id}"
 
-            config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DISCORD)
-            if config is None:
-                return None
+            if source is None:
+                raise RuntimeError("Discord connection source is required")
             await accept_channel_event(
                 ChannelEvent(
-                    config_id=config.id,
+                    config_id=source.config_id,
                     agent_id=agent_id,
                     provider="discord",
                     event_key=f"{channel_id}:{message.id}",
@@ -268,6 +278,7 @@ class DiscordGatewayManager:
                     text=user_text,
                     is_group=message.guild is not None,
                     group_session_owner="sender",
+                    stream_source=source,
                 )
             )
             return None

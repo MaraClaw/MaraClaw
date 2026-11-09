@@ -11,6 +11,7 @@ from app.runtime.tasks import EventTasks, OwnedTasks
 from app.services import feishu_ws
 from app.services.dingtalk_stream import DingTalkStreamManager
 from app.services.feishu_ws import FeishuWSManager
+from stream_source_fixtures import connection_config
 
 
 @pytest.mark.asyncio
@@ -187,6 +188,7 @@ async def test_feishu_initial_connect_retries_then_leaves_reconnection_to_the_sd
 
     monkeypatch.setattr(feishu_ws.asyncio, "sleep", yielding_sleep)
     manager, agent_id = FeishuWSManager(), uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "feishu")
     # When the manager starts the client and the health watch spins with the SDK connection missing.
     await manager.start_client(agent_id, "app", "secret")
     await asyncio.wait_for(client.ping_started.wait(), 5)
@@ -204,6 +206,7 @@ async def test_feishu_initial_connect_retry_stops_when_the_manager_is_closing(mo
     client = FakeLarkClient(failures=1000)
     install_fake_lark(monkeypatch, client)
     manager, agent_id = FeishuWSManager(), uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "feishu")
     client.on_disconnect.append(lambda: setattr(manager, "_closing", True))
     # When the client starts.
     await manager.start_client(agent_id, "app", "secret")
@@ -225,6 +228,7 @@ async def test_feishu_initial_connect_retry_wait_is_cancelled_by_stop_client(mon
 
     monkeypatch.setattr(feishu_ws.asyncio, "sleep", blocked_sleep)
     manager, agent_id = FeishuWSManager(), uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "feishu")
     await manager.start_client(agent_id, "app", "secret")
     task = manager._tasks[agent_id]
     await asyncio.wait_for(waiting.wait(), 5)

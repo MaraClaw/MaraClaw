@@ -10,6 +10,7 @@ from app.services.feishu_service import feishu_service
 from app.services.storage import store_agent_upload
 
 from .media_limits import MediaBudget, MediaTooLargeError, too_large_note
+from .stream_source import StreamSource, authorize_stream_source
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
 
@@ -38,7 +39,9 @@ def _post_parts(value: JsonValue) -> tuple[list[str], list[str]]:
     return text, images
 
 
-async def accept_feishu_event(config: ChannelConfigRecord, event: JsonObject) -> bool:
+async def accept_feishu_event(
+    config: ChannelConfigRecord, event: JsonObject, *, source: StreamSource | None = None
+) -> bool:
     message = json_object_from(event.get("message"))
     message_id = json_as_str_or(message.get("message_id"))
     kind = json_as_str_or(message.get("message_type"), "text")
@@ -70,6 +73,7 @@ async def accept_feishu_event(config: ChannelConfigRecord, event: JsonObject) ->
         kind=kind,
         media_ids=tuple(media),
         is_group=group,
+        stream_source=source,
     )
     if await is_channel_event_replay(native):
         return True
@@ -77,6 +81,8 @@ async def accept_feishu_event(config: ChannelConfigRecord, event: JsonObject) ->
     saved = text
     budget = MediaBudget()
     for media_id in media:
+        if source is not None:
+            await authorize_stream_source(source)
         resource_type = "file" if kind == "file" else "image"
         filename = json_as_str_or(body.get("file_name")) or f"image_{media_id[-8:]}.jpg"
         try:
@@ -95,6 +101,8 @@ async def accept_feishu_event(config: ChannelConfigRecord, event: JsonObject) ->
             saved = f"{saved}\n{note}".strip()
             continue
         budget.spend(len(data))
+        if source is not None:
+            await authorize_stream_source(source)
         _, workspace_path, _ = await store_agent_upload(
             config.agent_id, filename, data, content_type="image/jpeg" if resource_type == "image" else None
         )

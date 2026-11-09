@@ -17,6 +17,7 @@ from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
 
 _WECOM_SDK_PROXY_DISABLED = False
 
@@ -154,9 +155,10 @@ class WeComStreamManager:
                 return existing_task
 
         self._connected[agent_id] = False
+        source = await acquire_stream_source(agent_id, ChannelType.WECOM, (bot_id, bot_secret))
         callbacks = self._callbacks[agent_id] = CallbackAdmission()
         task = asyncio.create_task(
-            self._run_client(agent_id, bot_id, bot_secret, callbacks),
+            self._run_client(agent_id, bot_id, bot_secret, callbacks, source),
             name=f"wecom-stream-{str(agent_id)[:8]}",
         )
         self._tasks[agent_id] = task
@@ -177,6 +179,7 @@ class WeComStreamManager:
         bot_id: str,
         bot_secret: str,
         callbacks: CallbackAdmission,
+        source: StreamSource,
     ) -> None:
         """Run the WeCom WebSocket client (async, runs in the main event loop)."""
         task = asyncio.current_task()
@@ -203,6 +206,10 @@ class WeComStreamManager:
             client = stream_client
             self._clients[agent_id] = stream_client
 
+            async def reply_stream(frame: _WeComFrame, stream_id: str, content: str) -> None:
+                await authorize_stream_source(source)
+                await _reply_stream(stream_client, frame, stream_id, content)
+
             async def on_disconnected(_reason: object = None) -> None:
                 if self._clients.get(agent_id) is stream_client:
                     self._connected[agent_id] = False
@@ -228,8 +235,7 @@ class WeComStreamManager:
                             f"body_keys={list(body.keys())}"
                         )
                         stream_id = generate_req_id("stream")
-                        await _reply_stream(
-                            stream_client,
+                        await reply_stream(
                             frame,
                             stream_id,
                             "Unable to identify the sender for this WeCom message.",
@@ -255,11 +261,12 @@ class WeComStreamManager:
                         chat_id=chat_id,
                         chat_type=chat_type,
                         message_id=str(body.get("msgid") or body.get("msg_id") or ""),
+                        source=source,
                     )
 
                     # Reply via streaming
                     stream_id = generate_req_id("stream")
-                    await _reply_stream(stream_client, frame, stream_id, reply_text)
+                    await reply_stream(frame, stream_id, reply_text)
                     logger.info(f"[WeCom Stream] Replied to {sender_id}: {reply_text[:80]}")
 
                 except Exception as e:
@@ -269,8 +276,7 @@ class WeComStreamManager:
                     traceback.print_exc()
                     try:
                         stream_id = generate_req_id("stream")
-                        await _reply_stream(
-                            stream_client,
+                        await reply_stream(
                             frame,
                             stream_id,
                             f"Processing error: {str(e)[:100]}",
@@ -285,8 +291,7 @@ class WeComStreamManager:
                     sender_id = _extract_wecom_sender_id(body)
                     logger.info(f"[WeCom Stream] Image message from {sender_id} (not yet handled)")
                     stream_id = generate_req_id("stream")
-                    await _reply_stream(
-                        stream_client,
+                    await reply_stream(
                         frame,
                         stream_id,
                         "Received your image. Image processing is not yet supported.",
@@ -301,8 +306,7 @@ class WeComStreamManager:
                     sender_id = _extract_wecom_sender_id(body)
                     logger.info(f"[WeCom Stream] File message from {sender_id} (not yet handled)")
                     stream_id = generate_req_id("stream")
-                    await _reply_stream(
-                        stream_client,
+                    await reply_stream(
                         frame,
                         stream_id,
                         "Received your file. File processing is not yet supported.",
@@ -313,6 +317,7 @@ class WeComStreamManager:
             # ── Enter chat event: send welcome ──
             async def on_enter_chat(frame: _WeComFrame) -> None:
                 try:
+                    await authorize_stream_source(source)
                     # Look up agent's welcome message
 
                     from app.dao import agent_dao as _agent_dao
@@ -323,6 +328,7 @@ class WeComStreamManager:
                         "msgtype": "text",
                         "text": {"content": welcome},
                     }
+                    await authorize_stream_source(source)
                     await _reply_welcome(stream_client, frame, welcome_message)
                     logger.info(f"[WeCom Stream] Sent welcome message for agent {agent_id}")
                 except Exception as e:
@@ -332,15 +338,17 @@ class WeComStreamManager:
             def business(
                 callback: Callable[[_WeComFrame], Awaitable[None]],
             ) -> Callable[[_WeComFrame], Awaitable[None]]:
+                async def authorized(frame: _WeComFrame) -> None:
+                    await authorize_stream_source(source)
+                    await callback(frame)
+
                 @wraps(callback)
                 async def handle(frame: _WeComFrame) -> None:
                     try:
-                        await callbacks.run(callback, frame)
+                        await callbacks.run(authorized, frame)
                     except CallbackRefusedError as error:
                         logger.warning("[WeCom Stream] Message refused for {}: {}", agent_id, error)
-                        await callbacks.report_refusal(
-                            _reply_stream, stream_client, frame, generate_req_id("stream"), str(error)
-                        )
+                        await callbacks.report_refusal(reply_stream, frame, generate_req_id("stream"), str(error))
 
                 return callbacks.wrap(handle)
 
@@ -460,25 +468,25 @@ async def _process_wecom_stream_message(
     chat_id: str = "",
     chat_type: str = "single",
     message_id: str = "",
+    source: StreamSource | None = None,
 ) -> str:
-    from app.dao.channel_config_dao import channel_config_dao
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     if not message_id:
         raise ValueError("WeCom message ID is required")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
-    if config is None:
-        raise RuntimeError("WeCom channel configuration unavailable")
+    if source is None:
+        raise RuntimeError("WeCom connection source is required")
     await accept_channel_event(
         ChannelEvent(
-            config_id=config.id,
+            config_id=source.config_id,
             agent_id=agent_id,
             provider="wecom",
-            event_key=f"{config.app_id}:{chat_id}:{message_id}",
+            event_key=f"{source.account_id}:{chat_id}:{message_id}",
             sender_id=sender_id,
             conversation_id=_build_wecom_conv_id(sender_id, chat_id, chat_type),
             text=user_text,
             is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
+            stream_source=source,
         )
     )
     return ""

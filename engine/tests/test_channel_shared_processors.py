@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import dingtalk, google_chat, wecom
+from app.core.domain.channels import ChannelType
 from app.dao import agent_dao, channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.channel_config import ChannelConfigRecord
@@ -20,6 +21,7 @@ from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding, submissions
 from app.services.channels.google_chat import parse_google_chat_event
 from app.services.channels.media_limits import READ_CHUNK_BYTES, MediaBudget, too_large_note
+from app.services.channels.stream_source import stream_source
 from app.services.dingtalk_stream import DingTalkStreamManager
 from app.services.dingtalk_token import DingTalkTokenManager
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
@@ -50,6 +52,7 @@ def pipeline(context, monkeypatch):
     config = ChannelConfigRecord(id=uuid4(), agent_id=agent.id, is_configured=True, extra_config={"bot_token": "token"})
     monkeypatch.setattr(channel_config_dao, "get", AsyncMock(return_value=config))
     monkeypatch.setattr(channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(submissions, "lock_channel_source", AsyncMock(return_value=config))
     monkeypatch.setattr(submissions, "load_user_principal", AsyncMock(return_value=user))
 
     async def access(principal, target):
@@ -80,7 +83,17 @@ def pipeline(context, monkeypatch):
 
 async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"):
     agent, _, _, _, config, *_ = pipeline
-    config.channel_type = "wecom" if name.startswith("wecom") else "discord" if name == "discord_gateway" else name
+    config.channel_type = ChannelType(
+        "wecom" if name.startswith("wecom") else "discord" if name == "discord_gateway" else name
+    )
+    config.extra_config = {
+        **(config.extra_config or {}),
+        "connection_mode": "gateway"
+        if name == "discord_gateway"
+        else "websocket"
+        if name in {"dingtalk", "wecom_stream"}
+        else "webhook",
+    }
     match name:
         case "dingtalk":
             await dingtalk.process_dingtalk_message(
@@ -93,6 +106,17 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
                 image_base64_list=["data:image/jpeg;base64,aGVsbG8="],
                 saved_file_paths=["workspace/uploads/photo.jpg"],
                 message_id=native_id,
+                native_event=submissions.ChannelEvent(
+                    config_id=config.id,
+                    agent_id=agent.id,
+                    provider="dingtalk",
+                    event_key=json.dumps([config.app_id, "chat-id", native_id], separators=(",", ":")),
+                    sender_id="staff-id",
+                    text="hello",
+                    is_group=group,
+                    conversation_id="dingtalk_group_chat-id" if group else "dingtalk_p2p_staff-id",
+                    stream_source=stream_source(config),
+                ),
             )
         case "wecom" | "wecom_kf":
             await wecom._process_wecom_text(
@@ -113,6 +137,7 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
                 chat_id="chat-id" if group else "",
                 chat_type="group" if group else "single",
                 message_id=native_id,
+                source=stream_source(config),
             )
         case "wechat":
             await wechat_message_processor.process_wechat_message(
@@ -133,7 +158,9 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
             message.guild = SimpleNamespace(id=789) if group else None
             if native_id:
                 message.id = native_id
-            await discord_gateway.DiscordGatewayManager()._handle_message(agent.id, message, "hello")
+            await discord_gateway.DiscordGatewayManager()._handle_message(
+                agent.id, message, "hello", source=stream_source(config)
+            )
         case "google_chat":
             event = parse_google_chat_event(
                 {
@@ -205,6 +232,7 @@ async def test_rejected_processor_never_reads_or_writes_shared_context(pipeline,
 def dingtalk_media_download(pipeline, monkeypatch):
     config = pipeline[4]
     config.channel_type = "dingtalk"
+    config.app_id, config.app_secret = "app-key", "app-secret"
     store = AsyncMock(return_value=("key", "workspace/uploads/capture.png", "path"))
     stream = CountingStream(total=3 * IMAGE_UPLOAD_MAX_BYTES)
     requests = []
@@ -228,6 +256,8 @@ FILE_MESSAGE: dingtalk_stream._DingTalkMessage = {
 
 
 async def deliver_dingtalk_file(agent_id, msg_data: dingtalk_stream._DingTalkMessage = FILE_MESSAGE):
+    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
+    assert config is not None
     await DingTalkStreamManager._handle_media_and_dispatch(
         msg_data=msg_data,
         app_key="app-key",
@@ -238,6 +268,7 @@ async def deliver_dingtalk_file(agent_id, msg_data: dingtalk_stream._DingTalkMes
         conversation_type="1",
         session_webhook="https://provider.invalid/reply",
         message_id="native-id",
+        source=stream_source(config),
     )
 
 
