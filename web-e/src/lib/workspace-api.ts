@@ -12,6 +12,8 @@ export { completeFocus, createTask, deleteTrigger, listFocus, listTaskLogs, list
 export type { FocusItem, TaskOut } from './agent-work-api.ts'
 export { CHANNEL_FIELDS, CHANNELS, deleteChannel, getChannel, getChannelWebhook, getWechatQr, saveChannel } from './channels-api.ts'
 export type { ChannelConfig, ChannelField } from './channels-api.ts'
+export { getAgentToolConfig, listAgentTools, listAgentToolsWithConfig, patchAgentToolConfig, probeAgentTool, saveAgentToolConfig, testEmailConfig, testMcpServer, updateAgentTools } from './agent-tools-api.ts'
+export type { AgentTool, ConfigOperations } from './agent-tools-api.ts'
 
 export type ChatSession = {
   id: string
@@ -35,17 +37,6 @@ export type FileInfo = {
   modified_at?: string
   version_token?: string | null
   url?: string | null
-}
-
-export type AgentTool = {
-  id: string
-  name: string
-  display_name?: string
-  description?: string
-  category?: string
-  enabled: boolean
-  is_default?: boolean
-  source?: string
 }
 
 export type SkillRow = {
@@ -129,25 +120,6 @@ export async function installClawhub(slug: string): Promise<unknown> {
 
 export async function importSkillToAgent(agentId: string, skillId: string): Promise<unknown> {
   return apiRequest(`/api/agents/${agentId}/files/import-skill`, { method: 'POST', body: { skill_id: skillId } })
-}
-
-export async function listAgentTools(agentId: string): Promise<AgentTool[]> {
-  return apiRequest(`/api/tools/agents/${agentId}`)
-}
-
-export async function updateAgentTools(agentId: string, updates: Array<{ tool_id: string; enabled: boolean }>): Promise<void> {
-  await apiRequest(`/api/tools/agents/${agentId}`, { method: 'PUT', body: updates })
-}
-
-export async function getAgentToolConfig(agentId: string, toolId: string): Promise<{
-  merged_config: Record<string, unknown>
-  config_schema: Record<string, unknown>
-}> {
-  return apiRequest(`/api/tools/agents/${agentId}/tool-config/${toolId}`)
-}
-
-export async function saveAgentToolConfig(agentId: string, toolId: string, config: Record<string, unknown>): Promise<void> {
-  await apiRequest(`/api/tools/agents/${agentId}/tool-config/${toolId}`, { method: 'PUT', body: { config } })
 }
 
 export async function lockFile(agentId: string, path: string): Promise<void> {
@@ -251,26 +223,6 @@ export function fileTicketUrl(
 ): string {
   const query = new URLSearchParams({ path, inline: String(inline), ticket })
   return `/api/agents/${encodeURIComponent(agentId)}/files/download?${query.toString()}`
-}
-
-export async function listAgentToolsWithConfig(agentId: string): Promise<
-  Array<
-    AgentTool & {
-      config_schema?: Record<string, unknown>
-      agent_config?: Record<string, unknown>
-      global_config?: Record<string, unknown>
-    }
-  >
-> {
-  return apiRequest(`/api/tools/agents/${agentId}/with-config`)
-}
-
-export async function testEmailConfig(config: Record<string, unknown>): Promise<{ ok?: boolean; error?: string }> {
-  return apiRequest('/api/tools/test-email', { method: 'POST', body: { config } })
-}
-
-export async function testMcpServer(serverUrl: string, apiKey?: string): Promise<{ ok?: boolean; error?: string }> {
-  return apiRequest('/api/tools/test-mcp', { method: 'POST', body: { server_url: serverUrl, api_key: apiKey } })
 }
 
 export async function importSkillFromUrl(url: string): Promise<unknown> {

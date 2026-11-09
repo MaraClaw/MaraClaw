@@ -6,6 +6,7 @@ from typing import Protocol, TypeIs
 
 from . import workspace_read
 from .registry import ToolArguments, ToolOutputCallback, current_execution_context, register
+from .workspace_search_cursor import MAX_CURSOR_LENGTH, SearchContinuation
 
 
 class _WebReadModule(Protocol):
@@ -63,6 +64,17 @@ async def search_files(
     pattern = _string_argument(arguments, "pattern", "")
     if not pattern:
         return "❌ Missing required argument 'pattern' for search_files"
+    continuation: SearchContinuation = {}
+    if "cursor" in arguments:
+        cursor = arguments["cursor"]
+        if not isinstance(cursor, str) or not cursor or len(cursor) > MAX_CURSOR_LENGTH:
+            return "Invalid search_files cursor: expected a nonempty opaque cursor"
+        continuation["cursor"] = cursor
+    if "limit" in arguments:
+        limit = arguments["limit"]
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+            return "Invalid search_files limit: expected an integer between 1 and 50"
+        continuation["limit"] = limit
     context = current_execution_context()
     tenant_id = context.tenant_id if context is not None else await agent_tools._get_agent_tenant_id(agent_id)
     return await workspace_read._storage_search_files(
@@ -76,6 +88,7 @@ async def search_files(
         tool_storage_key=agent_tools._tool_storage_key,
         storage_walk_files=agent_tools._storage_walk_files,
         relative_storage_display=agent_tools._relative_storage_display,
+        **continuation,
     )
 
 

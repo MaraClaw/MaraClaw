@@ -18,12 +18,14 @@ class BoundedReader(Protocol):
     def read(self, size: int, /) -> bytes: ...
 
 
-def read_bounded(stream: BoundedReader, max_bytes: int) -> bytes:
+def read_bounded(stream: BoundedReader, max_bytes: int, *, range_read: bool = False) -> bytes:
     if max_bytes < 0:
         raise ValueError("max_bytes must be nonnegative")
     data = bytearray()
     while True:
-        chunk = stream.read(min(64 * 1024, max_bytes + 1 - len(data)))
+        if range_read and len(data) == max_bytes:
+            return bytes(data)
+        chunk = stream.read(min(64 * 1024, max_bytes + (not range_read) - len(data)))
         if not chunk:
             return bytes(data)
         data.extend(chunk)

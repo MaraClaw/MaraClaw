@@ -355,6 +355,8 @@ CREATE TABLE IF NOT EXISTS skills (
 	folder_name VARCHAR(100) NOT NULL, 
 	is_builtin BOOLEAN NOT NULL, 
 	is_default BOOLEAN NOT NULL, 
+	source_metadata JSONB,
+	imported_fingerprint VARCHAR(64),
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id), 

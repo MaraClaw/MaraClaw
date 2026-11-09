@@ -1,0 +1,27 @@
+[tool.coverage.run]
+branch = true
+omit = [
+    "app/services/skill_creator_files/*",
+    "app/templates/*",
+]
+
+[tool.coverage.report]
+include = [
+    "app/api/admin.py",
+    "app/api/users.py",
+    "app/api/tenants.py",
+    "app/services/admin_provisioning.py",
+    "app/services/admin_audit.py",
+    "app/services/tenant_provisioning.py",
+    "app/services/tenant_lifecycle.py",
+    "app/services/platform_admin_seeder.py",
+    "app/dao/admin_audit_dao.py",
+    "app/core/security.py",
+]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == [\"']__main__[\"']:",
+]

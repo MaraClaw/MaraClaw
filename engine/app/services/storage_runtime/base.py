@@ -171,13 +171,18 @@ class StorageBackend:
     async def read_bytes(self, key: str) -> bytes:
         raise NotImplementedError
 
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         """Read at most max_bytes, consuming only one additional byte to detect overflow.
 
         Raise StorageReadLimitExceededError on actual-byte overflow and FileNotFoundError
         for an absent key. Implementations must not first hash, promote, or fully
         read the object. A cancelled worker retains ownership of its resources
         until its bounded blocking operation finishes and closes them.
+
+        With ``offset`` supplied, return a range of at most ``max_bytes`` starting
+        at that nonnegative byte offset, without overflow probing or promotion.
+        A short result means EOF; an offset at/past EOF returns empty bytes.
+        Omit ``offset`` to retain the original whole-object overflow contract.
         """
         raise NotImplementedError
 

@@ -1,25 +1,19 @@
 """Skills API - global skill registry CRUD."""
 
 import asyncio
-import io
 import uuid as _uuid
-import zipfile
-from pathlib import Path
 from typing import TypedDict
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.core.json_types import JsonObject, http_header, json_as_str, mapping_from_row
+from app.core.json_types import JsonObject, json_as_str, mapping_from_row
 from app.core.logging import logger
-from app.core.security import get_current_admin, get_current_user, raise_if_password_change_required, require_role
+from app.core.security import get_current_admin, get_current_user, require_role
 from app.dao.skill_dao import skill_dao, skill_file_dao
-from app.dao.tenant_dao import tenant_dao
-from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx, optional_connection_ctx
 from app.db.types import as_jsonb
-from app.records.skill import SkillRecord
+from app.records.skill import SkillSource
 from app.records.user import UserRecord
 from app.schemas.content_response_catalog import (
     ClawhubSearchProjection,
@@ -35,16 +29,18 @@ from app.schemas.content_response_catalog import (
     SkillTokenStatus,
     UrlSkillInstallResponse,
 )
+from app.services.skill_access import (
+    ensure_skill_write_access as _ensure_skill_write_access,
+    fresh_import_actor as _fresh_import_actor,
+)
+from app.services.skill_archive import fetch_clawhub_skill_archive as _fetch_clawhub_skill_archive
+from app.services.skill_content import sanitized_skill_files, skill_fingerprint
 from app.services.skill_provider import (
-    MAX_SKILL_SIZE,
     ClawHubModeration,
     ClawHubOwnerInfo,
     ClawHubPayload,
     ClawHubSkillInfo,
     SkillFilePayload,
-    candidate_clawhub_bases as _candidate_clawhub_bases,
-    clawhub_download_url as _clawhub_download_url,
-    clawhub_headers_for_base as _clawhub_headers_for_base,
     clawhub_search_endpoint as _clawhub_search_endpoint,
     fetch_clawhub_json as _fetch_clawhub_json,
     fetch_clawhub_skill_meta as _fetch_clawhub_skill_meta,
@@ -53,6 +49,7 @@ from app.services.skill_provider import (
     parse_skill_md_frontmatter as _parse_skill_md_frontmatter,
     public_clawhub_url as _public_clawhub_url,
 )
+from app.services.skill_refresh import SkillRefreshIn, SkillRefreshResponse, refresh_skill
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -89,93 +86,6 @@ async def _get_clawhub_key(tenant_id: str | None = None) -> str:
     return await _get_tenant_setting(tenant_id, "clawhub_key")
 
 
-def _extract_clawhub_zip_files(data: bytes) -> list[SkillFilePayload]:
-    """Convert a ClawHub skill zip into [{"path", "content"}] records."""
-    files: list[SkillFilePayload] = []
-    total_size = 0
-
-    try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile as exc:
-        raise HTTPException(502, "ClawHub download did not return a valid skill archive") from exc
-
-    entries = [info for info in archive.infolist() if not info.is_dir()]
-    raw_paths = [Path(info.filename) for info in entries]
-    strip_prefix = ""
-    if raw_paths:
-        first_parts = raw_paths[0].parts
-        if len(first_parts) > 1:
-            candidate = first_parts[0]
-            has_root_skill = any(p.name.upper() == "SKILL.MD" and len(p.parts) == 1 for p in raw_paths)
-            has_prefixed_skill = any(
-                len(p.parts) > 1 and p.parts[0] == candidate and p.parts[-1].upper() == "SKILL.MD" for p in raw_paths
-            )
-            all_share_prefix = all(len(p.parts) > 1 and p.parts[0] == candidate for p in raw_paths)
-            if not has_root_skill and has_prefixed_skill and all_share_prefix:
-                strip_prefix = f"{candidate}/"
-
-    for info in entries:
-        rel = info.filename.lstrip("/")
-        if strip_prefix and rel.startswith(strip_prefix):
-            rel = rel[len(strip_prefix) :]
-        path = Path(rel)
-        if not rel or path.is_absolute() or ".." in path.parts:
-            continue
-
-        total_size += info.file_size
-        if total_size > MAX_SKILL_SIZE:
-            raise HTTPException(413, f"Skill exceeds size limit ({MAX_SKILL_SIZE // 1024}KB)")
-
-        content = archive.read(info).decode("utf-8", errors="replace")
-        files.append({"path": rel, "content": content})
-
-    if not any(f["path"].upper() == "SKILL.MD" for f in files):
-        raise HTTPException(400, "No SKILL.md found in ClawHub archive - not a valid skill package")
-    return files
-
-
-async def _fetch_clawhub_skill_archive(
-    slug: str,
-    api_key: str = "",
-    preferred_base: str | None = None,
-    version: str | None = None,
-    tag: str | None = None,
-) -> tuple[list[SkillFilePayload], str]:
-    """Download a ClawHub skill archive from official API or mirror."""
-    params = {"slug": slug}
-    if version not in (None, ""):
-        params["version"] = version
-    if tag not in (None, ""):
-        params["tag"] = tag
-
-    last_error = ""
-    for base_url in _candidate_clawhub_bases(preferred_base):
-        try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(
-                    _clawhub_download_url(base_url),
-                    params=params,
-                    headers=_clawhub_headers_for_base(api_key, base_url),
-                )
-            content_type = http_header(resp.headers, "content-type")
-            if resp.status_code == 404:
-                last_error = f"Skill '{slug}' not found on ClawHub at {base_url}"
-                continue
-            if resp.status_code == 429:
-                last_error = f"ClawHub rate limit exceeded at {base_url}"
-                continue
-            if resp.status_code == 200 and ("zip" in content_type or resp.content.startswith(b"PK")):
-                return _extract_clawhub_zip_files(resp.content), base_url
-            last_error = f"ClawHub download failed from {base_url}: HTTP {resp.status_code}"
-        except HTTPException:
-            raise
-        except Exception as exc:
-            last_error = f"Failed to download ClawHub skill from {base_url}: {exc}"
-    if "rate limit" in last_error:
-        raise HTTPException(429, "ClawHub rate limit exceeded. Please wait a moment and try again.")
-    raise HTTPException(502, last_error or f"Failed to download skill '{slug}' from ClawHub")
-
-
 class SkillFileIn(BaseModel):
     path: str
     content: str
@@ -191,7 +101,8 @@ class SkillCreateIn(BaseModel):
 
 
 class ClawhubInstallIn(BaseModel):
-    slug: str
+    slug: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+    version: str | None = Field(default=None, min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._+-]+$")
 
 
 class UrlImportIn(BaseModel):
@@ -234,35 +145,6 @@ def classify_portability(content: str) -> int:
     return 1
 
 
-def _ensure_skill_write_access(skill: SkillRecord, current_user: UserRecord):
-    """Allow platform admins to edit everything; tenant admins can edit
-    tenant-owned skills AND builtin (preset) skills visible to their tenant.
-    Builtin skills are treated as presets -- placed during company init,
-    but fully manageable by org_admin afterwards.
-    """
-    if current_user.role == "platform_admin":
-        return
-    if not current_user.tenant_id:
-        raise HTTPException(403, "Cannot modify skills without a tenant")
-    # Allow org_admin to manage: their own tenant skills OR builtin (preset) skills
-    if skill.tenant_id is not None and skill.tenant_id != current_user.tenant_id:
-        raise HTTPException(403, "Cannot modify other-tenant skills")
-
-
-async def _fresh_import_actor(current_user: UserRecord) -> UserRecord:
-    actor = await user_dao.get_with_identity(current_user.id, fresh=True)
-    if actor is None or not actor.is_active or actor.identity is None or not actor.identity.is_active:
-        raise HTTPException(401, "User not found or inactive")
-    raise_if_password_change_required(actor)
-    if actor.tenant_id != current_user.tenant_id or actor.identity_id != current_user.identity_id:
-        raise HTTPException(403, "Membership changed during import")
-    if actor.tenant_id is not None:
-        tenants = await tenant_dao.get_many([actor.tenant_id])
-        if not tenants or not tenants[0].is_active:
-            raise HTTPException(403, "Tenant not found or inactive")
-    return actor
-
-
 async def _save_skill_to_db(
     folder_name: str,
     name: str,
@@ -272,9 +154,11 @@ async def _save_skill_to_db(
     files: list[SkillFilePayload],
     source_url: str | None = None,
     tenant_id: str | None = None,
+    source_metadata: SkillSource | None = None,
 ) -> SavedSkillResult:
     """Create a Skill + SkillFile records in the database."""
     _ = source_url
+    stored_files = sanitized_skill_files(files)
     async with optional_connection_ctx():
         tid = _uuid.UUID(tenant_id) if tenant_id not in (None, "") else None
         existing = await skill_dao.get_by_folder_name(folder_name, tenant_id=tid, tenant_scoped=True)
@@ -284,23 +168,34 @@ async def _save_skill_to_db(
                 f"A skill with folder name '{folder_name}' already exists. Delete it first or use a different name.",
             )
 
-        skill = await skill_dao.create(
-            obj_in={
-                "name": name,
-                "description": description,
-                "category": category,
-                "icon": icon,
-                "folder_name": folder_name,
-                "is_builtin": False,
-                "tenant_id": tid,
-            }
-        )
+        values: dict[str, object] = {
+            "name": name,
+            "description": description,
+            "category": category,
+            "icon": icon,
+            "folder_name": folder_name,
+            "is_builtin": False,
+            "tenant_id": tid,
+        }
+        if source_metadata is not None:
+            values.update(
+                source_metadata=source_metadata.model_dump(mode="json"),
+                imported_fingerprint=skill_fingerprint((file["path"], file["content"]) for file in stored_files),
+            )
+        skill = await skill_dao.create(obj_in=values)
 
-        for f in files:
-            content = f["content"].replace("\x00", "")
-            _ = await skill_file_dao.create(obj_in={"skill_id": skill.id, "path": f["path"], "content": content})
+        for file in stored_files:
+            _ = await skill_file_dao.create(
+                obj_in={"skill_id": skill.id, "path": file["path"], "content": file["content"]}
+            )
 
-    return {"id": str(skill.id), "name": skill.name, "folder_name": skill.folder_name}
+    return {
+        "id": str(skill.id),
+        "name": skill.name,
+        "folder_name": skill.folder_name,
+        "source_metadata": source_metadata,
+        "imported_fingerprint": skill.imported_fingerprint,
+    }
 
 
 # ─── ClawHub Integration ─────────────────────────────
@@ -384,7 +279,10 @@ async def install_from_clawhub(
     moderation_summary = moderation.get("summary", "")
 
     # 3. Fetch files from the ClawHub archive
-    files, archive_base = await _fetch_clawhub_skill_archive(slug, api_key=api_key, preferred_base=meta_base)
+    files, archive_base = await _fetch_clawhub_skill_archive(
+        slug, api_key=api_key, preferred_base=meta_base, version=body.version
+    )
+    source_metadata = SkillSource(slug=slug, owner=handle, requested_version=body.version, archive_source=archive_base)
 
     if not files:
         raise HTTPException(404, "No files found in the ClawHub skill archive")
@@ -415,6 +313,7 @@ async def install_from_clawhub(
             files=files,
             source_url=_public_clawhub_url(archive_base, slug),
             tenant_id=tenant_id,
+            source_metadata=source_metadata,
         )
 
     return {
@@ -425,7 +324,7 @@ async def install_from_clawhub(
         "has_scripts": has_scripts,
         "file_count": len(files),
         "source": "clawhub",
-        "archive_source": archive_base,
+        "archive_source": source_metadata.archive_source,
     }
 
 
@@ -532,6 +431,8 @@ async def list_skills(current_user: UserRecord = Depends(get_current_user)) -> l
             "is_builtin": s.is_builtin,
             "is_default": s.is_default,
             "created_at": s.created_at.isoformat() if s.created_at else None,
+            "source_metadata": s.source_metadata,
+            "imported_fingerprint": s.imported_fingerprint,
         }
         for s in skills
     ]
@@ -556,6 +457,8 @@ async def get_skill(skill_id: str, current_user: UserRecord = Depends(get_curren
         "icon": skill.icon,
         "folder_name": skill.folder_name,
         "is_builtin": skill.is_builtin,
+        "source_metadata": skill.source_metadata,
+        "imported_fingerprint": skill.imported_fingerprint,
         "files": [{"path": f.path, "content": f.content} for f in skill.files],
     }
 
@@ -604,6 +507,15 @@ class SkillUpdateIn(BaseModel):
     files: list[SkillFileIn] | None = None
 
 
+@router.post("/{skill_id}/refresh", response_model=SkillRefreshResponse)
+async def refresh_registry_skill(
+    skill_id: _uuid.UUID, body: SkillRefreshIn, current_user: UserRecord = Depends(get_current_admin)
+) -> SkillRefreshResponse:
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    api_key = await _get_clawhub_key(tenant_id)
+    return await refresh_skill(skill_id, body, current_user, api_key=api_key)
+
+
 @router.put("/{skill_id}", response_model=None)
 async def update_skill(
     skill_id: str, body: SkillUpdateIn, current_user: UserRecord = Depends(get_current_admin)
@@ -615,6 +527,7 @@ async def update_skill(
             tenant_id=current_user.tenant_id,
             role=current_user.role,
             with_files=True,
+            for_update=True,
         )
         if not skill:
             raise HTTPException(404, "Skill not found")
@@ -646,6 +559,7 @@ async def delete_skill(skill_id: str, current_user: UserRecord = Depends(get_cur
             skill_id,
             tenant_id=current_user.tenant_id,
             role=current_user.role,
+            for_update=True,
         )
         if not skill:
             raise HTTPException(404, "Skill not found")
@@ -815,6 +729,7 @@ async def browse_write(body: BrowseWriteIn, current_user: UserRecord = Depends(g
             tenant_id=current_user.tenant_id,
             role=current_user.role,
             with_files=True,
+            for_update=True,
         )
         if not skill:
             skill = await skill_dao.create(
@@ -855,6 +770,7 @@ async def browse_delete(path: str, current_user: UserRecord = Depends(get_curren
             tenant_id=current_user.tenant_id,
             role=current_user.role,
             with_files=True,
+            for_update=True,
         )
         if not skill:
             raise HTTPException(404, "Skill not found")

@@ -389,14 +389,23 @@ export type ChatTicketRequest = z.infer<typeof ChatTicketRequestSchema>;
 export const ChatTicketResponseSchema = z.looseObject({ ["session_id"]: z.guid(), ["ticket"]: z.string() });
 export type ChatTicketResponse = z.infer<typeof ChatTicketResponseSchema>;
 
+export const ClawhubInstallInSchema = z.looseObject({ ["slug"]: z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", "u")), ["version"]: z.union([z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200).regex(new RegExp("^[A-Za-z0-9._+-]+$", "u")), z.null()]).optional() });
+export type ClawhubInstallIn = z.infer<typeof ClawhubInstallInSchema>;
+
 export const ClickRequestSchema = z.looseObject({ ["button"]: z.string().optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string(), ["x"]: z.number().refine(Number.isInteger), ["y"]: z.number().refine(Number.isInteger) });
 export type ClickRequest = z.infer<typeof ClickRequestSchema>;
+
+export const CompanyConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["unset"]: z.array(z.string()).optional() });
+export type CompanyConfigOperations = z.infer<typeof CompanyConfigOperationsSchema>;
 
 export const CompanyReportOutSchema = z.looseObject({ ["content"]: z.string(), ["generated_at"]: z.string(), ["id"]: z.string(), ["missing_count"]: z.number().refine(Number.isInteger), ["needs_refresh"]: z.boolean(), ["period_end"]: z.string(), ["period_label"]: z.string(), ["period_start"]: z.string(), ["report_type"]: z.string(), ["submitted_count"]: z.number().refine(Number.isInteger), ["updated_at"]: z.string() });
 export type CompanyReportOut = z.infer<typeof CompanyReportOutSchema>;
 
 export const CompanyReportRegenerateSchema = z.looseObject({ ["period_start"]: z.string(), ["report_type"]: z.string() });
 export type CompanyReportRegenerate = z.infer<typeof CompanyReportRegenerateSchema>;
+
+export const ConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["unset"]: z.array(z.string()).optional() });
+export type ConfigOperations = z.infer<typeof ConfigOperationsSchema>;
 
 export const ControlStatusValues = ["ok","error","already_locked","locked","unlocked"] as const;
 export const ControlStatus = { OK: "ok", ERROR: "error", ALREADY_LOCKED: "already_locked", LOCKED: "locked", UNLOCKED: "unlocked" } as const;
@@ -586,6 +595,21 @@ export type KeyResultUpdate = z.infer<typeof KeyResultUpdateSchema>;
 
 export const LockRequestSchema = z.looseObject({ ["env_type"]: ControlEnvironmentSchema.optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["platform_hint"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type LockRequest = z.infer<typeof LockRequestSchema>;
+
+export const MCPCatalogDiscoverySchema = z.strictObject({ ["api_key"]: z.union([z.string(), z.null()]).optional(), ["server_url"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 500), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
+export type MCPCatalogDiscovery = z.infer<typeof MCPCatalogDiscoverySchema>;
+
+export const MCPDiscoveredToolSchema = z.looseObject({ ["description"]: z.string().optional(), ["inputSchema"]: JsonInputObjectSchema.optional(), ["name"]: z.string().refine(value => [...value].length >= 1) });
+export type MCPDiscoveredTool = z.infer<typeof MCPDiscoveredToolSchema>;
+
+export const MCPCatalogImportSchema = z.strictObject({ ["api_key"]: z.union([z.string(), z.null()]).optional(), ["name_prefix"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 98).regex(new RegExp("^[a-zA-Z0-9_-]+$", "u")), ["server_name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 98), ["server_url"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 500), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["tools"]: z.array(MCPDiscoveredToolSchema).min(1) });
+export type MCPCatalogImport = z.infer<typeof MCPCatalogImportSchema>;
+
+export const ToolCreatedResponseSchema = z.looseObject({ ["id"]: z.string(), ["name"]: z.string() });
+export type ToolCreatedResponse = z.infer<typeof ToolCreatedResponseSchema>;
+
+export const MCPCatalogImportResponseSchema = z.looseObject({ ["ok"]: z.intersection(z.literal(true), z.boolean()), ["tools"]: z.array(ToolCreatedResponseSchema) });
+export type MCPCatalogImportResponse = z.infer<typeof MCPCatalogImportResponseSchema>;
 
 export const MCPTimeoutSchema = z.number().gt(0);
 export type MCPTimeout = z.infer<typeof MCPTimeoutSchema>;
@@ -877,6 +901,12 @@ export type ReviewPage = z.infer<typeof ReviewPageSchema>;
 export const RoleUpdateSchema = z.looseObject({ ["role"]: UserRoleSchema });
 export type RoleUpdate = z.infer<typeof RoleUpdateSchema>;
 
+export const SavedToolReferenceSchema = z.strictObject({ ["agent_id"]: z.union([z.guid(), z.null()]).optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["tool_id"]: z.guid() });
+export type SavedToolReference = z.infer<typeof SavedToolReferenceSchema>;
+
+export const SavedToolProbeSchema = z.strictObject({ ["operations"]: ConfigOperationsSchema.optional(), ["saved"]: SavedToolReferenceSchema });
+export type SavedToolProbe = z.infer<typeof SavedToolProbeSchema>;
+
 export const ScheduleCreateSchema = z.looseObject({ ["cron_expr"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100), ["ends_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["instruction"]: z.string().refine(value => [...value].length <= 5000).optional(), ["is_enabled"]: z.boolean().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200), ["notify_on_failure"]: z.boolean().optional(), ["timezone"]: z.string().optional() });
 export type ScheduleCreate = z.infer<typeof ScheduleCreateSchema>;
 
@@ -932,6 +962,15 @@ export type SessionOut = z.infer<typeof SessionOutSchema>;
 
 export const SessionPageOutSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(SessionOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
 export type SessionPageOut = z.infer<typeof SessionPageOutSchema>;
+
+export const SkillRefreshInSchema = z.strictObject({ ["expected_fingerprint"]: z.string().regex(new RegExp("^[0-9a-f]{64}$", "u")), ["version"]: z.union([z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200).regex(new RegExp("^[A-Za-z0-9._+-]+$", "u")), z.null()]).optional() });
+export type SkillRefreshIn = z.infer<typeof SkillRefreshInSchema>;
+
+export const SkillSourceSchema = z.strictObject({ ["archive_source"]: z.string(), ["owner"]: z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$", "u")), ["provider"]: z.intersection(z.literal("clawhub"), z.string()).optional(), ["requested_version"]: z.union([z.string(), z.null()]).optional(), ["slug"]: z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", "u")) });
+export type SkillSource = z.infer<typeof SkillSourceSchema>;
+
+export const SkillRefreshResponseSchema = z.looseObject({ ["folder_name"]: z.string(), ["id"]: z.guid(), ["imported_fingerprint"]: z.string(), ["name"]: z.string(), ["source_metadata"]: SkillSourceSchema });
+export type SkillRefreshResponse = z.infer<typeof SkillRefreshResponseSchema>;
 
 export const SlackChannelPayloadSchema = z.looseObject({ ["bot_token"]: z.string().optional(), ["signing_secret"]: z.string().optional() });
 export type SlackChannelPayload = z.infer<typeof SlackChannelPayloadSchema>;
@@ -1004,9 +1043,6 @@ export type ToolCatalogResponse = z.infer<typeof ToolCatalogResponseSchema>;
 
 export const ToolCreateSchema = z.looseObject({ ["category"]: z.string().optional(), ["description"]: z.string().optional(), ["display_name"]: z.string(), ["icon"]: z.string().optional(), ["is_default"]: z.boolean().optional(), ["mcp_server_name"]: z.union([z.string(), z.null()]).optional(), ["mcp_server_url"]: z.union([z.string(), z.null()]).optional(), ["mcp_tool_name"]: z.union([z.string(), z.null()]).optional(), ["name"]: z.string(), ["parameters_schema"]: JsonInputObjectSchema.optional(), ["tenant_id"]: z.union([z.string(), z.null()]).optional(), ["type"]: z.string().optional() });
 export type ToolCreate = z.infer<typeof ToolCreateSchema>;
-
-export const ToolCreatedResponseSchema = z.looseObject({ ["id"]: z.string(), ["name"]: z.string() });
-export type ToolCreatedResponse = z.infer<typeof ToolCreatedResponseSchema>;
 
 export const ToolUpdateSchema = z.looseObject({ ["config"]: z.union([JsonInputObjectSchema, z.null()]).optional(), ["description"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["enabled"]: z.union([z.boolean(), z.null()]).optional(), ["icon"]: z.union([z.string(), z.null()]).optional(), ["is_default"]: z.union([z.boolean(), z.null()]).optional(), ["mcp_server_name"]: z.union([z.string(), z.null()]).optional(), ["mcp_server_url"]: z.union([z.string(), z.null()]).optional(), ["parameters_schema"]: z.union([JsonInputObjectSchema, z.null()]).optional(), ["tenant_id"]: z.union([z.string(), z.null()]).optional() });
 export type ToolUpdate = z.infer<typeof ToolUpdateSchema>;

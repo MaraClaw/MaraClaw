@@ -46,6 +46,9 @@ def _client_factory(responses: list[FakeResponse]):
 
 
 async def test_install_from_clawhub_defaults_null_moderation_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected_versions = []
+    sources = []
+
     async def fetch_metadata(*_args, **_kwargs):
         return {
             "skill": {"displayName": "Research"},
@@ -53,10 +56,12 @@ async def test_install_from_clawhub_defaults_null_moderation_to_empty(monkeypatc
             "moderation": None,
         }, "https://clawhub.test"
 
-    async def fetch_archive(*_args, **_kwargs):
+    async def fetch_archive(*_args, **kwargs):
+        selected_versions.append(kwargs.get("version"))
         return [{"path": "SKILL.md", "content": "# Research"}], "https://clawhub.test"
 
-    async def save_skill(*_args, **_kwargs):
+    async def save_skill(*_args, **kwargs):
+        sources.append(kwargs.get("source_metadata"))
         return {"id": "skill-id", "name": "Research", "folder_name": "research"}
 
     monkeypatch.setattr(skills, "_fetch_clawhub_skill_meta", fetch_metadata)
@@ -67,12 +72,15 @@ async def test_install_from_clawhub_defaults_null_moderation_to_empty(monkeypatc
     user: Any = SimpleNamespace(display_name="Test User", tenant_id=None, id=None, role="member")
     monkeypatch.setattr(skills, "_fresh_import_actor", AsyncMock(return_value=user))
     result = await skills.install_from_clawhub(
-        skills.ClawhubInstallIn(slug="research"),
+        skills.ClawhubInstallIn(slug="research", version="1.2.3"),
         user,
     )
 
     assert result["is_suspicious"] is False
     assert result["moderation_summary"] == ""
+    assert selected_versions == ["1.2.3"]
+    assert sources[0].requested_version == "1.2.3"
+    assert sources[0].owner == "acme"
 
 
 async def test_fetch_clawhub_json_parses_valid_fields_and_ignores_malformed_fields(

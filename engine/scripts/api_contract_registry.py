@@ -6,6 +6,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from app.api.agent_credentials import AgentCredentialPayload
 from app.api.files import list_files_page
+from app.api.skills import install_from_clawhub, refresh_registry_skill
 from app.api.upload import UploadPolicy
 from app.core.domain.activity import ActivityAction
 from app.core.domain.agents import (
@@ -72,6 +73,9 @@ AUDITED_HTTP_MODULES = frozenset(
         "schedules",
         "tasks",
         "tools",
+        "tool_catalog_import",
+        "tool_config_operations",
+        "tool_probes",
         "whatsapp",
         "whatsapp_personal",
         "triggers",
@@ -138,7 +142,7 @@ PUBLIC_SCHEMA_NAMES = {
     "JsonObject-Output": "JsonOutputObject",
 }
 
-AUDITED_HTTP_ENDPOINTS = frozenset({list_files_page})
+AUDITED_HTTP_ENDPOINTS = frozenset({list_files_page, install_from_clawhub, refresh_registry_skill})
 
 
 def explicit_schemas() -> dict[str, JsonValue]:

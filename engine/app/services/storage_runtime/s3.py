@@ -22,7 +22,7 @@ from app.services.storage_runtime.base import (
     checked_page_limit,
     walk_order,
 )
-from app.services.storage_runtime.s3_connection import S3ListArguments, S3ObjectIdentity
+from app.services.storage_runtime.s3_connection import S3GetArguments, S3ListArguments, S3ObjectIdentity
 from app.services.storage_runtime.s3_create import S3CreateBackend
 from app.services.storage_runtime.s3_read import materialize_object, read_object
 from app.services.storage_runtime.utils import normalize_storage_key
@@ -193,10 +193,17 @@ class S3StorageBackend(S3CreateBackend):
         return await anyio.to_thread.run_sync(read_object, get_object, None, abandon_on_cancel=True)
 
     @override
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        if max_bytes < 0 or (offset is not None and offset < 0):
+            raise ValueError("max_bytes and offset must be nonnegative")
         client = self._client_or_raise()
-        get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
-        return await anyio.to_thread.run_sync(read_object, get_object, max_bytes, abandon_on_cancel=True)
+        arguments: S3GetArguments = {"Bucket": self.bucket, "Key": self._object_key(key)}
+        if offset is not None:
+            if max_bytes == 0:
+                return b""
+            arguments["Range"] = f"bytes={offset}-{offset + max_bytes - 1}"
+        get_object = partial(client.get_object, **arguments)
+        return await anyio.to_thread.run_sync(read_object, get_object, max_bytes, offset, abandon_on_cancel=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

@@ -9,6 +9,10 @@ from pathlib import Path
 
 from app.services.storage_runtime.base import StorageBackend, StorageEntry
 
+from .workspace_search import search_page
+from .workspace_search_cursor import InvalidSearchCursorError, SearchQuery, parse_position
+from .workspace_search_scope import search_key_allowed, search_path_allowed
+
 type StorageBackendFactory = Callable[[], StorageBackend]
 type ToolStorageKeyFn = Callable[[uuid.UUID, str, str | None], tuple[str, str, bool]]
 type DisplaySizeFn = Callable[[int], str]
@@ -106,11 +110,6 @@ def _storage_walk_files(storage: StorageBackend, root_key: str) -> AsyncGenerato
     return storage.walk(root_key)
 
 
-_BINARY_SUFFIXES = frozenset(
-    {".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".tar", ".gz"}
-)
-
-
 def _relative_storage_display(entry_key: str, base_key: str, display_base: str) -> str:
     rel = entry_key.removeprefix(base_key.rstrip("/") + "/")
     return f"{display_base.rstrip('/')}/{rel}".strip("/") if display_base else rel
@@ -124,62 +123,44 @@ async def _storage_search_files(
     ignore_case: bool = False,
     tenant_id: str | None = None,
     *,
+    cursor: str | None = None,
+    limit: int = 50,
     get_storage_backend: StorageBackendFactory,
     tool_storage_key: ToolStorageKeyFn,
     storage_walk_files: StorageWalkFn,
     relative_storage_display: RelativeDisplayFn,
 ) -> str:
+    del storage_walk_files, relative_storage_display
+    if isinstance(limit, bool) or not 1 <= limit <= 50:
+        return "Invalid search_files limit: expected an integer between 1 and 50"
+    if not search_path_allowed(path):
+        return "Access denied for this path"
     storage = get_storage_backend()
     rel_path = "" if path in ("", ".") else path
-    base_key, normalized, _ = tool_storage_key(agent_id, rel_path, tenant_id)
-    is_dir = await storage.is_dir(base_key)
-    if not is_dir and normalized:
+    base_key, normalized, enterprise = tool_storage_key(agent_id, rel_path, tenant_id)
+    if enterprise and tenant_id in (None, ""):
         return f"Directory not found: {path}"
-    flags = re.IGNORECASE if ignore_case else 0
+    query = SearchQuery(
+        agent=str(agent_id),
+        tenant=tenant_id,
+        root=base_key,
+        display=normalized,
+        pattern=pattern,
+        file_pattern=file_pattern,
+        ignore_case=ignore_case,
+        limit=limit,
+    )
+    if not search_key_allowed(storage, base_key, base_key):
+        return "Access denied for this path"
     try:
-        regex = re.compile(pattern, flags)
+        position = await parse_position(cursor, query)
+        if cursor is None and normalized and not await storage.is_dir(base_key):
+            return f"Directory not found: {path}"
+        return await search_page(storage, position)
     except re.error as error:
         return f"Invalid regex pattern: {error}"
-    if not is_dir:
-        return f"No matches found for pattern '{pattern}' in 0 file(s)"
-
-    results: list[str] = []
-    total_matches = 0
-    files_searched = 0
-    async with aclosing(storage_walk_files(storage, base_key)) as entries:
-        async for entry in entries:
-            if entry.is_dir:
-                continue
-            rel_display = relative_storage_display(entry.key, base_key, normalized)
-            if not fnmatch.fnmatch(Path(rel_display).name, file_pattern) and not fnmatch.fnmatch(
-                rel_display, file_pattern
-            ):
-                continue
-            if Path(rel_display).suffix.lower() in _BINARY_SUFFIXES:
-                continue
-            files_searched += 1
-            try:
-                content = await storage.read_text(entry.key, encoding="utf-8", errors="ignore")
-            except Exception:
-                content = ""
-            for index, line in enumerate(content.splitlines(), 1):
-                if regex.search(line):
-                    results.append(f"{rel_display}:{index}: {line.strip()[:100]}")
-                    total_matches += 1
-                    if len(results) >= 50:
-                        break
-            if len(results) >= 50:
-                break
-    if not results:
-        return f"No matches found for pattern '{pattern}' in {files_searched} file(s)"
-    truncated = total_matches > len(results)
-    truncation_note = (
-        f" (showing first {len(results)} of {total_matches}+ - refine pattern or path for more)" if truncated else ""
-    )
-    return (
-        f"🔍 Found {total_matches}+ match(es) in {files_searched} file(s) for pattern '{pattern}'{truncation_note}:\n"
-        + "\n".join(results)
-    )
+    except InvalidSearchCursorError as error:
+        return str(error)
 
 
 async def _storage_find_files(

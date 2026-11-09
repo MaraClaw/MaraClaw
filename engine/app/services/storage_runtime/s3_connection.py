@@ -18,6 +18,10 @@ class S3ObjectArguments(TypedDict):
     Key: str
 
 
+class S3GetArguments(S3ObjectArguments):
+    Range: NotRequired[str]
+
+
 class S3ListArguments(TypedDict):
     Bucket: str
     Prefix: NotRequired[str]
@@ -48,7 +52,7 @@ class S3DeleteArguments(TypedDict):
 class S3Client(Protocol):
     def list_objects_v2(self, **kwargs: Unpack[S3ListArguments]) -> Mapping[str, object]: ...
 
-    def get_object(self, **kwargs: Unpack[S3ObjectArguments]) -> Mapping[str, object]: ...
+    def get_object(self, **kwargs: Unpack[S3GetArguments]) -> Mapping[str, object]: ...
 
     def head_object(self, **kwargs: Unpack[S3ObjectArguments]) -> Mapping[str, object]: ...
 

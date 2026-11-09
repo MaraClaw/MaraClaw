@@ -1,6 +1,7 @@
 """Blocking S3 response ownership, including cancellation of the awaiter."""
 
 import os
+import re
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
@@ -27,7 +28,7 @@ def _is_response_body(value: object) -> TypeIs[_ResponseBody]:
     return callable(getattr(value, "read", None)) and callable(getattr(value, "close", None))
 
 
-def _open_body(get_object: Callable[[], Mapping[str, object]]) -> _ResponseBody:
+def _open_body(get_object: Callable[[], Mapping[str, object]], range_offset: int | None = None) -> _ResponseBody:
     try:
         response = get_object()
     except ClientError as exc:
@@ -37,19 +38,41 @@ def _open_body(get_object: Callable[[], Mapping[str, object]]) -> _ResponseBody:
     body = response["Body"]
     if not _is_response_body(body):
         raise TypeError("S3 get_object response is missing a readable, closable Body")
+    if range_offset is not None:
+        content_range = str(response.get("ContentRange", ""))
+        parsed = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+        if parsed is None or int(parsed[1]) != range_offset:
+            body.close()
+            raise OSError("S3 provider did not honor the requested byte range")
     return body
 
 
-def read_object(get_object: Callable[[], Mapping[str, object]], max_bytes: int | None) -> bytes:
+def read_object(
+    get_object: Callable[[], Mapping[str, object]], max_bytes: int | None, range_offset: int | None = None
+) -> bytes:
     """Own GET, read and close in one worker, even after the awaiter abandons it.
 
     Cancellation cannot interrupt a blocking SDK call. The worker completes the
     bounded read (subject to the client's read timeout) and always closes its body.
     """
-    with closing(_open_body(get_object)) as body:
+    try:
+        body = _open_body(get_object, range_offset)
+    except ClientError as exc:
+        if range_offset is not None and exc.response.get("Error", {}).get("Code") in {
+            "416",
+            "InvalidRange",
+            "RequestedRangeNotSatisfiable",
+        }:
+            return b""
+        raise
+    with closing(body):
         if max_bytes is None:
             return body.read()
-        return read_bounded(body, max_bytes)
+        return (
+            read_bounded(body, max_bytes, range_read=True)
+            if range_offset is not None
+            else read_bounded(body, max_bytes)
+        )
 
 
 class _TempHandoff:

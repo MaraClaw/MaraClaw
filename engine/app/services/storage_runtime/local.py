@@ -103,9 +103,11 @@ class LocalStorageBackend(StorageBackend):
             return cast("bytes", await f.read())
 
     @override
-    async def read_bytes_bounded(self, key: str, max_bytes: int) -> bytes:
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        if offset is not None and offset < 0:
+            raise ValueError("offset must be nonnegative")
         path = self.root.resolve() / normalize_storage_key(key)
-        return await anyio.to_thread.run_sync(_read_file_bounded, path, max_bytes, abandon_on_cancel=True)
+        return await anyio.to_thread.run_sync(_read_file_bounded, path, max_bytes, offset, abandon_on_cancel=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -250,8 +252,11 @@ def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}:{hash_part}"
 
 
-def _read_file_bounded(path: Path, max_bytes: int) -> bytes:
+def _read_file_bounded(path: Path, max_bytes: int, offset: int | None = None) -> bytes:
     with open_regular_file(path) as stream:
+        if offset is not None:
+            _ = stream.seek(offset)
+            return read_bounded(stream, max_bytes, range_read=True)
         return read_bounded(stream, max_bytes)
 
 

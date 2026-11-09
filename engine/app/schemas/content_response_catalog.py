@@ -1,8 +1,9 @@
-from typing import Literal
+from typing import Literal, NotRequired
 
 from typing_extensions import TypedDict
 
 from app.dao.analytics_projection_contracts import ClawbookContributorProjection, ClawbookStatsProjection
+from app.records.skill import SkillSource
 from app.services.skill_provider import SkillFilePayload
 
 
@@ -21,6 +22,8 @@ class SkillIdentityResponse(TypedDict):
 
 class SavedSkillResult(SkillIdentityResponse):
     folder_name: str
+    source_metadata: NotRequired[SkillSource | None]
+    imported_fingerprint: NotRequired[str | None]
 
 
 class UrlSkillInstallResponse(SavedSkillResult):

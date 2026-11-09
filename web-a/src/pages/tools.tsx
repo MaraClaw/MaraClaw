@@ -44,7 +44,7 @@ export function ToolsPage() {
       </div> : <p className="text-sm font-medium">Company context: your organization</p>}
       <p id="tools-company-help" className="text-sm leading-relaxed text-muted-foreground">{concreteCompany
         ? 'This selection scopes catalog visibility, new MCP tools and built-in source configuration. Each record shows its ownership; company selection does not change who owns it. Available actions follow the permissions returned by the server for this context.'
-        : 'Inspect record ownership and server-permitted actions in this catalog. Select a concrete company before creating MCP tools or replacing configuration. Current / platform scope uses the server’s current context, which may include multiple companies.'}</p>
+        : 'Inspect record ownership and server-permitted actions in this catalog. Select a concrete company before creating MCP tools or configuring a tool. Current / platform scope uses the server’s current context, which may include multiple companies.'}</p>
     </CardContent></Card>
     <ToolsCatalog key={`${owner.generation}:${tenantId ?? 'current'}:${concreteCompany}`} tenantId={tenantId} concreteCompany={concreteCompany} />
   </div>

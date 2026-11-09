@@ -5114,8 +5114,23 @@
       "ClawhubInstallIn": {
         "properties": {
           "slug": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",
             "title": "Slug",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._+-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
@@ -5267,6 +5282,35 @@
             "type": "string"
           }
         ]
+      },
+      "CompanyConfigOperations": {
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "$ref": "#/components/schemas/JsonObject-Input"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "unset": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unset",
+            "type": "array"
+          }
+        },
+        "title": "CompanyConfigOperations",
+        "type": "object"
       },
       "CompanyCreateRequest": {
         "properties": {
@@ -5630,6 +5674,23 @@
           "can_disable"
         ],
         "title": "CompanyStats",
+        "type": "object"
+      },
+      "ConfigOperations": {
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "$ref": "#/components/schemas/JsonObject-Input"
+          },
+          "unset": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unset",
+            "type": "array"
+          }
+        },
+        "title": "ConfigOperations",
         "type": "object"
       },
       "ConnectedEvent": {
@@ -9340,6 +9401,152 @@
           "session_id"
         ],
         "title": "LockRequest",
+        "type": "object"
+      },
+      "MCPCatalogDiscovery": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "server_url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Server Url",
+            "type": "string"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          }
+        },
+        "required": [
+          "server_url"
+        ],
+        "title": "MCPCatalogDiscovery",
+        "type": "object"
+      },
+      "MCPCatalogImport": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "name_prefix": {
+            "maxLength": 98,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Name Prefix",
+            "type": "string"
+          },
+          "server_name": {
+            "maxLength": 98,
+            "minLength": 1,
+            "title": "Server Name",
+            "type": "string"
+          },
+          "server_url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Server Url",
+            "type": "string"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MCPDiscoveredTool"
+            },
+            "minItems": 1,
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "server_url",
+          "server_name",
+          "name_prefix",
+          "tools"
+        ],
+        "title": "MCPCatalogImport",
+        "type": "object"
+      },
+      "MCPCatalogImportResponse": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCreatedResponse"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "tools"
+        ],
+        "title": "MCPCatalogImportResponse",
+        "type": "object"
+      },
+      "MCPDiscoveredTool": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "inputSchema": {
+            "$ref": "#/components/schemas/JsonObject-Input"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MCPDiscoveredTool",
         "type": "object"
       },
       "MCPScalar": {
@@ -13497,6 +13704,61 @@
         "title": "RoleUpdate",
         "type": "object"
       },
+      "SavedToolProbe": {
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "$ref": "#/components/schemas/ConfigOperations"
+          },
+          "saved": {
+            "$ref": "#/components/schemas/SavedToolReference"
+          }
+        },
+        "required": [
+          "saved"
+        ],
+        "title": "SavedToolProbe",
+        "type": "object"
+      },
+      "SavedToolReference": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "tool_id": {
+            "format": "uuid",
+            "title": "Tool Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_id"
+        ],
+        "title": "SavedToolReference",
+        "type": "object"
+      },
       "ScheduleCreate": {
         "properties": {
           "cron_expr": {
@@ -14434,6 +14696,68 @@
         "title": "SkillFileIn",
         "type": "object"
       },
+      "SkillRefreshIn": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_fingerprint": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Fingerprint",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._+-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "expected_fingerprint"
+        ],
+        "title": "SkillRefreshIn",
+        "type": "object"
+      },
+      "SkillRefreshResponse": {
+        "properties": {
+          "folder_name": {
+            "title": "Folder Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "imported_fingerprint": {
+            "title": "Imported Fingerprint",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_metadata": {
+            "$ref": "#/components/schemas/SkillSource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "folder_name",
+          "source_metadata",
+          "imported_fingerprint"
+        ],
+        "title": "SkillRefreshResponse",
+        "type": "object"
+      },
       "SkillSettingsIn": {
         "properties": {
           "clawhub_key": {
@@ -14460,6 +14784,50 @@
           }
         },
         "title": "SkillSettingsIn",
+        "type": "object"
+      },
+      "SkillSource": {
+        "additionalProperties": false,
+        "description": "Credential-free download provenance, never a provider authenticity claim.",
+        "properties": {
+          "archive_source": {
+            "title": "Archive Source",
+            "type": "string"
+          },
+          "owner": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$",
+            "title": "Owner",
+            "type": "string"
+          },
+          "provider": {
+            "const": "clawhub",
+            "default": "clawhub",
+            "title": "Provider",
+            "type": "string"
+          },
+          "requested_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Version"
+          },
+          "slug": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "owner",
+          "archive_source"
+        ],
+        "title": "SkillSource",
         "type": "object"
       },
       "SkillUpdateIn": {
@@ -39232,6 +39600,64 @@
         ]
       }
     },
+    "/api/skills/{skill_id}/refresh": {
+      "post": {
+        "operationId": "post_2f6170692f736b696c6c732f7b736b696c6c5f69647d2f72656672657368",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Skill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillRefreshIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillRefreshResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Registry Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
     "/api/sso/config": {
       "get": {
         "description": "List active SSO providers with their redirect URLs for the specified session ID.",
@@ -41675,6 +42101,88 @@
           "tools"
         ]
       },
+      "patch": {
+        "operationId": "patch_2f6170692f746f6f6c732f6167656e74732f7b6167656e745f69647d2f746f6f6c2d636f6e6669672f7b746f6f6c5f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigOperations"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Agent Tool Config",
+        "tags": [
+          "tools"
+        ]
+      },
       "put": {
         "description": "Save per-agent config override for a tool.",
         "operationId": "put_2f6170692f746f6f6c732f6167656e74732f7b6167656e745f69647d2f746f6f6c2d636f6e6669672f7b746f6f6c5f69647d",
@@ -41925,15 +42433,168 @@
         ]
       }
     },
-    "/api/tools/test-email": {
+    "/api/tools/mcp/discover": {
       "post": {
-        "description": "Test IMAP and SMTP email connections with provided config.",
-        "operationId": "post_2f6170692f746f6f6c732f746573742d656d61696c",
+        "operationId": "post_2f6170692f746f6f6c732f6d63702f646973636f766572",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EmailTestRequest"
+                "$ref": "#/components/schemas/MCPCatalogDiscovery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPTestSuccess"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Discover Mcp Catalog",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/tools/mcp/import": {
+      "post": {
+        "operationId": "post_2f6170692f746f6f6c732f6d63702f696d706f7274",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPCatalogImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPCatalogImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Mcp Catalog",
+        "tags": [
+          "tools"
+        ]
+      }
+    },
+    "/api/tools/test-email": {
+      "post": {
+        "operationId": "post_2f6170692f746f6f6c732f746573742d656d61696c",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EmailTestRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SavedToolProbe"
+                  }
+                ],
+                "title": "Data"
               }
             }
           },
@@ -41974,13 +42635,38 @@
     },
     "/api/tools/test-mcp": {
       "post": {
-        "description": "Test connection to an MCP server and list available tools.\n\nSupports two authentication modes:\n- URL-embedded key (e.g. ?tavilyApiKey=xxx) - include in server_url.\n- Bearer token - pass via api_key field; sent as Authorization header.",
         "operationId": "post_2f6170692f746f6f6c732f746573742d6d6370",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MCPTestRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MCPTestRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SavedToolProbe"
+                  }
+                ],
+                "title": "Data"
               }
             }
           },
@@ -42063,6 +42749,78 @@
           }
         ],
         "summary": "Delete Tool",
+        "tags": [
+          "tools"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_2f6170692f746f6f6c732f7b746f6f6c5f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyConfigOperations"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Company Tool Config",
         "tags": [
           "tools"
         ]
@@ -43359,9 +44117,12 @@
       "ChatServerEvent",
       "ChatTicketRequest",
       "ChatTicketResponse",
+      "ClawhubInstallIn",
       "ClickRequest",
+      "CompanyConfigOperations",
       "CompanyReportOut",
       "CompanyReportRegenerate",
+      "ConfigOperations",
       "ControlActionResult",
       "ControlEnvironment",
       "ControlStatus",
@@ -43409,6 +44170,9 @@
       "KeyResultStatus",
       "KeyResultUpdate",
       "LockRequest",
+      "MCPCatalogDiscovery",
+      "MCPCatalogImport",
+      "MCPCatalogImportResponse",
       "MCPServerCreate",
       "MCPServerInventory",
       "MCPServerPatch",
@@ -43417,6 +44181,7 @@
       "MCPServerUpdatedResponse",
       "MCPTestRequest",
       "MCPTestResponse",
+      "MCPTestSuccess",
       "MemberAuthUser",
       "MemberDailyReportOut",
       "MemberDailyReportUpsert",
@@ -43483,6 +44248,7 @@
       "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",
+      "SavedToolProbe",
       "ScheduleCreate",
       "ScheduleHistoryItem",
       "ScheduleHistoryPage",
@@ -43498,6 +44264,8 @@
       "SelectedNotificationsRequest",
       "SessionOut",
       "SessionPageOut",
+      "SkillRefreshIn",
+      "SkillRefreshResponse",
       "SlackChannelPayload",
       "TaskCreate",
       "TaskLogCreate",
@@ -43633,10 +44401,13 @@
       "ChatTicketRequest",
       "ChatTicketResponse",
       "ChunkEvent",
+      "ClawhubInstallIn",
       "ClickRequest",
       "CompanyAccessLevel",
+      "CompanyConfigOperations",
       "CompanyReportOut",
       "CompanyReportRegenerate",
+      "ConfigOperations",
       "ConnectedEvent",
       "ControlActionResult",
       "ControlEnvironment",
@@ -43710,6 +44481,10 @@
       "LifecycleOperationalBlockCode",
       "LivePreview",
       "LockRequest",
+      "MCPCatalogDiscovery",
+      "MCPCatalogImport",
+      "MCPCatalogImportResponse",
+      "MCPDiscoveredTool",
       "MCPScalar",
       "MCPServerCreate",
       "MCPServerInventory",
@@ -43803,6 +44578,8 @@
       "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",
+      "SavedToolProbe",
+      "SavedToolReference",
       "ScheduleCreate",
       "ScheduleHistoryItem",
       "ScheduleHistoryPage",
@@ -43820,6 +44597,9 @@
       "SelectedNotificationsRequest",
       "SessionOut",
       "SessionPageOut",
+      "SkillRefreshIn",
+      "SkillRefreshResponse",
+      "SkillSource",
       "SlackChannelPayload",
       "StringErrorEvent",
       "SubmissionRejectionReason",

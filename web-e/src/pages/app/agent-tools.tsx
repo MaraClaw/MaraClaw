@@ -5,19 +5,12 @@ import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
-  getAgentToolConfig,
   listAgentToolsWithConfig,
-  saveAgentToolConfig,
-  testEmailConfig,
-  testMcpServer,
   updateAgentTools,
   type AgentOut,
 } from '@/lib/workspace-api'
-
-const BLOCKED = new Set(['allow_network', 'http_proxy', 'https_proxy', 'no_proxy'])
+import { AgentToolConfigForm } from './agent-tool-config'
 
 export function AgentToolsPage() {
   const scope = useWorkspaceSession()
@@ -25,7 +18,7 @@ export function AgentToolsPage() {
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
   const [openId, setOpenId] = useState<string | null>(null)
-  const tools = useQuery({ queryKey: ['tools', agent.id], queryFn: () => listAgentToolsWithConfig(agent.id) })
+  const tools = useQuery({ queryKey: ['tools', agent.id], queryFn: ({ signal }) => listAgentToolsWithConfig(agent.id, signal) })
 
   const toggle = useMutation({
     mutationFn: (update: { tool_id: string; enabled: boolean }) => updateAgentTools(agent.id, [update]),
@@ -42,11 +35,14 @@ export function AgentToolsPage() {
       <p className="text-sm text-muted-foreground">
         Enable tools and edit per-agent config. Secrets stay masked. Network/proxy fields stay with admins.
       </p>
+      {tools.isPending ? <p role="status" className="text-sm">Loading tools…</p> : null}
+      {tools.isError ? <p role="alert" className="text-sm text-destructive">Could not load tools. Refresh this page to try again.</p> : null}
+      {tools.isSuccess && tools.data.length === 0 ? <p className="text-sm text-muted-foreground">No tools are available for this agent.</p> : null}
       <ul className="space-y-2">
         {(tools.data ?? []).map((tool) => (
           <li key={tool.id} className="rounded-xl border border-border px-3 py-2">
             <div className="flex items-center justify-between gap-3">
-              <button type="button" className="text-left" onClick={scope.effect(() => setOpenId(openId === tool.id ? null : tool.id))}>
+              <button type="button" className="min-h-11 min-w-0 text-left focus-visible:outline-2 focus-visible:outline-ring" aria-expanded={openId === tool.id} onClick={scope.effect(() => setOpenId(openId === tool.id ? null : tool.id))}>
                 <p className="text-sm font-medium">{tool.display_name || tool.name}</p>
                 <p className="text-xs text-muted-foreground">{tool.description}</p>
               </button>
@@ -63,78 +59,10 @@ export function AgentToolsPage() {
                 </label>
               </div>
             </div>
-            {openId === tool.id && canManage ? <ToolConfigForm agentId={agent.id} toolId={tool.id} /> : null}
+            {openId === tool.id && canManage ? <AgentToolConfigForm key={`${agent.id}:${tool.id}`} agentId={agent.id} toolId={tool.id} kind={tool.type === 'mcp' ? 'mcp' : tool.category === 'email' ? 'email' : null} /> : null}
           </li>
         ))}
       </ul>
-    </div>
-  )
-}
-
-function ToolConfigForm({ agentId, toolId }: { agentId: string; toolId: string }) {
-  const scope = useWorkspaceSession()
-  const config = useQuery({
-    queryKey: ['tool-config', agentId, toolId],
-    queryFn: () => getAgentToolConfig(agentId, toolId),
-  })
-  const [draft, setDraft] = useState<Record<string, string>>({})
-  const schema = (config.data?.config_schema?.properties ?? {}) as Record<string, { type?: string; title?: string }>
-  const keys = Object.keys(schema).filter((key) => !BLOCKED.has(key))
-
-  const merged = { ...(config.data?.merged_config ?? {}), ...draft }
-
-  return (
-    <div className="mt-3 space-y-2 border-t border-border pt-3">
-      {keys.length === 0 ? <p className="text-xs text-muted-foreground">No editable fields.</p> : null}
-      {keys.map((key) => (
-        <label key={key} className="block text-xs">
-          <span className="text-muted-foreground">{schema[key]?.title || key}</span>
-          <Input
-            className="mt-1 h-9"
-            type={key.toLowerCase().includes('password') || key.toLowerCase().includes('secret') || key === 'api_key' ? 'password' : 'text'}
-            value={String(merged[key] ?? '')}
-            onChange={scope.effect((event) => setDraft((prev) => ({ ...prev, [key]: event.target.value })))}
-          />
-        </label>
-      ))}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          onClick={() =>
-            scope.isCurrent() && void saveAgentToolConfig(agentId, toolId, { ...config.data?.merged_config, ...draft }).then(() =>
-              scope.isCurrent() && toast.success('Saved'),
-            ).catch(scope.rethrowCurrent)
-          }
-        >
-          Save config
-        </Button>
-        {merged.api_key || merged.host || merged.username ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              scope.isCurrent() && void testEmailConfig(merged).then((result) =>
-                scope.isCurrent() && toast[result.ok ? 'success' : 'error'](result.ok ? 'Email connection ok' : (result.error ?? 'Failed')),
-              ).catch(scope.rethrowCurrent)
-            }
-          >
-            Test email
-          </Button>
-        ) : null}
-        {typeof merged.server_url === 'string' || typeof merged.url === 'string' ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              scope.isCurrent() && void testMcpServer(String(merged.server_url || merged.url), String(merged.api_key || '')).then((result) =>
-                scope.isCurrent() && toast[result.ok ? 'success' : 'error'](result.ok ? 'MCP reachable' : (result.error ?? 'Failed')),
-              ).catch(scope.rethrowCurrent)
-            }
-          >
-            Test MCP
-          </Button>
-        ) : null}
-      </div>
     </div>
   )
 }
