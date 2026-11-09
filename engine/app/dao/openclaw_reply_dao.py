@@ -2,6 +2,8 @@ from collections.abc import Sequence
 from typing import ClassVar, final
 from uuid import UUID, uuid5
 
+from pydantic import ValidationError
+
 from app.core.json_types import str_from_row, uuid_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
@@ -80,6 +82,28 @@ class OpenClawReplyDAO(BaseDAO[OpenClawReplyBinding]):
                     {"id": native_id, "agent": agent_id},
                 )
             )
+
+    async def published_reply(self, binding: OpenClawReplyBinding, event_id: str) -> ChatMessageRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT m.* FROM openclaw_reply_receipts r JOIN chat_messages m ON m.id = r.message_id "
+                "WHERE r.binding_id = %(binding)s AND r.event_id = %(event)s AND r.message_id = %(message)s "
+                "AND r.pending_text IS NULL AND NOT r.publish_pending AND m.role = 'assistant' "
+                "AND m.agent_id = %(agent)s AND m.user_id = %(user)s AND m.conversation_id = %(session)s "
+                "FOR SHARE OF r, m",
+                {
+                    "binding": binding.id,
+                    "event": event_id,
+                    "message": uuid5(binding.id, event_id),
+                    "agent": binding.agent_id,
+                    "user": binding.user_id,
+                    "session": str(binding.session_id),
+                },
+            )
+            try:
+                return ChatMessageRecord.from_row(row) if row is not None else None
+            except ValidationError:
+                return None
 
     async def persist(
         self, binding: OpenClawReplyBinding, reply: TranscriptReply, media: ReplyMedia

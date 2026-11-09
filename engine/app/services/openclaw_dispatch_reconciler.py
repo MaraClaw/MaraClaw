@@ -1,4 +1,4 @@
-"""Worker-owned recovery for pending OpenClaw lane heads and provably interrupted delivered turns."""
+"""Worker-owned recovery for pending lane heads and conclusive delivered-turn evidence."""
 
 import sqlite3
 from datetime import datetime
@@ -14,6 +14,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.runtime.tasks import loop_progress
 from app.services import openclaw_gateway_delivery as delivery
 from app.services.openclaw_interrupted_inputs import interrupted_before_consumption
+from app.services.openclaw_recovered_dispatch import settle_recovered_report
 from app.services.openclaw_routing import wake_shared_lane
 from app.services.openclaw_turns import runtime_session_key
 
@@ -52,14 +53,21 @@ class OpenClawDispatchReconciler:
         return count
 
     async def _settle_interrupted(self) -> int:
-        """Complete delivered turns with exact interruption evidence; never release or resubmit delivered input."""
+        """Complete delivered turns with exact recovery evidence; never release or resubmit delivered input."""
         messages, after = await gateway_message_dao.delivered_dispatch_page(PAGE, after=self._delivered_after)
         agents = {agent.id: agent for agent in await agent_dao.get_many(list({msg.agent_id for msg in messages}))}
         count = 0
         for message in messages:
             agent = agents.get(message.agent_id)
             binding_id = message.reply_binding_id
-            if agent is None or binding_id is None or not await _interrupted(agent, message):
+            if agent is None or binding_id is None:
+                continue
+            recovered = await settle_recovered_report(agent, message)
+            if recovered is not None:
+                await delivery.publish_report(agent, recovered)
+                count += 1
+                continue
+            if not await _interrupted(agent, message):
                 continue
             report = await delivery.settle_native_report(agent, message.id, INTERRUPTED_NOTICE, binding_id=binding_id)
             if report is not None:
