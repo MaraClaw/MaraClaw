@@ -1,4 +1,4 @@
-"""Interruption evidence reader over a real live-WAL SQLite file shaped like OpenClaw 2026.11.1."""
+"""Interruption evidence reader over a real live-WAL SQLite file shaped like OpenClaw 2026.11.2."""
 
 import json
 import sqlite3
