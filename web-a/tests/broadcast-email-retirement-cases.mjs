@@ -23,7 +23,7 @@ export async function runRetiredReceiptCases({ scenario, capture }) {
         await expect(page.getByLabel('Title', { exact: true })).toHaveCount(0)
         await page.getByRole('link', { name: 'Broadcast', exact: true }).click()
       } else {
-        state.user = { ...admin, id: 'replacement', tenant_id: 'tenant-b' }
+        state.user = { ...admin, id: '28e275bd-29a0-4adf-a1ab-1cbf787798fb', tenant_id: '28e275bd-29a0-4adf-a1ab-1cbf787798fd' }
         if (retirement === 'different-token') state.token = 'synthetic-next-token'
         await page.getByRole('button', { name: 'Sign out', exact: true }).click()
         await page.getByLabel('Email', { exact: true }).fill('replacement@example.test')

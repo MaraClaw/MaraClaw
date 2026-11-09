@@ -11,11 +11,12 @@ import { Label } from '@/components/ui/label'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import {
-  attemptAfterFailure, broadcastDraftSchema, broadcastFailureMessage, reviewBroadcast, sendBroadcast,
-  type BroadcastDraft, type BroadcastResult, type BroadcastSubmission,
+  acceptBroadcast, attemptAfterFailure, broadcastDraftSchema, broadcastFailureMessage, reviewBroadcast,
+  type BroadcastAcceptance, type BroadcastDraft, type BroadcastResult, type BroadcastSubmission,
 } from '@/lib/broadcast-api'
 import { BroadcastEmailProgress } from './broadcast-email-progress'
 import { BroadcastHistory } from './broadcast-history'
+import { BroadcastJobProgress } from './broadcast-job-progress'
 
 const emptyDraft = { title: '', body: '', send_email: false }
 const buttonMotion = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
@@ -35,6 +36,7 @@ export function BroadcastPage() {
   const attempt = useRef<BroadcastSubmission | null>(null)
   const [snapshot, setSnapshot] = useState<BroadcastSubmission | null>(null)
   const [result, setResult] = useState<BroadcastResult | null>(null)
+  const [job, setJob] = useState<BroadcastAcceptance | null>(null)
   const [sendError, setSendError] = useState<Error | null>(null)
   const form = useForm<BroadcastDraft>({ resolver: zodResolver(broadcastDraftSchema), defaultValues: emptyDraft })
   const { errors } = form.formState
@@ -47,19 +49,17 @@ export function BroadcastPage() {
   }, [])
 
   const sending = useSessionMutation({
-    mutationFn: ({ draft, idempotencyKey }: BroadcastSubmission) => sendBroadcast(draft, idempotencyKey),
+    mutationFn: ({ draft, idempotencyKey }: BroadcastSubmission) => acceptBroadcast(draft, idempotencyKey),
     retry: false,
     onSuccess: (data) => {
       if (!active.current || !isSessionCurrent()) return
-      void client.invalidateQueries({ queryKey: ['admin-broadcast-history', user?.tenant_id], refetchType: 'none' })
-      setHistoryRevision((value) => value + 1)
       attempt.current = null
-      focusRequested.current = 'success'
+      focusRequested.current = null
       setSnapshot(null)
       setSendError(null)
-      setResult(data)
+      setJob(data)
       form.reset(emptyDraft)
-      toast.success('Broadcast sent')
+      toast.success('Broadcast accepted')
     },
     onError: (error, submission) => {
       if (!active.current || !isSessionCurrent()) return
@@ -107,6 +107,7 @@ export function BroadcastPage() {
         ) : result ? (
           <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
             <h2 className="font-display text-lg font-semibold">Broadcast sent</h2>
+            <p className="text-sm">Notification processing completed.</p>
             <dl className="grid gap-4 sm:grid-cols-3">
               {[
                 ['Users notified', result.users_notified],
@@ -120,8 +121,15 @@ export function BroadcastPage() {
           </div>
         ) : null}
       </div>
+      {job && !result ? <BroadcastJobProgress key={job.broadcast_id} receipt={job} onCompleted={(data) => {
+        if (!active.current || !isSessionCurrent()) return
+        void client.invalidateQueries({ queryKey: ['admin-broadcast-history', user?.tenant_id], refetchType: 'none' })
+        setHistoryRevision((value) => value + 1)
+        focusRequested.current = 'success'
+        setResult(data)
+      }} /> : null}
       {result ? <BroadcastEmailProgress key={result.broadcast_id} receipt={result} /> : null}
-      {snapshot ? (
+      {job && !result ? null : snapshot ? (
         <Card role="region" aria-labelledby={`${id}-review`} onKeyDown={(event) => {
           if (event.key === 'Escape') { event.preventDefault(); closeReview() }
         }}>
@@ -164,7 +172,8 @@ export function BroadcastPage() {
               if (submitting.current || !active.current || !isSessionCurrent()) return
               focusRequested.current = 'review'
               setSendError(null)
-              setResult(null)
+               setResult(null)
+               setJob(null)
               setSnapshot(reviewBroadcast(Object.freeze({ ...values }), attempt.current))
             })}>
               <div className="flex flex-col gap-2">

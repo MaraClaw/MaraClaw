@@ -4,7 +4,7 @@ import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { broadcastDraftSchema, sendBroadcast, type BroadcastSubmission } from '../src/lib/broadcast-api.ts'
+import { acceptBroadcast, broadcastDraftSchema, broadcastIdSchema, fetchBroadcastJobStatus, sendBroadcast, type BroadcastSubmission } from '../src/lib/broadcast-api.ts'
 import { ApiError, apiRequest } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { canSendBroadcast } from '../src/lib/types/auth.ts'
@@ -13,6 +13,59 @@ import { adminUser, createFixture } from './helpers.ts'
 const counts = { ok: true, broadcast_id: '0d75651c-8c6c-4404-9046-50e1b3ff6dd2', users_notified: 7, agents_notified: 3, emails_sent: 5 }
 const draft = { title: '  Maintenance  ', body: 'First line\nSecond line', send_email: false }
 const key = '5d2f6d54-7a4b-4f47-9d63-6c2b2f1f2a10'
+const acceptance = { broadcast_id: counts.broadcast_id, status: 'accepted', accepted_at: '2026-11-09T04:00:00Z', users_total: 7, agents_total: 3 }
+const progress = { ...acceptance, status: 'processing', completed_at: null, processed: 5, users_notified: 3, agents_notified: 1, skipped: 1, emails_queued: 2 }
+
+test('acceptance posts the reviewed payload and retry key to the durable endpoint', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(acceptance, { status: 202 }))
+  const result = await acceptBroadcast(draft, key)
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, '/api/notifications/broadcast/jobs')
+  assert.equal(options?.method, 'POST')
+  assert.equal(options?.body, JSON.stringify(draft))
+  assert.equal(new Headers(options?.headers).get('Idempotency-Key'), key)
+  assert.deepEqual(result, acceptance)
+  assert.equal(Object.isFrozen(result), true)
+})
+
+test('job status reads the accepted ID with cancellation and distinct committed counters', async (t) => {
+  const controller = new AbortController()
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(progress))
+  const result = await fetchBroadcastJobStatus(broadcastIdSchema.parse(counts.broadcast_id), controller.signal)
+  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, `/api/notifications/broadcast/jobs/${counts.broadcast_id}`)
+  assert.equal(options?.method, 'GET')
+  assert.equal(options?.signal?.aborted, false)
+  controller.abort()
+  assert.equal(options?.signal?.aborted, true)
+  assert.deepEqual(result, progress)
+})
+
+for (const malformed of [
+  {}, { ...acceptance, status: 'completed' }, { ...acceptance, broadcast_id: 'invalid' },
+  { ...acceptance, accepted_at: '2026-11-09' },
+  ...['users_total', 'agents_total'].flatMap((field) => [-1, 1.5, '2', null].map((value) => ({ ...acceptance, [field]: value }))),
+]) test(`acceptance rejects malformed receipt ${JSON.stringify(malformed)}`, async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(malformed, { status: 202 }))
+  await assert.rejects(acceptBroadcast(draft, key), z.ZodError)
+})
+
+for (const malformed of [
+  {}, { ...progress, broadcast_id: key }, { ...progress, status: 'accepted' },
+  { ...progress, processed: 11 }, { ...progress, processed: 4 }, { ...progress, emails_queued: 4 },
+  { ...progress, status: 'completed' }, { ...progress, completed_at: '2026-11-09T04:01:00Z' },
+  ...['users_total', 'agents_total', 'processed', 'users_notified', 'agents_notified', 'skipped', 'emails_queued'].flatMap((field) =>
+    [-1, 1.5, '2', null, undefined].map((value) => ({ ...progress, [field]: value }))),
+]) test(`job status rejects malformed progress ${JSON.stringify(malformed)}`, async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(malformed))
+  await assert.rejects(fetchBroadcastJobStatus(broadcastIdSchema.parse(counts.broadcast_id)), z.ZodError)
+})
+
+test('job status accepts an empty completed audience', async (t) => {
+  const empty = { ...progress, status: 'completed', completed_at: '2026-11-09T04:01:00Z', users_total: 0, agents_total: 0, processed: 0, users_notified: 0, agents_notified: 0, skipped: 0, emails_queued: 0 }
+  t.mock.method(globalThis, 'fetch', async () => Response.json(empty))
+  assert.deepEqual(await fetchBroadcastJobStatus(broadcastIdSchema.parse(counts.broadcast_id)), empty)
+})
 
 test('broadcast posts the exact current-tenant payload and parses distinct counts', async (t) => {
   // Given
@@ -121,7 +174,7 @@ for (const token of ['token-a', 'token-b']) for (const status of [200, 403]) {
     t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
     const callbacks: string[] = []
     const mutation = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), {
-      mutationFn: (submission: BroadcastSubmission) => sendBroadcast(submission.draft, submission.idempotencyKey),
+      mutationFn: (submission: BroadcastSubmission) => acceptBroadcast(submission.draft, submission.idempotencyKey),
       retry: false,
       onSuccess: () => { callbacks.push('success/reset/confirmation/notification') },
       onError: () => { callbacks.push('error/confirmation/notification') },
@@ -131,7 +184,7 @@ for (const token of ['token-a', 'token-b']) for (const status of [200, 403]) {
     await started.promise
     // When
     policy.replace(token)
-    response.resolve(Response.json(status === 200 ? counts : { detail: 'Only org admins can send broadcasts' }, { status }))
+    response.resolve(Response.json(status === 200 ? acceptance : { detail: 'Only org admins can send broadcasts' }, { status }))
     // Then
     await rejected
     assert.deepEqual(callbacks, [])

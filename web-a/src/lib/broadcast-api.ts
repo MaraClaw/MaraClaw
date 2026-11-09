@@ -5,6 +5,7 @@ import {
   BroadcastRequestSchema, NotificationBroadcastEmailCancellationResponseSchema,
   NotificationBroadcastEmailStatusResponseSchema, NotificationBroadcastResponseSchema,
   NotificationBroadcastHistoryItemSchema, NotificationBroadcastHistoryPageResponseSchema,
+  NotificationBroadcastJobAcceptanceResponseSchema, NotificationBroadcastJobStatusResponseSchema,
 } from './engine-contracts.generated.ts'
 
 export const broadcastDraftSchema = BroadcastRequestSchema.strip().extend({
@@ -27,6 +28,46 @@ const broadcastResultSchema = NotificationBroadcastResponseSchema.strip().extend
 }).readonly()
 
 export type BroadcastResult = z.infer<typeof broadcastResultSchema>
+
+const jobAudienceFields = {
+  broadcast_id: broadcastIdSchema,
+  accepted_at: z.iso.datetime({ offset: true }),
+  users_total: z.number().int().nonnegative(),
+  agents_total: z.number().int().nonnegative(),
+}
+const broadcastAcceptanceSchema = NotificationBroadcastJobAcceptanceResponseSchema.strip().extend(jobAudienceFields).readonly()
+const broadcastJobStatusSchema = NotificationBroadcastJobStatusResponseSchema.strip().extend({
+  ...jobAudienceFields,
+  completed_at: z.iso.datetime({ offset: true }).nullable(),
+  processed: z.number().int().nonnegative(),
+  users_notified: z.number().int().nonnegative(),
+  agents_notified: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  emails_queued: z.number().int().nonnegative(),
+}).refine((value) => (
+  value.users_notified <= value.users_total && value.agents_notified <= value.agents_total &&
+  value.processed <= value.users_total + value.agents_total &&
+  value.processed === value.users_notified + value.agents_notified + value.skipped &&
+  value.emails_queued <= value.users_notified &&
+  (value.status === 'completed'
+    ? value.completed_at !== null && value.processed === value.users_total + value.agents_total
+    : value.completed_at === null)
+)).readonly()
+
+export type BroadcastAcceptance = z.infer<typeof broadcastAcceptanceSchema>
+export type BroadcastJobStatus = z.infer<typeof broadcastJobStatusSchema>
+
+export async function acceptBroadcast(payload: BroadcastDraft, idempotencyKey: string): Promise<BroadcastAcceptance> {
+  return apiRequest('/api/notifications/broadcast/jobs', {
+    schema: broadcastAcceptanceSchema, method: 'POST', body: payload, idempotencyKey,
+  })
+}
+
+export async function fetchBroadcastJobStatus(id: BroadcastId, signal?: AbortSignal): Promise<BroadcastJobStatus> {
+  return apiRequest(`/api/notifications/broadcast/jobs/${encodeURIComponent(id)}`, {
+    schema: broadcastJobStatusSchema.refine((value) => value.broadcast_id === id), signal,
+  })
+}
 
 const broadcastHistoryItemSchema = NotificationBroadcastHistoryItemSchema.strip().extend({
   broadcast_id: broadcastIdSchema,
