@@ -6,10 +6,13 @@ import pytest
 from fastapi import FastAPI
 
 from app.api import tools
+from app.config import get_settings
 from app.core import permissions
 from app.core.domain.agents import PermissionAccessLevel
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_value_from_response
+from app.core.security import encrypt_data
+from app.core.stored_credentials import CredentialContext, PreservedCredential, StoredCredentialError
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.tool import AgentToolRecord, ToolRecord
@@ -201,3 +204,42 @@ async def test_category_delete_http_remains_bodyless(
     # Then success has neither JSON null nor an advertised JSON content type.
     assert (response.status_code, response.content) == (204, b"")
     assert "content-type" not in response.headers
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_category_credential_metadata_remains_readable_and_redacted(
+    client: httpx.AsyncClient,
+    context: tuple[FastAPI, AgentRecord, ToolRecord, AgentToolRecord],
+    monkeypatch: pytest.MonkeyPatch,
+    rejected: bool,
+) -> None:
+    agent = context[1]
+    config_id = uuid4()
+    marker = PreservedCredential(
+        "mcred:v1:invalid", CredentialContext("channel", str(agent.id), str(config_id), ("app_secret",), "atlassian")
+    )
+    metadata = ChannelConfigRecord(
+        id=config_id,
+        agent_id=agent.id,
+        is_configured=True,
+        app_secret=marker if rejected else encrypt_data("category-secret", get_settings().SECRET_KEY),
+        extra_config={"nested": [{"bot_token": "nested-token", "public": "visible"}]},
+    )
+
+    async def read(**kwargs: object) -> ChannelConfigRecord:
+        if rejected:
+            raise StoredCredentialError
+        return metadata
+
+    async def inspect(**kwargs: object) -> ChannelConfigRecord:
+        return metadata
+
+    monkeypatch.setattr(tools.channel_config_dao, "get_for_agent", read)
+    monkeypatch.setattr(tools.channel_config_dao, "get_metadata_for_agent", inspect)
+    response = await client.get(f"/api/tools/agents/{agent.id}/category-config/atlassian")
+    assert response.status_code == 200
+    assert response.json()["id"] == str(config_id)
+    assert response.json()["agent_config"]["api_key"] == ("****" if rejected else "****cret")
+    assert response.json()["agent_config"]["nested"] == [{"bot_token": True, "public": "visible"}]
+    assert "nested-token" not in response.text
+    assert "mcred:" not in response.text

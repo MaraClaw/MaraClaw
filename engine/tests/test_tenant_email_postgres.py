@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.broadcast_email_persistence_fixtures import PersistenceDB, broadcast_db, member, tenant
@@ -9,6 +10,7 @@ __all__ = ["broadcast_db", "smtp_sink"]
 
 from app.api import tenant_email
 from app.core.security import get_current_user
+from app.core.stored_credentials import StoredCredentialError
 from app.dao.tenant_email_dao import tenant_email_dao
 from app.dao.user_dao import user_dao
 from app.schemas.tenant_email import TenantEmailUpdate
@@ -139,3 +141,63 @@ async def test_identity_delivery_uses_saved_maraclaw_smtp_on_the_wire(broadcast_
     message = smtp_sink.messages.get_nowait()
     assert message["To"] == "identity@example.com"
     assert message["From"] == "maraclaw@example.com"
+
+
+@pytest.mark.parametrize("damage", ["tenant", "legacy", "malformed"])
+async def test_rejected_smtp_has_metadata_and_replacement_recovery_without_delivery(
+    broadcast_db: PersistenceDB, smtp_sink: SMTPSink, damage: str
+) -> None:
+    own, foreign = await tenant(broadcast_db), await tenant(broadcast_db)
+    user = await member(broadcast_db, own)
+    await broadcast_db.admin.execute(
+        "UPDATE users SET role = 'platform_admin', is_genesis = TRUE WHERE id = %(id)s", {"id": user.id}
+    )
+    actor = await user_dao.get_with_identity(user.id, fresh=True)
+    assert actor is not None
+    draft = TenantEmailUpdate(
+        enabled=True,
+        smtp_host="127.0.0.1",
+        smtp_port=smtp_sink.port,
+        smtp_ssl=False,
+        from_address="relay@example.com",
+        password="smtp-secret",
+    )
+    for company in (own, foreign):
+        await tenant_email_dao.put(company, email_config.stored_settings(draft, {}, public_only=False))
+    row = await broadcast_db.admin.fetchone(
+        "SELECT value->>'password' AS password FROM tenant_settings WHERE tenant_id = %(id)s AND key = 'tenant_email'",
+        {"id": foreign},
+    )
+    assert row is not None
+    rejected = (
+        row["password"] if damage == "tenant" else ("old-plaintext-secret" if damage == "legacy" else "mcred:v1:YWJj")
+    )
+    await broadcast_db.admin.execute(
+        "UPDATE tenant_settings SET value = jsonb_set(value, '{password}', to_jsonb(%(password)s::text)) WHERE tenant_id = %(id)s AND key = 'tenant_email'",
+        {"id": own, "password": rejected},
+    )
+    with pytest.raises(StoredCredentialError):
+        await tenant_email_dao.get(own)
+    assert await email_config.saved_transport(own) is None
+    assert smtp_sink.messages.empty()
+    app = FastAPI()
+    app.include_router(tenant_email.router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: actor
+    url = f"/api/enterprise/tenant-email?tenant_id={own}"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        metadata = await client.get(url)
+        assert metadata.status_code == 200
+        assert metadata.json()["has_password"] is True
+        assert "mcred:" not in metadata.text
+        assert "smtp-secret" not in metadata.text
+        retained = await client.put(url, json=draft.model_dump(mode="json", exclude={"password"}))
+        assert retained.status_code == 200
+        with pytest.raises(StoredCredentialError):
+            await tenant_email_dao.get(own)
+        replacement = await client.put(
+            url, json=draft.model_copy(update={"password": "replacement-password"}).model_dump(mode="json")
+        )
+        assert replacement.status_code == 200
+        assert email_config.load_settings(await tenant_email_dao.get(own)).password == "replacement-password"
+        deleted = await client.delete(url)
+        assert deleted.status_code == 204

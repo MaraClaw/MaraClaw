@@ -24,7 +24,7 @@ async def test_capture_replacement_rejects_before_export_and_releases_lease(
             return AgentCredentialRecord(credential_id, UUID(surface.key.agent_id), "portal.example", revision=2)
         return None
 
-    monkeypatch.setattr(agent_credential_dao, "get_for_agent", find)
+    monkeypatch.setattr(agent_credential_dao, "get_metadata_for_agent", find)
     surface.store.before_io = lambda: pytest.fail("invalid target reached browser export")
 
     response = await surface.post(
@@ -58,7 +58,7 @@ async def test_capture_race_conflict_remains_distinct_and_releases_owned_lease(
             surface.redis.advance(121)
         raise CredentialRevisionConflictError
 
-    monkeypatch.setattr(agent_credential_dao, "get_for_agent", find)
+    monkeypatch.setattr(agent_credential_dao, "get_metadata_for_agent", find)
     monkeypatch.setattr(agent_credential_dao, "edit", raced)
 
     response = await surface.post(

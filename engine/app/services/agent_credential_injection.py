@@ -8,10 +8,10 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from app.config import get_settings
 from app.core.logging import logger
-from app.core.security import decrypt_data
+from app.core.stored_credentials import open_credential
 from app.dao.agent_credential_dao import agent_credential_dao
+from app.dao.credential_contexts import cookie_context
 from app.records.agent_credential import CredentialRevision
 
 if TYPE_CHECKING:
@@ -75,7 +75,7 @@ async def inject_credentials(client: AgentBayClient, agent_id: UUID) -> None:
         try:
             if credential.cookies_json is None:
                 continue
-            raw = decrypt_data(credential.cookies_json, get_settings().SECRET_KEY)
+            raw = open_credential(credential.cookies_json, cookie_context(agent_id, credential.id))
             cookies = TypeAdapter(list[dict[str, JsonValue]]).validate_json(raw)
             if not cookies:
                 continue

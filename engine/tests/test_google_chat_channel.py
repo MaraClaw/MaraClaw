@@ -432,13 +432,18 @@ async def test_configure_stores_object_and_json_string_service_accounts_identica
     assert _stored(configure).encrypt_key is None
 
 
-async def test_configure_response_never_returns_private_key(configure):
-    response = await configure.post({"project_number": "111", "service_account_json": _service_account()})
+@pytest.mark.parametrize("nested_metadata", [False, True])
+async def test_configure_response_never_returns_private_key(configure, nested_metadata):
+    service_account = (
+        {**_service_account(), "project_id": {"bot_token": "nested-token"}} if nested_metadata else _service_account()
+    )
+    response = await configure.post({"project_number": "111", "service_account_json": service_account})
 
     assert response.status_code == 201
     assert "SECRET-KEY-MATERIAL" not in response.text
     assert response.json()["extra_config"]["service_account_json"]["credentials_configured"] is True
     assert "private_key" not in response.json()["extra_config"]["service_account_json"]
+    assert "nested-token" not in response.text
 
 
 async def test_configure_without_credentials_keeps_inbound_only_setup(configure):

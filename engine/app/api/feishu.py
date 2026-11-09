@@ -39,8 +39,10 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
+from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.llm_bridge import _load_agent_and_model
 from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note, too_large_reply
+from app.services.channels.redact import channel_config_out
 from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
 from app.services.llm.base import ToolCallbackData
 from app.services.llm.types import OpenAIMessage
@@ -384,7 +386,7 @@ async def configure_channel(
     extra_config = data.extra_config or {}
     if extra_config.get("connection_mode", "webhook") != "websocket" and not (data.verification_token or "").strip():
         raise HTTPException(status_code=422, detail="verification_token is required for webhook mode")
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -409,7 +411,7 @@ async def configure_channel(
         else:
             schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
 
-        return ChannelConfigOut.model_validate(config)
+        return channel_config_out(config)
 
     config = await channel_config_dao.create(
         obj_in={
@@ -432,7 +434,7 @@ async def configure_channel(
             feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
         )
 
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/channel", response_model=ChannelConfigOut)
@@ -441,10 +443,10 @@ async def get_channel_config(
 ) -> ChannelConfigOut:
     """Get Feishu channel configuration for an agent."""
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    config = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/channel/webhook-url", response_model=None)
@@ -462,7 +464,7 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
     agent, _access = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.FEISHU)
+    config = await get_channel_config_metadata(agent_id, ChannelType.FEISHU)
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
     _ = await channel_config_dao.delete(record_id=config.id)

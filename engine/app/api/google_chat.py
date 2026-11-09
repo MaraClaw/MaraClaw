@@ -67,7 +67,7 @@ async def configure_google_chat_channel(
         raise HTTPException(status_code=422, detail="project_number is required")
     verification_token = str(data.get("verification_token") or "").strip() or None
 
-    existing = await channel_config.get_channel_config(agent_id, CHANNEL_TYPE)
+    existing = await channel_config.get_channel_config_metadata(agent_id, CHANNEL_TYPE)
     try:
         write = resolve_google_chat_write(data, existing, project_number)
     except GoogleChatCredentialError as exc:
@@ -94,7 +94,7 @@ async def get_google_chat_channel(
     # Secrets: only creator/manage path should see config metadata; still redacted.
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can view channel credentials")
-    config = await channel_config.require_channel_config(agent_id, CHANNEL_TYPE)
+    config = await channel_config.require_channel_config_metadata(agent_id, CHANNEL_TYPE)
     return channel_config_out(config)
 
 

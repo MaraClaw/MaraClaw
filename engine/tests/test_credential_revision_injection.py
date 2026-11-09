@@ -4,12 +4,22 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.config import get_settings
 from app.core.logging.service import flush_logging
-from app.core.security import encrypt_data
+from app.core.stored_credentials import seal_credential
+from app.dao.credential_contexts import cookie_context
 from app.records.agent_credential import AgentCredentialRecord, CredentialRevision
 from app.services import agent_credential_injection as injection
 from credential_revision_fakes import COOKIE_SECRET, ERROR_SECRET, ScriptClient, idle
+
+
+def _credential(agent_id: UUID, platform: str, plaintext: str) -> AgentCredentialRecord:
+    credential_id = uuid4()
+    return AgentCredentialRecord(
+        credential_id,
+        agent_id,
+        platform,
+        cookies_json=seal_credential(plaintext, cookie_context(agent_id, credential_id)),
+    )
 
 
 @pytest.fixture
@@ -29,21 +39,12 @@ async def test_injection_publishes_only_complete_nonempty_attributed_batches(
         [{"name": "reject", "value": COOKIE_SECRET}],
         [{"name": "first", "value": COOKIE_SECRET}, {"name": "reject", "value": COOKIE_SECRET}],
     ]
-    credentials = [
-        AgentCredentialRecord(
-            uuid4(), agent_id, "portal.example", cookies_json=encrypt_data(json.dumps(batch), get_settings().SECRET_KEY)
-        )
-        for batch in batches
-    ]
+    credentials = [_credential(agent_id, "portal.example", json.dumps(batch)) for batch in batches]
     credentials.extend(
         [
             AgentCredentialRecord(uuid4(), agent_id, "bad-encryption", cookies_json="invalid"),
-            AgentCredentialRecord(
-                uuid4(), agent_id, "bad-json", cookies_json=encrypt_data("{bad", get_settings().SECRET_KEY)
-            ),
-            AgentCredentialRecord(
-                uuid4(), agent_id, "bad-shape", cookies_json=encrypt_data('["not-a-cookie"]', get_settings().SECRET_KEY)
-            ),
+            _credential(agent_id, "bad-json", "{bad"),
+            _credential(agent_id, "bad-shape", '["not-a-cookie"]'),
         ]
     )
     published: list[CredentialRevision] = []
@@ -75,13 +76,8 @@ async def test_injection_never_publishes_unproven_receipts(
     monkeypatch: pytest.MonkeyPatch, client: ScriptClient, failure: str, capfd: pytest.CaptureFixture[str]
 ) -> None:
     agent_id = uuid4()
-    credential = AgentCredentialRecord(
-        uuid4(),
-        agent_id,
-        "portal.example",
-        revision=4,
-        cookies_json=encrypt_data(json.dumps(client.cookies), get_settings().SECRET_KEY),
-    )
+    credential = _credential(agent_id, "portal.example", json.dumps(client.cookies))
+    credential.revision = 4
 
     async def active(_agent_id: UUID) -> list[AgentCredentialRecord]:
         return [credential]

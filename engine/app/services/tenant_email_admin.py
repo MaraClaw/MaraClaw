@@ -13,6 +13,7 @@ from app.core.acl_locks import lock_tenants, lock_user
 from app.core.json_types import json_object_from
 from app.core.outbound_policy import OutboundPolicyError, resolve_public_addresses
 from app.core.security import raise_if_password_change_required
+from app.core.stored_credentials import StoredCredentialError
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tenant_email_dao import tenant_email_dao
 from app.dao.user_dao import user_dao
@@ -65,7 +66,14 @@ async def get_config(actor: UserRecord, selected: UUID | None) -> TenantEmailOut
     own_tenant(await fresh_actor(actor), tenant_id)
     if await tenant_dao.get(tenant_id) is None:
         raise HTTPException(404, "Organization not found")
-    settings = load_settings(await tenant_email_dao.get(tenant_id))
+    try:
+        settings = load_settings(await tenant_email_dao.get(tenant_id))
+    except StoredCredentialError:
+        metadata = await tenant_email_dao.get_metadata(tenant_id)
+        settings = load_settings(metadata)
+        return redacted(settings).model_copy(
+            update={"has_password": bool(metadata.get("password")), "effective_source": "none"}
+        )
     _config, source = await resolve_with_source(tenant_id)
     return redacted(settings).model_copy(update={"effective_source": source})
 
@@ -81,7 +89,10 @@ async def validate_host(settings: TenantEmailSettings) -> None:
 async def put_config(actor: UserRecord, selected: UUID | None, data: TenantEmailUpdate) -> TenantEmailOut:
     tenant_id = own_tenant(actor, selected)
     async with locked_actor(actor, tenant_id) as (fresh, _tenant):
-        before = await tenant_email_dao.get(tenant_id)
+        try:
+            before = await tenant_email_dao.get(tenant_id)
+        except StoredCredentialError:
+            before = await tenant_email_dao.get_metadata(tenant_id)
         public_only = fresh.role != "platform_admin" or (
             bool(before.get("public_only", True)) and data.smtp_host == before.get("smtp_host")
         )

@@ -17,6 +17,8 @@ from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
+from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.redact import channel_config_out
 from app.services.channels.submissions import ChannelEvent, accept_channel_event
 from app.services.sso_scan_authority import capture_scan_authority
 from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
@@ -56,7 +58,7 @@ async def configure_dingtalk_channel(
     conn_mode = extra_config.get("connection_mode", "websocket")
     dingtalk_agent_id = extra_config.get("agent_id", "")
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.DINGTALK)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -84,7 +86,7 @@ async def configure_dingtalk_channel(
         else:
             schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
-        return ChannelConfigOut.model_validate(config)
+        return channel_config_out(config)
 
     config = await channel_config_dao.create(
         obj_in={
@@ -106,16 +108,16 @@ async def configure_dingtalk_channel(
             "start DingTalk stream client",
         )
 
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.get("/agents/{agent_id}/dingtalk-channel", response_model=ChannelConfigOut)
 async def get_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)):
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
+    config = await get_channel_config_metadata(agent_id, ChannelType.DINGTALK)
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
-    return ChannelConfigOut.model_validate(config)
+    return channel_config_out(config)
 
 
 @router.delete("/agents/{agent_id}/dingtalk-channel", status_code=204)
@@ -123,7 +125,7 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
+    config = await get_channel_config_metadata(agent_id, ChannelType.DINGTALK)
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
     _ = await channel_config_dao.delete(record_id=config.id)

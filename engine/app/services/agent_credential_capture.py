@@ -9,8 +9,6 @@ from uuid import UUID, uuid4
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from app.config import get_settings
-from app.core.security import encrypt_data
 from app.dao.agent_credential_dao import CredentialRevisionConflictError, agent_credential_dao
 from app.records.agent_credential import CredentialRevision
 from app.schemas.agent_credential import CredentialCapture, CredentialCaptureCreate, CredentialCaptureReplace
@@ -35,7 +33,7 @@ async def bind_capture(agent_id: UUID, capture: CredentialCapture) -> Credential
         case CredentialCaptureCreate():
             return None
         case CredentialCaptureReplace(credential_id=credential_id, expected_revision=expected):
-            credential = await agent_credential_dao.get_for_agent(credential_id, agent_id)
+            credential = await agent_credential_dao.get_metadata_for_agent(credential_id, agent_id)
             if credential is None:
                 raise CaptureTargetMissingError
             if credential.revision != expected:
@@ -95,7 +93,7 @@ async def capture_cookies(client: AgentBayClient, plan: CapturePlan) -> int:
         return 0
     if not cookies:
         return 0
-    encrypted = encrypt_data(json.dumps(cookies), get_settings().SECRET_KEY)
+    plaintext = json.dumps(cookies)
     now = datetime.now(UTC)
     if plan.target is None:
         _ = await agent_credential_dao.create(
@@ -104,7 +102,7 @@ async def capture_cookies(client: AgentBayClient, plan: CapturePlan) -> int:
                 "credential_type": "website",
                 "platform": plan.platform,
                 "display_name": plan.platform,
-                "cookies_json": encrypted,
+                "cookies_json": plaintext,
                 "cookies_updated_at": now,
                 "last_login_at": now,
                 "status": "active",
@@ -113,6 +111,6 @@ async def capture_cookies(client: AgentBayClient, plan: CapturePlan) -> int:
     else:
         _ = await agent_credential_dao.edit(
             plan.target,
-            {"cookies_json": encrypted, "cookies_updated_at": now, "last_login_at": now, "status": "active"},
+            {"cookies_json": plaintext, "cookies_updated_at": now, "last_login_at": now, "status": "active"},
         )
     return len(cookies)

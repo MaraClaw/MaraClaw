@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import ClassVar, final
-from uuid import UUID
+from collections.abc import Mapping, Sequence
+from typing import ClassVar, final, override
+from uuid import UUID, uuid4
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import str_from_row
+from app.core.stored_credentials import StoredCredentialError
 from app.dao.base import BaseDAO
+from app.dao.channel_credentials import channel_credentials
 from app.records.channel_config import ChannelConfigRecord
 
 _COLUMNS = (
@@ -36,6 +38,49 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
     columns: ClassVar[tuple[str, ...]] = _COLUMNS
     record_factory = staticmethod(ChannelConfigRecord.from_row)
 
+    @override
+    def _from_row(self, row: Mapping[str, object]) -> ChannelConfigRecord:
+        return self.record_factory(channel_credentials(row, "open"))
+
+    @override
+    def _deleted_row(self, row: Mapping[str, object]) -> ChannelConfigRecord:
+        return self.record_factory(channel_credentials(row, "metadata"))
+
+    @override
+    def _updated_row(self, row: Mapping[str, object]) -> ChannelConfigRecord:
+        try:
+            return self._from_row(row)
+        except StoredCredentialError:
+            return self._deleted_row(row)
+
+    @override
+    async def create(self, *, obj_in: Mapping[str, object]) -> ChannelConfigRecord:
+        return await super().create(obj_in=channel_credentials({**obj_in, "id": obj_in.get("id", uuid4())}, "seal"))
+
+    @override
+    async def update(self, *, db_obj: ChannelConfigRecord, obj_in: Mapping[str, object]) -> ChannelConfigRecord:
+        data = channel_credentials(
+            {**obj_in, "id": db_obj.id, "agent_id": db_obj.agent_id, "channel_type": db_obj.channel_type}, "seal"
+        )
+        return await super().update(db_obj=db_obj, obj_in=data)
+
+    async def get_for_admission(self, config_id: UUID) -> ChannelConfigRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM channel_configs WHERE id = %(id)s FOR SHARE",
+                {"id": config_id},
+            )
+            return self._from_row(row) if row is not None else None
+
+    async def get_metadata_for_agent(self, *, agent_id: UUID, channel_type: ChannelType) -> ChannelConfigRecord | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT {self._select_list()} FROM channel_configs "
+                "WHERE agent_id = %(agent_id)s AND channel_type = %(channel_type)s LIMIT 1",
+                {"agent_id": agent_id, "channel_type": channel_type.value},
+            )
+            return self._deleted_row(row) if row is not None else None
+
     async def get_for_agent(
         self,
         *,
@@ -49,7 +94,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 "LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type.value},
             )
-            return ChannelConfigRecord.from_row(row) if row is not None else None
+            return self._from_row(row) if row is not None else None
 
     async def get_first_for_agent(self, agent_id: UUID) -> ChannelConfigRecord | None:
         """Return any channel config row for the agent (first match)."""
@@ -58,7 +103,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 f"SELECT {self._select_list()} FROM channel_configs WHERE agent_id = %(agent_id)s LIMIT 1",
                 {"agent_id": agent_id},
             )
-            return ChannelConfigRecord.from_row(row) if row is not None else None
+            return self._from_row(row) if row is not None else None
 
     async def list_configured(self, channel_type: ChannelType) -> Sequence[ChannelConfigRecord]:
         async with self.session() as db:
@@ -67,7 +112,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 "WHERE is_configured IS TRUE AND channel_type = %(channel_type)s",
                 {"channel_type": channel_type.value},
             )
-            return [ChannelConfigRecord.from_row(row) for row in rows]
+            return [self._from_row(row) for row in rows]
 
     async def get_for_tenant_channel(
         self,
@@ -84,7 +129,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 "LIMIT 1",
                 {"channel_type": channel_type.value, "tenant_id": tenant_id},
             )
-            return ChannelConfigRecord.from_row(row) if row is not None else None
+            return self._from_row(row) if row is not None else None
 
     async def get_configured_for_agent(
         self, agent_id: UUID, *, channel_type: ChannelType
@@ -96,7 +141,7 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
                 "AND is_configured IS TRUE LIMIT 1",
                 {"agent_id": agent_id, "channel_type": channel_type.value},
             )
-            return ChannelConfigRecord.from_row(row) if row is not None else None
+            return self._from_row(row) if row is not None else None
 
     async def list_configured_types_for_agent(
         self, agent_id: UUID, *, channel_types: Sequence[ChannelType]

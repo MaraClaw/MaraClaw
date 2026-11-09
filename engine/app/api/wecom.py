@@ -42,6 +42,8 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 from app.services import im_token_cache
+from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.redact import channel_config_out
 from app.services.platform_service import platform_service
 from app.services.sso_scan_authority import capture_scan_authority
 from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
@@ -250,7 +252,7 @@ async def configure_wecom_channel(
         "connection_mode": "websocket" if has_ws_mode else "webhook",
     }
 
-    existing = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
+    existing = await get_channel_config_metadata(agent_id, ChannelType.WECOM)
     if existing:
         config = await channel_config_dao.update(
             db_obj=existing,
@@ -264,7 +266,7 @@ async def configure_wecom_channel(
                 "is_connected": False,
             },
         )
-        config_out = ChannelConfigOut.model_validate(config or existing)
+        config_out = channel_config_out(config or existing)
     else:
         config = await channel_config_dao.create(
             obj_in={
@@ -279,7 +281,7 @@ async def configure_wecom_channel(
                 "is_connected": False,
             }
         )
-        config_out = ChannelConfigOut.model_validate(config)
+        config_out = channel_config_out(config)
 
     try:
         if has_ws_mode:
@@ -301,11 +303,11 @@ async def get_wecom_channel(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await check_agent_access(current_user, agent_id)
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
+    config = await get_channel_config_metadata(agent_id, ChannelType.WECOM)
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
 
-    config_out = ChannelConfigOut.model_validate(config)
+    config_out = channel_config_out(config)
     extra = json_object_from(config.extra_config)
     if extra.get("connection_mode") == "websocket":
         config_out.is_connected = wecom_stream_manager.status().get(str(agent_id), False)
@@ -325,7 +327,7 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove channel")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
+    config = await get_channel_config_metadata(agent_id, ChannelType.WECOM)
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
     await wecom_stream_manager.stop_client(agent_id)

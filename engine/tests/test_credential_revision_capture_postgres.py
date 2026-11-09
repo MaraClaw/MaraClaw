@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.config import get_settings
-from app.core.security import decrypt_data
+from app.core.stored_credentials import open_credential
 from app.dao.agent_credential_dao import agent_credential_dao as credentials
+from app.dao.credential_contexts import cookie_context
 from app.records.agent_credential import AgentCredentialRecord, CredentialRevision
 from app.schemas.agent_credential import CredentialCaptureCreate, CredentialCaptureReplace
 from app.services.agent_credential_capture import CapturePlan, bind_capture, capture_cookies
@@ -35,7 +35,10 @@ async def test_explicit_capture_replaces_only_the_bound_revision(credential: Age
     assert current.last_login_at is not None
     assert current.display_name == "original"
     assert current.cookies_json is not None
-    assert json.loads(decrypt_data(current.cookies_json, get_settings().SECRET_KEY)) == client.cookies
+    assert (
+        json.loads(open_credential(current.cookies_json, cookie_context(current.agent_id, current.id)))
+        == client.cookies
+    )
 
 
 async def test_explicit_creation_preserves_an_existing_platform_credential(credential: AgentCredentialRecord) -> None:

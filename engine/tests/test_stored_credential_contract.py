@@ -1,13 +1,15 @@
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.core.security import encrypt_data
+from app.core.stored_credentials import seal_credential
 from app.dao.agent_dao import AgentDAO
+from app.dao.credential_contexts import model_key_context
 from app.services import resource_discovery, tool_config
 from app.services.agent_tool_exec import email_tools
 from app.services.llm import utils
@@ -18,6 +20,8 @@ from app.services.tool_runtime import tool_config as runtime_config
 @dataclass(frozen=True)
 class StoredModel:
     api_key_encrypted: str | None
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+    tenant_id: uuid.UUID | None = None
 
 
 @pytest.fixture
@@ -26,6 +30,7 @@ def secret_settings(monkeypatch):
     for module in (utils, tool_config, runtime_config):
         monkeypatch.setattr(module, "get_settings", lambda: settings)
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("app.core.stored_credentials.get_settings", lambda: settings)
     return settings
 
 
@@ -36,8 +41,9 @@ def test_model_rejects_invalid_stored_credentials(secret_settings, stored):
 
 
 def test_model_decrypts_current_ciphertext(secret_settings):
-    stored = encrypt_data("model-key", secret_settings.SECRET_KEY)
-    assert utils.get_model_api_key(StoredModel(stored)) == "model-key"
+    model_id = uuid.uuid4()
+    stored = seal_credential("model-key", model_key_context(None, model_id))
+    assert utils.get_model_api_key(StoredModel(stored, model_id)) == "model-key"
 
 
 @pytest.mark.parametrize("stored", [None, ""])

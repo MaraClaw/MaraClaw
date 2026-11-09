@@ -60,7 +60,9 @@ async def test_credential_http_preserves_datetime_encoding_and_hides_cookies(mon
         created_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     monkeypatch.setattr(agent_credentials, "check_agent_access", AsyncMock(return_value=(None, "manage")))
-    monkeypatch.setattr(agent_credentials.agent_credential_dao, "list_for_agent", AsyncMock(return_value=[cred]))
+    monkeypatch.setattr(
+        agent_credentials.agent_credential_dao, "list_metadata_for_agent", AsyncMock(return_value=[cred])
+    )
     app = FastAPI()
     app.include_router(agent_credentials.router)
     app.dependency_overrides[agent_credentials.get_current_user] = lambda: user

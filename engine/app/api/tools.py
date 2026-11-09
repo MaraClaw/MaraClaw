@@ -31,6 +31,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
+from app.core.stored_credentials import PreservedCredential
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.system_setting_dao import system_setting_dao
@@ -54,6 +55,8 @@ from app.schemas.operator_response_tools import (
     ToolCatalogResponse,
     ToolCreatedResponse,
 )
+from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.redact import redact_extra_config
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     encrypt_sensitive_fields,
@@ -748,7 +751,7 @@ async def _get_category_channel_config(agent_id: uuid.UUID, category: str) -> Ch
         channel_type = ChannelType(category)
     except ValueError:
         return None
-    return await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=channel_type)
+    return await get_channel_config_metadata(agent_id, channel_type)
 
 
 @router.get("/agents/{agent_id}/category-config/{category}")
@@ -797,8 +800,11 @@ async def get_category_config(
             "api_key": config.app_secret,
             **json_object_from(config.extra_config),
         }
-        raw_agent = _decrypt_sensitive_fields(full_agent)
+        preserved = {key: value for key, value in full_agent.items() if isinstance(value, PreservedCredential)}
+        raw_agent = _decrypt_sensitive_fields({key: value for key, value in full_agent.items() if key not in preserved})
+        raw_agent.update(preserved)
         raw_agent = {k: v for k, v in raw_agent.items() if v is not None}
+        raw_agent = json_object_from(redact_extra_config(raw_agent))
 
     effective_config = {**raw_global, **raw_agent}
 

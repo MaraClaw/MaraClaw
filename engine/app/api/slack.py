@@ -22,6 +22,7 @@ from app.core.json_types import (
     mapping_from_row,
 )
 from app.core.logging import logger
+from app.core.outbound_transport import public_http_client
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
@@ -94,7 +95,7 @@ async def get_slack_channel(
     agent, _ = await check_agent_access(current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can view channel credentials")
-    config = await channel_cfg.require_channel_config(agent_id, "slack")
+    config = await channel_cfg.require_channel_config_metadata(agent_id, "slack")
     return channel_config_out(config)
 
 
@@ -343,7 +344,7 @@ async def slack_event_webhook(
         try:
             _limit = _media_budget.limit_for(_fname)
             async with (
-                _httpx.AsyncClient(timeout=30, follow_redirects=True) as _hc,
+                public_http_client(timeout=30, follow_redirects=True, origin="https://files.slack.com") as _hc,
                 _hc.stream("GET", _url, headers={"Authorization": f"Bearer {_bot_token}"}) as _r,
             ):
                 _data = await read_capped(_r, _limit)
