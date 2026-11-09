@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { chatPath, navigateChat, submitted } from './chat-identity-fixture'
 import { prepareChatSkills } from './chat-skill-mentions-fixture'
-import { originalAgent, replacementAgent } from './session-fencing-fixture'
+import { originalAgent, replacementAgent, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
+import { discoveryKey, folderNames, prepareDiscovery } from './workspace-discovery-fixture'
 
 const composerName = `Message ${originalAgent.name}`
 
@@ -120,5 +121,41 @@ for (const mutation of ['install', 'delete'] as const) {
     await expect(picker.getByRole('button')).toHaveCount(mutation === 'install' ? 4 : 2)
     await expect(picker.getByRole('button', { name: mutation === 'install' ? /^@cache-addition / : /^@report / })).toHaveCount(mutation === 'install' ? 1 : 0)
     expect(fixture.requests.filter((request) => request === `/api/agents/${originalAgent.id}/files/:skills`).length).toBeGreaterThanOrEqual(2)
+  })
+}
+
+for (const interruption of ['navigation', 'replacement'] as const) {
+  test(`chat installed skill ${interruption} aborts four active folders without admitting the queue`, async ({ page }, info) => {
+    const discovery = await prepareDiscovery(page)
+    const holds = folderNames.slice(0, 4).map((name) => discovery.hold(discoveryKey('files', `skills/${name}`)))
+    try {
+      await page.goto(chatPath())
+      const composer = page.getByRole('textbox', { name: composerName })
+      await composer.fill('@')
+      const requests = await Promise.all(holds.map((hold) => hold.requested))
+      expect(discovery.requests.filter(({ key }) => key.includes(':skills/'))).toHaveLength(4)
+      const aborted = requests.map((request) => page.waitForEvent('requestfailed', { predicate: (failed) => failed === request }))
+      if (interruption === 'navigation') await navigateChat(page, '/app/agents')
+      else await writeFromOtherTab(page, replacementToken)
+      await Promise.all(aborted)
+      await Promise.all(holds.map((hold) => hold.release()))
+      expect(discovery.requests.filter(({ key }) => key.includes(':skills/'))).toHaveLength(4)
+      const agent = interruption === 'navigation' ? originalAgent : replacementAgent
+      await navigateChat(page, chatPath(undefined, agent))
+      const activeComposer = page.getByRole('textbox', { name: `Message ${agent.name}` })
+      await activeComposer.fill('@')
+      const picker = page.getByRole('region', { name: 'Installed skills' })
+      const name = interruption === 'navigation' ? 'folder-00' : 'current-only'
+      await expect(picker.getByRole('button', { name: new RegExp(`^@${name} `) })).toBeVisible()
+      await expect(picker.getByRole('button')).toHaveCount(interruption === 'navigation' ? folderNames.length + 1 : 1)
+      await picker.getByRole('button', { name: new RegExp(`^@${name} `) }).click()
+      await activeComposer.press('Enter')
+      await expect.poll(() => discovery.chat.sockets.flatMap((socket) => socket.sent).length).toBe(1)
+      const socket = discovery.chat.sockets.find((socket) => socket.sent.length > 0)
+      expect(socket).toBeDefined()
+      if (!socket) throw new Error('Expected submitted skill socket')
+      expect(submitted(socket).content).toContain(interruption === 'navigation' ? 'skills/folder-00/SKILL.md' : 'skills/current-only.md')
+      await page.screenshot({ path: info.outputPath(`chat-${interruption}.png`) })
+    } finally { discovery.releaseAll() }
   })
 }

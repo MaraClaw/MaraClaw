@@ -21,15 +21,15 @@ export function AgentPlaywrightPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
-  const tools = useQuery({ queryKey: ['tools', agent.id], queryFn: () => listAgentToolsWithConfig(agent.id) })
+  const tools = useQuery({ queryKey: ['tools', agent.id], queryFn: ({ signal }) => listAgentToolsWithConfig(agent.id, signal) })
   const crabbox = useQuery({
     queryKey: ['files', agent.id, '.crabbox'],
-    queryFn: () => listFiles(agent.id, '.crabbox'),
+    queryFn: ({ signal }) => listFiles(agent.id, '.crabbox', signal),
     retry: false,
   })
   const reports = useQuery({
     queryKey: ['files', agent.id, '.crabbox/captures'],
-    queryFn: () => listFiles(agent.id, '.crabbox/captures'),
+    queryFn: ({ signal }) => listFiles(agent.id, '.crabbox/captures', signal),
     retry: false,
   })
 

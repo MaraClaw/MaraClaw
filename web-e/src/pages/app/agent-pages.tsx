@@ -16,10 +16,10 @@ export function AgentPagesPage() {
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
   const [path, setPath] = useState('workspace/')
-  const pages = useQuery({ queryKey: ['pages', agent.id], queryFn: () => listPublishedPages(agent.id) })
+  const pages = useQuery({ queryKey: ['pages', agent.id], queryFn: ({ signal }) => listPublishedPages(agent.id, signal) })
   const files = useQuery({
     queryKey: ['files', agent.id, path],
-    queryFn: () => listFiles(agent.id, path),
+    queryFn: ({ signal }) => listFiles(agent.id, path, signal),
   })
 
   const publish = useMutation({
