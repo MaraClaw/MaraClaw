@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -51,7 +52,7 @@ function TransferForm({ scope, sourceName }: { readonly scope: TransferScope; re
     <Dialog.Description className="text-sm leading-relaxed text-muted-foreground">Transfer agents owned by {sourceName} to an active member in this organization. This does not activate or deactivate either member. Pending deletion requests for transferred agents will be cancelled.</Dialog.Description>
     {source.isPending ? <p role="status" className="text-sm">Loading agents...</p> : null}
     {source.isError ? <div className="flex flex-col items-start gap-3">
-      <p role="alert" className="text-sm">Unable to load transfer options. Check your connection and try again.</p>
+      <ErrorToast error={source.error} message="Unable to load transfer options. Check your connection and try again." />
       <Button variant="outline" disabled={source.isFetching} onClick={() => { setSelected([]); void source.refetch() }}>Reload transfer options</Button>
     </div> : null}
     {source.isSuccess && !sourceEligible ? <p role="alert" className="text-sm">This member is no longer in your organization or is not eligible. Close this dialog and refresh Users.</p> : null}
@@ -77,13 +78,14 @@ function TransferForm({ scope, sourceName }: { readonly scope: TransferScope; re
         </Select>
         <p id={`${recipientId}-hint`} className="text-xs text-muted-foreground">Active members and agent admins only. Organization admins and members of other organizations are excluded.</p>
         {targets.isFetching || search !== debouncedSearch ? <p role="status" className="text-sm">Loading recipients...</p> : null}
-        {targets.isError ? <p role="alert" className="text-sm text-destructive">Unable to load recipients. Check your connection and try again.</p> : null}
+        {targets.isError ? <ErrorToast error={targets.error} message="Unable to load recipients. Check your connection and try again." /> : null}
         {targets.isError && !targets.isFetchNextPageError ? <Button type="button" variant="outline" disabled={targets.isFetching} onClick={() => { void targets.refetch() }}>Reload recipients</Button> : null}
         {targets.hasNextPage ? <Button type="button" variant="outline" disabled={targets.isFetching || search !== debouncedSearch || transfer.isPending || transfer.isSuccess} onClick={() => { void targets.fetchNextPage() }}>Load more recipients</Button> : null}
         {targets.isSuccess && members.length === 0 ? <p className="text-sm text-muted-foreground">{debouncedSearch ? 'No matching recipients. Try another name or email.' : 'No eligible recipients. Activate or add another member before transferring agents.'}</p> : null}
       </div>
     </> : null}
-    <p role="alert" className="text-sm text-destructive">{validation || (transfer.isError ? agentLifecycleError(transfer.error) : '')}</p>
+    <p role="alert" className="text-sm text-destructive">{validation}</p>
+    {transfer.isError ? <ErrorToast error={transfer.error} message={agentLifecycleError(transfer.error)} /> : null}
     <p role="status" className="text-sm">{transfer.isSuccess ? `${transfer.data.transferred.length} agents transferred. ${transfer.data.cancelled_deletion_request_ids.length} pending deletion requests cancelled.` : ''}</p>
     <div className="flex flex-wrap gap-3">
       {transfer.isSuccess ? null : <Button type="button" disabled={!ready || agents.length === 0 || !recipient || selected.length === 0} onClick={submit}>{transfer.isPending ? 'Transferring...' : 'Transfer selected agents'}</Button>}
