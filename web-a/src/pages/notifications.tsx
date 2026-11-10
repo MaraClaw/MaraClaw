@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifications'
@@ -130,14 +131,14 @@ export function NotificationsPage() {
       </div> : null}
 
       <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Read state unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored. Read state unchanged.' : archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markSelectedRead.isSuccess ? 'Selected notifications marked as read.' : markSelectedUnread.isSuccess ? 'Selected notifications marked as unread.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : ''}</p>
-      {mutationError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{mutationError}</p> : null}
+      {mutationError ? <ErrorToast message={mutationError} /> : null}
       {unread.isError ? <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-        <p>Unread count could not be updated.</p>
+        <ErrorToast error={unread.error} message="Unread count could not be updated." />
         <Button variant="outline" className={actionClass} disabled={unread.isFetching} onClick={() => { void unread.refetch() }}>Retry count</Button>
       </div> : null}
       {notifications.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading notifications...</CardContent></Card> : null}
       {notifications.isError ? <Card><CardContent className="flex flex-wrap items-center justify-between gap-4">
-        <p role="alert" className="text-sm">Unable to load notifications. Try again.</p>
+        <ErrorToast error={notifications.error} message="Unable to load notifications. Try again." />
         <Button variant="outline" className={actionClass} disabled={notifications.isFetching} onClick={() => { void notifications.refetch() }}>Retry</Button>
       </CardContent></Card> : null}
 
