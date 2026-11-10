@@ -1,10 +1,11 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { PasswordField } from '@/components/ui/password-field'
@@ -34,8 +35,6 @@ type FormValues = z.infer<typeof schema>
 
 export function SettingsPassword() {
   const { owner, mustChangePassword, refreshReplacement, isCurrent } = useAuth()
-  const formId = useId()
-  const formErrorId = `${formId}-form-error`
   const [formError, setFormError] = useState<string | null>(null)
 
   const {
@@ -89,20 +88,13 @@ export function SettingsPassword() {
       </CardHeader>
       <CardContent>
         {formError ? (
-          <div
-            id={formErrorId}
-            role="alert"
-            className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
-          >
-            {formError}
-          </div>
+          <ErrorToast message={formError} />
         ) : null}
 
         <form
           className="space-y-4"
           onSubmit={handleSubmit(onSubmit)}
           noValidate
-          aria-describedby={formError ? formErrorId : undefined}
         >
           <PasswordField
             label="Current password"
