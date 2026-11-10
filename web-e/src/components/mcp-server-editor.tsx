@@ -8,6 +8,7 @@ import { createAgentMcpServer, patchAgentMcpServer, type McpServerList, type Mcp
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import { createMcpServerDraft, mcpServerChanges, mcpServerConfiguration } from '@/lib/mcp-server-draft'
 import type { AgentOut } from '@/lib/workspace-api'
+import { showRequestError } from '@/lib/request-error-toast'
 
 export function McpServerEditor({ agentId, server, onClose, returnFocus, onAccessDenied, onSavedSyncPending }: {
   readonly agentId: string
@@ -45,8 +46,8 @@ export function McpServerEditor({ agentId, server, onClose, returnFocus, onAcces
       onClose()
     },
     onError(failure) {
-      if (failure instanceof ApiError && failure.status === 403) { onAccessDenied(); return }
-      setError(userFacingRequestError(failure, 'Unable to save this server. Check your connection and try again.'))
+      showRequestError(userFacingRequestError(failure, 'Unable to save this server. Check your connection and try again.'), failure)
+      if (failure instanceof ApiError && failure.status === 403) onAccessDenied()
     },
     onSettled() { submitting.current = false },
   })
@@ -78,7 +79,7 @@ export function McpServerEditor({ agentId, server, onClose, returnFocus, onAcces
             <fieldset disabled={save.isPending} className="min-w-0">
               <McpServerForm draft={draft} server={server} onChange={scope.effect(setDraft)} />
             </fieldset>
-            {error ? <p role="alert" className="break-words text-base text-destructive">{error}</p> : null}
+            {error ? <p role="status" className="text-sm text-destructive">{error}</p> : null}
             {save.isPaused ? <p role="status" className="text-base text-muted-foreground">You’re offline. Saving will resume when the connection returns.</p> : null}
             <div className="flex flex-wrap justify-end gap-3">
               <Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>Cancel</Button>
