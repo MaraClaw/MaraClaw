@@ -4,7 +4,9 @@ import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { getAgentToolConfig, patchAgentToolConfig, probeAgentTool } from '@/lib/workspace-api'
 import { memberConfigFields, memberFieldOperations, type FieldEdits } from '@/lib/tool-config-fields'
 import { AgentToolField } from './agent-tool-field'
+import { showRequestError } from '@/lib/request-error-toast'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 export function AgentToolConfigForm({ agentId, toolId, kind }: {
   readonly agentId: string; readonly toolId: string; readonly kind: 'mcp' | 'email' | null
 }) {
@@ -52,7 +54,7 @@ export function AgentToolConfigForm({ agentId, toolId, kind }: {
       }
     } catch (cause) {
       if (!(cause instanceof Error)) throw cause
-      if (isCurrent()) setError(probe ? 'Connection test failed. Check saved settings and draft values.' : 'Could not save. Enter new values for fields marked Set; check your permissions and try again.')
+      if (isCurrent()) showRequestError(probe ? 'Unable to test the connection. Try again.' : 'Could not save. Enter new values for fields marked Set; check your permissions and try again.', cause)
     } finally {
       running.current = false
       controller.current = null
@@ -60,7 +62,7 @@ export function AgentToolConfigForm({ agentId, toolId, kind }: {
     }
   }
   if (config.isPending) return <p role="status" className="mt-3 text-sm">Loading configuration…</p>
-  if (config.isError) return <div className="mt-3 space-y-3"><p role="alert" className="text-sm text-destructive">Could not load configuration.</p><Button type="button" variant="outline" onClick={() => { void config.refetch() }}>Retry configuration</Button></div>
+  if (config.isError) return <div className="mt-3 space-y-3"><RequestErrorToast error={config.error} message="Could not load configuration." /><Button type="button" variant="outline" onClick={() => { void config.refetch() }}>Retry configuration</Button></div>
   const changed = Object.values(edits).some((edit) => edit.operation !== 'preserve')
   return <form autoComplete="off" noValidate className="mt-4 space-y-6 border-t border-border pt-4" onSubmit={(event) => { event.preventDefault(); void execute(false) }}>
     <p className="text-sm text-muted-foreground">Only explicit edits change agent overrides. Removing an override restores inheritance. Secrets are never prefilled.</p>
@@ -76,7 +78,7 @@ export function AgentToolConfigForm({ agentId, toolId, kind }: {
     </div>
     {!config.data.fields.length ? <p className="text-sm text-muted-foreground">No editable fields. Network and proxy settings are managed by administrators.</p> : null}
     {message ? <p role="status" className="text-sm">{message}</p> : null}
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {error ? <p role="status" className="text-sm text-destructive">{error}</p> : null}
     <div className="flex flex-wrap gap-3">
       <Button type="submit" disabled={pending || !changed}>{pending ? 'Working…' : 'Save config'}</Button>
       {kind ? <Button type="button" variant="outline" disabled={pending} onClick={() => { void execute(true) }}>Test saved + draft</Button> : null}
