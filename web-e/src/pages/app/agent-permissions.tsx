@@ -4,6 +4,9 @@ import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import { AgentDepartmentAccess } from '@/components/agent-department-access'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -90,7 +93,7 @@ export function AgentPermissionsPage() {
       {perms.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading current access…</p> : null}
       {perms.isError ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive">Unable to load current access. Reload it before saving changes.</p>
+          <RequestErrorToast error={perms.error} message="Unable to load current access. Reload it before saving changes." />
           <Button size="sm" variant="outline" disabled={perms.isFetching} onClick={session.effect(() => void perms.refetch())}>
             Retry access
           </Button>
@@ -169,6 +172,7 @@ export function AgentPermissionsPage() {
           <Label htmlFor="agent-handover" className="text-sm font-semibold">
             Handover ownership
           </Label>
+          {candidates.isError ? <RequestErrorToast error={candidates.error} message="Unable to load handover candidates. Try again." /> : null}
           <Select id="agent-handover" value={handoverId} onChange={session.effect((event) => setHandoverId(event.target.value))}>
             <option value="">Choose a teammate</option>
             {(candidates.data ?? []).map((row) => (
@@ -185,7 +189,7 @@ export function AgentPermissionsPage() {
                 if (!session.isCurrent()) return
                 toast.success('Ownership transferred')
                 void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
-              }).catch(session.rethrowCurrent)
+              }).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to transfer ownership.'), error)))
             }
           >
             Transfer
@@ -196,7 +200,8 @@ export function AgentPermissionsPage() {
       {isCreator ? (
         <div className="space-y-2">
           <h3 className="text-sm font-semibold">Approvals</h3>
-          {(approvals.data ?? []).length === 0 ? (
+          {approvals.isError ? <RequestErrorToast error={approvals.error} message="Unable to load approval requests. Try again." /> : null}
+          {!approvals.isError && (approvals.data ?? []).length === 0 ? (
             <p className="text-sm text-muted-foreground">No approval requests.</p>
           ) : (
             <ul className="space-y-2">
@@ -213,7 +218,7 @@ export function AgentPermissionsPage() {
                         onClick={() =>
                           session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'approve').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )).catch(session.rethrowCurrent)
+                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to approve this request.'), error)))
                         }
                       >
                         Approve
@@ -224,7 +229,7 @@ export function AgentPermissionsPage() {
                         onClick={() =>
                           session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'reject').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )).catch(session.rethrowCurrent)
+                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to reject this request.'), error)))
                         }
                       >
                         Reject
