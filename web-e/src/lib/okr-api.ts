@@ -1,6 +1,6 @@
 import { apiRequest } from './http.ts'
 import { z } from 'zod'
-import { CompanyReportOutSchema, KeyResultOutSchema, MemberDailyReportOutSchema, ObjectiveOutSchema, OKRSettingsOutSchema, PeriodOutSchema } from './engine-contracts.generated.ts'
+import { CompanyReportOutSchema, KeyResultOutSchema, MemberDailyReportOutSchema, ObjectiveOutSchema, ObjectivePageOutSchema, OKRSettingsOutSchema, PeriodOutSchema } from './engine-contracts.generated.ts'
 import type { CompanyReportRegenerate, KeyResultCreate, ObjectiveCreate, ObjectiveUpdate, OKRSettingsUpdate } from './engine-contracts.generated.ts'
 export type { CompanyReportOut as CompanyReport, KeyResultOut as OkrKeyResult, MemberDailyReportOut as DailyReport, OKRSettingsOut as OkrSettings, PeriodOut as OkrPeriod } from './engine-contracts.generated.ts'
 const objectiveSchema = ObjectiveOutSchema.extend({ key_results: z.array(KeyResultOutSchema).default([]) })
@@ -35,6 +35,19 @@ export async function listObjectives(periodStart?: string, periodEnd?: string): 
   if (periodEnd) query.set('period_end', periodEnd)
   const suffix = query.toString() ? `?${query}` : ''
   return apiRequest(`/api/okr/objectives${suffix}`, { schema: z.array(objectiveSchema) })
+}
+
+export async function listObjectivePage(options: {
+  readonly periodStart: string
+  readonly periodEnd: string
+  readonly cursor: string | null
+  readonly signal?: AbortSignal
+}) {
+  const query = new URLSearchParams({ period_start: options.periodStart, period_end: options.periodEnd, limit: '50' })
+  if (options.cursor !== null) query.set('cursor', options.cursor)
+  return apiRequest(`/api/okr/objectives/page?${query}`, {
+    schema: ObjectivePageOutSchema, ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
 }
 
 export async function createObjective(body: ObjectiveCreate): Promise<OkrObjective> {
