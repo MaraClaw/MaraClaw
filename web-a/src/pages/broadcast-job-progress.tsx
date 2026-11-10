@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { adminSession } from '@/lib/admin-session'
@@ -47,7 +48,7 @@ export function BroadcastJobProgress({ receipt, onCompleted }: {
         ].map(([label, count]) => <div key={label}><dt className="text-sm text-muted-foreground">{label}</dt><dd className="mt-1 font-semibold tabular-nums">{count.toLocaleString()}</dd></div>)}
       </dl>
       <p role="status" className="text-sm text-muted-foreground">{status.isFetching ? 'Checking broadcast progress...' : 'Email progress and completed history will be available when notification processing finishes.'}</p>
-      {status.isError ? <p role="alert" className="text-sm text-destructive">Could not refresh broadcast progress. The accepted job is kept; counts may be out of date. Refresh progress to try again.</p> : null}
+    {status.isError ? <ErrorToast error={status.error} message="Could not refresh broadcast progress. The accepted job is kept; counts may be out of date. Refresh progress to try again." /> : null}
       <Button type="button" variant="outline" className="h-auto min-h-11 self-start whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none" disabled={status.isFetching} onClick={() => { if (isCurrent()) void status.refetch() }}>Refresh broadcast progress</Button>
     </section>
   )

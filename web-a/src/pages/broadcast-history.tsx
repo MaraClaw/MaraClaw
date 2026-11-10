@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
@@ -45,7 +46,7 @@ export function BroadcastHistory() {
       <CardContent className="flex min-w-0 flex-col gap-5" aria-busy={history.isFetching}>
         <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{history.isFetching ? 'Loading published broadcasts...' : `Page ${cursors.length}`}</p>
         {history.isError ? <div className="flex flex-wrap items-center gap-3">
-          <p role="alert" className="text-sm text-destructive">Could not load published broadcasts. {history.error instanceof ApiError ? history.error.message : 'Check your connection and try again.'}</p>
+        <ErrorToast error={history.error} message={history.error instanceof ApiError ? history.error.message : 'Could not load published broadcasts. Check your connection and try again.'} />
           <Button type="button" variant="outline" className={actionClass} disabled={history.isFetching} onClick={() => { if (isCurrent()) void history.refetch() }}>Retry history</Button>
         </div> : null}
         {history.isSuccess && history.data.items.length === 0 ? <div className="flex flex-col gap-2 text-sm">
