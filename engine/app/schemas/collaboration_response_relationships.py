@@ -1,6 +1,9 @@
 """Dictionary contracts for human and agent relationships."""
 
-from typing import Literal, TypedDict
+from typing import ClassVar, Literal, TypedDict
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
 
 from app.core.permissions import RelationshipStatus
 
@@ -44,6 +47,21 @@ class HumanRelationshipResponse(RelationshipStatus):
     relation_label: str
     description: str
     member: RelationshipMemberSummary | None
+
+
+class HumanRelationshipPageResponse(TypedDict):
+    items: list[HumanRelationshipResponse]
+    next_cursor: str | None
+    has_more: bool
+
+
+class HumanRelationshipCursor(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1]
+    agent_id: UUID
+    tenant_id: UUID | None
+    relationship_id: UUID
 
 
 class RelationshipAgentSummary(TypedDict):

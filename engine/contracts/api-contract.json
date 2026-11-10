@@ -5193,6 +5193,20 @@
         "title": "ClickRequest",
         "type": "object"
       },
+      "CollaborationAcknowledgement": {
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CollaborationAcknowledgement",
+        "type": "object"
+      },
       "CommentCreate": {
         "properties": {
           "author_id": {
@@ -8053,6 +8067,105 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HumanRelationshipPageResponse": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HumanRelationshipResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "HumanRelationshipPageResponse",
+        "type": "object"
+      },
+      "HumanRelationshipResponse": {
+        "properties": {
+          "access_allowed": {
+            "title": "Access Allowed",
+            "type": "boolean"
+          },
+          "access_status": {
+            "title": "Access Status",
+            "type": "string"
+          },
+          "access_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Status Reason"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "member": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RelationshipMemberSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "member_id": {
+            "title": "Member Id",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "relation_label": {
+            "title": "Relation Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_allowed",
+          "access_status",
+          "access_status_reason",
+          "id",
+          "member_id",
+          "relation",
+          "relation_label",
+          "description",
+          "member"
+        ],
+        "title": "HumanRelationshipResponse",
         "type": "object"
       },
       "IdentityBindRequest": {
@@ -11587,6 +11700,34 @@
         "title": "ObjectiveOut",
         "type": "object"
       },
+      "ObjectivePageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectiveOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ObjectivePageOut",
+        "type": "object"
+      },
       "ObjectiveUpdate": {
         "properties": {
           "description": {
@@ -13491,6 +13632,94 @@
         "title": "RelationshipIn",
         "type": "object"
       },
+      "RelationshipMemberSummary": {
+        "properties": {
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "department_path": {
+            "title": "Department Path",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "is_platform_user": {
+            "title": "Is Platform User",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Name"
+          },
+          "provider_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Type"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "department_path",
+          "avatar_url",
+          "email",
+          "provider_name",
+          "provider_type",
+          "user_id",
+          "is_platform_user"
+        ],
+        "title": "RelationshipMemberSummary",
+        "type": "object"
+      },
       "RequestDetail": {
         "properties": {
           "applicant": {
@@ -14317,6 +14546,70 @@
           "session_id"
         ],
         "title": "ScreenshotRequest",
+        "type": "object"
+      },
+      "SearchAnalyticsDashboard": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "orgs": {
+            "items": {
+              "$ref": "#/components/schemas/SearchAnalyticsOrgRanking"
+            },
+            "title": "Orgs",
+            "type": "array"
+          },
+          "selected_summary": {
+            "$ref": "#/components/schemas/SearchAnalyticsSummary"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "system_summary": {
+            "$ref": "#/components/schemas/SearchAnalyticsSummary"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "timeseries": {
+            "items": {
+              "$ref": "#/components/schemas/SearchAnalyticsTimeBucket"
+            },
+            "title": "Timeseries",
+            "type": "array"
+          },
+          "trending": {
+            "items": {
+              "$ref": "#/components/schemas/SearchAnalyticsTrendingQuery"
+            },
+            "title": "Trending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "tenant_id",
+          "system_summary",
+          "selected_summary",
+          "timeseries",
+          "orgs",
+          "trending"
+        ],
+        "title": "SearchAnalyticsDashboard",
         "type": "object"
       },
       "SearchAnalyticsExportStatus": {
@@ -18730,7 +19023,7 @@
   },
   "info": {
     "title": "MaraClaw",
-    "version": "1.0.7"
+    "version": "1.0.8"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -19870,6 +20163,95 @@
           }
         ],
         "summary": "Update Platform Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/search-analytics/dashboard": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f7365617263682d616e616c79746963732f64617368626f617264",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchAnalyticsDashboard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Search Analytics Dashboard",
         "tags": [
           "admin"
         ]
@@ -25676,6 +26058,62 @@
           "relationships"
         ]
       },
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f72656c6174696f6e73686970732f",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelationshipIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationAcknowledgement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Relationship",
+        "tags": [
+          "relationships"
+        ]
+      },
       "put": {
         "description": "Replace all human relationships for this agent.",
         "operationId": "put_2f6170692f6167656e74732f7b6167656e745f69647d2f72656c6174696f6e73686970732f",
@@ -26059,6 +26497,83 @@
           }
         ],
         "summary": "Search Human Relationship Candidates",
+        "tags": [
+          "relationships"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/relationships/page": {
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f72656c6174696f6e73686970732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HumanRelationshipPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Relationship Page",
         "tags": [
           "relationships"
         ]
@@ -38006,6 +38521,125 @@
         ]
       }
     },
+    "/api/okr/objectives/page": {
+      "get": {
+        "description": "Page objectives while keeping each retained objective's complete key results.",
+        "operationId": "get_2f6170692f6f6b722f6f626a656374697665732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period_start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period_end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_types",
+            "required": false,
+            "schema": {
+              "items": {
+                "enum": [
+                  "company",
+                  "user",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              "title": "Owner Types",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectivePageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Objectives Page",
+        "tags": [
+          "okr"
+        ]
+      }
+    },
     "/api/okr/objectives/{objective_id}": {
       "delete": {
         "description": "Soft delete an Objective (set status to archived).",
@@ -44304,6 +44938,7 @@
       "AgentPageOut",
       "AgentPermissionScope",
       "AgentPermissionUpdate",
+      "AgentRelationshipBatchIn",
       "AgentSetupMCPRetry",
       "AgentSetupMCPStatus",
       "AgentSetupStatus",
@@ -44349,6 +44984,7 @@
       "ChatTicketResponse",
       "ClawhubInstallIn",
       "ClickRequest",
+      "CollaborationAcknowledgement",
       "CompanyConfigOperations",
       "CompanyReportOut",
       "CompanyReportRegenerate",
@@ -44391,6 +45027,7 @@
       "GoogleChatChannelPayload",
       "HTTPValidationError",
       "HandoverRequest",
+      "HumanRelationshipPageResponse",
       "IdentityBindRequest",
       "IdentityUnbindRequest",
       "InterAgentMessage",
@@ -44436,6 +45073,7 @@
       "OKRSettingsUpdate",
       "ObjectiveCreate",
       "ObjectiveOut",
+      "ObjectivePageOut",
       "ObjectiveUpdate",
       "OnboardingStartRequest",
       "OrgAdminCreateRequest",
@@ -44472,6 +45110,8 @@
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",
+      "RelationshipBatchIn",
+      "RelationshipIn",
       "RequestDetail",
       "RequestSummary",
       "ResendVerificationRequest",
@@ -44488,6 +45128,7 @@
       "ScheduleOut",
       "ScheduleUpdate",
       "ScreenshotRequest",
+      "SearchAnalyticsDashboard",
       "SearchAnalyticsExportStatus",
       "SearchAnalyticsOrgRanking",
       "SearchAnalyticsSummary",
@@ -44580,6 +45221,8 @@
       "AgentPermissionScope",
       "AgentPermissionUpdate",
       "AgentPermissionUserAccess",
+      "AgentRelationshipBatchIn",
+      "AgentRelationshipIn",
       "AgentSetupMCPRetry",
       "AgentSetupMCPStatus",
       "AgentSetupStatus",
@@ -44636,6 +45279,7 @@
       "ChunkEvent",
       "ClawhubInstallIn",
       "ClickRequest",
+      "CollaborationAcknowledgement",
       "CompanyAccessLevel",
       "CompanyConfigOperations",
       "CompanyReportOut",
@@ -44697,6 +45341,8 @@
       "GoogleChatChannelPayload",
       "HTTPValidationError",
       "HandoverRequest",
+      "HumanRelationshipPageResponse",
+      "HumanRelationshipResponse",
       "IdentityBindRequest",
       "IdentityOut",
       "IdentityUnbindRequest",
@@ -44758,6 +45404,7 @@
       "OKRSettingsUpdate",
       "ObjectiveCreate",
       "ObjectiveOut",
+      "ObjectivePageOut",
       "ObjectiveUpdate",
       "OnboardedEvent",
       "OnboardingRejectionReason",
@@ -44805,6 +45452,9 @@
       "RegisterInitRequest",
       "RegisterInitResponse",
       "RegistrationConfigResponse",
+      "RelationshipBatchIn",
+      "RelationshipIn",
+      "RelationshipMemberSummary",
       "RequestDetail",
       "RequestSummary",
       "ResendVerificationRequest",
@@ -44822,6 +45472,7 @@
       "ScheduleOut",
       "ScheduleUpdate",
       "ScreenshotRequest",
+      "SearchAnalyticsDashboard",
       "SearchAnalyticsExportStatus",
       "SearchAnalyticsKindCountProjection",
       "SearchAnalyticsOrgRanking",

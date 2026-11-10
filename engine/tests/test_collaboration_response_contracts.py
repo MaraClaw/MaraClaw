@@ -205,8 +205,9 @@ async def test_permission_candidates_without_tenant_keep_the_distinct_wrapper(
     assert response.json() == {"candidates": []}
 
 
+@pytest.mark.parametrize("surface", ["legacy", "page"])
 async def test_relationship_transport_keeps_nullable_members_and_provider_summary(
-    client: AsyncClient, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, surface: str
 ) -> None:
     member = OrgMemberRecord(uuid4(), "Member", tenant_id=agent.tenant_id)
     rows = [
@@ -219,11 +220,15 @@ async def test_relationship_transport_keeps_nullable_members_and_provider_summar
         relationships.agent_relationship_dao, "list_for_agent_with_members_and_providers", AsyncMock(return_value=rows)
     )
     monkeypatch.setattr(relationships, "evaluate_human_relationship_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(
+        relationships.agent_relationship_dao, "list_page_ids", AsyncMock(return_value=[r.id for r in rows])
+    )
 
-    response = await client.get(f"/api/agents/{agent.id}/relationships/")
+    response = await client.get(f"/api/agents/{agent.id}/relationships/{'page' if surface == 'page' else ''}")
 
     assert response.status_code == 200
-    payload: list[JsonObject] = TypeAdapter(list[JsonObject]).validate_json(response.content)
+    body = response.json()["items"] if surface == "page" else response.json()
+    payload: list[JsonObject] = TypeAdapter(list[JsonObject]).validate_python(body)
     assert payload[0]["member"] == {
         "name": "Member",
         "title": "",
@@ -237,7 +242,8 @@ async def test_relationship_transport_keeps_nullable_members_and_provider_summar
     }
     assert payload[1]["member"] is None
     assert payload[1]["access_status_reason"] is None
-    hints = dict[str, TypeForm[object]](get_type_hints(relationships.get_relationships))
+    handler = relationships.get_relationship_page if surface == "page" else relationships.get_relationships
+    hints = dict[str, TypeForm[object]](get_type_hints(handler))
     TypeAdapter[object](hints["return"]).validate_json(response.content)
 
 

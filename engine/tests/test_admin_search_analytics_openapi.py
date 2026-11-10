@@ -34,6 +34,10 @@ def schemas() -> dict[str, JsonObject]:
     ("path", "required"),
     [
         (
+            "dashboard",
+            {"start", "end", "tenant_id", "system_summary", "selected_summary", "timeseries", "orgs", "trending"},
+        ),
+        (
             "summary",
             {
                 "scope",
@@ -81,7 +85,9 @@ def test_analytics_openapi_requires_complete_projections(
     assert schema.get("additionalProperties") is not True
 
 
-@pytest.mark.parametrize(("path", "field"), [("orgs", "tenant_id"), ("export-status", "bucket")])
+@pytest.mark.parametrize(
+    ("path", "field"), [("orgs", "tenant_id"), ("export-status", "bucket"), ("dashboard", "tenant_id")]
+)
 def test_analytics_openapi_distinguishes_required_nullable_strings(
     schemas: dict[str, JsonObject], path: str, field: str
 ) -> None:
@@ -165,3 +171,17 @@ def test_analytics_openapi_describes_summary_aggregations(schemas: dict[str, Jso
     properties = json_object_from(nested["properties"])
     assert json_object_from(properties["kind"])["type"] == "string"
     assert json_object_from(properties["event_count"])["type"] == "integer"
+
+
+def test_dashboard_openapi_reuses_projections_and_resolved_window(schemas: dict[str, JsonObject]) -> None:
+    properties = json_object_from(schemas["dashboard"]["properties"])
+    assert json_object_from(properties["system_summary"])["$ref"] == "#/components/schemas/SearchAnalyticsSummary"
+    assert properties["selected_summary"] == properties["system_summary"]
+    for field in ("start", "end"):
+        assert json_object_from(properties[field])["format"] == "date-time"
+    for field, name in (
+        ("timeseries", "SearchAnalyticsTimeBucket"),
+        ("orgs", "SearchAnalyticsOrgRanking"),
+        ("trending", "SearchAnalyticsTrendingQuery"),
+    ):
+        assert json_object_from(json_object_from(properties[field])["items"])["$ref"] == f"#/components/schemas/{name}"

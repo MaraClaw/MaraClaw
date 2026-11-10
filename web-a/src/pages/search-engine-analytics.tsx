@@ -19,11 +19,10 @@ import { Select } from '@/components/ui/select'
 import { companyOptions } from '@/hooks/company-options'
 import { ApiError } from '@/lib/http'
 import {
+  getSearchAnalyticsDashboard,
   getSearchAnalyticsExportStatus,
   getSearchAnalyticsOrgs,
   getSearchAnalyticsSummary,
-  getSearchAnalyticsTimeseries,
-  getSearchAnalyticsTrending,
   type SearchAnalyticsOrg,
   type SearchAnalyticsPoint,
   type SearchAnalyticsSummary,
@@ -95,57 +94,38 @@ export function SearchEngineAnalytics() {
   const scoped = { ...window, tenantId: tenantId || undefined }
 
   const companies = useQuery(companyOptions())
-  const systemSummary = useQuery({
-    queryKey: ['admin-search-analytics-summary', window, 'system'],
-    queryFn: ({ signal }) => getSearchAnalyticsSummary(window, signal),
-  })
-  const summary = useQuery({
-    queryKey: ['admin-search-analytics-summary', scoped],
-    queryFn: ({ signal }) => getSearchAnalyticsSummary(scoped, signal),
-  })
-  const series = useQuery({
-    queryKey: ['admin-search-analytics-timeseries', scoped],
-    queryFn: ({ signal }) => getSearchAnalyticsTimeseries(scoped, signal),
-  })
-  const orgs = useQuery({
-    queryKey: ['admin-search-analytics-orgs', window],
-    queryFn: ({ signal }) => getSearchAnalyticsOrgs(window, signal),
-  })
-  const trending = useQuery({
-    queryKey: ['admin-search-analytics-trending', scoped],
-    queryFn: ({ signal }) => getSearchAnalyticsTrending(scoped, signal),
+  const dashboard = useQuery({
+    queryKey: ['admin-search-analytics-dashboard', scoped],
+    queryFn: ({ signal }) => getSearchAnalyticsDashboard(scoped, signal),
   })
   const exportStatus = useQuery({
     queryKey: ['admin-search-analytics-export'],
     queryFn: ({ signal }) => getSearchAnalyticsExportStatus(signal),
   })
 
-  const error =
-    (summary.error instanceof ApiError && summary.error.message) ||
-    (series.error instanceof ApiError && series.error.message) ||
-    (orgs.error instanceof ApiError && orgs.error.message) ||
-    (trending.error instanceof ApiError && trending.error.message) ||
-    null
+  const error = dashboard.error
+    ? dashboard.error instanceof ApiError ? dashboard.error.message : 'Failed to load search analytics'
+    : null
 
   const systemWide = !tenantId
   const selectedCompany = (companies.data ?? []).find((company) => company.id === tenantId)
   const unknownCompany = Boolean(tenantId && !selectedCompany && !companies.isLoading)
-  const totals = summary.data
-  const platform = systemSummary.data
+  const totals = dashboard.data?.selected_summary
+  const platform = dashboard.data?.system_summary
   const kindMix = totals?.by_kind ?? []
-  const chartData = series.isLoading
-    ? []
-    : padSeries(series.data ?? [], window.start, window.end).map((point) => ({
+  const chartData = dashboard.data
+    ? padSeries(dashboard.data.timeseries, window.start, window.end).map((point) => ({
         ...point,
         label: shortDate(point.date),
       }))
+    : []
   const insights = buildInsights({
     systemWide,
     companyName: selectedCompany?.name ?? 'This company',
     scoped: totals,
     platform,
-    orgs: orgs.data ?? [],
-    trendingTop: trending.data?.[0],
+    orgs: dashboard.data?.orgs ?? [],
+    trendingTop: dashboard.data?.trending[0],
   })
 
   function update(next: { range?: RangeKey; company?: string }) {
@@ -220,21 +200,21 @@ export function SearchEngineAnalytics() {
               ? `${rateLabel(totals?.event_count ?? 0, platform.event_count)} of the platform`
               : `${formatCount(totals?.unique_agents)} agents`
           }
-          loading={summary.isLoading}
+          loading={dashboard.isLoading}
         />
         <KpiCard
           label="Error rate"
           value={totals ? `${rateLabel(totals.error_count, totals.event_count)}` : '—'}
           hint={`${formatCount(totals?.error_count)} failed calls`}
           tone={(totals?.event_count ?? 0) > 0 && pct(totals?.error_count ?? 0, totals?.event_count ?? 0) >= 10 ? 'warn' : 'default'}
-          loading={summary.isLoading}
+          loading={dashboard.isLoading}
         />
         <KpiCard
           label="Quota pressure"
           value={totals ? `${rateLabel(totals.quota_count, totals.event_count)}` : '—'}
           hint={`${formatCount(totals?.quota_count)} quota responses`}
           tone={(totals?.event_count ?? 0) > 0 && pct(totals?.quota_count ?? 0, totals?.event_count ?? 0) >= 5 ? 'warn' : 'default'}
-          loading={summary.isLoading}
+          loading={dashboard.isLoading}
         />
         <KpiCard
           label={systemWide ? 'Companies searching' : 'Avg latency'}
@@ -250,7 +230,7 @@ export function SearchEngineAnalytics() {
               ? `${formatCount(totals?.unattributed_count)} unattributed`
               : `${formatCount(totals?.unique_agents)} agents in this org`
           }
-          loading={summary.isLoading}
+          loading={dashboard.isLoading}
         />
       </div>
 
@@ -273,7 +253,7 @@ export function SearchEngineAnalytics() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <VolumeChart data={chartData} loading={series.isLoading} reduceMotion={Boolean(reduceMotion)} />
+            <VolumeChart data={chartData} loading={dashboard.isLoading} reduceMotion={Boolean(reduceMotion)} />
           </CardContent>
         </Card>
 
@@ -283,7 +263,7 @@ export function SearchEngineAnalytics() {
             <CardDescription>Tavily search requests.</CardDescription>
           </CardHeader>
           <CardContent>
-            <KindMix items={kindMix} total={totals?.event_count ?? 0} loading={summary.isLoading} />
+            <KindMix items={kindMix} total={totals?.event_count ?? 0} loading={dashboard.isLoading} />
           </CardContent>
         </Card>
       </div>
@@ -297,8 +277,8 @@ export function SearchEngineAnalytics() {
             </CardHeader>
             <CardContent>
               <CompanyList
-                rows={orgs.data ?? []}
-                loading={orgs.isLoading}
+                rows={dashboard.data?.orgs ?? []}
+                loading={dashboard.isLoading}
                 onOpen={(id) => update({ company: id })}
               />
             </CardContent>
@@ -310,7 +290,7 @@ export function SearchEngineAnalytics() {
               <CardDescription>How this company compares to the entire system in the same range.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ShareOfPlatform scoped={totals} platform={platform} loading={summary.isLoading || systemSummary.isLoading} />
+              <ShareOfPlatform scoped={totals} platform={platform} loading={dashboard.isLoading} />
             </CardContent>
           </Card>
         )}
@@ -324,8 +304,8 @@ export function SearchEngineAnalytics() {
           </CardHeader>
           <CardContent>
             <TrendList
-              rows={trending.data ?? []}
-              loading={trending.isLoading}
+              rows={dashboard.data?.trending ?? []}
+              loading={dashboard.isLoading}
               showOrgs={systemWide}
             />
           </CardContent>

@@ -1,7 +1,7 @@
 {
   "name": "web-e",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -27,7 +27,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^14.11.1",
     "lru-cache": "^11.5.3",
-    "lucide-react": "^1.70.0",
+    "lucide-react": "^1.71.0",
     "qrcode.react": "4.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

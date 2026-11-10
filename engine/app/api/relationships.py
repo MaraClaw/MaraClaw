@@ -1,8 +1,11 @@
 """Agent relationship management API - human + agent-to-agent."""
 
+import base64
 import uuid
+from collections.abc import Sequence
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.permissions import (
@@ -16,16 +19,24 @@ from app.core.permissions import (
 from app.core.security import get_current_user
 from app.dao import agent_agent_relationship_dao, agent_dao, agent_relationship_dao, org_member_dao, user_dao
 from app.records.agent import AgentRecord
+from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.schemas.collaboration_response_relationships import (
     AgentRelationshipResponse,
     CollaborationAcknowledgement,
     HumanRelationshipCandidate,
+    HumanRelationshipCursor,
+    HumanRelationshipPageResponse,
     HumanRelationshipResponse,
     VisibleRelationshipAgent,
 )
 from app.services.access_relationships import ensure_access_granted_platform_relationships
+from app.services.relationship_mutations import (
+    RelationshipIn,
+    eligible_relationship_member,
+    human_relationship_mutation,
+)
 
 router = APIRouter(prefix="/agents/{agent_id}/relationships", tags=["relationships"])
 
@@ -80,12 +91,6 @@ async def _get_valid_member_user_id(
 # ─── Schemas ───────────────────────────────────────────
 
 
-class RelationshipIn(BaseModel):
-    member_id: str
-    relation: str = "collaborator"
-    description: str = ""
-
-
 class RelationshipBatchIn(BaseModel):
     relationships: list[RelationshipIn]
 
@@ -135,6 +140,12 @@ async def get_relationships(
         await _regenerate_relationships_file(agent_id)
 
     rows = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
+    return await _human_relationship_responses(rows, source_agent)
+
+
+async def _human_relationship_responses(
+    rows: Sequence[AgentRelationshipRecord], source_agent: AgentRecord
+) -> list[HumanRelationshipResponse]:
     out: list[HumanRelationshipResponse] = []
     for r in rows:
         linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
@@ -162,6 +173,44 @@ async def get_relationships(
             }
         )
     return out
+
+
+@router.get("/page", response_model=HumanRelationshipPageResponse)
+async def get_relationship_page(
+    agent_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+    *,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+) -> HumanRelationshipPageResponse:
+    source, _ = await check_agent_access(current_user, agent_id)
+    after_id = None
+    if cursor is not None:
+        try:
+            decoded = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+            position = HumanRelationshipCursor.model_validate_json(decoded)
+        except ValueError:
+            raise HTTPException(400, "Invalid relationship cursor") from None
+        if position.agent_id != agent_id or position.tenant_id != source.tenant_id:
+            raise HTTPException(400, "Relationship cursor belongs to another agent or organization")
+        after_id = position.relationship_id
+    if await ensure_access_granted_platform_relationships(source, created_by_user_id=current_user.id):
+        await _regenerate_relationships_file(agent_id)
+    ids = await agent_relationship_dao.list_page_ids(agent_id, limit + 1, after_id)
+    retained = ids[:limit]
+    has_more = len(ids) > limit
+    rows = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id, relationship_ids=retained)
+    next_cursor = None
+    if has_more:
+        position = HumanRelationshipCursor(
+            version=1, agent_id=agent_id, tenant_id=source.tenant_id, relationship_id=retained[-1]
+        )
+        next_cursor = base64.urlsafe_b64encode(position.model_dump_json().encode()).decode().rstrip("=")
+    return {
+        "items": await _human_relationship_responses(rows, source),
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 @router.get("/member-candidates", response_model=None)
@@ -239,63 +288,45 @@ async def save_relationships(
     agent_id: uuid.UUID, data: RelationshipBatchIn, current_user: UserRecord = Depends(get_current_user)
 ) -> CollaborationAcknowledgement:
     """Replace all human relationships for this agent."""
-    _agent, access_level = await check_agent_access(current_user, agent_id)
-    if not _can_manage_relationships(current_user, access_level):
-        raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
+    async with human_relationship_mutation(agent_id, current_user) as agent:
+        existing_list = await agent_relationship_dao.list_for_agent(agent_id)
+        existing_by_member = {r.member_id: r for r in existing_list}
+        targets = {
+            await eligible_relationship_member(item, agent): item
+            for item in _dedupe_human_relationships(data.relationships)
+        }
+        _ = await agent_relationship_dao.delete_for_agent(agent_id)
+        for member_id, item in targets.items():
+            existing = existing_by_member.get(member_id)
+            _ = await agent_relationship_dao.create(
+                obj_in={
+                    "agent_id": agent_id,
+                    "member_id": member_id,
+                    "relation": item.relation,
+                    "description": item.description,
+                    "created_by_user_id": (existing.created_by_user_id if existing else None) or current_user.id,
+                    "updated_by_user_id": current_user.id,
+                }
+            )
+        await _regenerate_relationships_file(agent_id)
+    return {"status": "ok"}
 
-    existing_list = await agent_relationship_dao.list_for_agent(agent_id)
-    existing_by_member = {r.member_id: r for r in existing_list}
 
-    _ = await agent_relationship_dao.delete_for_agent(agent_id)
-
-    for r in _dedupe_human_relationships(data.relationships):
-        if r.member_id.startswith("platform-user:"):
-            platform_user_id = uuid.UUID(r.member_id.split(":", 1)[1])
-            platform_user = await user_dao.get_with_identity(platform_user_id)
-            if not platform_user or platform_user.tenant_id != _agent.tenant_id or not platform_user.is_active:
-                raise HTTPException(status_code=400, detail="Platform user is not available")
-            if await get_agent_access_level_for_user_id(platform_user.id, _agent) in (None, ""):
-                raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
-            if _agent.tenant_id is None:
-                raise HTTPException(status_code=400, detail="Agent has no organization")
-            member = await org_member_dao.get_active_by_user_and_tenant(platform_user.id, _agent.tenant_id)
-            if not member:
-                member = await org_member_dao.create(
-                    obj_in={
-                        "tenant_id": _agent.tenant_id,
-                        "user_id": platform_user.id,
-                        "external_id": f"platform:{platform_user.id}",
-                        "name": platform_user.display_name or platform_user.email or "User",
-                        "email": platform_user.email,
-                        "avatar_url": platform_user.avatar_url,
-                        "title": platform_user.title or "",
-                        "status": "active",
-                    }
-                )
-            member_id = member.id
+@router.post("/", response_model=CollaborationAcknowledgement)
+async def add_relationship(
+    agent_id: uuid.UUID, data: RelationshipIn, current_user: UserRecord = Depends(get_current_user)
+) -> CollaborationAcknowledgement:
+    async with human_relationship_mutation(agent_id, current_user) as agent:
+        member_id = await eligible_relationship_member(data, agent)
+        existing = await agent_relationship_dao.get_for_agent_and_member(agent_id, member_id)
+        fields = {"relation": data.relation, "description": data.description, "updated_by_user_id": current_user.id}
+        if existing is not None:
+            _ = await agent_relationship_dao.update(db_obj=existing, obj_in=fields)
         else:
-            member_id = uuid.UUID(r.member_id)
-            member = await org_member_dao.get(member_id)
-        if not member or member.tenant_id != _agent.tenant_id or member.status != "active":
-            raise HTTPException(status_code=400, detail="Relationship member is not available")
-        linked_user_id = await _get_valid_member_user_id(member, _agent.tenant_id)
-        if member.user_id and not linked_user_id:
-            raise HTTPException(status_code=400, detail="Relationship member is linked to an unavailable platform user")
-        if linked_user_id and await get_agent_access_level_for_user_id(linked_user_id, _agent) in (None, ""):
-            raise HTTPException(status_code=403, detail="Platform user does not have access to this agent")
-        existing = existing_by_member.get(member_id)
-        _ = await agent_relationship_dao.create(
-            obj_in={
-                "agent_id": agent_id,
-                "member_id": member_id,
-                "relation": r.relation,
-                "description": r.description,
-                "created_by_user_id": (existing.created_by_user_id if existing else None) or current_user.id,
-                "updated_by_user_id": current_user.id,
-            }
-        )
-
-    await _regenerate_relationships_file(agent_id)
+            _ = await agent_relationship_dao.create(
+                obj_in={**fields, "agent_id": agent_id, "member_id": member_id, "created_by_user_id": current_user.id}
+            )
+        await _regenerate_relationships_file(agent_id)
     return {"status": "ok"}
 
 
@@ -304,13 +335,11 @@ async def delete_relationship(
     agent_id: uuid.UUID, rel_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> CollaborationAcknowledgement:
     """Delete a single human relationship."""
-    _agent, access_level = await check_agent_access(current_user, agent_id)
-    if not _can_manage_relationships(current_user, access_level):
-        raise HTTPException(status_code=403, detail="Only org admins or managers can modify relationships")
-    rel = await agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
-    if rel:
-        _ = await agent_relationship_dao.delete(record_id=rel_id)
-        await _regenerate_relationships_file(agent_id)
+    async with human_relationship_mutation(agent_id, current_user):
+        rel = await agent_relationship_dao.get_for_agent_by_id(agent_id, rel_id)
+        if rel:
+            _ = await agent_relationship_dao.delete(record_id=rel_id)
+            await _regenerate_relationships_file(agent_id)
 
     return {"status": "ok"}
 

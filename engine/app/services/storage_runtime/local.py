@@ -19,11 +19,13 @@ from app.services.storage_runtime.base import (
     StorageEntry,
     StoragePage,
     StorageReadLimitExceededError,
+    StorageSnapshot,
     StorageVersion,
     checked_page_limit,
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import open_regular_file, read_bounded
+from app.services.storage_runtime.local_snapshot import read_file_snapshot
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -108,6 +110,14 @@ class LocalStorageBackend(StorageBackend):
             raise ValueError("offset must be nonnegative")
         path = self.root.resolve() / normalize_storage_key(key)
         return await anyio.to_thread.run_sync(_read_file_bounded, path, max_bytes, offset, abandon_on_cancel=True)
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
+        normalized = normalize_storage_key(key)
+        path = self.root.resolve() / normalized
+        return await anyio.to_thread.run_sync(read_file_snapshot, path, normalized, max_bytes, abandon_on_cancel=True)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

@@ -1,6 +1,7 @@
 import { apiRequest } from './http.ts'
 import { z } from 'zod'
 import {
+  SearchAnalyticsDashboardSchema,
   SearchAnalyticsExportStatusSchema, SearchAnalyticsOrgRankingSchema,
   SearchAnalyticsKindCountProjectionSchema, SearchAnalyticsSummarySchema, SearchAnalyticsTimeBucketSchema,
   SearchAnalyticsTrendingQuerySchema,
@@ -41,6 +42,7 @@ export type SearchAnalyticsPoint = z.infer<typeof pointSchema>
 export type SearchAnalyticsOrg = z.infer<typeof orgSchema>
 export type SearchAnalyticsTrend = z.infer<typeof trendSchema>
 export type SearchAnalyticsExportStatus = z.infer<typeof exportStatusSchema>
+export type SearchAnalyticsDashboard = z.infer<typeof SearchAnalyticsDashboardSchema>
 
 export type SearchAnalyticsQuery = {
   start?: string
@@ -65,6 +67,15 @@ export async function getSearchAnalyticsSummary(
   signal?: AbortSignal,
 ): Promise<SearchAnalyticsSummary> {
   return apiRequest(`/api/admin/search-analytics/summary${rangeQuery(params)}`, { schema: summarySchema, signal })
+}
+
+export async function getSearchAnalyticsDashboard(
+  params: SearchAnalyticsQuery,
+  signal?: AbortSignal,
+): Promise<SearchAnalyticsDashboard> {
+  return apiRequest(`/api/admin/search-analytics/dashboard${rangeQuery(params)}`, {
+    schema: SearchAnalyticsDashboardSchema, signal,
+  })
 }
 
 export async function getSearchAnalyticsTimeseries(

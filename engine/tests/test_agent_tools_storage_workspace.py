@@ -28,8 +28,10 @@ from app.services.storage_runtime.base import (
     StorageEntry,
     StoragePage,
     StorageReadLimitExceededError,
+    StorageSnapshot,
     StorageVersion,
     WriteCondition,
+    content_hash_bytes,
 )
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
@@ -185,6 +187,11 @@ class MemoryStorageBackend(StorageBackend):
         if key in self.files:
             await self.read_bytes_bounded(key, max_bytes)
         return await self.get_version(key)
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        data = await self.read_bytes_bounded(key, max_bytes)
+        return StorageSnapshot(data, await self.get_version(key), content_hash_bytes(data))
 
     @override
     async def write_bytes_if_match(

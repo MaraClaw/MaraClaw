@@ -1,27 +1,22 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { AddKeyResult, OkrReports } from '@/components/okr-reports'
+import { OkrReports } from '@/components/okr-reports'
+import { OkrObjectives } from './okr-objectives'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
-  createObjective,
   getOkrSettings,
   listDailyReports,
-  listObjectives,
   listOkrPeriods,
   submitDailyReport,
-  updateKrProgress,
   updateOkrSettings,
 } from '@/lib/okr-api'
 
@@ -40,14 +35,8 @@ export function OkrPage() {
   const [periodStart, setPeriodStart] = useState('')
   const selected = periods.data?.find((period) => period.start === periodStart) ?? current
 
-  const objectives = useQuery({
-    queryKey: ['okr', 'objectives', selected?.start, selected?.end],
-    queryFn: () => listObjectives(selected?.start, selected?.end),
-    enabled: Boolean(selected),
-  })
   const reports = useQuery({ queryKey: ['okr', 'daily', todayIso()], queryFn: () => listDailyReports(todayIso()) })
 
-  const [title, setTitle] = useState('')
   const [report, setReport] = useState('')
 
   function fail(error: unknown, fallback: string) {
@@ -97,9 +86,10 @@ export function OkrPage() {
         </div>
       </section>
 
-      <label className="block text-sm">
+      <label htmlFor="okr-period" className="block text-sm">
         <span className="text-muted-foreground">Period</span>
         <Select
+          id="okr-period"
           fit
           className="mt-1"
           value={selected?.start ?? ''}
@@ -114,97 +104,7 @@ export function OkrPage() {
         </Select>
       </label>
 
-      {objectives.isLoading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
-
-      <ul className="space-y-3">
-        {(objectives.data ?? []).map((objective) => (
-          <li key={objective.id} className="rounded-2xl border border-border p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="font-medium">{objective.title}</p>
-                <p className="text-xs text-muted-foreground">
-                  {objective.owner_name ?? objective.owner_type} · {objective.status}
-                </p>
-              </div>
-              <Badge variant="soft">{objective.owner_type}</Badge>
-            </div>
-            {objective.description ? <p className="mt-2 text-sm text-muted-foreground">{objective.description}</p> : null}
-            <ul className="mt-3 space-y-2">
-              {objective.key_results.map((kr) => {
-                const ratio = kr.target_value ? Math.min(1, kr.current_value / kr.target_value) : 0
-                return (
-                  <li key={kr.id}>
-                    <div className="flex justify-between text-xs">
-                      <span>{kr.title}</span>
-                      <span>
-                        {kr.current_value}/{kr.target_value}
-                        {kr.unit ? ` ${kr.unit}` : ''}
-                      </span>
-                    </div>
-                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div className="h-full bg-primary" style={{ width: `${ratio * 100}%` }} />
-                    </div>
-                    {isAdmin ? (
-                      <button
-                        type="button"
-                        className="mt-1 text-xs text-primary"
-                        onClick={() => {
-                          if (!scope.isCurrent()) return
-                          const next = window.prompt('New current value', String(kr.current_value))
-                          if (!next) return
-                          void updateKrProgress(kr.id, Number(next)).then(scope.effect(() =>
-                            queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] }),
-                          )).catch(scope.rethrowCurrent)
-                        }}
-                      >
-                        Update progress
-                      </button>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ul>
-            {isAdmin && selected ? (
-              <AddKeyResult
-                objectiveId={objective.id}
-                onAdded={scope.effect(() => { void queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] }) })}
-              />
-            ) : null}
-          </li>
-        ))}
-      </ul>
-
-      {isAdmin && selected ? (
-        <form
-          className="space-y-2 rounded-2xl border border-border p-4"
-          onSubmit={(event) => {
-            if (!scope.isCurrent()) return
-            event.preventDefault()
-            if (!title.trim()) return
-            void createObjective({
-              title: title.trim(),
-              owner_type: 'company',
-              period_start: selected.start,
-              period_end: selected.end,
-            })
-              .then(() => {
-                if (!scope.isCurrent()) return
-                setTitle('')
-                toast.success('Objective created')
-                void queryClient.invalidateQueries({ queryKey: ['okr', 'objectives'] })
-              })
-              .catch((error) => fail(error, 'Could not create objective'))
-          }}
-        >
-          <Label htmlFor="obj-title">New company objective</Label>
-          <div className="flex gap-2">
-            <Input id="obj-title" value={title} onChange={scope.effect((event) => setTitle(event.target.value))} />
-            <Button type="submit" size="sm">
-              Add
-            </Button>
-          </div>
-        </form>
-      ) : null}
+      {selected ? <OkrObjectives key={`${selected.start}:${selected.end}`} period={selected} isAdmin={isAdmin} /> : null}
 
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">Today’s reports</h2>

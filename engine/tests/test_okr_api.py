@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from app.api import okr as okr_api
 from app.core.domain.okr import KeyResultStatus, PeriodFrequency
 from app.core.domain.users import UserRole
+from app.dao import org_member_dao
 from app.records.okr import CompanyReportRecord, OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.user import UserRecord
 from app.schemas.okr import OKRSettingsOut, OKRSettingsUpdate
@@ -32,6 +33,36 @@ def _admin() -> UserRecord:
 
 def _member() -> UserRecord:
     return UserRecord(id=USER_ID, tenant_id=TENANT_ID, role=UserRole.MEMBER, display_name="Member")
+
+
+async def test_legacy_objectives_http_keeps_full_array(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        OKRObjectiveRecord(
+            id=uuid.UUID(int=i + 1),
+            tenant_id=TENANT_ID,
+            title=f"Objective {i}",
+            owner_type="company",
+            period_start=date(2026, 1, 1),
+            period_end=date(2026, 3, 31),
+        )
+        for i in range(205)
+    ]
+    read = AsyncMock(return_value=rows)
+    monkeypatch.setattr(okr_api.okr_objective_dao, "list_for_period", read)
+    monkeypatch.setattr(okr_api.okr_key_result_dao, "list_for_objectives", AsyncMock(return_value=[]))
+    app = FastAPI()
+    app.include_router(okr_api.router)
+    app.dependency_overrides[okr_api.get_current_user] = _member
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/okr/objectives", params={"period_start": "2026-01-01", "period_end": "2026-03-31"}
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [str(row.id) for row in rows]
+    read.assert_awaited_once_with(TENANT_ID, period_start=date(2026, 1, 1), period_end=date(2026, 3, 31))
 
 
 def _settings(
@@ -146,7 +177,7 @@ async def test_sync_relationships_wipes_and_rebuilds(monkeypatch: pytest.MonkeyP
     result = await okr_api.sync_okr_relationships(user=_admin())
 
     assert result == {"status": "ok", "okr_agent_id": str(AGENT_ID)}
-    sync.assert_awaited_once_with(TENANT_ID, AGENT_ID)
+    sync.assert_awaited_once_with(TENANT_ID, AGENT_ID, _admin())
 
 
 @pytest.mark.asyncio
@@ -163,7 +194,7 @@ async def test_create_objective_maps_org_member_to_user_id(monkeypatch: pytest.M
         created_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     monkeypatch.setattr(okr_api.user_dao, "get", AsyncMock(side_effect=[None, _admin()]))
-    monkeypatch.setattr(okr_api.org_member_dao, "get", AsyncMock(return_value=member))
+    monkeypatch.setattr(org_member_dao, "get", AsyncMock(return_value=member))
     create = AsyncMock(return_value=created)
     monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
 
@@ -222,7 +253,7 @@ async def test_create_objective_rejects_foreign_owner_without_writing(
     user_get = AsyncMock(side_effect=user_lookups)
     monkeypatch.setattr(okr_api.user_dao, "get", user_get)
     member = None if member_tenant is None else SimpleNamespace(id=MEMBER_ID, tenant_id=member_tenant, user_id=USER_ID)
-    monkeypatch.setattr(okr_api.org_member_dao, "get", AsyncMock(return_value=member))
+    monkeypatch.setattr(org_member_dao, "get", AsyncMock(return_value=member))
     create = AsyncMock()
     monkeypatch.setattr(okr_api.okr_objective_dao, "create", create)
     with pytest.raises(HTTPException) as exc:

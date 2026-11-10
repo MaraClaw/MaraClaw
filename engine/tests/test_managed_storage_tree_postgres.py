@@ -122,7 +122,10 @@ async def test_whole_prefix_deletion_cannot_bypass_agent_accounting(quota_world:
         await quota_world.backend.delete_tree("")
 
 
-async def test_promotion_of_a_legacy_file_is_charged_like_any_managed_write(quota_world: StorageWorld, tmp_path: Path):
+@pytest.mark.parametrize("snapshot", [False, True])
+async def test_promotion_of_a_legacy_file_is_charged_like_any_managed_write(
+    quota_world: StorageWorld, tmp_path: Path, snapshot: bool
+):
     world = quota_world
     world.scale(LIMIT, CEILING)
     agent = await world.agent()
@@ -130,15 +133,18 @@ async def test_promotion_of_a_legacy_file_is_charged_like_any_managed_write(quot
     legacy.mkdir(parents=True)
     _ = (legacy / "old.txt").write_bytes(b"o" * 300)
     storage = world.fallback(str(tmp_path))
-    assert await storage.read_bytes(world.key(agent, "workspace/uploads/old.txt")) == b"o" * 300
+    key = world.key(agent, "workspace/uploads/old.txt")
+    data = (await storage.read_snapshot_bounded(key, 400)).data if snapshot else await storage.read_bytes(key)
+    assert data == b"o" * 300
     assert (await world.usage(agent), world.stored(world.key(agent, "workspace/uploads/old.txt"))) == (300, b"o" * 300)
 
 
 @pytest.mark.parametrize(
     ("size", "refusal"), [(CEILING + 1, StorageFileTooLargeError), (CEILING, StorageQuotaExceededError)]
 )
+@pytest.mark.parametrize("snapshot", [False, True])
 async def test_a_promotion_that_does_not_fit_is_refused_without_a_provider_write(
-    quota_world: StorageWorld, tmp_path: Path, size: int, refusal: type[Exception]
+    quota_world: StorageWorld, tmp_path: Path, size: int, refusal: type[Exception], snapshot: bool
 ):
     world = quota_world
     world.scale(LIMIT, CEILING)
@@ -150,8 +156,10 @@ async def test_a_promotion_that_does_not_fit_is_refused_without_a_provider_write
     legacy.mkdir(parents=True)
     _ = (legacy / "old.bin").write_bytes(b"o" * size)
     key = world.key(agent, "workspace/old.bin")
+    storage = world.fallback(str(tmp_path))
+    operation = storage.read_snapshot_bounded(key, 1000) if snapshot else storage.read_bytes(key)
     with pytest.raises(refusal):
-        await world.fallback(str(tmp_path)).read_bytes(key)
+        await operation
     assert world.s3.state.count("PUT", key) == 0
 
 

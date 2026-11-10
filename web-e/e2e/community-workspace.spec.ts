@@ -7,10 +7,10 @@ const community = { name: 'Renamed community', slug: 'renamed-community', is_def
 const company = { name: 'KABERS', slug: 'kabers', is_default_end_user_org: false }
 const featureApi = /\/api\/(?:okr|org|departments)(?:\/|\?|$)/
 const destinations = [
-  { path: '/app/okr', heading: 'OKR', content: 'Company objective', endpoint: '/api/okr/objectives' },
+  { path: '/app/okr', heading: 'OKR', content: 'Company objective', endpoint: '/api/okr/objectives/page' },
   { path: '/app/directory', heading: 'Directory', content: 'No people in this company yet.', endpoint: '/api/org/users/page' },
   { path: '/app/directory?tab=departments', heading: 'Directory', content: 'No org departments yet.', endpoint: '/api/departments/options' },
-  { path: '/app/OKR', heading: 'OKR', content: 'Company objective', endpoint: '/api/okr/objectives' },
+  { path: '/app/OKR', heading: 'OKR', content: 'Company objective', endpoint: '/api/okr/objectives/page' },
   { path: '/app/Directory', heading: 'Directory', content: 'No people in this company yet.', endpoint: '/api/org/users/page' },
 ] as const
 
@@ -40,12 +40,12 @@ async function prepareOrganization(page: Page, tenant: {
       case '/api/okr/periods': return route.fulfill({ json: [
         { start: '2026-10-01', end: '2026-12-31', label: 'Current quarter', is_current: true },
       ] })
-      case '/api/okr/objectives': return route.fulfill({ json: [
+      case '/api/okr/objectives/page': return route.fulfill({ json: { items: [
         {
           id: 'company-objective', title: 'Company objective', owner_type: 'company', status: 'active', key_results: [],
           period_start: '2026-10-01', period_end: '2026-12-31', created_at: '2026-10-01T00:00:00Z',
         },
-      ] })
+      ], next_cursor: null } })
       case '/api/okr/member-daily-reports':
       case '/api/okr/company-reports': return route.fulfill({ json: [] })
       case '/api/departments/options': return route.fulfill({ json: { departments: [] } })

@@ -46,6 +46,15 @@ class StorageVersion:
         return self.version_id or self.etag or self.content_hash or f"{self.modified_at}:{self.size}"
 
 
+@dataclass(frozen=True, slots=True)
+class StorageSnapshot:
+    """Bytes and storage identity from one read, with a separate actual SHA-256 digest."""
+
+    data: bytes
+    version: StorageVersion
+    sha256: str
+
+
 @dataclass
 class WriteCondition:
     version_token: str | None = None
@@ -101,6 +110,12 @@ class StorageReadLimitExceededError(ValueError):
         self.max_bytes: int = max_bytes
         self.size_bytes: int = size_bytes
         super().__init__(f"Storage read exceeds {max_bytes} bytes (observed {size_bytes})")
+
+
+class StorageReadChangedError(OSError):
+    def __init__(self, key: str):
+        self.key: str = key
+        super().__init__(f"Storage file changed while reading: {key}")
 
 
 MAX_DIR_PAGE_LIMIT = 500
@@ -189,6 +204,15 @@ class StorageBackend:
     async def read_text(self, key: str, encoding: str = "utf-8", errors: str = "replace") -> str:
         raw = await self.read_bytes(key)
         return raw.decode(encoding, errors=errors)
+
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        """Read bounded bytes, their storage identity and actual SHA-256 together.
+
+        Reject detected local changes. A remote identity must come from the GET
+        supplying the bytes, never a separate probe. Keep existing token semantics
+        and worker ownership through cancellation; unsupported backends fail closed.
+        """
+        raise NotImplementedError
 
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         raise NotImplementedError

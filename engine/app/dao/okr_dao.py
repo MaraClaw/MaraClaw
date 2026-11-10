@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, ClassVar, final
 from uuid import UUID
@@ -96,6 +97,25 @@ _COMPANY_REPORT_COLUMNS = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ObjectivePageScope:
+    """The authorized objective collection to which a continuation belongs."""
+
+    tenant_id: UUID
+    period_start: date
+    period_end: date
+    owner_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectivePagePosition:
+    """Unique ascending position within the objective collection."""
+
+    owner_type: str
+    created_at: datetime
+    id: UUID
+
+
 @final
 class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
     """DAO for okr_objectives."""
@@ -103,6 +123,36 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
     table: ClassVar[str] = "okr_objectives"
     columns: ClassVar[tuple[str, ...]] = _OBJECTIVE_COLUMNS
     record_factory = staticmethod(OKRObjectiveRecord.from_row)
+
+    async def list_page(
+        self, scope: ObjectivePageScope, *, limit: int, after: ObjectivePagePosition | None = None
+    ) -> Sequence[OKRObjectiveRecord]:
+        """Fetch one contained, active page plus an unhydrated lookahead row."""
+        params = {
+            "tenant_id": scope.tenant_id,
+            "period_start": scope.period_start,
+            "period_end": scope.period_end,
+            "limit": limit + 1,
+        }
+        clauses = [
+            "tenant_id = %(tenant_id)s",
+            "period_start >= %(period_start)s",
+            "period_end <= %(period_end)s",
+            "status <> 'archived'",
+        ]
+        if scope.owner_types:
+            clauses.append("owner_type = ANY(%(owner_types)s)")
+            params["owner_types"] = list(scope.owner_types)
+        if after is not None:
+            clauses.append("(owner_type, created_at, id) > (%(owner_type)s, %(created_at)s, %(id)s)")
+            params.update(owner_type=after.owner_type, created_at=after.created_at, id=after.id)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM okr_objectives WHERE {' AND '.join(clauses)} "
+                "ORDER BY owner_type, created_at, id LIMIT %(limit)s",
+                params,
+            )
+            return [OKRObjectiveRecord.from_row(row) for row in rows]
 
     async def list_for_period(
         self,

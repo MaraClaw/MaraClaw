@@ -15,6 +15,16 @@ from app.dao.analytics_projection_contracts import (
     SearchAnalyticsTrendingQueryProjection,
 )
 from app.dao.base import BaseDAO
+from app.dao.web_search_analytics_sql import (
+    DASHBOARD,
+    DASHBOARD_ADAPTER,
+    KINDS,
+    ORGS,
+    SUMMARY,
+    TIMESERIES,
+    TRENDING,
+    SearchAnalyticsDashboardProjection,
+)
 from app.records.web_search_event import WebSearchEventRecord
 
 _EVENT_COLUMNS = (
@@ -44,14 +54,6 @@ _EVENT_COLUMNS = (
     "exported_at",
     "schema_version",
 )
-
-
-def _range_clause(alias: str = "") -> str:
-    prefix = f"{alias}." if alias else ""
-    return (
-        f"{prefix}occurred_at >= %(start)s AND {prefix}occurred_at < %(end)s "
-        f"AND (%(tenant_id)s::uuid IS NULL OR {prefix}tenant_id = %(tenant_id)s)"
-    )
 
 
 @final
@@ -219,23 +221,8 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
     ) -> SearchAnalyticsSummaryProjection:
         params = {"start": start, "end": end, "tenant_id": tenant_id}
         async with self.session() as db:
-            totals = await db.fetchone(
-                "SELECT count(*) AS event_count, "
-                "count(*) FILTER (WHERE status_class NOT IN ('ok', 'quota')) AS error_count, "
-                "count(*) FILTER (WHERE status_class = 'quota' OR error_class = 'quota_rotated') AS quota_count, "
-                "count(DISTINCT tenant_id) AS unique_orgs, "
-                "count(DISTINCT agent_id) AS unique_agents, "
-                "count(*) FILTER (WHERE tenant_id IS NULL) AS unattributed_count, "
-                "COALESCE(avg(latency_ms), 0)::float8 AS avg_latency_ms "
-                f"FROM web_search_events WHERE {_range_clause()}",
-                params,
-            )
-            by_kind = await db.fetchall(
-                "SELECT kind, count(*) AS event_count "
-                f"FROM web_search_events WHERE {_range_clause()} "
-                "GROUP BY kind ORDER BY kind",
-                params,
-            )
+            totals = await db.fetchone(SUMMARY, params)
+            by_kind = await db.fetchall(KINDS, params)
         totals = totals or {}
         return {
             "event_count": int_from_row(totals.get("event_count")),
@@ -256,42 +243,25 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
     ) -> list[SearchAnalyticsTimeBucketProjection]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT (occurred_at AT TIME ZONE 'UTC')::date AS bucket_date, "
-                "count(*) AS event_count, "
-                "count(*) FILTER (WHERE status_class NOT IN ('ok', 'quota')) AS error_count, "
-                "count(*) FILTER (WHERE status_class = 'quota' OR error_class = 'quota_rotated') AS quota_count "
-                f"FROM web_search_events WHERE {_range_clause()} "
-                "GROUP BY 1 ORDER BY 1",
+                TIMESERIES,
                 {"start": start, "end": end, "tenant_id": tenant_id},
             )
-        series: list[SearchAnalyticsTimeBucketProjection] = []
-        for row in rows:
-            bucket = row.get("bucket_date")
-            date_value = str(bucket)
-            series.append(
-                {
-                    "date": date_value,
-                    "event_count": int_from_row(row.get("event_count")),
-                    "error_count": int_from_row(row.get("error_count")),
-                    "quota_count": int_from_row(row.get("quota_count")),
-                }
-            )
-        return series
+        return [
+            {
+                "date": str(row.get("bucket_date")),
+                "event_count": int_from_row(row.get("event_count")),
+                "error_count": int_from_row(row.get("error_count")),
+                "quota_count": int_from_row(row.get("quota_count")),
+            }
+            for row in rows
+        ]
 
     async def top_orgs(
         self, *, start: datetime, end: datetime, limit: int
     ) -> list[SearchAnalyticsOrgRankingProjection]:
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT e.tenant_id, t.name AS tenant_name, count(*) AS event_count, "
-                "count(*) FILTER (WHERE e.status_class = 'quota' OR e.error_class = 'quota_rotated') AS quota_count "
-                "FROM web_search_events e "
-                "LEFT JOIN tenants t ON t.id = e.tenant_id "
-                "WHERE e.occurred_at >= %(start)s AND e.occurred_at < %(end)s "
-                "AND e.tenant_id IS NOT NULL "
-                "GROUP BY e.tenant_id, t.name "
-                "ORDER BY event_count DESC "
-                "LIMIT %(limit)s",
+                ORGS,
                 {"start": start, "end": end, "limit": limit},
             )
         return [
@@ -316,14 +286,7 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
         order = "distinct_orgs DESC, hits DESC" if system_wide else "hits DESC"
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT query_hash, query_normalized, kind, count(*) AS hits, "
-                "count(DISTINCT agent_id) AS distinct_agents, "
-                "count(DISTINCT tenant_id) AS distinct_orgs "
-                f"FROM web_search_events WHERE {_range_clause()} "
-                "AND query_normalized <> '' "
-                "GROUP BY query_hash, query_normalized, kind "
-                f"ORDER BY {order} "
-                "LIMIT %(limit)s",
+                TRENDING + f"ORDER BY {order} LIMIT %(limit)s",
                 {"start": start, "end": end, "tenant_id": tenant_id, "limit": limit},
             )
         return [
@@ -337,6 +300,13 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             }
             for row in rows
         ]
+
+    async def dashboard(
+        self, *, start: datetime, end: datetime, tenant_id: UUID | None
+    ) -> SearchAnalyticsDashboardProjection:
+        async with self.session() as db:
+            payload = await db.fetchval(DASHBOARD, {"start": start, "end": end, "tenant_id": tenant_id})
+        return DASHBOARD_ADAPTER.validate_python(payload)
 
 
 web_search_event_dao = WebSearchEventDAO()

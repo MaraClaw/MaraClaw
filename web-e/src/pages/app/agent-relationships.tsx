@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
@@ -7,24 +6,34 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
+import { usePageNavigation } from '@/hooks/use-page-navigation'
+import { ApiError, userFacingRequestError } from '@/lib/http'
+import { addRelationship, listRelationshipPage } from '@/lib/relationships-api'
 import {
   deleteRelationship,
   listRelationshipCandidates,
-  listRelationships,
-  saveRelationships,
   type AgentOut,
 } from '@/lib/workspace-api'
 
 const RELATIONS = ['collaborator', 'direct_leader', 'team_member', 'stakeholder', 'subordinate', 'mentor', 'other']
 
 export function AgentRelationshipsPage() {
-  const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
+  return <AgentRelationships key={agent.id} agent={agent} />
+}
+
+function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
+  const scope = useWorkspaceSession()
   const canManage = agent.access_level === 'manage'
-  const queryClient = useQueryClient()
+  const prefix = ['rels', agent.id, 'page']
+  const navigation = usePageNavigation(prefix)
   const [memberId, setMemberId] = useState('')
   const [relation, setRelation] = useState('collaborator')
-  const rows = useQuery({ queryKey: ['rels', agent.id], queryFn: () => listRelationships(agent.id) })
+  const rows = useQuery({
+    queryKey: [...prefix, navigation.revision, navigation.cursor],
+    queryFn: ({ signal }) => listRelationshipPage(agent.id, { cursor: navigation.cursor, signal }),
+    retry: false,
+  })
   const candidates = useQuery({
     queryKey: ['rel-candidates', agent.id],
     queryFn: () => listRelationshipCandidates(agent.id),
@@ -32,24 +41,23 @@ export function AgentRelationshipsPage() {
   })
 
   const add = useMutation({
-    mutationFn: async () => {
-      const current = (rows.data ?? []).map((row) => ({
-        member_id: row.member_id,
-        relation: row.relation,
-        description: row.description ?? '',
-      }))
-      current.push({ member_id: memberId, relation, description: '' })
-      await saveRelationships(agent.id, current)
-    },
+    mutationFn: () => addRelationship(agent.id, { member_id: memberId, relation, description: '' }),
     onSuccess() {
+      void navigation.reset()
+      if (!navigation.isCurrent()) return
       setMemberId('')
-      void queryClient.invalidateQueries({ queryKey: ['rels', agent.id] })
       toast.success('Relationship saved')
     },
     onError() {
-      toast.error('Unable to save relationship')
+      if (navigation.isCurrent()) toast.error('Unable to save relationship')
     },
   })
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteRelationship(agent.id, id),
+    onSuccess() { void navigation.reset() },
+    onError() { if (navigation.isCurrent()) toast.error('Unable to remove relationship') },
+  })
+  const cursorRejected = rows.error instanceof ApiError && rows.error.status === 400
 
   return (
     <div className="mx-auto max-w-2xl space-y-4 p-6">
@@ -83,11 +91,21 @@ export function AgentRelationshipsPage() {
               </option>
             ))}
           </Select>
-          <Button type="submit">Add</Button>
+          <Button type="submit" disabled={!memberId || add.isPending}>Add</Button>
         </form>
       ) : null}
-      <ul className="space-y-2">
-        {(rows.data ?? []).map((row) => (
+      {rows.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading relationships…</p> : null}
+      {rows.isError ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-sm text-destructive">{userFacingRequestError(rows.error, 'Unable to load relationships.')}</p>
+          <Button size="sm" variant="outline" onClick={() => cursorRejected ? navigation.reset() : rows.refetch()}>
+            {cursorRejected ? 'Restart relationships' : 'Retry relationships'}
+          </Button>
+        </div>
+      ) : null}
+      {rows.data?.items.length === 0 ? <p className="text-sm text-muted-foreground">No relationships yet.</p> : null}
+      <ul className="space-y-2" aria-label="Relationships">
+        {(rows.data?.items ?? []).map((row) => (
           <li key={row.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
             <div>
               <p className="text-sm font-medium">{row.member?.name || row.member_id}</p>
@@ -99,11 +117,8 @@ export function AgentRelationshipsPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() =>
-                    scope.isCurrent() && void deleteRelationship(agent.id, row.id).then(scope.effect(() =>
-                      queryClient.invalidateQueries({ queryKey: ['rels', agent.id] }),
-                    )).catch(scope.rethrowCurrent)
-                  }
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(row.id)}
                 >
                   Remove
                 </Button>
@@ -112,6 +127,13 @@ export function AgentRelationshipsPage() {
           </li>
         ))}
       </ul>
+      <nav aria-label="Relationship pages" className="flex items-center gap-3">
+        <Button size="sm" variant="outline" disabled={navigation.page === 1 || rows.isFetching} onClick={navigation.previous}>Previous</Button>
+        <span role="status" className="text-sm text-muted-foreground">Page {navigation.page}</span>
+        <Button size="sm" variant="outline" disabled={!rows.data?.next_cursor || rows.isFetching} onClick={() => {
+          if (rows.data?.next_cursor) navigation.next(rows.data.next_cursor)
+        }}>Next</Button>
+      </nav>
     </div>
   )
 }

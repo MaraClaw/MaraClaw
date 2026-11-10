@@ -14,12 +14,14 @@ for (const selection of ['default', 'explicit'] as const) {
           await route.fulfill({ json: [previous, current] })
           break
         case '/api/okr/settings':
-          await route.fulfill({ json: { enabled: false, period_frequency: 'quarterly' } })
+          await route.fulfill({ json: { enabled: false, period_frequency: 'quarterly', daily_report_enabled: false,
+            daily_report_time: '18:00', weekly_report_enabled: false, weekly_report_day: 5 } })
           break
-        case '/api/okr/objectives': {
+        case '/api/okr/objectives/page': {
           const period = url.searchParams.get('period_start') === previous.start ? previous : current
           expect(url.searchParams.get('period_end')).toBe(period.end)
-          await route.fulfill({ json: [{ id: period.start, title: `${period.label} objective`, owner_type: 'company', status: 'active', key_results: [] }] })
+          await route.fulfill({ json: { items: [{ id: period.start, title: `${period.label} objective`, owner_type: 'company',
+            period_start: period.start, period_end: period.end, created_at: '2026-10-01T00:00:00Z', status: 'active', key_results: [] }], next_cursor: null } })
           break
         }
         default:

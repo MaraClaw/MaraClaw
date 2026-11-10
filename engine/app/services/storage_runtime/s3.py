@@ -18,13 +18,14 @@ from app.services.storage_runtime.base import (
     StorageEntry,
     StoragePage,
     StorageReadLimitExceededError,
+    StorageSnapshot,
     StorageVersion,
     checked_page_limit,
     walk_order,
 )
 from app.services.storage_runtime.s3_connection import S3GetArguments, S3ListArguments, S3ObjectIdentity
 from app.services.storage_runtime.s3_create import S3CreateBackend
-from app.services.storage_runtime.s3_read import materialize_object, read_object
+from app.services.storage_runtime.s3_read import materialize_object, read_object, read_object_snapshot
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _LAST_CODE_POINT = "\U0010ffff"
@@ -204,6 +205,16 @@ class S3StorageBackend(S3CreateBackend):
             arguments["Range"] = f"bytes={offset}-{offset + max_bytes - 1}"
         get_object = partial(client.get_object, **arguments)
         return await anyio.to_thread.run_sync(read_object, get_object, max_bytes, offset, abandon_on_cancel=True)
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
+        client = self._client_or_raise()
+        get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
+        return await anyio.to_thread.run_sync(
+            read_object_snapshot, get_object, normalize_storage_key(key), max_bytes, abandon_on_cancel=True
+        )
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
