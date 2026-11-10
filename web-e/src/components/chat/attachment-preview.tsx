@@ -4,13 +4,14 @@ import { useWorkspaceSession } from '@/hooks/session-workspace'
 import { attachmentPreviewClient, type AttachmentPreview } from '@/lib/attachment-preview-api'
 import { ApiError, BinaryLimitError, userFacingRequestError } from '@/lib/http'
 import { AttachmentImage } from './attachment-image'
+import { showRequestError } from '@/lib/request-error-toast'
 
 const AttachmentPdf = lazy(() => import('./attachment-pdf').then((module) => ({ default: module.AttachmentPdf })))
 const AttachmentOffice = lazy(() => import('./attachment-office').then((module) => ({ default: module.AttachmentOffice })))
 type PreviewState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly preview: AttachmentPreview }
-  | { readonly status: 'failed'; readonly message: string }
+   | { readonly status: 'failed'; readonly message: string | null }
 
 class RendererBoundary extends Component<{ readonly children: ReactNode }, { readonly failed: boolean }> {
   state = { failed: false }
@@ -57,7 +58,11 @@ function PreviewAttempt({ agentId, path, onRetry }: {
         const message = error instanceof BinaryLimitError || (error instanceof ApiError && error.status === 413)
           ? new BinaryLimitError().message
           : userFacingRequestError(error, 'Preview is unavailable. Try again or download the file.')
-        setState({ status: 'failed', message })
+        if (error instanceof BinaryLimitError) setState({ status: 'failed', message })
+        else {
+          showRequestError(message, error)
+          setState({ status: 'failed', message: null })
+        }
       },
     )
     return () => controller.abort()
@@ -66,7 +71,7 @@ function PreviewAttempt({ agentId, path, onRetry }: {
   switch (state.status) {
     case 'loading': return <p role="status" className="text-sm text-muted-foreground">Checking access and loading preview…</p>
     case 'failed': return <div className="space-y-4">
-      <p role="alert" className="text-sm text-destructive">{state.message}</p>
+      {state.message ? <p role="alert" className="text-sm text-destructive">{state.message}</p> : null}
       <Button type="button" variant="outline" className="min-h-11" onClick={onRetry}>Retry preview</Button>
     </div>
     case 'ready': return <RendererBoundary><PreviewRenderer preview={state.preview} /></RendererBoundary>
