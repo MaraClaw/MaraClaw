@@ -69,8 +69,11 @@ export function RegisterPage() {
       .then((config) => {
         if (!cancelled && isCurrent(expectedOwner)) setInviteRequired(Boolean(config.invitation_code_required))
       })
-      .catch(() => {
-        if (!cancelled && isCurrent(expectedOwner)) setInviteRequired(false)
+      .catch((error: unknown) => {
+        if (!cancelled && isCurrent(expectedOwner)) {
+          setInviteRequired(false)
+          toast.error(userFacingRequestError(error, 'Unable to load registration settings. Try again.'))
+        }
       })
     return () => { cancelled = true }
   }, [owner, isCurrent])
@@ -115,7 +118,7 @@ export function RegisterPage() {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
         return
       }
-      setFormError(userFacingRequestError(error, 'Unable to create an account. Try again.'))
+      toast.error(userFacingRequestError(error, 'Unable to create an account. Try again.'))
     }
   }
 
@@ -164,7 +167,9 @@ export function RegisterPage() {
                         return current === duplicateEmailMessage ? null : current
                       })
                     })
-                    .catch(() => undefined)
+                    .catch((error: unknown) => {
+                      if (isCurrent(expectedOwner)) toast.error(userFacingRequestError(error, 'Unable to check this email. Try again.'))
+                    })
                 },
               })}
             />

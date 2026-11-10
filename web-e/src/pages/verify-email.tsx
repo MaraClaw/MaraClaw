@@ -14,7 +14,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { resendVerificationRequest, verifyEmailRequest } from '@/lib/auth-api'
 import type { SessionOwner } from '@/lib/auth-session'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
 
 const schema = z.object({
   token: z.string().trim().min(6, 'Enter the 6-digit code').max(512),
@@ -74,11 +74,7 @@ export function VerifyEmailPage() {
       })
       .catch((error: unknown) => {
         if (cancelled || !isCurrent(expectedOwner)) return
-        setFormError(
-          error instanceof ApiError
-            ? (formatApiDetail(error.detail) ?? 'This verification code is invalid or expired.')
-            : 'Unable to verify. Try again.',
-        )
+        toast.error(userFacingRequestError(error, 'Unable to verify. Try again.'))
       })
     return () => {
       cancelled = true
@@ -93,11 +89,7 @@ export function VerifyEmailPage() {
       await consume(expectedOwner, values.token)
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ?? 'This verification code is invalid or expired.')
-          : 'Unable to verify. Try again.',
-      )
+      toast.error(userFacingRequestError(error, 'Unable to verify. Try again.'))
     }
   }
 
@@ -116,7 +108,7 @@ export function VerifyEmailPage() {
       toast.success('If that account exists, a new code is on the way.')
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setFormError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to resend.')
+      toast.error(userFacingRequestError(error, 'Unable to resend.'))
     } finally {
       if (isCurrent(expectedOwner)) setResending(false)
     }
