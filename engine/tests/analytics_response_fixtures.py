@@ -5,6 +5,7 @@ from app.dao.analytics_projection_contracts import (
     SearchAnalyticsTimeBucketProjection,
     SearchAnalyticsTrendingQueryProjection,
 )
+from app.dao.web_search_analytics_sql import SearchAnalyticsDashboardProjection
 
 
 def summary_projection() -> SearchAnalyticsSummaryProjection:
@@ -41,3 +42,13 @@ def trending_query_projection() -> SearchAnalyticsTrendingQueryProjection:
 
 def export_status_projection(timestamp: object = None) -> SearchAnalyticsExportStatusProjection:
     return {"pending": 1, "exporting": 0, "exported": 2, "skipped": 0, "last_exported_at": timestamp}
+
+
+def dashboard_projection() -> SearchAnalyticsDashboardProjection:
+    return {
+        "system_summary": summary_projection(),
+        "selected_summary": {**summary_projection(), "event_count": 1},
+        "timeseries": [time_bucket_projection()],
+        "orgs": [org_ranking_projection()],
+        "trending": [trending_query_projection()],
+    }
