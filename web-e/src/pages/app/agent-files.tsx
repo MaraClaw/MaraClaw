@@ -5,12 +5,14 @@ import { useEffect, useReducer, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { agentFilesQuery, loadedFiles } from '@/lib/agent-files-query'
 import { createFilePreview, reduceFilePreview } from '@/lib/file-download'
-import { ApiError, formatApiDetail, userFacingRequestError } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import { formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   deleteFileContent,
@@ -104,7 +106,7 @@ export function AgentFilesPage() {
       setVersion(data.version_token)
     },
     onError(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Cannot read file')
+      toast.error(userFacingRequestError(error, 'Cannot read file'))
     },
   })
 
@@ -115,7 +117,7 @@ export function AgentFilesPage() {
       void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
     },
     onError(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Save failed')
+      toast.error(userFacingRequestError(error, 'Save failed'))
     },
   })
 
@@ -161,8 +163,8 @@ export function AgentFilesPage() {
           />
         </div>
         <div id="workspace-upload-policy" className="mb-3 text-xs text-muted-foreground">
-          {uploadPolicy.isError ? <div role="alert" className="space-y-2 text-destructive">
-            <p>Could not load upload limits. Uploading is unavailable.</p>
+          {uploadPolicy.isError ? <div className="space-y-2">
+            <RequestErrorToast error={uploadPolicy.error} message="Could not load upload limits. Uploading is unavailable." />
             <Button type="button" size="sm" variant="outline" disabled={uploadPolicy.isFetching}
               onClick={() => { if (scope.isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
           </div> : <p role="status">{uploadPolicy.isSuccess
@@ -193,9 +195,7 @@ export function AgentFilesPage() {
             </li>
           ))}
         </ul>
-        {listing.isError ? <p role="alert" className="mt-3 text-xs text-destructive">
-          {listing.isFetchNextPageError ? 'Could not load more files. Your loaded files are still available.' : 'Could not load files. Try again.'}
-        </p> : null}
+        {listing.isError ? <RequestErrorToast error={listing.error} message={listing.isFetchNextPageError ? 'Could not load more files. Your loaded files are still available.' : 'Could not load files. Try again.'} /> : null}
         {listing.hasNextPage || listing.isError ? (
           <Button type="button" size="sm" variant="outline" className="mt-3 min-h-11 w-full"
             disabled={listing.isFetching || listing.isPaused}
@@ -227,10 +227,10 @@ export function AgentFilesPage() {
                       {download.isPending ? <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : null}
                       Download
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success('Locked for edit'))).catch(scope.rethrowCurrent)}>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success('Locked for edit'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to lock this file.'), error)))}>
                       Lock
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void unlockFile(agent.id, selected).then(scope.effect(() => toast.success('Unlocked'))).catch(scope.rethrowCurrent)}>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void unlockFile(agent.id, selected).then(scope.effect(() => toast.success('Unlocked'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to unlock this file.'), error)))}>
                       Unlock
                     </Button>
                   </>
@@ -248,7 +248,7 @@ export function AgentFilesPage() {
                         if (!scope.isCurrent()) return
                         setSelected(null)
                         void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
-                      }).catch(scope.rethrowCurrent)
+                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to delete this file.'), error)))
                     }}
                   >
                     Delete
@@ -260,6 +260,7 @@ export function AgentFilesPage() {
               <FileImagePreview key={`${agent.id}:${selected}`} agentId={agent.id} path={selected} />
             ) : null}
             <Textarea className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+            {revisions.isError ? <RequestErrorToast error={revisions.error} message="Unable to load file revisions. Try again." /> : null}
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">
                 <p className="text-xs font-medium">Revisions</p>
@@ -278,7 +279,7 @@ export function AgentFilesPage() {
                             toast.success('Restored')
                             void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
                             openFile.mutate(selected)
-                          }).catch(scope.rethrowCurrent)
+                          }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to restore this revision.'), error)))
                         }
                       >
                         Restore
