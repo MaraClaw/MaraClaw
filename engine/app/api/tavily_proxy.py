@@ -1,4 +1,4 @@
-"""Guest-facing Tavily proxy: rotate stored keys on quota errors, within request, response and time limits."""
+"""Guest-facing Tavily proxy: retry upstream failures before key failover, within request, response and time limits."""
 
 from __future__ import annotations
 
