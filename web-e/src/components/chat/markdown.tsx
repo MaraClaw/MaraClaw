@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { parseMarkdownTable, splitMarkdownBlocks } from './markdown-blocks'
 
 function escapeHtml(value: string): string {
   return value
@@ -18,9 +19,18 @@ function renderInline(text: string): string {
 const MarkdownBlock = memo(function MarkdownBlock({ block }: { readonly block: string }) {
   const trimmed = block.trim()
   if (trimmed.startsWith('```')) {
-    const body = trimmed.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '')
+    const body = block.replace(/^\s*`{3,}[^\n]*\n?/, '').replace(/`{3,}\s*$/, '')
     return <pre className="overflow-x-auto rounded-lg bg-background/80 p-2 text-xs" dangerouslySetInnerHTML={{ __html: `<code>${escapeHtml(body)}</code>` }} />
   }
+  const table = parseMarkdownTable(block)
+  if (table) return <div className="max-w-full overflow-x-auto rounded-lg border border-border [scrollbar-color:var(--muted-foreground)_transparent]" role="region" aria-label="Response table" tabIndex={0}>
+    <table className="w-full border-collapse text-sm tabular-nums">
+      <thead className="bg-muted/50"><tr>{table.header.map((cell, index) => <th key={index} scope="col" className="border-b border-border px-3 py-2 font-semibold" style={{ textAlign: table.alignments[index] }} dangerouslySetInnerHTML={{ __html: renderInline(cell) }} />)}</tr></thead>
+      <tbody>{table.rows.map((row, rowIndex) => <tr key={rowIndex} className="border-b border-border last:border-0">
+        {table.header.map((_, index) => <td key={index} className="px-3 py-2 align-top" style={{ textAlign: table.alignments[index] }} dangerouslySetInnerHTML={{ __html: renderInline(row[index] ?? '') }} />)}
+      </tr>)}</tbody>
+    </table>
+  </div>
   if (trimmed.startsWith('# ')) return <h3 className="font-semibold" dangerouslySetInnerHTML={{ __html: renderInline(trimmed.slice(2)) }} />
   if (trimmed.startsWith('## ')) return <h4 className="font-semibold" dangerouslySetInnerHTML={{ __html: renderInline(trimmed.slice(3)) }} />
   if (/^[-*] /.test(trimmed)) {
@@ -37,7 +47,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ block }: { readonly block: s
 export const ChatMarkdown = memo(function ChatMarkdown({ text }: { readonly text: string }) {
   let start = 0
   return <div className="space-y-2 [&_a]:text-inherit">
-    {text.split(/\n{2,}/).map((block) => {
+    {splitMarkdownBlocks(text).map((block) => {
       const key = start
       start += block.length + 1
       return <MarkdownBlock key={key} block={block} />
