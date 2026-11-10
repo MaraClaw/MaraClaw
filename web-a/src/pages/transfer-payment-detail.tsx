@@ -7,6 +7,7 @@ import { Link, useParams } from 'react-router-dom'
 import { z } from 'zod'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -68,7 +69,7 @@ function PaymentReview({ request, ready }: { readonly request: TransferSummary; 
       </CardContent>
     </Card>
     {decision.isSuccess ? <h2 ref={outcome} tabIndex={-1} aria-live="polite" className="rounded-xl border bg-card p-4 text-base font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">Payment review saved: {transferStatusLabels[decision.data.status]}.</h2> : null}
-    {decision.isError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{conflict ? 'This request changed before your decision was saved. The latest details are being refreshed. Check the current status before trying again.' : decision.error instanceof ApiError ? decision.error.message : 'Unable to save your payment decision. Check your connection and retry.'}</p> : null}
+    {decision.isError ? <ErrorToast error={decision.error} message={conflict ? 'This request changed before your decision was saved. The latest details are being refreshed. Check the current status before trying again.' : decision.error instanceof ApiError ? decision.error.message : 'Unable to save your payment decision. Check your connection and retry.'} /> : null}
     {isPendingTransferPayment(request) ? <Card>
       <CardHeader><h2 className="font-display text-lg font-semibold">Review payment</h2><p className="text-sm leading-relaxed text-muted-foreground">Check payment against the saved fee and instructions before approving. Approval only creates a destination admission request. Rejection does not move the member.</p></CardHeader>
       <CardContent><form noValidate className="flex flex-col gap-4" onSubmit={form.handleSubmit(({ reason }) => submit('approved', reason))}>
@@ -102,7 +103,7 @@ export function TransferPaymentDetailPage() {
     </header>
     {!parsedId.success ? <p role="alert" className="text-sm text-destructive">This transfer payment request link is invalid.</p> : <>
       {detail.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading transfer payment...</CardContent></Card> : null}
-      {detail.isError ? <Card><CardContent className="flex flex-col items-start gap-3"><p role="alert" className="text-sm">{detail.error instanceof ApiError ? detail.error.message : 'Unable to load this payment request. Check your connection and retry.'}</p><Button variant="outline" disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>Retry</Button></CardContent></Card> : null}
+      {detail.isError ? <Card><CardContent className="flex flex-col items-start gap-3"><ErrorToast error={detail.error} message={detail.error instanceof ApiError ? detail.error.message : 'Unable to load this payment request. Check your connection and retry.'} /><Button variant="outline" disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>Retry</Button></CardContent></Card> : null}
       {detail.data ? <PaymentReview key={detail.data.id} request={detail.data} ready={detail.isSuccess} /> : null}
     </>}
   </div>

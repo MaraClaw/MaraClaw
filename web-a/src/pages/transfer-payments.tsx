@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -48,7 +49,7 @@ export function TransferPaymentsPage() {
     </div>
     {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading transfer payments...</CardContent></Card> : null}
     {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
-      <p role="alert" className="text-sm">{reviews.error instanceof ApiError ? reviews.error.message : 'Unable to load transfer payments. Check your connection and retry.'}</p>
+      <ErrorToast error={reviews.error} message={reviews.error instanceof ApiError ? reviews.error.message : 'Unable to load transfer payments. Check your connection and retry.'} />
       <Button variant="outline" className={transferActionClass} disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>Retry</Button>
     </CardContent></Card> : null}
     {reviews.isSuccess && items.length === 0 ? <Card><CardContent className="flex flex-col gap-2 py-4">
