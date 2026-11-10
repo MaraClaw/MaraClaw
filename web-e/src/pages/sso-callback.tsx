@@ -4,12 +4,13 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { bindProvider, oauthCallback } from '@/lib/auth-api'
 import { consumeSsoTransaction, readSsoContinuation, SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
 import {
   isMultiTenantResponse,
   isTokenResponse,
@@ -103,7 +104,7 @@ export function SsoCallbackPage() {
         consumeSsoTransaction(transaction)
         continuation.current = null
         if (!isCurrent(expectedOwner)) return
-        setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'SSO sign-in failed.')
+        setError(userFacingRequestError(err, 'SSO sign-in failed.'))
       })
     return () => { cancelled = true }
   }, [applySession, navigate, provider, code, storedState, validationError, transaction, capture, isCurrent])
@@ -131,7 +132,7 @@ export function SsoCallbackPage() {
     } catch (err) {
       continuation.current = null
       if (!isCurrent(expectedOwner)) return
-      setError(err instanceof ApiError ? (formatApiDetail(err.detail) ?? err.message) : 'Unable to finish SSO.')
+      setError(userFacingRequestError(err, 'Unable to finish SSO.'))
     } finally {
       if (isCurrent(expectedOwner)) setSelecting(null)
     }
@@ -150,9 +151,10 @@ export function SsoCallbackPage() {
       brandBody="SSO returns you to the member workspace, not the admin console."
       highlights={memberAuthHighlights}
     >
-      {error ? (
+      {requestError ? <RequestErrorToast message={requestError} /> : null}
+      {validationError ? (
         <div role="alert" className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive">
-          {error}
+          {validationError}
         </div>
       ) : null}
 
