@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -108,7 +111,7 @@ export function AgentTasksPage() {
           <Button type="submit">Add</Button>
         </form>
         {history.isPending ? <p className="text-sm text-muted-foreground">Loading tasks...</p> : null}
-        {history.isError || doing.isError ? <p role="alert" className="text-sm text-muted-foreground">Unable to load tasks. <button type="button" className="underline" onClick={scope.effect(() => { if (history.isError) void history.refetch(); if (doing.isError) void doing.refetch() })}>Retry</button></p> : null}
+        {history.isError || doing.isError ? <div><RequestErrorToast error={history.error ?? doing.error} message="Unable to load tasks." /><button type="button" className="underline" onClick={scope.effect(() => { if (history.isError) void history.refetch(); if (doing.isError) void doing.refetch() })}>Retry tasks</button></div> : null}
         <ul className="space-y-2">
           {tasks.map((task) => (
             <li key={task.id} className="rounded-xl border border-border px-3 py-2">
@@ -124,7 +127,7 @@ export function AgentTasksPage() {
               {openTask === task.id ? (
                 <div className="mt-2 space-y-2 text-xs text-muted-foreground">
                   {logs.isPending ? <p>Loading logs...</p> : null}
-                  {logs.isError || tail.isError ? <p role="alert">Unable to load logs. <button type="button" className="underline" onClick={scope.effect(() => { if (logs.isError) void logs.refetch(); if (tail.isError) void refreshLogs() })}>Retry</button></p> : null}
+                  {logs.isError || tail.isError ? <div><RequestErrorToast error={logs.error ?? tail.error} message="Unable to load logs." /><button type="button" className="underline" onClick={scope.effect(() => { if (logs.isError) void logs.refetch(); if (tail.isError) void refreshLogs() })}>Retry logs</button></div> : null}
                   <ul className="space-y-1">{logItems.map((log) => <li key={log.id}>{log.content}</li>)}</ul>
                   {logs.isSuccess && logItems.length === 0 ? <p>No logs yet.</p> : null}
                   {hasMoreLogs || (logs.data?.pages.length ?? 0) > 1 ? <Button size="sm" variant="outline"
@@ -154,6 +157,7 @@ export function AgentTasksPage() {
 
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">Focus</h2>
+        {focus.isError ? <RequestErrorToast error={focus.error} message="Unable to load focus items. Try again." /> : null}
         <form
           className="flex gap-2"
           onSubmit={(event) => {
@@ -170,7 +174,7 @@ export function AgentTasksPage() {
               if (!scope.isCurrent()) return
               setFocusTitle('')
               void queryClient.invalidateQueries({ queryKey: ['focus', agent.id] })
-            }).catch(scope.rethrowCurrent)
+            }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to add this focus item.'), error)))
           }}
         >
           <Input value={focusTitle} onChange={scope.effect((event) => setFocusTitle(event.target.value))} placeholder="Focus item" />
@@ -190,7 +194,7 @@ export function AgentTasksPage() {
                   onClick={() =>
                     scope.isCurrent() && void completeFocus(agent.id, item.key).then(scope.effect(() =>
                       queryClient.invalidateQueries({ queryKey: ['focus', agent.id] }),
-                    )).catch(scope.rethrowCurrent)
+                    )).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to complete this focus item.'), error)))
                   }
                 >
                   Complete
@@ -201,6 +205,7 @@ export function AgentTasksPage() {
         </ul>
 
         <h2 className="pt-4 font-display text-lg font-semibold">Triggers</h2>
+        {triggers.isError ? <RequestErrorToast error={triggers.error} message="Unable to load triggers. Try again." /> : null}
         <ul className="space-y-2">
           {(triggers.data ?? []).map((trigger) => (
             <li key={`${agent.id}:${trigger.id}`} className="min-w-0 rounded-xl border border-border px-3 py-2 text-sm">
@@ -214,7 +219,7 @@ export function AgentTasksPage() {
                       onChange={(event) =>
                         scope.isCurrent() && void patchTrigger(agent.id, trigger.id, { is_enabled: event.target.checked }).then(scope.effect(() =>
                           queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
-                        )).catch(scope.rethrowCurrent)
+                        )).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to update this trigger.'), error)))
                       }
                     />
                     Enabled
@@ -225,7 +230,7 @@ export function AgentTasksPage() {
                     onClick={() =>
                       scope.isCurrent() && void deleteTrigger(agent.id, trigger.id).then(scope.effect(() =>
                         queryClient.invalidateQueries({ queryKey: ['triggers', agent.id] }),
-                      )).catch(scope.rethrowCurrent)
+                      )).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to delete this trigger.'), error)))
                     }
                   >
                     Delete
