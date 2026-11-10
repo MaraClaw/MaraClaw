@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -69,7 +70,7 @@ export function ToolCatalogImport({ inventory, pending, error, onDiscover, onImp
         </fieldset>
         <Button type="submit" className={toolButtonClass} disabled={pending || !confirmed || !chosen.length || !namesValid || !serverName.trim()}>{pending ? 'Importing…' : `Import ${chosen.length} selected tools`}</Button>
       </form> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {error ? <ErrorToast message={error} /> : null}
       <div className="flex flex-wrap gap-3">
         <Button type="button" variant="outline" className={toolButtonClass} disabled={pending} onClick={() => { clear(); onManual() }}>Create manually</Button>
         <Button type="button" variant="outline" className={toolButtonClass} disabled={pending} onClick={() => { clear(); onClose() }}>Cancel</Button>
