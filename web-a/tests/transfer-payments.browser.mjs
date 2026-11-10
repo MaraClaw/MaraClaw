@@ -3,7 +3,7 @@ import { bounded, detailPath, listPath } from './transfer-payment-fixture.browse
 
 await runPayments(async ({ scenario, capture, verify }) => {
   for (const view of matrix) {
-    await scenario({ ...view, name: `payment-${view.width}-${view.theme}`, role: view.width === 390 ? 'org_admin' : 'platform_admin' }, async ({ page, state, go, hold }) => {
+    await scenario({ ...view, name: `payment-${view.width}-${view.theme}`, role: 'platform_admin' }, async ({ page, state, go, hold }) => {
       await go(); await visible(page.locator('main a[href^="/transfer-payments/"]'))
       verify('pending queue excludes free requests', await page.locator('main ul li').count(), 1)
       verify('payment nav visible', await page.locator('nav a[href="/transfer-payments"]').count() > 0)
@@ -51,7 +51,7 @@ await runPayments(async ({ scenario, capture, verify }) => {
     })
   }
   for (const width of [390, 1440]) for (const theme of ['light', 'dark']) {
-    await scenario({ width, theme, name: `states-${width}-${theme}`, role: 'org_admin' }, async ({ page, state, go, hold }) => {
+    await scenario({ width, theme, name: `states-${width}-${theme}`, role: 'platform_admin' }, async ({ page, state, go, hold }) => {
       const list = hold((call) => call.path === listPath)
       await go(); await bounded(list.entered)
       await visible(page.locator('main [role="status"]').filter({ hasText: 'Loading transfer payments' }))
@@ -82,29 +82,33 @@ await runPayments(async ({ scenario, capture, verify }) => {
     })
   }
   for (const options of [
+    { name: 'default-genesis-denied', role: 'org_admin', defaultOrg: true, width: 390 },
     { name: 'other-genesis-denied', role: 'org_admin', defaultOrg: false },
     { name: 'additional-admin-denied', role: 'org_admin', genesis: false },
+    { name: 'inactive-platform-denied', role: 'platform_admin', active: false },
+    { name: 'inactive-platform-flag-denied', role: 'org_admin', platformFlag: true, active: false, width: 390 },
+    { name: 'anonymous-denied', anonymous: true },
     { name: 'password-fence', role: 'org_admin', forcePassword: true },
+    { name: 'platform-password-fence', role: 'platform_admin', forcePassword: true },
     { name: 'canonical-platform-flag', role: 'org_admin', platformFlag: true },
   ]) {
     await scenario(options, async ({ page, state, go }) => {
-      await go()
-      if (state.platformFlag) {
-        await visible(page.locator('main a[href^="/transfer-payments/"]'))
-        verify('canonical PA flag skips tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
-      } else {
-        await visible(page.locator('main h1').filter({ hasText: state.forcePassword ? /^Settings$/u : /^Overview$/u }))
-        verify('denied reviewer sends no transfer API requests', state.calls.filter((call) => call.path.startsWith('/api/company-admissions/transfers')).length, 0)
-        if (state.genesis === false || state.forcePassword) verify('additional admin or force-password sends no tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
+      for (const path of ['/transfer-payments', `/transfer-payments/${state.row.id}`]) {
+        await go(path)
+        if (state.platformFlag && state.user.is_active) {
+          await visible(page.locator(path === '/transfer-payments' ? 'main a[href^="/transfer-payments/"]' : 'main input[type="checkbox"]'))
+          verify('canonical PA flag retains payment navigation', await page.locator('nav a[href="/transfer-payments"]').count() > 0)
+        } else {
+          if (state.anonymous) await visible(page.locator('main input[type="email"]'))
+          else await visible(page.locator('main h1').filter({ hasText: state.forcePassword ? /^Settings$/u : /^Overview$/u }))
+          verify('denied direct route redirects', await page.evaluate(() => location.pathname), state.anonymous ? '/login' : state.forcePassword ? '/settings' : '/')
+          verify('denied reviewer has no payment navigation', await page.locator('nav a[href="/transfer-payments"]').count(), 0)
+          verify('denied reviewer sends no transfer API requests', state.calls.filter((call) => call.path.startsWith('/api/company-admissions/transfers')).length, 0)
+          if (state.user.role === 'org_admin' && state.user.is_genesis && !state.forcePassword && !state.platformFlag) verify('genesis admissions navigation remains available', await page.locator('nav a[href="/admission-approvals"]').count() > 0)
+        }
+        verify('payment eligibility needs no tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
+        await capture(page, state, path === '/transfer-payments' ? 'list-access' : 'detail-access')
       }
-      await capture(page, state, options.name)
     })
   }
-  await scenario({ name: 'tenant-access-error', role: 'org_admin', width: 390, theme: 'dark' }, async ({ page, state, go }) => {
-    state.tenantStatus = 503
-    await go(); await visible(button(page, 'Retry access check')); await capture(page, state, 'access-error')
-    verify('failed capability check sends no transfer reads', state.calls.filter((call) => call.path.startsWith('/api/company-admissions/transfers')).length, 0)
-    state.tenantStatus = 200
-    await page.snapshot(); await button(page, 'Retry access check').click(); await visible(page.locator('main a[href^="/transfer-payments/"]'))
-  })
 })

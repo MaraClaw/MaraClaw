@@ -3,27 +3,20 @@ import test from 'node:test'
 import { z } from 'zod'
 
 import { ApiError } from '../src/lib/http.ts'
-import { canInspectReviewTenant, canOpenTransferAdmission, canReviewTransferPayments, isPendingTransferPayment } from '../src/lib/transfer-review-access.ts'
-import { decideTransferPayment, fetchReviewTenant, fetchTransferDetail, fetchTransferReviews, transferSummarySchema } from '../src/lib/transfer-reviews-api.ts'
+import { canOpenTransferAdmission, canReviewTransferPayments, isPendingTransferPayment } from '../src/lib/transfer-review-access.ts'
+import { decideTransferPayment, fetchTransferDetail, fetchTransferReviews, transferSummarySchema } from '../src/lib/transfer-reviews-api.ts'
 import { adminUser } from './helpers.ts'
 import { admittedTransfer, pendingTransfer } from './transfer-review-fixtures.ts'
 
-test('only active platform admins or the matching active default-org genesis can review payments', () => {
+test('only active platform admins can review payments', () => {
   // Given
   const genesis = { ...adminUser(), is_genesis: true, tenant_id: pendingTransfer.source_tenant_id }
-  const tenant = { id: pendingTransfer.source_tenant_id, is_active: true, is_default_end_user_org: true }
   // When / Then
   assert.equal(canReviewTransferPayments({ ...genesis, role: 'platform_admin', is_genesis: false }), true)
   assert.equal(canReviewTransferPayments({ ...genesis, is_platform_admin: true }), true)
-  assert.equal(canReviewTransferPayments(genesis, tenant), true)
-  for (const user of [null, adminUser(), { ...genesis, is_genesis: false }, { ...genesis, role: 'member' }, { ...genesis, is_active: false }, { ...genesis, tenant_id: null }] as const) {
-    assert.equal(canReviewTransferPayments(user, tenant), false)
-    assert.equal(canInspectReviewTenant(user), false)
+  for (const user of [null, undefined, adminUser(), genesis, { ...genesis, is_genesis: false }, { ...genesis, role: 'member' }, { ...genesis, role: 'agent_admin' }, { ...genesis, tenant_id: null }, { ...genesis, role: 'platform_admin', is_active: false }, { ...genesis, is_platform_admin: true, is_active: false }] as const) {
+    assert.equal(canReviewTransferPayments(user), false)
   }
-  for (const record of [undefined, { ...tenant, is_default_end_user_org: false }, { ...tenant, is_active: false }, { ...tenant, id: pendingTransfer.target_tenant_id }]) {
-    assert.equal(canReviewTransferPayments(genesis, record), false)
-  }
-  assert.equal(canInspectReviewTenant({ ...genesis, is_platform_admin: true }), false)
 })
 
 test('destination admission links require own-target genesis rights and always exclude canonical platform admins', () => {
@@ -78,15 +71,14 @@ for (const invalid of [[], { items: [pendingTransfer] }, { items: [], next_curso
   })
 }
 
-test('detail and own tenant read use only the authorized transfer and tenant endpoints', async (t) => {
+test('detail reads only the authorized transfer endpoint', async (t) => {
   // Given
-  const tenant = { id: pendingTransfer.source_tenant_id, is_active: true, is_default_end_user_org: true }
-  const fetch = t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => Response.json(String(url) === '/api/tenants/me' ? tenant : pendingTransfer))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(pendingTransfer))
   // When
-  const results = await Promise.all([fetchTransferDetail(pendingTransfer.id), fetchReviewTenant()])
+  const result = await fetchTransferDetail(pendingTransfer.id)
   // Then
-  assert.deepEqual(results, [pendingTransfer, tenant])
-  assert.deepEqual(fetch.mock.calls.map((call) => call.arguments[0]), [`/api/company-admissions/transfers/${pendingTransfer.id}`, '/api/tenants/me'])
+  assert.deepEqual(result, pendingTransfer)
+  assert.deepEqual(fetch.mock.calls.map((call) => call.arguments[0]), [`/api/company-admissions/transfers/${pendingTransfer.id}`])
 })
 
 for (const invalid of [{ ...pendingTransfer, status: 'approved' }, { ...pendingTransfer, id: 'wrong' }, { ...pendingTransfer, fee_amount_minor: 1.5 }, { ...pendingTransfer, created_at: '2026-10-24T10:00:00' }, { ...pendingTransfer, admission_request_id: undefined }]) {

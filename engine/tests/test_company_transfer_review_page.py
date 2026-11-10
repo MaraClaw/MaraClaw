@@ -134,7 +134,7 @@ async def test_equal_created_at_rows_are_neither_repeated_nor_skipped(
 async def test_reviewer_check_runs_before_cursor_decoding(
     transfer_fixture: TransferFixture, app: FastAPI, client: AsyncClient, cursor_kind: str
 ) -> None:
-    # Given a session that is neither a platform admin nor the default-organization genesis admin.
+    # Given a session without platform-admin authority.
     app.dependency_overrides[get_current_user] = lambda: transfer_fixture.applicant
     cursor = {"valid": cursor_for(), "malformed": "%%%", "cross_view": cursor_for({"view": "recent"})}[cursor_kind]
 

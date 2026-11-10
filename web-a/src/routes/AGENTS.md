@@ -4,7 +4,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 
 ## OVERVIEW
 
-`AppRouter` is the path table. Guards wrap and read context; only `TransferReviewRoute` triggers a fetch, through `useTransferReviewAccess`.
+`AppRouter` is the path table. Guards wrap and read context; `TransferReviewRoute` uses `useTransferReviewAccess` without a tenant lookup.
 
 | Path | Gate | Screen |
 |------|------|--------|
@@ -19,7 +19,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/activity` | admin (PA + OA) | bounded recent administrator activity; platform filters vs own organization |
 | `/invitations` | `InvitationsRoute`: `canManageInvitations` (`org_admin`, not PA, has tenant) | invitations form + history |
 | `/agent-deletion-requests` `/agent-deletion-requests/:id` | `AgentDeletionReviewRoute`: `canReviewAgentDeletions` (active `org_admin`, not PA, has tenant) | deletion queue, detail + approval |
-| `/transfer-payments` `/transfer-payments/:id` | `TransferReviewRoute`: PA, or genesis OA of the default end-user org (tenant lookup) | payment queue, detail + decision |
+| `/transfer-payments` `/transfer-payments/:id` | `TransferReviewRoute`: active PA only | payment queue, detail + decision |
 | `/admission-approvals` `/admission-approvals/:id` | `AdmissionReviewRoute`: `canReviewAdmissions` (`org_admin` + `is_genesis`) | admission queue, detail + decision |
 | `/broadcast` | `BroadcastRoute`: `canSendBroadcast` (`org_admin`, not PA) | broadcast |
 | `/companies` `/companies/:companyId` | `PlatformAdminRoute` | companies, company detail + domains + deletion |
@@ -39,7 +39,7 @@ Analytics is `?tab=analytics` on `/search-engine`, not a route.
 | `index.tsx` | `AppRouter`, all pages lazy under one `Suspense`, plus the `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `AgentDeletionReviewRoute` guards. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine` and `/openclaw-updates`; their nav items use `platformAdminOnly`. |
-| `transfer-review.tsx` | `TransferReviewRoute`: waits on `useTransferReviewAccess().isPending`, shows a retry card on lookup error (stays locked), else `canReview ? Outlet : /`. |
+| `transfer-review.tsx` | `TransferReviewRoute`: `useTransferReviewAccess().canReview ? Outlet : /`. |
 
 Nav chrome: `../components/layout/admin-shell.tsx` (per-gate nav flags, force-pw locks links). Add the route here first, then the nav entry with the same predicate (see `../components/layout/AGENTS.md`).
 

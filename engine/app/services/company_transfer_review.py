@@ -18,7 +18,6 @@ from app.services.company_admissions import fresh_user
 from app.services.company_transfer_fence import fence_owned_agents
 from app.services.company_transfer_guards import require_default_source
 from app.services.notification_service import send_notification
-from app.services.org_membership import get_fallback_org
 from app.services.system_email_service import send_system_email
 
 
@@ -26,10 +25,7 @@ async def require_payment_reviewer(user_id: UUID) -> UserRecord:
     user = await fresh_user(user_id)
     if user.is_platform_admin:
         return user
-    fallback = await get_fallback_org()
-    if user.is_genesis and user.role == "org_admin" and user.tenant_id == fallback.id:
-        return user
-    raise HTTPException(403, "Payment review requires a platform admin or default-organization genesis admin")
+    raise HTTPException(403, "Payment review requires a platform admin")
 
 
 async def admission_created_email(email: str, admission_id: UUID) -> None:

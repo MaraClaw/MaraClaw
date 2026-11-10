@@ -33,6 +33,11 @@ class TransferStore:
     async def get_locked(self, request_id: UUID) -> CompanyTransferRecord | None:
         return await self.get(request_id)
 
+    async def list_requests(self, applicant_id: UUID | None, limit: int = 100) -> list[CompanyTransferRecord]:
+        rows = [row for row in self.rows.values() if applicant_id is None or row.applicant_user_id == applicant_id]
+        rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+        return rows[:limit]
+
     async def active_for(self, user_id: UUID) -> CompanyTransferRecord | None:
         return next(
             (
