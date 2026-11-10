@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
@@ -47,7 +48,7 @@ function ExecutionPages({ target }: { readonly target: TriggerExecutionTarget })
     {history.isRefetching && !history.isFetchingNextPage
       ? <p role="status" className="text-sm text-muted-foreground">Refreshing execution history…</p> : null}
     {history.isError && !history.isFetchNextPageError && !history.isFetching ? <div className="space-y-2">
-      <p role="alert" className="text-sm text-destructive">Unable to load execution history. Try again.</p>
+      <RequestErrorToast error={history.error} message="Unable to load execution history. Try again." />
       {!history.data ? <Button type="button" variant="outline" onClick={scope.effect(() => { void history.refetch() })}>
         Retry history
       </Button> : null}
@@ -61,7 +62,7 @@ function ExecutionPages({ target }: { readonly target: TriggerExecutionTarget })
       ? <p role="status" className="text-sm text-muted-foreground">Loading older executions…</p> : null}
     {history.hasNextPage ? <div className="space-y-2">
       {history.isFetchNextPageError && !history.isFetching
-        ? <p role="alert" className="text-sm text-destructive">Unable to load older executions. Try again.</p> : null}
+        ? <RequestErrorToast error={history.error} message="Unable to load older executions. Try again." /> : null}
       <Button type="button" variant="outline" disabled={history.isFetching}
         onClick={scope.effect(() => { if (!history.isFetching) void history.fetchNextPage() })}>
         {history.isFetchingNextPage ? 'Loading older executions…' : history.isFetchNextPageError ? 'Retry older executions' : 'Load older executions'}
