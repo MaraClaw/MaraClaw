@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import {
   createCredential,
   deleteCredential,
@@ -44,7 +45,7 @@ export function AgentCredentialsPage() {
 
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : fallback)
+    toast.error(userFacingRequestError(error, fallback))
   }
 
   const add = useMutation({
@@ -74,6 +75,7 @@ export function AgentCredentialsPage() {
   return (
     <div className="space-y-6 p-6">
       <section className="space-y-3">
+        {credentials.isError ? <RequestErrorToast error={credentials.error} message="Unable to load saved credentials. Try again." /> : null}
         <div>
           <h2 className="font-display text-lg font-semibold">Cookie vault</h2>
           <p className="text-sm text-muted-foreground">
@@ -99,7 +101,7 @@ export function AgentCredentialsPage() {
                       if (!scope.isCurrent()) return
                       toast.success('Removed')
                       void queryClient.invalidateQueries({ queryKey: ['credentials', agent.id] })
-                    }).catch(scope.rethrowCurrent)
+                    }).catch((error: unknown) => fail(error, 'Unable to delete this credential. Try again.'))
                   }
                 >
                   Delete
@@ -148,7 +150,7 @@ export function AgentCredentialsPage() {
                   if (!scope.isCurrent()) return
                   toast.success(event.target.checked ? 'gogcli enabled' : 'gogcli disabled')
                   void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
-                }).catch(scope.rethrowCurrent)
+                }).catch((error: unknown) => fail(error, 'Unable to update gogcli. Try again.'))
               }
             />
             Enabled
@@ -156,9 +158,9 @@ export function AgentCredentialsPage() {
         </div>
         {agent.gogcli_enabled ? (
           <>
-            <p className="text-sm">
+            {gogcli.isError ? <RequestErrorToast error={gogcli.error} message="Unable to check Google sign-in status. Try again." /> : <p className="text-sm">
               {gogcli.data?.authenticated ? `Signed in as ${gogcli.data.account_hint ?? 'account'}` : gogcli.data?.detail || 'Not signed in'}
-            </p>
+            </p>}
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
                 <Label htmlFor="kr">Keyring password</Label>
