@@ -2,6 +2,7 @@ import { skipToken, useQuery } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -106,7 +107,7 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
       </p>
       {preview.isError ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive wrap-anywhere">{preview.error instanceof ApiError ? preview.error.message : 'Could not load merge preview. Check your connection and try again.'}</p>
+          <ErrorToast error={preview.error} message={preview.error instanceof ApiError ? preview.error.message : 'Could not load merge preview. Check your connection and try again.'} />
           <Button type="button" variant="outline" className="h-11" onClick={() => { if (!isCurrent()) return; heading.current?.focus(); setConfirmedToken(null); setAttempt((value) => value + 1) }}>Retry preview</Button>
         </div>
       ) : null}
@@ -137,7 +138,7 @@ export function DepartmentMerge({ department, departments, tenantId, onCancel, o
           </label>
         </div>
       ) : null}
-      {merge.isError ? <p role="alert" className="text-sm text-destructive wrap-anywhere">{isMergePreviewChanged(merge.error) ? 'The merge preview changed. Review the refreshed preview and confirm again.' : merge.error instanceof ApiError ? merge.error.message : 'Could not merge departments. Check your connection and try again.'}</p> : null}
+      {merge.isError ? <ErrorToast error={merge.error} message={isMergePreviewChanged(merge.error) ? 'The merge preview changed. Review the refreshed preview and confirm again.' : merge.error instanceof ApiError ? merge.error.message : 'Could not merge departments. Check your connection and try again.'} /> : null}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="ghost" className="h-11" disabled={merge.isPending} onClick={onCancel}>Cancel</Button>
         <Button type="button" variant="destructive" className="h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100" disabled={merge.isPending || !ready || !confirmed} onClick={apply}>Merge departments</Button>
