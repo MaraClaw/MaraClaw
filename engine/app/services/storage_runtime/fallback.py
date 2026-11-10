@@ -14,6 +14,7 @@ from app.services.storage_runtime.base import (
     StorageEntry,
     StoragePage,
     StorageReadLimitExceededError,
+    StorageSnapshot,
     StorageVersion,
     WriteCondition,
     walk_order,
@@ -95,6 +96,27 @@ class FallbackStorageBackend(StorageBackend):
             await self.primary.create_bytes_if_absent(key, data)
             try:
                 return await self.primary.read_bytes_bounded(key, max_bytes)
+            except FileNotFoundError:
+                pass
+        raise StorageConditionalRaceError(key, 3)
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        try:
+            return await self.primary.read_snapshot_bounded(key, max_bytes)
+        except FileNotFoundError:
+            pass
+        try:
+            legacy = await self.fallback.read_snapshot_bounded(key, max_bytes)
+        except (FileNotFoundError, StorageReadLimitExceededError) as legacy_error:
+            try:
+                return await self.primary.read_snapshot_bounded(key, max_bytes)
+            except FileNotFoundError:
+                raise legacy_error from None
+        for _attempt in range(3):
+            _ = await self.primary.create_bytes_if_absent(key, legacy.data)
+            try:
+                return await self.primary.read_snapshot_bounded(key, max_bytes)
             except FileNotFoundError:
                 pass
         raise StorageConditionalRaceError(key, 3)
