@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { OpenClawUpdateCard } from '@/components/openclaw-update-card'
 import { Button } from '@/components/ui/button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
@@ -14,7 +15,7 @@ export function AgentUpdateGate({ agentId, query }: {
     <div className="mx-auto max-w-xl space-y-4 p-6">
       <h1 className="font-display text-xl font-semibold">Agent work is paused</h1>
       {query.isError ? <div className="space-y-3">
-        <p role="alert" className="text-sm text-destructive">Unable to confirm OpenClaw upgrade status. Check your connection and retry before continuing work.</p>
+        <RequestErrorToast error={query.error} message="Unable to confirm OpenClaw upgrade status. Check your connection and retry before continuing work." />
         <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry status check</Button>
       </div> : null}
       {query.data ? <OpenClawUpdateCard update={query.data} submitting={query.submitting}>
