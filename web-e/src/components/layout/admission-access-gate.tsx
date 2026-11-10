@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { OnboardingGate } from '@/components/layout/onboarding-gate'
 import { Button } from '@/components/ui/button'
 import { useAdmissionAccess } from '@/hooks/use-admission-access'
@@ -17,7 +18,7 @@ export function AdmissionAccessGate() {
   }
   if (query.isError) {
     return <div className="space-y-3 p-6">
-      <p role="alert" className="text-sm text-destructive">Unable to confirm organization access. Retry to continue to the workspace.</p>
+      <RequestErrorToast error={query.error} message="Unable to confirm organization access. Retry to continue to the workspace." />
       <Button variant="outline" disabled={query.isFetching} onClick={scope.effect(() => { void query.refetch() })}>Retry access check</Button>
     </div>
   }
