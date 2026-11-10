@@ -6,6 +6,8 @@ import { useAuth } from '@/hooks/use-auth'
 import { authorizeProvider, listAuthProviders } from '@/lib/auth-api'
 import { storeSsoTransaction } from '@/lib/sso-storage'
 import type { AuthProvider } from '@/lib/types/auth'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 
 export function SsoButtons() {
   const location = useLocation()
@@ -19,8 +21,11 @@ export function SsoButtons() {
       .then((rows) => {
         if (!cancelled && isCurrent(expectedOwner)) setProviders(rows.filter((row) => row.is_active))
       })
-      .catch(() => {
-        if (!cancelled && isCurrent(expectedOwner)) setProviders([])
+      .catch((error: unknown) => {
+        if (!cancelled && isCurrent(expectedOwner)) {
+          setProviders([])
+          showRequestError(userFacingRequestError(error, 'Unable to load sign-in providers. Try again.'), error)
+        }
       })
     return () => { cancelled = true }
   }, [owner, isCurrent])
@@ -39,6 +44,7 @@ export function SsoButtons() {
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
       if (!(error instanceof Error)) throw error
+      showRequestError(userFacingRequestError(error, 'Unable to start SSO sign-in. Try again.'), error)
     }
   }
 
