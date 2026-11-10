@@ -444,8 +444,8 @@ def bounded_proxy(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     [
         ("ceiling", 502, "response_ceiling", 12, 1),
         ("deadline", 504, "deadline_exceeded", 4, 1),
-        ("rotation", 504, "deadline_exceeded", 0, 1),
-        ("upstream", 500, "upstream_error", 4, 2),
+        ("rotation", 504, "deadline_exceeded", 0, 4),
+        ("upstream", 500, "upstream_error", 4, 8),
     ],
 )
 async def test_bounded_post_records_one_event_at_http_boundary(
@@ -461,14 +461,14 @@ async def test_bounded_post_records_one_event_at_http_boundary(
     from app.services.tavily.keys import add_key
 
     first = await add_key(label="a", api_key="key-a")
-    _ = await add_key(label="b", api_key="key-b")
-    responses = [FakeResponse(500, "boom"), FakeResponse(500, "boom")]
+    second = await add_key(label="b", api_key="key-b")
+    responses = [FakeResponse(500, "boom") for _ in range(8)]
     if failure == "ceiling":
         responses = [FakeResponse(200, chunks=[b"123456", b"789012", b"not read"])]
     if failure == "deadline":
         responses = [FakeResponse(500, "boom", on_send=lambda: bounded_proxy.clock.advance(31))]
     if failure == "rotation":
-        responses = [FakeResponse(432, "quota")]
+        responses = [FakeResponse(432, "quota") for _ in range(4)]
         advance = client_mod.advance_cursor
 
         async def expire_during_rotation(key_id: UUID):
@@ -490,10 +490,52 @@ async def test_bounded_post_records_one_event_at_http_boundary(
     assert len(bounded_proxy.events.rows) == 1
     row = bounded_proxy.events.rows[0]
     assert (row.http_status, row.error_class, row.response_bytes) == (status, error_class, response_bytes)
-    assert row.key_id == first.id
+    assert row.key_id == (second.id if failure == "upstream" else first.id)
     assert row.agent_id == bounded_proxy.agent
     assert row.tenant_id == bounded_proxy.tenant
     assert len(row.error_class) <= 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize(
+    ("failure_status", "error_class"), [(401, None), (432, "quota_rotated"), (433, "quota_rotated")]
+)
+async def test_failover_records_one_success_with_quota_specific_attribution(
+    bounded_proxy: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    failure_status: int,
+    error_class: str | None,
+) -> None:
+    from app.services.tavily.client import proxy_tavily
+    from app.services.tavily.keys import add_key
+
+    await add_key(label="a", api_key="key-a")
+    await add_key(label="b", api_key="key-b")
+    third = await add_key(label="c", api_key="key-c")
+    calls = use_upstream(
+        monkeypatch,
+        [
+            *[FakeResponse(failure_status, "failed") for _ in range(4)],
+            *[FakeResponse(500, "boom") for _ in range(4)],
+            FakeResponse(200, "{}"),
+        ],
+    )
+
+    result = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}", agent_id=bounded_proxy.agent)
+
+    assert result[0] == 200
+    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"] * 4 + ["Bearer key-b"] * 4 + ["Bearer key-c"]
+    assert len(bounded_proxy.events.rows) == 1
+    row = bounded_proxy.events.rows[0]
+    assert (row.key_id, row.kind, row.http_status, row.status_class, row.error_class) == (
+        third.id,
+        path,
+        200,
+        "ok",
+        error_class,
+    )
 
 
 @pytest.mark.asyncio

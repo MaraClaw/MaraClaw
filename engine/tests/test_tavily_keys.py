@@ -11,7 +11,7 @@ import pytest
 
 from app.core.security import encrypt_data
 from app.records.tavily_api_key import TavilyApiKeyRecord
-from app.services.tavily.errors import is_quota_error, is_transient_error
+from app.services.tavily.errors import is_quota_error
 from app.services.tavily.keys import (
     DuplicateTavilyKeyError,
     TavilyKeyNotFoundError,
@@ -179,13 +179,13 @@ async def test_public_view_hides_ciphertext(key_dao: MemoryKeyDao) -> None:
     assert encrypt_data("super-secret-key", "test-secret") not in str(view)
 
 
-def test_quota_classifier_distinguishes_quota_from_transient() -> None:
+def test_quota_classifier_distinguishes_quota_from_other_failures() -> None:
     assert is_quota_error(432) is True
     assert is_quota_error(433) is True
     assert is_quota_error(429) is False
     assert is_quota_error(434) is False
-    assert is_transient_error(503) is True
-    assert is_transient_error(429) is False
+    assert is_quota_error(401) is False
+    assert is_quota_error(503) is False
 
 
 @pytest.mark.parametrize(("enabled", "has_key"), [(True, True), (True, False), (False, True)])
