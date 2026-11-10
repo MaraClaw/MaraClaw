@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import { cancelScheduleRun, getScheduleRun, type ScheduleRunReceipt as RunReceipt, type ScheduleRunTarget } from '@/lib/schedules-api'
+import { showRequestError } from '@/lib/request-error-toast'
 
 const statusLabels: Readonly<Record<RunReceipt['status'], string>> = {
   pending: 'Pending', running: 'Running', success: 'Success', failure: 'Failure', cancelled: 'Cancelled', unknown: 'Unknown',
@@ -74,7 +76,7 @@ export function ScheduleRunReceipt({ agentId, scheduleId, runId }: ScheduleRunTa
         return
       }
       if (isUnavailable(error)) setAccessLost(true)
-      setMessage(userFacingRequestError(error, 'Cancellation could not be confirmed. Check the run status before trying again.'))
+      showRequestError(userFacingRequestError(error, 'Cancellation could not be confirmed. Check the run status before trying again.'), error)
     },
     onSettled: (_result, _error, signal) => { if (!signal.aborted) setCancelling(false) },
   })
@@ -93,7 +95,7 @@ export function ScheduleRunReceipt({ agentId, scheduleId, runId }: ScheduleRunTa
         </> : <span className="text-muted-foreground">{receipt.isError || accessLost ? 'Run status unavailable.' : 'Loading run status…'}</span>}
       </div>
       <p className="break-all text-xs text-muted-foreground">Run <code>{runId}</code></p>
-      {receipt.isError ? <p role="status" className="text-sm text-destructive">{userFacingRequestError(receipt.error, 'Unable to load run status. Try again.')}</p> : null}
+      {receipt.isError ? <RequestErrorToast error={receipt.error} message={userFacingRequestError(receipt.error, 'Unable to load run status. Try again.')} /> : null}
       {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
       {receipt.data?.can_cancel && !accessLost && !isUnavailable(receipt.error) ? <Button size="sm" variant="outline" disabled={cancel.isPending}
         onClick={requestCancel}>

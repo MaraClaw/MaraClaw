@@ -1,6 +1,7 @@
 import { useInfiniteQuery, type QueryFunctionContext } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -59,8 +60,8 @@ function HistoryPages({ agentId, scheduleId, outcome }: {
     <>
       {history.isPending || (history.isFetching && !history.data) ? <p role="status" className="text-sm text-muted-foreground">Loading run history...</p> : null}
       {history.isError && !history.isFetching ? <div className="space-y-2">
-        <p role="status" className="text-sm text-destructive">{userFacingRequestError(history.error,
-          history.isFetchNextPageError ? 'Unable to load older runs. Try again.' : 'Unable to load run history. Try again.')}</p>
+        <RequestErrorToast error={history.error} message={userFacingRequestError(history.error,
+          history.isFetchNextPageError ? 'Unable to load older runs. Try again.' : 'Unable to load run history. Try again.')} />
         {!history.data ? <Button variant="outline" disabled={history.isFetching}
           onClick={scope.effect(() => { void history.refetch() })}>Retry history</Button> : null}
       </div> : null}

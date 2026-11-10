@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { TimezoneSelect } from '@/components/timezone-select'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,7 @@ import { describeScheduleRecurrence, recognizeScheduleRecurrence } from '@/lib/s
 import { formatScheduleNextRun, scheduleTimezoneError } from '@/lib/schedule-time'
 import { timezoneLabel } from '@/lib/timezone-catalog'
 import { useAuth } from '@/hooks/use-auth'
+import { showRequestError } from '@/lib/request-error-toast'
 
 export function AgentSchedulesPage() {
   const { agent } = useOutletContext<{ agent: AgentOut }>()
@@ -83,9 +85,10 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
       if (!mounted.current) return
       const definite = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408
       if (definite) runIntents.current.delete(id)
-      setRunMessages((messages) => ({ ...messages, [id]: definite
-        ? userFacingRequestError(error, 'Unable to run schedule. Try again.')
-        : 'Acceptance could not be confirmed. Retry Run to check the same request without starting another run.' }))
+      showRequestError(definite
+         ? userFacingRequestError(error, 'Unable to run schedule. Try again.')
+         : 'Acceptance could not be confirmed. Retry Run to check the same request without starting another run.', error)
+      setRunMessages((messages) => ({ ...messages, [id]: definite ? '' : 'Retry Run to check the same request without starting another run.' }))
     },
   })
   const remove = useMutation({
@@ -172,7 +175,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
               })}>Cancel edit</Button> : null}
             </div>
           </fieldset>
-          {saveError ? <p role="status" className="mt-2 text-sm text-destructive">{saveError}</p> : null}
+          {saveError ? <RequestErrorToast message={saveError} /> : null}
         </form>
       ) : (
         <p className="text-sm text-muted-foreground">Only the agent creator can add or run schedules.</p>
@@ -184,7 +187,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
         {schedules.fetchStatus === 'paused' ? 'Waiting for connection to load schedules.' : schedules.isPending ? 'Loading schedules...' : ''}
       </p>
       {schedules.isError ? <div className="space-y-2">
-        <p role="status" className="text-sm text-destructive">{userFacingRequestError(schedules.error, 'Unable to load schedules. Try again.')}</p>
+        <RequestErrorToast error={schedules.error} message={userFacingRequestError(schedules.error, 'Unable to load schedules. Try again.')} />
         <Button variant="outline" disabled={schedules.isFetching} onClick={scope.effect(() => { void schedules.refetch() })}>Retry</Button>
       </div> : null}
       {schedules.data?.length === 0 ? <p className="text-sm text-muted-foreground">No schedules yet.</p> : null}
