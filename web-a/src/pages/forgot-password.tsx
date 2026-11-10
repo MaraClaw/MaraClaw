@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/layout/auth-shell'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -29,7 +30,6 @@ export function ForgotPasswordPage() {
   const isCurrent = useSessionCurrent()
   const emailId = `${formId}-email`
   const emailErrorId = `${formId}-email-error`
-  const formErrorId = `${formId}-form-error`
   const [formError, setFormError] = useState<string | null>(null)
   const [sent, setSent] = useState(false)
 
@@ -112,20 +112,13 @@ export function ForgotPasswordPage() {
       }
     >
       {formError ? (
-        <div
-          id={formErrorId}
-          role="alert"
-          className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
-        >
-          {formError}
-        </div>
+        <ErrorToast message={formError} />
       ) : null}
 
       <form
         className="space-y-4"
         onSubmit={handleSubmit(onSubmit)}
         noValidate
-        aria-describedby={formError ? formErrorId : undefined}
       >
         <div className="space-y-2">
           <Label htmlFor={emailId}>Email</Label>
