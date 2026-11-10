@@ -1,10 +1,11 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useId } from 'react'
+import { useId } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -47,7 +48,6 @@ export function TenantUsers({
     register,
     handleSubmit,
     reset,
-    setError,
     setFocus,
     clearErrors,
     formState: { errors },
@@ -58,11 +58,6 @@ export function TenantUsers({
   const assignments = groupDepartmentAssignments(departments.data?.assignments ?? [])
   const savingAssignment = assign.isPending ? assign.variables : undefined
 
-  useEffect(() => {
-    if (!create.isPending && errors.name?.type === 'server') {
-      setFocus('name')
-    }
-  }, [create.isPending, errors.name?.type, setFocus])
 
   function onCreate(values: FormValues) {
     clearErrors()
@@ -78,7 +73,6 @@ export function TenantUsers({
         const message = duplicate
           ? 'A department with this name already exists. Use a different name.'
           : error instanceof ApiError ? error.message : 'Could not create department. Check your connection and try again.'
-        setError(duplicate ? 'name' : 'root.server', { type: 'server', message })
         toast.error(message)
       },
     })
@@ -99,7 +93,6 @@ export function TenantUsers({
             onSubmit={handleSubmit(onCreate)}
             noValidate
             aria-busy={create.isPending}
-            aria-describedby={errors.root?.server ? `${formId}-error` : undefined}
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="grid min-w-0 flex-1 gap-1.5">
@@ -132,11 +125,6 @@ export function TenantUsers({
                 className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
                 {...register('description')} />
             </div>
-            {errors.root?.server ? (
-              <p id={`${formId}-error`} role="alert" className="text-sm text-destructive">
-                {errors.root.server.message}
-              </p>
-            ) : null}
             <p role="status" className={create.isPending ? 'text-xs text-muted-foreground' : 'sr-only'}>
               {create.isPending ? 'Creating department…' : ''}
             </p>
@@ -144,9 +132,7 @@ export function TenantUsers({
           {departments.isLoading ? <p className="text-sm text-muted-foreground" role="status">Loading departments…</p> : null}
           {departments.error ? (
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm text-destructive" role="alert">
-                {departments.error instanceof ApiError ? departments.error.message : 'Failed to load departments'}
-              </p>
+              <ErrorToast error={departments.error} message={departments.error instanceof ApiError ? departments.error.message : 'Failed to load departments'} />
               <Button
                 type="button"
                 variant="ghost"
