@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form'
 import { Link, Navigate } from 'react-router-dom'
 import { z } from 'zod'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { AuthShell } from '@/components/auth/auth-shell'
 import { AdmissionPending } from '@/components/auth/admission-pending'
 import { InvitationCode } from '@/components/auth/invitation-code'
@@ -58,7 +59,7 @@ function TransferForm({ initialCode }: { readonly initialCode: string }) {
     description="Validate your invitation, then confirm your password and transfer choices. Free transfers join immediately; paid transfers join after payment approval."
     brandTitle="Change where you work" brandBody="Keep the same MaraClaw account and join the company that invited you." highlights={highlights}>
     {!flow.quote && !flow.quoteError ? <p role="status" className="mb-4 text-sm text-muted-foreground">Loading transfer options…</p> : null}
-    {flow.quoteError ? <div role="alert" className="mb-4 space-y-2 text-sm text-destructive"><p>{flow.quoteError}</p><Button variant="outline" onClick={flow.reload}>Retry transfer options</Button></div> : null}
+    {flow.quoteError ? <div className="mb-4 space-y-2"><RequestErrorToast message={flow.quoteError} /><Button variant="outline" onClick={flow.reload}>Retry transfer options</Button></div> : null}
     {flow.quote && !flow.quote.source_eligible ? <p role="alert" className="mb-4 text-sm text-destructive">Only default-organization members can transfer to a company. Transfers from one company to another are not supported.</p> : null}
     {flow.admission?.status === 'pending' ? <AdmissionPending request={flow.admission} /> : null}
     {flow.admission?.status === 'approved' ? <div role="status" className="mb-4 space-y-2 text-sm"><p>Organization joined. {flow.busy ? 'Opening workspace…' : 'Open your joined workspace to continue.'}</p><Button disabled={flow.busy} onClick={() => void flow.open()}>Open joined workspace</Button></div> : null}
@@ -68,7 +69,7 @@ function TransferForm({ initialCode }: { readonly initialCode: string }) {
       <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{flow.payment.instructions}</p>
       <Link className="inline-flex min-h-11 items-center font-medium text-primary hover:underline" to={`/app/admissions/transfers/${encodeURIComponent(flow.payment.id)}`}>View transfer request</Link>
     </div> : null}
-    {flow.error && !flow.selection ? <p role="alert" className="mb-4 text-sm text-destructive">{flow.error}</p> : null}
+    {flow.error && !flow.selection ? <RequestErrorToast message={flow.error} /> : null}
     <InvitationCode invitation={invitation} disabled={disabled} />
     {invitation.preview && !flow.admission && !flow.payment ? <form className="space-y-4" aria-labelledby={`${formId}-heading`} onSubmit={handleSubmit((values) => {
       if (invitation.preview) flow.submit({ password: values.password, invitation_code: invitation.code.trim() })
