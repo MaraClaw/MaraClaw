@@ -15,7 +15,8 @@ import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { authorizeProvider, changePasswordRequest, fetchMyTenants, listAuthProviders, switchTenant, unbindProvider, updateCurrentUser } from '@/lib/auth-api'
 import { storeSsoTransaction } from '@/lib/sso-storage'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import type { AuthProvider } from '@/lib/types/auth'
 import { SettingsTimezoneCard } from './settings-timezone-card'
 
@@ -45,8 +46,6 @@ export function SettingsPage() {
   const { user, owner, isCurrent, mustChangePassword, refreshUser, refreshReplacement, logout } = useAuth()
   const [mountedOwner] = useState(() => owner)
   const formId = useId()
-  const [passwordError, setPasswordError] = useState<string | null>(null)
-  const [profileError, setProfileError] = useState<string | null>(null)
   const [providers, setProviders] = useState<AuthProvider[]>([])
   const tenants = useQuery({ queryKey: ['my-tenants'], queryFn: () => fetchMyTenants(owner) })
 
@@ -57,8 +56,11 @@ export function SettingsPage() {
       .then((rows) => {
         if (!cancelled && isCurrent(expectedOwner)) setProviders(rows.filter((row) => row.is_active))
       })
-      .catch(() => {
-        if (!cancelled && isCurrent(expectedOwner)) setProviders([])
+      .catch((error: unknown) => {
+        if (!cancelled && isCurrent(expectedOwner)) {
+          setProviders([])
+          toast.error(userFacingRequestError(error, 'Unable to load sign-in providers. Try again.'))
+        }
       })
     return () => { cancelled = true }
   }, [mountedOwner, isCurrent])
@@ -75,7 +77,6 @@ export function SettingsPage() {
   async function onPassword(values: PasswordValues) {
     const expectedOwner = mountedOwner
     if (!isCurrent(expectedOwner)) return
-    setPasswordError(null)
     try {
       const result = await changePasswordRequest({
         old_password: values.old_password,
@@ -89,14 +90,13 @@ export function SettingsPage() {
       toast.success(mustChangePassword ? 'Password updated. You can use the workspace now.' : 'Password updated')
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setPasswordError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to update password.')
+      toast.error(userFacingRequestError(error, 'Unable to update password.'))
     }
   }
 
   async function onProfile(values: ProfileValues) {
     const expectedOwner = mountedOwner
     if (!isCurrent(expectedOwner)) return
-    setProfileError(null)
     try {
       await updateCurrentUser({
         display_name: values.display_name,
@@ -105,7 +105,7 @@ export function SettingsPage() {
       toast.success('Profile updated')
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setProfileError(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to update profile.')
+      toast.error(userFacingRequestError(error, 'Unable to update profile.'))
     }
   }
 
@@ -144,7 +144,6 @@ export function SettingsPage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={profileForm.handleSubmit(onProfile)}>
-            {profileError ? <p className="text-sm text-destructive">{profileError}</p> : null}
             <div className="space-y-2">
               <Label htmlFor={`${formId}-name`}>Display name</Label>
               <Input id={`${formId}-name`} {...profileForm.register('display_name')} />
@@ -165,7 +164,6 @@ export function SettingsPage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={passwordForm.handleSubmit(onPassword)}>
-            {passwordError ? <p className="text-sm text-destructive">{passwordError}</p> : null}
             <PasswordField label="Current password" autoComplete="current-password" error={passwordForm.formState.errors.old_password?.message} {...passwordForm.register('old_password')} />
             <PasswordField label="New password" autoComplete="new-password" error={passwordForm.formState.errors.new_password?.message} {...passwordForm.register('new_password')} />
             <PasswordField label="Confirm new password" autoComplete="new-password" error={passwordForm.formState.errors.confirm_password?.message} {...passwordForm.register('confirm_password')} />
@@ -233,6 +231,7 @@ export function SettingsPage() {
           <CardDescription>Legacy multi-membership only. Most members belong to one company.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {tenants.isError ? <RequestErrorToast error={tenants.error} message={userFacingRequestError(tenants.error, 'Unable to load organizations. Try again.')} /> : null}
           {(tenants.data ?? []).map((tenant) => (
             <div key={tenant.tenant_id ?? tenant.tenant_slug} className="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2">
               <div>
