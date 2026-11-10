@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { listCredentials, type CredentialCapture } from '@/lib/control-api'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 export function ControlCaptureFields({ agentId, canManage, capture, onCapture, domain, onDomain, busy }: {
   readonly agentId: string
   readonly canManage: boolean
@@ -63,7 +64,7 @@ export function ControlCaptureFields({ agentId, canManage, capture, onCapture, d
       </p>
       {canManage && credentials.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading saved credentials…</p> : null}
       {canManage && credentials.isError ? (
-        <p role="alert" className="text-sm text-destructive">Saved credentials could not be loaded. Create a new credential or release without saving.</p>
+        <RequestErrorToast error={credentials.error} message="Saved credentials could not be loaded. Create a new credential or release without saving." />
       ) : null}
     </div>
   )

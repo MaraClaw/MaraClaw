@@ -3,6 +3,7 @@ import { useRef, useState, type MouseEvent } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -116,13 +117,15 @@ export function AgentControlPage() {
 
   return (
     <div className="space-y-4 p-6">
+      {sessions.isError ? <RequestErrorToast error={sessions.error} message="Unable to load control sessions. Try again." /> : null}
+      {sharedSession.isError ? <RequestErrorToast error={sharedSession.error} message="Unable to open the shared control session. Try again." /> : null}
       <div>
         <h2 className="font-display text-lg font-semibold">Take Control</h2>
         <p className="text-sm text-muted-foreground">
           Drive the live AgentBay browser or desktop. The agent waits while you are locked in.
         </p>
       </div>
-      {captureError ? <p role="alert" className="text-sm text-destructive">{captureError}</p> : null}
+      {captureError ? <RequestErrorToast message={captureError} /> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs">
           <span className="text-muted-foreground">Chat session</span>
