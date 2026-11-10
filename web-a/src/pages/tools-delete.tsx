@@ -1,5 +1,6 @@
 import { useId } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { deleteTool } from '@/lib/tools-api'
@@ -22,7 +23,7 @@ export function ToolDeleteConfirmation({ tool, onClose, onDeleted }: {
       <CardDescription>{toolRecordImpact(tool)} Deleting it permanently removes the record and its agent tool assignments. This cannot be undone.</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
-      {mutation.errorMessage ? <p role="alert" className="text-sm text-destructive">{mutation.errorMessage}</p> : null}
+      {mutation.errorMessage ? <ErrorToast error={mutation.error} message={mutation.errorMessage} /> : null}
       <div className="flex flex-wrap gap-3">
         <Button variant="destructive" className={toolButtonClass} disabled={mutation.isPending} onClick={() => mutation.submit(undefined)}>{mutation.isPending ? 'Deleting…' : 'Delete tool permanently'}</Button>
         <Button variant="outline" className={toolButtonClass} disabled={mutation.isPending} onClick={onClose}>Cancel</Button>

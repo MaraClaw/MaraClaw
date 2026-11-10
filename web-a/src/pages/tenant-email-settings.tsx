@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useId } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
@@ -32,7 +33,8 @@ function ScopedEmailSettings({ tenantId, recipient }: { readonly tenantId: strin
   return <>
     <p className="text-sm text-muted-foreground">Your organization: {own.data?.name ?? (own.isError ? 'name unavailable' : 'loading…')}. These settings apply only to your organization.</p>
     {config.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading SMTP settings…</p> : null}
-    {config.isError ? <div className="space-y-3"><p role="alert" className="text-sm text-destructive">Could not load SMTP settings. Check the connection and try again.</p><Button type="button" variant="outline" onClick={() => { void config.refetch() }}>Retry loading SMTP settings</Button></div> : null}
+            {config.isError ? <div className="space-y-3"><ErrorToast error={config.error} message="Could not load SMTP settings. Check the connection and try again." /><Button type="button" variant="outline" onClick={() => { void config.refetch() }}>Retry loading SMTP settings</Button></div> : null}
+            {own.isError ? <ErrorToast error={own.error} message="Could not load your organization name." /> : null}
     {config.data ? <>
       <p className="text-sm text-muted-foreground">{tenantEmailSource(config.data.effective_source)}</p>
       <TenantEmailEditor tenantId={tenantId} saved={config.data} recipient={recipient} />

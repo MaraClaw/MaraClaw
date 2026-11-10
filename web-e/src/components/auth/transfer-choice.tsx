@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useRef, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { formatMoney } from '@/lib/format-money'
 import type { TransferQuote, TransferSelection } from '@/lib/types/company-transfers'
@@ -60,7 +61,7 @@ export function TransferChoice({ quote, busy, error, onCancel, onConfirm }: {
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{quote.instructions || 'No payment instructions provided. Contact support before paying.'}</p>
             <p className="text-muted-foreground">Payment approval joins the destination automatically. The submitted request saves the server’s fee and instructions; check its status before paying.</p>
           </div> : null}
-          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          {error ? <RequestErrorToast message={error} /> : null}
           <div className="flex flex-wrap justify-end gap-2">
             <Button ref={cancel} variant="outline" className="min-h-11" disabled={busy} onClick={onCancel}>Cancel</Button>
             <Button variant={choice === 'free' ? 'secondary' : 'default'} className={`h-auto min-h-11 whitespace-normal ${choice === 'free' ? 'bg-destructive/12 text-destructive hover:bg-destructive/20' : ''}`} disabled={busy || choice === null || (choice === 'free' && !consent)}

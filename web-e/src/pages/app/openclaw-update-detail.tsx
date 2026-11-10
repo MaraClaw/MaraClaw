@@ -1,6 +1,7 @@
 import { ArrowLeft } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { OpenClawUpdateCard } from '@/components/openclaw-update-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,7 +27,7 @@ export function OpenClawUpdateDetailPage() {
       <Button asChild variant="outline"><Link to="/app/notifications"><ArrowLeft aria-hidden="true" className="size-4" />Back to Inbox</Link></Button>
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading update notice…</p> : null}
       {query.isError ? <div className="space-y-3">
-        <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load this update notice. Check your connection and try again.')}</p>
+        <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load this update notice. Check your connection and try again.')} />
         <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</Button>
       </div> : null}
       {query.data ? <Card className="gap-6 px-6">

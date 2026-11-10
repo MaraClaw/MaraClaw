@@ -5,6 +5,7 @@ import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { userFacingRequestError } from '@/lib/http'
 import { listOrgDepartments } from '@/lib/org-departments-api'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 export function OrgDepartments() {
   const scope = useWorkspaceSession()
   const { user } = useAuth()
@@ -21,9 +22,7 @@ export function OrgDepartments() {
       </div>
       {departments.isError ? (
         <div className="space-y-3">
-          <p role="status" className="text-sm text-destructive">
-            {userFacingRequestError(departments.error, 'Unable to load org departments. Try again.')}
-          </p>
+          <RequestErrorToast error={departments.error} message={userFacingRequestError(departments.error, 'Unable to load org departments. Try again.')} />
           <Button variant="outline" disabled={departments.isFetching} onClick={scope.effect(() => { void departments.refetch() })}>Retry</Button>
         </div>
       ) : null}

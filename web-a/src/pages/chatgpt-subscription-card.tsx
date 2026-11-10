@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -35,6 +36,7 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
   const trigger = useRef<HTMLButtonElement>(null)
   const [attempt, setAttempt] = useState<ChatGPTSubscriptionStart | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [restart, setRestart] = useState(false)
   const [success, setSuccess] = useState(false)
   const { register, handleSubmit, reset, setFocus, formState: { errors } } = useForm<z.infer<typeof schema>>({
@@ -79,21 +81,22 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
           setAttempt(null)
           setSuccess(true)
           setError(null)
+          setStatusMessage(null)
           break
         case 'pending':
-          setError('Sign-in is still pending. Finish signing in, then paste the full callback address again, or restart.')
+          setStatusMessage('Sign-in is still pending. Finish signing in, then paste the full callback address again, or restart.')
           break
         case 'expired':
           setRestart(true)
-          setError('This ChatGPT sign-in has expired. Restart to get a new sign-in link.')
+          setStatusMessage('This ChatGPT sign-in has expired. Restart to get a new sign-in link.')
           break
         case 'denied':
           setRestart(true)
-          setError('ChatGPT sign-in was denied. Restart when you are ready to try again.')
+          setStatusMessage('ChatGPT sign-in was denied. Restart when you are ready to try again.')
           break
         case 'error':
           setRestart(true)
-          setError('ChatGPT sign-in could not be completed. Restart to try again.')
+          setStatusMessage('ChatGPT sign-in could not be completed. Restart to try again.')
           break
         default: throw new Error(status satisfies never)
       }
@@ -124,6 +127,7 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
     submitted.current = null
     setAttempt(null)
     setError(null)
+    setStatusMessage(null)
     setRestart(false)
     setSuccess(false)
     start.mutate()
@@ -147,6 +151,7 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
               submitted.current = { attempt_id: attempt.attempt_id, callback_url: values.callback_url }
               reset()
               setError(null)
+              setStatusMessage(null)
               complete.mutate()
             })}>
             <p className="text-sm">
@@ -162,7 +167,7 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
               <Label htmlFor={`${id}-callback`}>Full callback URL</Label>
               <Input id={`${id}-callback`} type="text" autoComplete="off" spellCheck={false}
                 disabled={complete.isPending} aria-invalid={Boolean(errors.callback_url)}
-                aria-describedby={`${id}-help${errors.callback_url ? ` ${id}-invalid` : ''}${error ? ` ${id}-error` : ''}`}
+                aria-describedby={`${id}-help${errors.callback_url ? ` ${id}-invalid` : ''}`}
                 {...register('callback_url')} />
               {errors.callback_url ? <p id={`${id}-invalid`} className="text-sm text-destructive" role="alert">{errors.callback_url.message}</p> : null}
             </div>
@@ -172,7 +177,8 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
             </Button></div>
           </form>
         ) : null}
-        {error ? <p id={`${id}-error`} className="text-sm text-destructive" role="alert">{error}</p> : null}
+        {statusMessage ? <p className="text-sm text-muted-foreground" role="status">{statusMessage}</p> : null}
+        {error ? <ErrorToast message={error} /> : null}
         <div>
           <Button ref={trigger} type="button" variant={attempt ? 'outline' : 'default'}
             disabled={busy || !tenantId} onClick={begin}>

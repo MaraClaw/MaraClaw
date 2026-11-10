@@ -11,7 +11,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { OkrReports } from '@/components/okr-reports'
 import { OkrObjectives } from './okr-objectives'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
 import {
   getOkrSettings,
   listDailyReports,
@@ -41,7 +41,7 @@ export function OkrPage() {
 
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : fallback)
+    toast.error(userFacingRequestError(error, fallback))
   }
 
   const saveSettings = useMutation({

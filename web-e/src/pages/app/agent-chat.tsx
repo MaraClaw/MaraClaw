@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { Link, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { LiveReply } from '@/components/chat/live-reply'
 import { ChatTranscript } from '@/components/chat/transcript'
 import { HistoryControl } from '@/components/chat/history-control'
@@ -32,7 +33,7 @@ import { createChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isWritableSession } from '@/lib/chat/sessions'
 import { ChatEventType, archivedSessionId } from '@/lib/chat/protocol'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
 import { chatUploadLimit, formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   createSession,
@@ -538,7 +539,7 @@ export function AgentChatPage() {
     } catch (error) {
       if (!isCurrent() || !submissions.active || activeSessionRef.current !== uploadSession) return
       setBusy(false)
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Upload failed')
+        toast.error(userFacingRequestError(error, 'Upload failed'))
     }
   }
 
@@ -582,12 +583,14 @@ export function AgentChatPage() {
           <SessionList agentId={agent.id} sessions={loadedSessions} activeId={activeId} hasMore={Boolean(sessionsQuery.hasNextPage)}
             loadingMore={sessionsQuery.isFetchingNextPage} error={sessionsQuery.isFetchNextPageError ? sessionsQuery.error : null}
             onLoadMore={() => { if (isCurrent() && !sessionsQuery.isFetching) void sessionsQuery.fetchNextPage({ cancelRefetch: false }) }} />
+          {sessionsQuery.isError && !sessionsQuery.isFetchNextPageError ? <RequestErrorToast error={sessionsQuery.error} message="Could not load conversations. Try again." /> : null}
+          {lookupQuery.isError ? <RequestErrorToast error={lookupQuery.error} message="Could not open this conversation. Check your access and try again." /> : null}
           <HistoryControl ready={historyQuery.data !== undefined} loading={Boolean(activeId) && historyQuery.isLoading}
             error={historyQuery.error} hasEarlier={historyQuery.hasEarlier} loadingEarlier={historyQuery.loadingEarlier}
             earlierError={historyQuery.earlierError} onRefresh={() => { if (isCurrent()) void historyQuery.refetch() }}
             onLoadEarlier={() => { if (isCurrent()) threadScroll.loadEarlier() }} />
-          {!sessionId && sharedSessionQuery.error ? <div role="alert" className="space-y-2 text-sm text-destructive">
-            <p>Could not open the shared conversation.</p>
+          {!sessionId && sharedSessionQuery.error ? <div className="space-y-2">
+            <RequestErrorToast error={sharedSessionQuery.error} message="Could not open the shared conversation." />
             <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
           </div> : null}
           <ChatTranscript lines={lines} viewport={threadScroll} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
@@ -659,7 +662,7 @@ export function AgentChatPage() {
                     <Dialog.Description className="mt-1 select-text leading-relaxed">
                       {uploadPolicy.isSuccess
                         ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`
-                        : uploadPolicy.isError ? 'Could not load upload limits. Uploading is unavailable.' : 'Loading upload limits…'}
+                      : uploadPolicy.isError ? 'Upload limits must be confirmed before uploading.' : 'Loading upload limits…'}
                     </Dialog.Description>
                   </Dialog.Content>
                 </Dialog.Root>
@@ -671,8 +674,8 @@ export function AgentChatPage() {
             </div>}
           />
           <div id="chat-upload-policy" className={uploadPolicy.isSuccess ? 'sr-only' : 'mt-2 text-xs text-muted-foreground'}>
-            {uploadPolicy.isError ? <div role="alert" className="space-y-2 text-destructive">
-              <p>Could not load upload limits. Uploading is unavailable.</p>
+            {uploadPolicy.isError ? <div className="space-y-2">
+              <RequestErrorToast error={uploadPolicy.error} message="Could not load upload limits. Uploading is unavailable." />
               <Button type="button" size="sm" variant="outline" className="h-11" disabled={uploadPolicy.isFetching}
                 onClick={() => { if (isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
             </div> : <p role="status">{uploadPolicy.isSuccess

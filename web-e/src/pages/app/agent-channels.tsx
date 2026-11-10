@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -30,7 +31,7 @@ export function AgentChannelsPage() {
       {!creator ? <p className="text-sm text-muted-foreground">Only the agent creator can view or change channel credentials.</p> : null}
       {catalog.isPending ? <p role="status">Loading channel capabilities…</p> : catalog.isError ? (
         <div className="space-y-2">
-          <p role="alert">Unable to load channel capabilities. Retry to view available integrations.</p>
+          <RequestErrorToast error={catalog.error} message="Unable to load channel capabilities. Retry to view available integrations." />
           <Button variant="outline" disabled={catalog.isFetching} onClick={scope.effect(() => void catalog.refetch())}>Retry catalog</Button>
         </div>
       ) : catalog.data.map((channel) => (
@@ -92,7 +93,7 @@ function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: st
     },
   })
   if (query.isPending) return <p role="status">Loading configuration…</p>
-  if (query.isError) return <div className="space-y-2"><p role="alert">Unable to load configuration.</p><Button variant="outline" onClick={scope.effect(() => void query.refetch())}>Retry configuration</Button></div>
+  if (query.isError) return <div className="space-y-2"><RequestErrorToast error={query.error} message="Unable to load configuration." /><Button variant="outline" onClick={scope.effect(() => void query.refetch())}>Retry configuration</Button></div>
   return (
     <div className="space-y-3">
       {query.data ? <p className="text-sm text-muted-foreground">Configuration saved; connection not verified.</p> : null}
@@ -120,8 +121,8 @@ function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: st
             </label>
           ))}
         </div>
-        {save.isError ? <p role="alert">Unable to save. Check the fields and supply fresh, unmasked credentials when replacing them.</p> : null}
-        {remove.isError ? <p role="alert">Unable to disconnect. Try again.</p> : null}
+        {save.isError ? <RequestErrorToast error={save.error} message="Unable to save. Check the fields and supply fresh, unmasked credentials when replacing them." /> : null}
+        {remove.isError ? <RequestErrorToast error={remove.error} message="Unable to disconnect. Try again." /> : null}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={save.isPending || remove.isPending}>Save</Button>
           {query.data ? <Button type="button" variant="outline" className="text-destructive" disabled={save.isPending || remove.isPending} onClick={() => remove.mutate()}>Remove</Button> : null}
@@ -134,7 +135,7 @@ function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: st
           <Button variant="outline" onClick={scope.effect(() => void navigator.clipboard.writeText(hookUrl).then(scope.effect(() => toast.success('Copied'))).catch(scope.rethrowCurrent))}>Copy</Button>
         </div>
       </div> : null}
-      {webhook.isError ? <p role="alert">Unable to load webhook URL.</p> : null}
+      {webhook.isError ? <RequestErrorToast error={webhook.error} message="Unable to load webhook URL." /> : null}
     </div>
   )
 }
@@ -147,7 +148,7 @@ function WechatCard({ agentId }: { readonly agentId: string }) {
   return (
     <div className="space-y-2">
       <Button variant="outline" disabled={qr.isPending} onClick={() => qr.mutate()}>Request login QR</Button>
-      {qr.isError ? <p role="alert">Unable to request the login QR. Try again.</p> : null}
+      {qr.isError ? <RequestErrorToast error={qr.error} message="Unable to request the login QR. Try again." /> : null}
       {qr.data?.qrcode_url ? <img src={qr.data.qrcode_url} alt="WeChat login QR" width={192} height={192} className="max-w-48" /> : null}
     </div>
   )

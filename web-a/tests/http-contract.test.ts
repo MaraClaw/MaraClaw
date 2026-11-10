@@ -3,8 +3,37 @@ import test from 'node:test'
 
 import { createAuthSession } from '../src/lib/auth-session.ts'
 import { TOKEN_KEY } from '../src/lib/auth-storage.ts'
-import { ApiError, createApiRequest } from '../src/lib/http.ts'
+import { ApiError, createApiRequest, formatApiDetail } from '../src/lib/http.ts'
 import { adminUser, createFixture, tokenResponse } from './helpers.ts'
+
+for (const body of [
+  '<html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>',
+  JSON.stringify({ detail: '<!DOCTYPE html><html>502 Bad Gateway</html>' }),
+] as const) {
+  test(`an HTML gateway response has a human-readable error (${body.startsWith('{') ? 'JSON' : 'HTML'})`, async () => {
+    const { policy } = createFixture()
+    const request = createApiRequest(policy, {
+      url: (path) => path,
+      fetch: async () => new Response(body, { status: 502 }),
+    })
+
+    await assert.rejects(request('/api/auth/login', { token: null }), (error) => {
+      assert.ok(error instanceof ApiError)
+      assert.equal(error.status, 502)
+      assert.equal(error.message, 'The server is temporarily unavailable. Please try again shortly.')
+      return true
+    })
+  })
+}
+
+test('untrusted error details reject markup while retaining useful validation messages', () => {
+  assert.equal(formatApiDetail('&lt;html&gt;Bad gateway&lt;/html&gt;'), null)
+  assert.equal(formatApiDetail({ message: '<html>Bad gateway</html>' }), null)
+  assert.equal(formatApiDetail({ detail: [{ msg: '<script>proxy error</script>' }] }), null)
+  assert.equal(formatApiDetail({ detail: [{ msg: 'Name is required' }, { msg: 'Choose a company' }] }), 'Name is required Choose a company')
+  assert.equal(new ApiError(403, 'Your role cannot perform this action').message, 'Your role cannot perform this action')
+  assert.equal(new ApiError(400, '<html>Bad request</html>').message, 'Request failed (400)')
+})
 
 for (const status of [200, 401] as const) {
   test(`public tokenless ${status} remains independent of a replacement login`, async (t) => {

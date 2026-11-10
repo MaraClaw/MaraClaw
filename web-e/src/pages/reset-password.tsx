@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/button'
 import { PasswordField } from '@/components/ui/password-field'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { resetPasswordRequest } from '@/lib/auth-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { authSession } from '@/lib/auth-session'
 
 const schema = z
   .object({
@@ -30,7 +31,6 @@ export function ResetPasswordPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const token = useMemo(() => searchParams.get('token')?.trim() ?? '', [searchParams])
-  const [formError, setFormError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
@@ -44,17 +44,14 @@ export function ResetPasswordPage() {
 
   async function onSubmit(values: FormValues) {
     if (tokenMissing) return
-    setFormError(null)
+    const owner = authSession.capture()
     try {
       await resetPasswordRequest({ token, new_password: values.new_password })
+      if (!authSession.isCurrent(owner)) return
       toast.success('Password updated. Sign in with your new password.')
       navigate('/login', { replace: true })
     } catch (error) {
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ?? 'This reset link is invalid or has expired.')
-          : 'Unable to update password. Try again.',
-      )
+      if (authSession.isCurrent(owner)) toast.error(userFacingRequestError(error, 'Unable to update password. Try again.'))
     }
   }
 
@@ -82,11 +79,6 @@ export function ResetPasswordPage() {
         </div>
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
-          {formError ? (
-            <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive">
-              {formError}
-            </div>
-          ) : null}
           <PasswordField
             label="New password"
             autoComplete="new-password"

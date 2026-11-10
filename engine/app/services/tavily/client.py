@@ -1,4 +1,4 @@
-"""Forward Tavily API calls with one-cycle quota (432/433) rotation, bounded by one deadline and a response ceiling."""
+"""Forward Tavily calls with three retries per key and one-cycle failover within the deadline and response ceiling."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import final
 from uuid import UUID
 
 import httpx
+from tenacity import AsyncRetrying, RetryError, retry_if_exception_type, retry_if_result, stop_after_attempt
 
 from app.config import get_settings
 from app.services.tavily.errors import (
@@ -17,7 +18,6 @@ from app.services.tavily.errors import (
     TavilyLimitError,
     TavilyResponseTooLargeError,
     is_quota_error,
-    is_transient_error,
 )
 from app.services.tavily.http_client import tavily_client
 from app.services.tavily.keys import (
@@ -230,9 +230,7 @@ async def _send_or_unavailable(
             deadline=deadline,
             max_response_bytes=max_response_bytes,
         )
-    except TavilyLimitError:
-        raise
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         # A transport error that lands after the budget is gone is the deadline's doing, not the upstream's.
         if deadline.expired():
             raise TavilyDeadlineExceededError(bytes_read=deadline.bytes_read) from exc
@@ -330,61 +328,73 @@ async def _proxy_tavily(
     cleaned = path.lstrip("/")
     url = f"{UPSTREAM_BASE}/{cleaned}"
 
-    start = await current_key()
-    if start is None:
-        env_key = await _env_fallback_key()
-        if env_key is None:
-            raise TavilyProxyError(503, "no Tavily API keys configured")
-        return await _send_or_unavailable(
-            method=method,
-            url=url,
-            headers=headers,
-            content=content,
-            api_key=env_key,
-            deadline=deadline,
-            max_response_bytes=max_response_bytes,
-        )
+    record = await current_key()
+
+    def upstream_failed(result: tuple[int, str, dict[str, str]]) -> bool:
+        return result[0] >= 400
 
     seen: set[UUID] = set()
-    record = start
-    last: tuple[int, str, dict[str, str]] | None = None
-    transient_retries = 0
+    last: tuple[int, str, dict[str, str]] | TavilyProxyError | None = None
 
-    while record is not None and record.id not in seen:
+    while True:
         # Stop before touching or trying another key. Local failures leave the ring alone.
         deadline.check()
-        seen.add(record.id)
-        state.key_id = record.id
-        await touch_used(record.id)
-        status, body, out_headers = await _send_or_unavailable(
-            method=method,
-            url=url,
-            headers=headers,
-            content=content,
-            api_key=decrypt_api_key(record),
-            deadline=deadline,
-            max_response_bytes=max_response_bytes,
-        )
-        last = (status, body, out_headers)
+        if record is None:
+            api_key = await _env_fallback_key()
+            if api_key is None:
+                raise TavilyProxyError(503, "no Tavily API keys configured")
+        else:
+            seen.add(record.id)
+            state.key_id = record.id
+            await touch_used(record.id)
+            api_key = decrypt_api_key(record)
+        quota_error = False
+        result: tuple[int, str, dict[str, str]] | None = None
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(4),
+                retry=retry_if_result(upstream_failed) | retry_if_exception_type(TavilyProxyError),
+                reraise=True,
+            ):
+                with attempt:
+                    result = await _send_or_unavailable(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        content=content,
+                        api_key=api_key,
+                        deadline=deadline,
+                        max_response_bytes=max_response_bytes,
+                    )
+                outcome = attempt.retry_state.outcome
+                if outcome is not None and not outcome.failed:
+                    attempt.retry_state.set_result(result)
+            last = result
+        except RetryError:
+            last = result
+        except TavilyProxyError as exc:
+            last = exc
         deadline.check()
+        if record is None:
+            break
+        if isinstance(last, tuple):
+            status, body, _out_headers = last
+            if status < 400:
+                return last
+            if is_quota_error(status):
+                await mark_exhausted(record.id, message=body[:200])
+                quota_error = True
 
-        if is_quota_error(status):
-            await mark_exhausted(record.id, message=body[:200])
-            deadline.bytes_read = 0
-            deadline.check()
-            record = await advance_cursor(record.id)
+        deadline.bytes_read = 0
+        deadline.check()
+        record = await advance_cursor(record.id)
+        if quota_error:
             state.quota_rotated = True
-            transient_retries = 0
-            continue
+        if record is None or record.id in seen:
+            break
 
-        if is_transient_error(status) and transient_retries < 1:
-            transient_retries += 1
-            deadline.bytes_read = 0
-            seen.discard(record.id)
-            continue
-
-        return last
-
+    if isinstance(last, TavilyProxyError):
+        raise last
     if last is None:
         raise TavilyProxyError(503, "no Tavily API keys configured")
     return last

@@ -1,5 +1,6 @@
 import { useId } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,9 +15,8 @@ export function InvitationCode({ invitation, disabled }: {
     <div className="space-y-2">
       <Label htmlFor={id}>Invitation code</Label>
       <Input id={id} required maxLength={256} autoComplete="off" value={invitation.code} disabled={disabled}
-        aria-invalid={Boolean(invitation.error)} aria-describedby={invitation.error ? `${id}-error` : undefined}
         onChange={(event) => invitation.edit(event.currentTarget.value)} />
-      {invitation.error ? <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{invitation.error}</p> : null}
+      {invitation.error ? <RequestErrorToast message={invitation.error} /> : null}
     </div>
     <Button type="submit" variant={invitation.preview ? 'outline' : 'default'} className="h-11 w-full" disabled={disabled || invitation.busy || !invitation.code.trim()}>
       {invitation.busy ? 'Validating invitation…' : 'Validate invitation'}

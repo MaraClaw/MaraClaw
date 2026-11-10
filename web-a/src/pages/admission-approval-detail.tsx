@@ -7,6 +7,7 @@ import { Link, useParams } from 'react-router-dom'
 import { z } from 'zod'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -70,9 +71,7 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
         </CardContent>
       </Card>
       <p role="status" className="sr-only">{decision.isSuccess ? `Request ${admissionStatusLabels[decision.data.status].toLowerCase()}.` : ''}</p>
-      {decision.isError ? <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-        {conflict ? 'This request changed before your decision was saved. The latest details are being refreshed. Review the current status before trying again.' : decision.error instanceof ApiError ? decision.error.message : 'Unable to save your decision. Try again.'}
-      </p> : null}
+      {decision.isError ? <ErrorToast error={decision.error} message={conflict ? 'This request changed before your decision was saved. The latest details are being refreshed. Review the current status before trying again.' : decision.error instanceof ApiError ? decision.error.message : 'Unable to save your decision. Try again.'} /> : null}
       {request.status === 'pending' ? <Card>
         <CardHeader><h2 className="font-display text-lg font-semibold">Review decision</h2><p className="text-sm leading-relaxed text-muted-foreground">Approve to admit this applicant to {request.target_tenant.name}, or reject the request.</p></CardHeader>
         <CardContent>
@@ -112,7 +111,7 @@ export function AdmissionApprovalDetailPage() {
       {!parsedId.success ? <p role="alert" className="text-sm text-destructive">This admission request link is invalid.</p> : <>
         {detail.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading admission request...</CardContent></Card> : null}
         {detail.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
-          <p role="alert" className="text-sm">{detail.error instanceof ApiError ? detail.error.message : 'Unable to load this admission request.'}</p>
+          <ErrorToast error={detail.error} message={detail.error instanceof ApiError ? detail.error.message : 'Unable to load this admission request.'} />
           <Button variant="outline" className={actionClass} disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>Retry</Button>
         </CardContent></Card> : null}
         {detail.data ? <AdmissionReview key={detail.data.id} request={detail.data} ready={detail.isSuccess && !detail.isFetching} /> : null}

@@ -61,6 +61,7 @@ dependencies = [
     "typing-extensions>=4.16.0",
     "pytest>=9.2.0",
     "orjson>=3.13.0",
+    "tenacity>=9.2.1",
 ]
 
 [project.optional-dependencies]

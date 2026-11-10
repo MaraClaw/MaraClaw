@@ -63,6 +63,10 @@ async function api(state, request, response) {
       assert.equal(request.method, 'GET'); assert.equal(payload, undefined)
       assert.deepEqual([...url.searchParams], [['attempt_id', `attempt-${state.attempt}`]])
       body = { status: state.recovery, attempt_id: `attempt-${state.attempt}` }
+    } else if (path.endsWith('/grok-subscription/start')) {
+      body = { session_id: 'synthetic-grok', verification_url: 'https://auth.example.test/grok', user_code: 'SYNTHETIC', interval: 5, expires_in: 600 }
+    } else if (path.endsWith('/grok-subscription/status')) {
+      body = { status: state.outcome, detail: '<html>unsafe provider detail</html>' }
     } else {
       assert.equal(request.method, 'GET')
       switch (path) {
@@ -136,7 +140,7 @@ async function scenario(options, exercise) {
     await exercise(page, state)
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(receipt.violations, [])
-    assert.equal(state.calls.some((call) => call.path.includes('grok-subscription')), false)
+    assert.equal(state.calls.some((call) => call.path.includes('grok-subscription')), Boolean(state.grok))
     assert.equal(await page.evaluate(() => [location.href, ...Object.values(localStorage), ...Object.values(sessionStorage), document.body.innerText].some((value) => value.includes('synthetic-private-code'))), false)
     receipt.scenarios.push(state.name)
   } finally {
@@ -185,7 +189,12 @@ try {
     await begin(page); await submit(page, state)
     if (outcome === 503) { await wait(card(page).locator('[role="status"]')); assert.equal(state.calls.filter((call) => call.path === `${base}/status`).length, 1) }
     else {
-      await wait(card(page).locator('[role="alert"]'))
+      const domainOutcome = typeof outcome === 'string'
+      await wait(domainOutcome ? card(page).locator('[role="status"]') : page.locator('[data-sonner-toast]'))
+      if (domainOutcome) {
+        assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
+        await screenshot(page, state, 'persistent-status')
+      }
       if (outcome === 400 || outcome === 'pending') {
         await wait(button(page, 'Complete ChatGPT sign-in')); state.completeStatus = 200; state.outcome = 'authorized'
         await submit(page, state); await wait(card(page).locator('[role="status"]'))
@@ -194,6 +203,16 @@ try {
         assert.equal(state.attempt, 2)
       }
     }
+  })
+  for (const outcome of ['expired', 'denied', 'error']) await scenario({ name: `grok-${outcome}`, outcome, grok: true }, async (page, state) => {
+    await button(page, 'Connect Grok subscription').click()
+    const grokCard = page.locator('[data-slot="card"]').filter({ has: page.locator('h3').filter({ hasText: /^Connect Grok subscription$/u }) })
+    await wait(grokCard.locator('[role="status"]'))
+    assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
+    assert.equal((await grokCard.textContent()).includes('unsafe provider detail'), false)
+    await grokCard.evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+    await writeFile(join(output, `${state.name}.png`), await page.screenshot())
+    receipt.screenshots.push(join(output, `${state.name}.png`))
   })
   for (const path of ['start', 'complete']) await scenario({ name: `tenant-switch-${path}`, platform: true }, async (page, state) => {
     if (path === 'complete') await begin(page)

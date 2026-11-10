@@ -1,7 +1,8 @@
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { RequestErrorToast } from '@/components/request-error-toast'
 
 type HistoryControlProps = {
   readonly ready: boolean
@@ -18,13 +19,12 @@ export function HistoryControl({ ready, loading, error, hasEarlier, loadingEarli
   const [keyboardActive, setKeyboardActive] = useState(false)
   return <div className="space-y-2 text-center text-sm text-muted-foreground">
     {loading ? <p role="status">Loading conversation…</p> : null}
-    {error ? <div role="alert" className="space-y-2 text-destructive">
-      <p>{error instanceof ApiError ? formatApiDetail(error.detail) ?? error.message
-        : ready ? 'Could not refresh this conversation.' : 'Could not load this conversation.'}</p>
+    {error ? <div className="space-y-2">
+      <RequestErrorToast error={error} message={userFacingRequestError(error, ready ? 'Could not refresh this conversation.' : 'Could not load this conversation.')} />
       <Button type="button" variant="outline" onClick={onRefresh}>Retry conversation</Button>
     </div> : null}
     {ready ? <>
-      {earlierError ? <p role="alert" className="text-destructive">Could not load earlier messages. You can keep chatting.</p> : null}
+      {earlierError ? <RequestErrorToast error={earlierError} message="Could not load earlier messages. You can keep chatting." /> : null}
       {hasEarlier ? <Button type="button" variant="outline"
         disabled={loadingEarlier && !keyboardActive}
         aria-disabled={loadingEarlier && keyboardActive ? true : undefined}

@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -111,8 +112,7 @@ export function AdminAuditPage() {
         {filters.start_at || filters.end_at ? <p className="text-sm text-muted-foreground">Applied UTC window: {filters.start_at ?? 'Any start'} (inclusive) to {filters.end_at ?? 'Any end'} (exclusive).</p> : null}
         {activity.isPending ? <Card><CardContent role="status">{activity.isPaused ? 'Waiting for a connection. Activity will load when you are back online.' : 'Loading recent activity...'}</CardContent></Card> : activity.isError ? (
           <Card><CardContent role="alert" className="flex flex-col gap-3">
-            <p className="font-medium">Could not load recent activity.</p>
-            <p className="text-sm text-muted-foreground">{activity.error instanceof ApiError ? activity.error.message : 'Check your connection and try again. If this continues, contact your administrator.'}</p>
+            <ErrorToast error={activity.error} message={activity.error instanceof ApiError ? activity.error.message : 'Could not load recent activity. Check your connection and try again. If this continues, contact your administrator.'} />
             {cursors.length > 0 ? <p className="text-sm text-muted-foreground">If this cursor is no longer valid, refresh activity to restart from the newest events.</p> : null}
             <Button type="button" variant="outline" className={`${buttonClass} self-start`} onClick={() => void activity.refetch()}>Try again</Button>
           </CardContent></Card>

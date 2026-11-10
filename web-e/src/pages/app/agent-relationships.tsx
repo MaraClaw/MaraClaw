@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -97,7 +98,7 @@ function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
       {rows.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading relationships…</p> : null}
       {rows.isError ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive">{userFacingRequestError(rows.error, 'Unable to load relationships.')}</p>
+          <RequestErrorToast error={rows.error} message={userFacingRequestError(rows.error, 'Unable to load relationships.')} />
           <Button size="sm" variant="outline" onClick={() => cursorRejected ? navigation.reset() : rows.refetch()}>
             {cursorRejected ? 'Restart relationships' : 'Retry relationships'}
           </Button>

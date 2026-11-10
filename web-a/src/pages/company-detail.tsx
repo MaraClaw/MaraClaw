@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -79,9 +80,7 @@ export function CompanyDetailPage() {
       </Button>
 
       {companies.error ? (
-        <p className="text-sm text-destructive">
-          {companies.error instanceof ApiError ? companies.error.message : 'Failed to load company'}
-        </p>
+        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : 'Failed to load company'} />
       ) : null}
       {companyMissing ? <p className="text-sm text-muted-foreground">That company was not found.</p> : null}
 
@@ -131,9 +130,7 @@ export function CompanyDetailPage() {
           </form>
 
           {domains.error ? (
-            <p className="text-sm text-destructive">
-              {domains.error instanceof ApiError ? domains.error.message : 'Failed to load domains'}
-            </p>
+            <ErrorToast error={domains.error} message={domains.error instanceof ApiError ? domains.error.message : 'Failed to load domains'} />
           ) : null}
 
           {(domains.data ?? []).map((item) => (

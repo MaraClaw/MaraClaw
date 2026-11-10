@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useId, useRef, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -106,7 +107,7 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
                 <p id={`${reasonId}-help`} className="text-sm text-muted-foreground">Required. Use 1–1,000 characters after trimming spaces.</p>
                 {reasonError ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{reasonError}</p> : null}
               </div>
-              {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+              {error ? <RequestErrorToast message={error} /> : null}
               <div className="flex flex-wrap justify-end gap-2">
                 <Dialog.Close asChild><Button type="button" variant="outline" className="min-h-11">Cancel</Button></Dialog.Close>
                 <Button type="submit" className="min-h-11" disabled={submit.isPending || !available}>
@@ -122,7 +123,7 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
           : requests.isPending ? 'Checking deletion request status…' : ''}
       </p>
       {requests.isError ? <div className="space-y-2">
-        <p role="alert" className="text-sm text-destructive">Unable to load deletion request status. Retry before submitting another request.</p>
+        <RequestErrorToast error={requests.error} message="Unable to load deletion request status. Retry before submitting another request." />
         <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={requests.isFetching}
           onClick={scope.effect(() => { void requests.refetch() })}>Retry status</Button>
       </div> : null}

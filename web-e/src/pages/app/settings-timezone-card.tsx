@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { toast } from 'sonner'
 
 import { TimezoneSelect } from '@/components/timezone-select'
 import { Button } from '@/components/ui/button'
@@ -30,7 +31,7 @@ export function SettingsTimezoneCard() {
       setFeedback({ kind: 'success', message: 'Timezone updated. New schedules will use this preference.' })
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setFeedback({ kind: 'error', message: userFacingRequestError(error, 'Unable to update timezone. Try again.') })
+      toast.error(userFacingRequestError(error, 'Unable to update timezone. Try again.'))
     } finally {
       if (isCurrent(expectedOwner)) setPending(false)
     }

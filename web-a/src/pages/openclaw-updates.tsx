@@ -3,6 +3,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { ZodError } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -120,7 +121,7 @@ export function OpenClawUpdatesPage() {
         {sendError ? (
           <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 text-sm">
             <h2 className="font-medium text-destructive">Notice not confirmed</h2>
-            <p>{sendError instanceof ApiError ? sendError.message : 'The server response could not be confirmed. Check your connection.'}</p>
+            <ErrorToast error={sendError} message={sendError instanceof ApiError ? sendError.message : 'The server response could not be confirmed. Check your connection.'} />
             <p>Retry this notice after resolving the error. The same request ID and message will be reused, so a completed send is not duplicated.</p>
             <p>The request is saved in this tab for your admin account, including across navigation and reloads. Keep this tab open until confirmed. Composing a new notice starts a separate send and may duplicate a notice already delivered.</p>
           </div>

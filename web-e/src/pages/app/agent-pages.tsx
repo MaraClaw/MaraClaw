@@ -6,7 +6,9 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { listPublishedPages, publishWorkspacePage, unpublishPage } from '@/lib/control-api'
 import { listFiles, type AgentOut } from '@/lib/workspace-api'
 
@@ -29,7 +31,7 @@ export function AgentPagesPage() {
       void queryClient.invalidateQueries({ queryKey: ['pages', agent.id] })
     },
     onError(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Publish failed')
+      toast.error(userFacingRequestError(error, 'Publish failed'))
     },
   })
 
@@ -37,6 +39,7 @@ export function AgentPagesPage() {
     <div className="grid min-h-[28rem] grid-cols-1 md:grid-cols-[240px_1fr]">
       <aside className="space-y-2 border-b border-border p-3 md:border-r md:border-b-0">
         <p className="text-xs text-muted-foreground">HTML files in the workspace</p>
+        {files.isError ? <RequestErrorToast error={files.error} message="Unable to load workspace files. Try again." /> : null}
         <button type="button" className="text-xs text-primary" onClick={scope.effect(() => setPath(''))}>
           Root
         </button>
@@ -69,6 +72,7 @@ export function AgentPagesPage() {
       <div className="space-y-3 p-4">
         <div>
           <h2 className="font-display text-lg font-semibold">Published pages</h2>
+          {pages.isError ? <RequestErrorToast error={pages.error} message="Unable to load published pages. Try again." /> : null}
           <p className="text-sm text-muted-foreground">Anyone with the link can open `/p/{'{id}'}` without signing in.</p>
         </div>
         <ul className="space-y-2">
@@ -100,7 +104,7 @@ export function AgentPagesPage() {
                         if (!scope.isCurrent()) return
                         toast.success('Unpublished')
                         void queryClient.invalidateQueries({ queryKey: ['pages', agent.id] })
-                      }).catch(scope.rethrowCurrent)
+                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to unpublish this page. Try again.'), error)))
                     }
                   >
                     Unpublish

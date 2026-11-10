@@ -2,11 +2,13 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { useCallback, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { McpServerEditor } from '@/components/mcp-server-editor'
 import { Button } from '@/components/ui/button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { listAgentMcpServers, removeAgentMcpServer, type McpServerList, type McpServerSummary } from '@/lib/agent-mcp-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import type { AgentOut } from '@/lib/workspace-api'
 
 const transportLabels = { 'streamable-http': 'HTTP', sse: 'SSE', stdio: 'Local command (stdio)' } as const
@@ -34,7 +36,10 @@ function AgentMcpWorkspace({ agent }: { readonly agent: AgentOut }) {
     async queryFn({ signal }) {
       try { return await listAgentMcpServers(agent.id, { owner: scope.owner, signal }) }
       catch (error) {
-        if (error instanceof ApiError && error.status === 403) retireAccess()
+        if (error instanceof ApiError && error.status === 403 && scope.isCurrent()) {
+          showRequestError('Manage access is required to configure MCP servers.', error)
+          retireAccess()
+        }
         throw error
       }
     },
@@ -58,7 +63,12 @@ function AgentMcpWorkspace({ agent }: { readonly agent: AgentOut }) {
         default: result satisfies never
       }
     },
-    onError(error) { if (error instanceof ApiError && error.status === 403) retireAccess() },
+    onError(error) {
+      if (error instanceof ApiError && error.status === 403) {
+        showRequestError('Manage access is required to remove MCP servers.', error)
+        retireAccess()
+      }
+    },
   })
   const denied = (servers.error instanceof ApiError && servers.error.status === 403) || (remove.error instanceof ApiError && remove.error.status === 403)
   const canManage = manager && !denied
@@ -74,7 +84,7 @@ function AgentMcpWorkspace({ agent }: { readonly agent: AgentOut }) {
         {servers.fetchStatus === 'paused' ? <p role="status" className="text-base text-muted-foreground">You’re offline. Connect to load MCP servers.</p>
           : servers.isPending ? <p role="status" className="text-base text-muted-foreground">Loading MCP servers...</p> : null}
         {servers.isError ? <div className="space-y-3">
-          <p role="alert" className="text-base text-destructive">{userFacingRequestError(servers.error, 'Unable to load MCP servers. Check your connection and try again.')}</p>
+          <RequestErrorToast error={servers.error} message={userFacingRequestError(servers.error, 'Unable to load MCP servers. Check your connection and try again.')} />
           <Button variant="outline" disabled={servers.isFetching} onClick={scope.effect(() => { void servers.refetch() })}>Retry servers</Button>
         </div> : null}
         {servers.data?.servers.length === 0 ? <div className="space-y-2 rounded-2xl border border-border bg-card p-6">
@@ -105,7 +115,7 @@ function AgentMcpWorkspace({ agent }: { readonly agent: AgentOut }) {
               className="fixed top-1/2 left-1/2 z-50 w-[calc(100%_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-border bg-card p-6 shadow-elevated">
               <Dialog.Title className="font-display text-xl font-semibold">Remove server?</Dialog.Title>
               <Dialog.Description className="break-words text-base text-muted-foreground">Remove the stored configuration for {removing?.name}? This change is synced to OpenClaw.</Dialog.Description>
-              {remove.isError ? <p role="alert" className="text-base text-destructive">{userFacingRequestError(remove.error, 'Unable to remove this server. Check your connection and try again.')}</p> : null}
+              {remove.isError ? <RequestErrorToast error={remove.error} message={userFacingRequestError(remove.error, 'Unable to remove this server. Check your connection and try again.')} /> : null}
               {remove.isPaused ? <p role="status" className="text-base text-muted-foreground">You’re offline. Removal will resume when the connection returns.</p> : null}
               <div className="flex flex-wrap justify-end gap-3">
                 <Button variant="outline" disabled={remove.isPending} onClick={scope.effect(() => setRemoving(null))}>Cancel</Button>

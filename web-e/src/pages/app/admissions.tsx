@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -70,7 +71,7 @@ export function AdmissionsPage() {
       </div>
       {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
       {query.isFetching || query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading requests…</p> : null}
-      {query.isError && !invalidCursor ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load requests. Refresh to try again.')}</p> : null}
+      {query.isError && !invalidCursor ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load requests. Refresh to try again.')} /> : null}
       {page?.items.length === 0 ? (
         <div className="space-y-3 rounded-xl border border-border p-4">
           <p className="text-sm text-muted-foreground">{cursor !== undefined ? 'No more requests on this page. Go back or refresh to see the latest requests.' : status === 'all' ? 'No admission requests yet.' : `No ${admissionStatuses[status].label.toLowerCase()} requests match this filter.`}</p>

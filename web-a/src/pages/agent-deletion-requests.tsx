@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
@@ -29,7 +30,7 @@ export function AgentDeletionRequestsPage() {
     <p className="text-sm text-muted-foreground">Opening a request records your review. A list view does not count as a review or approval.</p>
     {requests.isPending ? <Card><CardContent role="status">Loading deletion requests...</CardContent></Card> : null}
     {requests.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
-      <p role="alert" className="text-sm">Unable to load deletion requests. Check your connection and try again.</p>
+      <ErrorToast error={requests.error} message="Unable to load deletion requests. Check your connection and try again." />
       <Button variant="outline" disabled={requests.isFetching} onClick={() => { void requests.refetch() }}>Retry</Button>
     </CardContent></Card> : null}
     {requests.isSuccess && requests.data.items.length === 0 ? <Card><CardContent className="text-sm text-muted-foreground">

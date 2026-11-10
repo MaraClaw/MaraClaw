@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { broadcastEmailStatusOptions } from '@/hooks/broadcast-options'
 import { useSessionCurrent } from '@/hooks/use-auth'
@@ -84,10 +85,10 @@ export function BroadcastEmailProgress({ receipt }: { readonly receipt: Broadcas
             </dl>
           ) : data ? <p className="text-sm">Email progress is unavailable.</p> : status.isPending ? <p role="status" className="text-sm">Loading email progress...</p> : null}
           <div ref={feedback} tabIndex={-1} role={cancellation.isError || status.isError ? 'alert' : 'status'} className="flex flex-col gap-2 text-sm focus-visible:outline-2 focus-visible:outline-ring">
-            {cancellation.isError ? <p>Could not confirm cancellation. Refreshed counts may show that some targets were cancelled. Review the current status before trying again.</p> : cancellation.data ? (
+            {cancellation.isError ? <ErrorToast error={cancellation.error} message="Could not confirm cancellation. Refreshed counts may show that some targets were cancelled. Review the current status before trying again." /> : cancellation.data ? (
               <p>{cancellation.data.available ? `Cancelled ${cancellation.data.cancelled_now.toLocaleString()} queued email targets in this request. Any remaining queued targets can be reviewed again; claimed work cannot be stopped.` : 'Email progress is unavailable.'}</p>
             ) : null}
-            {status.isError ? <p>Could not refresh email progress. Counts may be out of date. Refresh to try again.</p> : null}
+            {status.isError ? <ErrorToast error={status.error} message="Could not refresh email progress. Counts may be out of date. Refresh to try again." /> : null}
             {busy ? <p>Cancelling unclaimed email and refreshing progress...</p> : null}
           </div>
           <div className="flex flex-wrap gap-3">

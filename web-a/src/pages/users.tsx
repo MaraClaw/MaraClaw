@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -182,12 +183,10 @@ export function UsersPage() {
       </div>
 
       {rosterExport.message ? <p role="status" className="text-sm text-muted-foreground">{rosterExport.message}</p> : null}
-      {rosterExport.error ? <p role="alert" className="text-sm text-destructive">{rosterExport.error}</p> : null}
+      {rosterExport.error ? <ErrorToast message={rosterExport.error} /> : null}
 
       {companies.error ? (
-        <p className="text-sm text-destructive">
-          {companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'}
-        </p>
+        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'} />
       ) : null}
 
       {platformAdmin && !companies.isLoading && !companies.error && (companies.data?.length ?? 0) === 0 ? (
@@ -206,11 +205,9 @@ export function UsersPage() {
             <p className="text-sm text-muted-foreground">Loading platform admins…</p>
           ) : null}
           {platformAdmins.error ? (
-            <p className="text-sm text-destructive">
-              {platformAdmins.error instanceof ApiError
+            <ErrorToast error={platformAdmins.error} message={platformAdmins.error instanceof ApiError
                 ? platformAdmins.error.message
-                : 'Failed to load platform admins'}
-            </p>
+                : 'Failed to load platform admins'} />
           ) : null}
           {!platformAdmins.isLoading && !platformAdmins.error && visiblePlatform.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -240,9 +237,7 @@ export function UsersPage() {
         ) : null}
         {users.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading users…</p> : null}
         {users.error ? (
-          <p role="alert" className="text-sm text-destructive">
-            {users.error instanceof ApiError ? users.error.message : 'Failed to load users'}
-          </p>
+          <ErrorToast error={users.error} message={users.error instanceof ApiError ? users.error.message : 'Failed to load users'} />
         ) : null}
         {users.error ? <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void (users.isFetchNextPageError ? users.fetchNextPage() : users.refetch())}>Retry users</Button> : null}
 

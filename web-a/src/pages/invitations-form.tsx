@@ -4,6 +4,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link } from 'react-router-dom'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -80,7 +81,7 @@ export function InvitationsForm({ tenant }: { readonly tenant: string | null }) 
           </div>
           <Button type="submit" disabled={sending.isPending} className="min-h-11 self-start motion-reduce:transition-none">{sending.isPending ? 'Sending invitations…' : 'Send invitation emails'}</Button>
           <div ref={feedback} tabIndex={-1} role={failure ? 'alert' : 'status'} className="text-sm empty:hidden focus-visible:outline-2 focus-visible:outline-ring">
-            {failure ? <><p className="text-destructive">{failure.message}</p>{failure.settings ? <Link to="/settings" className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring">Open Settings</Link> : null}</> : sent !== null ? sent > 0 ? `${sent} ${sent === 1 ? 'invitation' : 'invitations'} created. Email delivery queued.` : 'No invitations were created. Check history before trying again.' : sending.isPending ? 'Sending. Please wait.' : null}
+      {failure ? <><ErrorToast error={sending.error} message={failure.message} />{failure.settings ? <Link to="/settings" className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring">Open Settings</Link> : null}</> : sent !== null ? sent > 0 ? `${sent} ${sent === 1 ? 'invitation' : 'invitations'} created. Email delivery queued.` : 'No invitations were created. Check history before trying again.' : sending.isPending ? 'Sending. Please wait.' : null}
           </div>
         </form>
       </CardContent>

@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -97,12 +98,12 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
             }}>Retry credentials email</Button>
           </> : null}
           <p role="status" className="text-sm">{emailRetry.isPending ? 'Queueing credentials email...' : ''}</p>
-          {emailRetry.isError ? <p role="alert" className="text-sm text-destructive">{emailRetry.error instanceof ApiError ? emailRetry.error.message : 'Unable to queue the credentials email. Try again.'}</p> : null}
+        {emailRetry.isError ? <ErrorToast error={emailRetry.error} message={emailRetry.error instanceof ApiError ? emailRetry.error.message : 'Unable to queue the credentials email. Try again.'} /> : null}
           <p className="text-xs text-muted-foreground">Return to requests, refresh, and reopen this request to see the latest delivery status.</p>
         </section> : null}
         {detail.status === 'pending' && detail.organization_name === null ? <p id={`${noteId}-organization`} className="text-sm">This request cannot be approved without an organization name. Reject it and ask the applicant to resubmit with an organization name.</p> : null}
         <p role="status" className="text-sm">{decision.isPending ? 'Saving decision...' : decision.isSuccess ? `Request ${statusLabels[detail.status].toLowerCase()}.` : ''}</p>
-        {decision.isError ? <div className="flex flex-col gap-2"><p role="alert" className="text-sm text-destructive">{decision.error instanceof ApiError ? decision.error.message : 'Unable to save your decision. Try again.'}</p>{conflict ? <p className="text-sm">Return to requests and refresh before reviewing again.</p> : null}</div> : null}
+    {decision.isError ? <div className="flex flex-col gap-2"><ErrorToast error={decision.error} message={decision.error instanceof ApiError ? decision.error.message : 'Unable to save your decision. Try again.'} />{conflict ? <p className="text-sm">Return to requests and refresh before reviewing again.</p> : null}</div> : null}
         {detail.status === 'pending' ? <form noValidate className="flex flex-col gap-4" onSubmit={form.handleSubmit(({ note }) => submit('approve', note))}>
           <div className="flex flex-col gap-2">
             <Label htmlFor={noteId}>Review note (optional)</Label>
@@ -136,7 +137,7 @@ export function OrganizationAdmissionsPage() {
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
     <header><h1 ref={queueHeading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight outline-none">Organization admissions</h1><p className="mt-2 text-sm text-muted-foreground">Review requests for a new organization and the commercial terms quoted at submission.</p></header>
     {selected && reviews.isFetching ? <p role="status" className="text-sm">Refreshing request status...</p> : null}
-    {reviews.isError ? <div className="flex flex-col items-start gap-3"><p role="alert" className="text-sm">{reviews.error instanceof ApiError ? reviews.error.message : 'Unable to load organization requests.'}</p><Button variant="outline" disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>Retry</Button></div> : null}
+    {reviews.isError ? <div className="flex flex-col items-start gap-3"><ErrorToast error={reviews.error} message={reviews.error instanceof ApiError ? reviews.error.message : 'Unable to load organization requests.'} /><Button variant="outline" disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>Retry</Button></div> : null}
     {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => setSelected(null)} /> : <>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-2"><Label htmlFor={filterId}>Request status</Label>

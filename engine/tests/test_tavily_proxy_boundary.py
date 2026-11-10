@@ -18,8 +18,13 @@ __all__ = ["limits", "recorded", "ring", "shared_wire"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_status", [401, 433])
 async def test_authenticated_search_and_crawl_rotation_at_http_boundary(
-    ring: MemoryKeyDao, shared_wire: SharedWire, limits: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ring: MemoryKeyDao,
+    shared_wire: SharedWire,
+    limits: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_status: int,
 ) -> None:
     agent_id = uuid4()
     token = tokens._proxy_token(agent_id, secret="test-secret")
@@ -27,16 +32,17 @@ async def test_authenticated_search_and_crawl_rotation_at_http_boundary(
     monkeypatch.setattr(tavily_proxy, "get_settings", lambda: limits)
     availability = AsyncMock(return_value=TavilyAgentAvailability(tenant_id=uuid4()))
     monkeypatch.setattr(tavily_proxy, "agent_available", availability)
-    await add_key(label="first", api_key="provider-first")
-    await add_key(label="second", api_key="provider-second")
+    first = await add_key(label="first", api_key="provider-first")
+    second = await add_key(label="second", api_key="provider-second")
     shared_wire.responses = [
         FakeResponse(200, '{"results":[{"url":"https://example.com","content":"found"}]}'),
-        FakeResponse(433, '{"detail":{"error":"plan limit"}}'),
+        *[FakeResponse(failure_status, '{"detail":{"error":"upstream failure"}}') for _ in range(4)],
         FakeResponse(
             200,
             '{"base_url":"https://example.com","results":[{"url":"https://example.com","raw_content":"page"}],'
             '"response_time":1.5,"request_id":"crawl-id"}',
         ),
+        FakeResponse(200, '{"results":[]}'),
     ]
     app = FastAPI()
     app.include_router(tavily_proxy.router)
@@ -50,27 +56,31 @@ async def test_authenticated_search_and_crawl_rotation_at_http_boundary(
             headers={"Authorization": f"Bearer {token}"},
             json={"url": "https://example.com", "extract_depth": "advanced", "format": "text", "timeout": 30},
         )
+        following = await http.post(
+            "/api/tavily/v1/crawl", headers={"Authorization": f"Bearer {token}"}, json={"url": "https://example.com"}
+        )
 
     assert denied.status_code == 401
     assert search.status_code == 200
     assert search.json()["results"][0]["content"] == "found"
     assert crawl.status_code == 200
+    assert following.status_code == 200
     assert crawl.json() == {
         "base_url": "https://example.com",
         "results": [{"url": "https://example.com", "raw_content": "page"}],
         "response_time": 1.5,
         "request_id": "crawl-id",
     }
-    assert [(str(r.url), r.headers["authorization"]) for r in shared_wire.requests] == [
-        ("https://api.tavily.com/search", "Bearer provider-first"),
-        ("https://api.tavily.com/crawl", "Bearer provider-first"),
-        ("https://api.tavily.com/crawl", "Bearer provider-second"),
-    ]
-    assert shared_wire.requests[0].content == b'{"query":"example"}'
-    assert (
-        shared_wire.requests[1].content
-        == shared_wire.requests[2].content
-        == b'{"url":"https://example.com","extract_depth":"advanced","format":"text","timeout":30}'
+    assert [(str(r.url), r.headers["authorization"]) for r in shared_wire.requests] == (
+        [("https://api.tavily.com/search", "Bearer provider-first")]
+        + [("https://api.tavily.com/crawl", "Bearer provider-first")] * 4
+        + [("https://api.tavily.com/crawl", "Bearer provider-second")] * 2
     )
+    assert shared_wire.requests[0].content == b'{"query":"example"}'
+    assert [request.content for request in shared_wire.requests[1:6]] == [
+        b'{"url":"https://example.com","extract_depth":"advanced","format":"text","timeout":30}'
+    ] * 5
     availability.assert_any_await(agent_id, sha256(token.encode()).digest())
     assert token not in search.text + crawl.text
+    assert ring.cursor == second.id
+    assert (first.exhausted_until is not None) == (failure_status == 433)

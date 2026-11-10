@@ -134,9 +134,9 @@ export function LoginPage() {
         return
       }
       if (error instanceof ApiError && error.status === 401) {
-        setFormError('Email or password is incorrect.')
+        toast.error('Email or password is incorrect.')
       } else {
-        setFormError(userFacingRequestError(error, 'Unable to sign in. Try again.'))
+        toast.error(userFacingRequestError(error, 'Unable to sign in. Try again.'))
       }
       setFocus('password')
     }
@@ -165,10 +165,10 @@ export function LoginPage() {
         navigate(result.needs_org_confirm && !from.startsWith('/transfer#code=') ? '/join' : from, { replace: true })
         return
       }
-      setFormError('Unable to complete organization selection. Try again.')
+      toast.error('Unable to complete organization selection. Try again.')
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      setFormError(userFacingRequestError(error, 'Unable to sign in. Try again.'))
+      toast.error(userFacingRequestError(error, 'Unable to sign in. Try again.'))
     } finally {
       if (isCurrent(expectedOwner)) setSelectingTenantId(null)
     }

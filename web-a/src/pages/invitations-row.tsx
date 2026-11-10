@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useLayoutEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { revokeInvitationOptions } from '@/hooks/invitation-options'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
@@ -52,7 +53,7 @@ export function InvitationsRow({ item, tenant }: { readonly item: InvitationCode
               <Button type="button" variant="outline" className="min-h-11" disabled={revoking.isPending} onClick={() => { restore.current = true; setConfirming(false) }}>Cancel</Button>
               <Button type="button" variant="destructive" className="min-h-11" disabled={revoking.isPending} onClick={() => revoking.mutate(item.id)}>{revoking.isPending ? 'Revoking…' : 'Confirm revoke'}</Button>
             </div>
-            {revoking.isError ? <p role="alert" className="text-sm text-destructive">Could not revoke the invitation. Refresh history before trying again.</p> : null}
+    {revoking.isError ? <ErrorToast error={revoking.error} message="Could not revoke the invitation. Refresh history before trying again." /> : null}
           </section>
         ) : <Button ref={trigger} type="button" variant="outline" className="min-h-11" aria-label={`Revoke invitation for ${item.invited_email ?? 'legacy code'}`} onClick={() => { revoking.reset(); setConfirming(true) }}>Revoke</Button> : <span className="text-muted-foreground">—</span>}
       </td>

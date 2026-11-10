@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { AddKeyResult } from '@/components/okr-reports'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,7 +51,7 @@ export function OkrObjectives({ period, isAdmin }: { readonly period: OkrPeriod;
       {objectives.isLoading ? <Loader2 aria-label="Loading objectives" className="size-4 animate-spin text-muted-foreground" /> : null}
       {objectives.isError ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive">{userFacingRequestError(objectives.error, 'Unable to load objectives.')}</p>
+          <RequestErrorToast error={objectives.error} message={userFacingRequestError(objectives.error, 'Unable to load objectives.')} />
           <Button size="sm" variant="outline" onClick={() => cursorRejected ? navigation.reset() : objectives.refetch()}>
             {cursorRejected ? 'Restart objectives' : 'Retry objectives'}
           </Button>

@@ -6,6 +6,9 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { RequestErrorToast } from '@/components/request-error-toast'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import {
   browseSkillRead,
   browseSkills,
@@ -34,6 +37,7 @@ export function AgentSkillsPage() {
   })
 
   const importSkill = useMutation({
+    onError(error) { showRequestError(userFacingRequestError(error, 'Unable to install this skill. Try again.'), error) },
     mutationFn: (skillId: string) => importSkillToAgent(agent.id, skillId),
     onSuccess() {
       toast.success('Skill copied into the agent workspace')
@@ -45,6 +49,7 @@ export function AgentSkillsPage() {
     <div className="grid gap-6 p-6 lg:grid-cols-2">
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">Catalog</h2>
+        {catalog.isError ? <RequestErrorToast error={catalog.error} message="Unable to load the skill catalog. Try again." /> : null}
         <ul className="space-y-2">
           {(catalog.data ?? []).map((skill) => (
             <li key={skill.id} className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
@@ -61,6 +66,7 @@ export function AgentSkillsPage() {
       </section>
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">ClawHub</h2>
+        {clawhub.isError ? <RequestErrorToast error={clawhub.error} message="Unable to search ClawHub. Try again." /> : null}
         <Input placeholder="Search ClawHub" value={query} onChange={scope.effect((event) => setQuery(event.target.value))} />
         <ul className="space-y-2">
           {(clawhub.data ?? []).map((row) => (
@@ -73,7 +79,7 @@ export function AgentSkillsPage() {
                 size="sm"
                 variant="outline"
                 onClick={() =>
-                  scope.isCurrent() && void installClawhub(row.slug).then(scope.effect(() => toast.success('Installed from ClawHub'))).catch(scope.rethrowCurrent)
+                  scope.isCurrent() && void installClawhub(row.slug).then(scope.effect(() => toast.success('Installed from ClawHub'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to install from ClawHub. Try again.'), error)))
                 }
               >
                 Add
@@ -92,7 +98,7 @@ export function AgentSkillsPage() {
               toast.success('Imported from URL')
               setSkillUrl('')
               void queryClient.invalidateQueries({ queryKey: ['skills'] })
-            }).catch(scope.rethrowCurrent)
+            }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to import this skill. Try again.'), error)))
           }}
         >
         <Input placeholder="https://…/skill.md" value={skillUrl} onChange={scope.effect((event) => setSkillUrl(event.target.value))} />
@@ -103,6 +109,7 @@ export function AgentSkillsPage() {
       </section>
       <section className="space-y-3 lg:col-span-2">
         <h2 className="font-display text-lg font-semibold">Browse skill files</h2>
+        {browse.isError ? <RequestErrorToast error={browse.error} message="Unable to load skill files. Try again." /> : null}
         <div className="flex gap-2 text-xs">
         <button type="button" className="text-primary" onClick={scope.effect(() => setBrowsePath(''))}>
             Root
@@ -122,7 +129,7 @@ export function AgentSkillsPage() {
                     setBrowseContent('')
                     return
                   }
-                  void browseSkillRead(entry.path).then(scope.effect((row) => setBrowseContent(row.content))).catch(scope.rethrowCurrent)
+                  void browseSkillRead(entry.path).then(scope.effect((row) => setBrowseContent(row.content))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to read this skill file. Try again.'), error)))
                 }}
               >
                 {entry.is_dir ? '▸ ' : ''}

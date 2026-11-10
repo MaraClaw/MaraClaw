@@ -1,6 +1,7 @@
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useLayoutEffect, useRef, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -100,7 +101,7 @@ export function AgentDepartmentAccess({
           {departments.isPending
             ? 'Loading departments…'
             : departments.isError
-              ? 'Unable to load departments. Your selections are unchanged.'
+              ? ''
               : departments.data?.length === 0
                 ? 'No org departments yet. Ask a company admin to create one.'
                 : available.length === 0
@@ -108,6 +109,7 @@ export function AgentDepartmentAccess({
                   : ''}
         </p>
         {departments.isError ? (
+          <><RequestErrorToast error={departments.error} message="Unable to load departments. Your selections are unchanged." />
           <Button
             type="button"
             size="sm"
@@ -116,7 +118,7 @@ export function AgentDepartmentAccess({
             onClick={scope.effect(() => void departments.refetch())}
           >
             Retry departments
-          </Button>
+          </Button></>
         ) : null}
       </div>
       {departmentIds.length > 0 ? (

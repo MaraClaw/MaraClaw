@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import {
   listAgentToolsWithConfig,
@@ -36,7 +37,7 @@ export function AgentToolsPage() {
         Enable tools and edit per-agent config. Secrets stay masked. Network/proxy fields stay with admins.
       </p>
       {tools.isPending ? <p role="status" className="text-sm">Loading tools…</p> : null}
-      {tools.isError ? <p role="alert" className="text-sm text-destructive">Could not load tools. Refresh this page to try again.</p> : null}
+      {tools.isError ? <RequestErrorToast error={tools.error} message="Could not load tools. Refresh this page to try again." /> : null}
       {tools.isSuccess && tools.data.length === 0 ? <p className="text-sm text-muted-foreground">No tools are available for this agent.</p> : null}
       <ul className="space-y-2">
         {(tools.data ?? []).map((tool) => (

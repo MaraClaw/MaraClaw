@@ -3,6 +3,7 @@ import type { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
 import { lifecycleBlockMessage, mcpWarningMessage, recordedStatus, startFailureMessage } from '@/lib/agent-lifecycle-policy'
 import { relativeTime } from '@/lib/relative-time'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 export function AgentLifecycleStatus({ query, expired, upgrading }: {
   readonly query: ReturnType<typeof useAgentLifecycle>
   readonly expired: boolean
@@ -16,7 +17,7 @@ export function AgentLifecycleStatus({ query, expired, upgrading }: {
     <section aria-label="Agent lifecycle" className="min-h-112 space-y-3 rounded-xl border border-border p-4 text-[1.0625rem] leading-normal md:min-h-96 md:text-sm [overflow-wrap:anywhere] [&_.text-muted-foreground]:text-[0.9375rem] md:[&_.text-muted-foreground]:text-sm">
       <h2 className="font-display text-lg font-semibold md:text-base">Agent lifecycle</h2>
       {paused ? <p role="status">You are offline. Lifecycle checks will resume when you reconnect. Start and integration retries stay unavailable until status is confirmed.</p> : query.isError ? <>
-        <p role="alert" className="text-destructive">Lifecycle status is unavailable. Start and integration retries stay unavailable until you check again.</p>
+        <RequestErrorToast error={query.error} message="Lifecycle status is unavailable. Start and integration retries stay unavailable until you check again." />
         <Button variant="outline" className="h-auto min-h-11 whitespace-normal text-[1.0625rem] transition-none md:text-sm" disabled={query.isFetching}
           onClick={() => void query.refetch()}>{query.isFetching ? 'Checking lifecycle...' : 'Check lifecycle again'}</Button>
       </> : null}
@@ -59,7 +60,7 @@ export function AgentLifecycleStatus({ query, expired, upgrading }: {
             </li>)}
           </ul>}
           <div className="min-h-[3lh]" role="status" aria-live="polite">
-            {query.retry.isPaused ? <p>Integration retry is paused while offline. It will resume when you reconnect.</p> : query.retry.isPending ? <p>Requesting integration retry...</p> : query.retry.isError ? <p role="alert" className="text-destructive">Unable to retry this integration. Check its saved connection and lifecycle status, then try again.</p> : null}
+            {query.retry.isPaused ? <p>Integration retry is paused while offline. It will resume when you reconnect.</p> : query.retry.isPending ? <p>Requesting integration retry...</p> : query.retry.isError ? <RequestErrorToast error={query.retry.error} message="Unable to retry this integration. Check its saved connection and lifecycle status, then try again." /> : null}
           </div>
         </div>
       </> : null}

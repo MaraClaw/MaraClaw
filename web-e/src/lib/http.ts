@@ -17,7 +17,8 @@ export class ApiError extends Error {
   detail: unknown
 
   constructor(status: number, detail: unknown, message?: string) {
-    super(message ?? formatApiDetail(detail) ?? `Request failed (${status})`)
+    super(formatApiDetail(message) ?? formatApiDetail(detail) ?? (status >= 500
+      ? 'The service is temporarily unavailable. Please try again.' : `Request failed (${status})`))
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
@@ -42,13 +43,16 @@ export function userFacingRequestError(error: unknown, fallback: string): string
 
 export function formatApiDetail(detail: unknown): string | null {
   if (detail == null) return null
-  if (typeof detail === 'string') return detail
+  if (typeof detail === 'string') {
+    const text = detail.trim()
+    return text && text.length <= 500 && !/<[^>]*>|&(?:lt|gt|#0*60|#x0*3c);/i.test(text) ? text : null
+  }
   if (typeof detail === 'object') {
-    if ('message' in detail && typeof detail.message === 'string') return detail.message
+    if ('message' in detail && typeof detail.message === 'string') return formatApiDetail(detail.message)
     if (!('detail' in detail)) return null
-    if (typeof detail.detail === 'string') return detail.detail
+    if (typeof detail.detail === 'string') return formatApiDetail(detail.detail)
     if (Array.isArray(detail.detail)) {
-      return detail.detail
+      return formatApiDetail(detail.detail
         .map((item: unknown) => {
           if (typeof item === 'string') return item
           if (item && typeof item === 'object' && 'msg' in item) {
@@ -57,7 +61,7 @@ export function formatApiDetail(detail: unknown): string | null {
           return null
         })
         .filter(Boolean)
-        .join(' ')
+        .join(' '))
     }
   }
   return null

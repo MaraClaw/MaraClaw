@@ -1,6 +1,7 @@
 import { ArrowUpCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { OpenClawUpdateCard } from '@/components/openclaw-update-card'
 import { Button } from '@/components/ui/button'
 import { upgradeOpenClawOptions } from '@/hooks/openclaw-update-options'
@@ -23,12 +24,12 @@ export function AgentOpenClawUpgrade({ agentId, status, query }: {
   return (
     <section aria-label="OpenClaw upgrade" className="space-y-3">
       {query.isError ? <div className="space-y-3 rounded-xl border border-border p-4">
-        <p role="alert" className="text-sm text-destructive">Unable to check the OpenClaw upgrade status. Work stays paused until status is confirmed.</p>
+        <RequestErrorToast error={query.error} message="Unable to check the OpenClaw upgrade status. Work stays paused until status is confirmed." />
         <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry status check</Button>
       </div> : null}
       {!update && !query.isError ? <p role="status" className="text-sm text-muted-foreground">Checking OpenClaw upgrade status…</p> : null}
       {update ? <OpenClawUpdateCard update={update} submitting={query.submitting}>
-        {upgrade.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(upgrade.error, 'Unable to start the upgrade. Check status and try Upgrade again.')}</p> : null}
+        {upgrade.isError ? <RequestErrorToast error={upgrade.error} message={userFacingRequestError(upgrade.error, 'Unable to start the upgrade. Check status and try Upgrade again.')} /> : null}
         {update.notice ? <>
           {!completed && !active && !update.can_upgrade ? <p className="text-sm text-muted-foreground">Contact an agent manager if you cannot upgrade this agent.</p> : null}
           {!completed && !active && status !== 'running' ? <p className="text-sm text-muted-foreground">{update.can_upgrade ? 'Start this agent using Start below, then choose Upgrade.' : 'An agent manager must start this agent before upgrading.'} Opening this notice does not restart it.</p> : null}

@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiError } from '@/lib/http'
@@ -38,9 +39,7 @@ export function UserDetailPage() {
 
       {detail.isLoading ? <p className="text-sm text-muted-foreground">Loading user…</p> : null}
       {detail.error ? (
-        <p className="text-sm text-destructive">
-          {detail.error instanceof ApiError ? detail.error.message : 'Failed to load user'}
-        </p>
+        <ErrorToast error={detail.error} message={detail.error instanceof ApiError ? detail.error.message : 'Failed to load user'} />
       ) : null}
 
       {person ? (

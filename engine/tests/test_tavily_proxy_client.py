@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 from collections.abc import AsyncIterator, Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, final, override
 from unittest.mock import AsyncMock
@@ -51,10 +51,13 @@ class MemoryKeyDao:
     async def list_ordered(self) -> list[TavilyApiKeyRecord]:
         return sorted(self.rows.values(), key=lambda row: row.position)
 
-    async def list_active_ordered(self, *, now) -> list[TavilyApiKeyRecord]:
-        del now
+    async def list_active_ordered(self, *, now: datetime) -> list[TavilyApiKeyRecord]:
         return sorted(
-            [row for row in self.rows.values() if row.status == "active"],
+            [
+                row
+                for row in self.rows.values()
+                if row.status == "active" and (row.exhausted_until is None or row.exhausted_until <= now)
+            ],
             key=lambda row: row.position,
         )
 
@@ -254,11 +257,16 @@ async def test_proxy_rotates_on_quota_and_succeeds_on_next_key(
     from app.core.security import decrypt_data
     from app.services.tavily import client as client_mod
 
+    now = datetime.now(UTC)
+    monkeypatch.setattr("app.services.tavily.keys._now", lambda: now)
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     calls: list[tuple[str, str, str]] = []
     responses = [
-        FakeResponse(quota_status, '{"detail":{"error":"This request exceeds your plan\'s set usage limit."}}'),
+        *[
+            FakeResponse(quota_status, '{"detail":{"error":"This request exceeds your plan\'s set usage limit."}}')
+            for _ in range(4)
+        ],
         FakeResponse(200, '{"ok":true}'),
     ]
     monkeypatch.setattr(
@@ -276,49 +284,196 @@ async def test_proxy_rotates_on_quota_and_succeeds_on_next_key(
     assert status == 200
     assert body == '{"ok":true}'
     assert decrypt_data(first.key_ciphertext, "test-secret") == "key-a"
-    assert "Bearer key-a" in calls[0][2]
-    assert "Bearer key-b" in calls[1][2]
+    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"] * 4 + ["Bearer key-b"]
     assert first.exhausted_until is not None
+    assert first.last_used_at is not None
+    assert first.exhausted_until - first.last_used_at == timedelta(hours=24)
     assert ring.cursor == second.id
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [402, 429, 434])
-async def test_proxy_passes_non_quota_client_errors_through_without_rotating(
-    ring: MemoryKeyDao, spy: RingSpy, monkeypatch: pytest.MonkeyPatch, status: int
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 408, 429, 434, 500, 503])
+async def test_proxy_http_failure_rotates_and_pins_the_successful_key(
+    ring: MemoryKeyDao,
+    spy: RingSpy,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: list[dict[str, object]],
+    path: str,
+    status: int,
 ) -> None:
+    from app.core.security import encrypt_data
+
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
+    decryptions: list[UUID] = []
+    decrypt = client_mod.decrypt_api_key
+
+    def decrypt_key(record: TavilyApiKeyRecord) -> str:
+        decryptions.append(record.id)
+        return decrypt(record)
+
+    monkeypatch.setattr(client_mod, "decrypt_api_key", decrypt_key)
     calls = use_upstream(
-        monkeypatch, [FakeResponse(status, '{"detail":{"error":"slow down"}}'), FakeResponse(200, "{}")]
+        monkeypatch,
+        [
+            *[FakeResponse(status, '{"detail":{"error":"upstream failed"}}') for _ in range(4)],
+            FakeResponse(200, "{}"),
+            FakeResponse(200, "{}"),
+        ],
     )
 
-    result = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+    result = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+    second.key_ciphertext = encrypt_data("key-b-updated", "test-secret")
+    following = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
 
-    assert result[0] == status
-    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"]
-    _assert_ring_untouched(ring, spy, first, second)
+    assert result[:2] == following[:2] == (200, "{}")
+    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"] * 4 + ["Bearer key-b", "Bearer key-b-updated"]
+    assert decryptions == [first.id, second.id, second.id]
+    assert ring.cursor == second.id
+    assert spy.advanced == [first.id]
+    assert spy.exhausted == []
+    assert first.exhausted_until is second.exhausted_until is None
+    assert [entry["key_id"] for entry in recorded] == [second.id, second.id]
+    assert [entry["quota_rotated"] for entry in recorded] == [False, False]
 
 
 @pytest.mark.asyncio
-async def test_proxy_does_not_rotate_on_500_then_retries_same_key(
-    ring: MemoryKeyDao, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("failures", [1, 2, 3])
+@pytest.mark.parametrize("failure_status", [401, 432, 433, 500, None])
+async def test_proxy_recovers_within_retries_and_keeps_the_key_pinned(
+    ring: MemoryKeyDao,
+    spy: RingSpy,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: list[dict[str, object]],
+    path: str,
+    failures: int,
+    failure_status: int | None,
 ) -> None:
-    from app.services.tavily import client as client_mod
+    first = await add_key(label="a", api_key="key-a")
+    second = await add_key(label="b", api_key="key-b")
+    calls: list[str] = []
 
-    _ = ring
-    _ = await add_key(label="a", api_key="key-a")
-    _ = await add_key(label="b", api_key="key-b")
-    calls: list[tuple[str, str, str]] = []
-    responses = [
-        FakeResponse(500, "boom"),
-        FakeResponse(200, '{"ok":true}'),
-    ]
-    monkeypatch.setattr(client_mod, "tavily_client", lambda: FakeClient(responses, calls))
-    status, body, _headers = await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
-    assert status == 200
-    assert body == '{"ok":true}'
-    assert [auth for _m, _u, auth in calls] == ["Bearer key-a", "Bearer key-a"]
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers["authorization"])
+        if len(calls) <= failures:
+            if failure_status is None:
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(failure_status, text="failed")
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: upstream)
+        result = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+        following = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+
+    assert result[:2] == following[:2] == (200, "ok")
+    assert calls == ["Bearer key-a"] * (failures + 2)
+    _assert_ring_untouched(ring, spy, first, second)
+    assert second.last_used_at is None
+    assert [entry["key_id"] for entry in recorded] == [first.id, first.id]
+    assert [entry["quota_rotated"] for entry in recorded] == [False, False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("succeeds", [True, False])
+async def test_proxy_wraps_eligible_keys_once_and_returns_the_final_response(
+    ring: MemoryKeyDao, spy: RingSpy, monkeypatch: pytest.MonkeyPatch, path: str, succeeds: bool
+) -> None:
+    first = await add_key(label="a", api_key="key-a")
+    second = await add_key(label="b", api_key="key-b")
+    third = await add_key(label="c", api_key="key-c")
+    disabled = await add_key(label="disabled", api_key="disabled")
+    disabled.status = "disabled"
+    cooling = await add_key(label="cooling", api_key="cooling")
+    cooling.exhausted_until = datetime.now(UTC) + timedelta(hours=1)
+    ring.cursor = third.id
+    final_status = 200 if succeeds else 400
+    calls = use_upstream(
+        monkeypatch,
+        [
+            *[FakeResponse(500, "boom") for _ in range(4)],
+            *[FakeResponse(401, "invalid key") for _ in range(4)],
+            *[FakeResponse(final_status, "final", headers={"x-final": "yes"}) for _ in range(1 if succeeds else 4)],
+        ],
+    )
+
+    status, body, headers = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+
+    assert (status, body, headers["x-final"]) == (final_status, "final", "yes")
+    assert [auth for _m, _u, auth in calls] == (
+        ["Bearer key-c"] * 4 + ["Bearer key-a"] * 4 + ["Bearer key-b"] * (1 if succeeds else 4)
+    )
+    assert spy.advanced == ([third.id, first.id] if succeeds else [third.id, first.id, second.id])
+    assert ring.cursor == (second.id if succeeds else third.id)
+    assert spy.exhausted == []
+    assert disabled.last_used_at is cooling.last_used_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("all_fail", [False, True])
+@pytest.mark.parametrize(
+    "error_type", [httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError]
+)
+async def test_proxy_transport_failures_retry_four_times_before_rotating(
+    ring: MemoryKeyDao,
+    spy: RingSpy,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: list[dict[str, object]],
+    path: str,
+    all_fail: bool,
+    error_type: type[httpx.TransportError],
+) -> None:
+    first = await add_key(label="a", api_key="key-a")
+    second = await add_key(label="b", api_key="key-b")
+    calls: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        auth = request.headers["authorization"]
+        calls.append(auth)
+        if auth == "Bearer key-a" or all_fail:
+            raise error_type(auth, request=request)
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: upstream)
+        if all_fail:
+            with pytest.raises(TavilyProxyError) as exc:
+                await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+            assert (exc.value.status_code, exc.value.body) == (502, "Tavily upstream unavailable")
+            assert isinstance(exc.value.__cause__, error_type)
+            assert str(exc.value.__cause__) == "Bearer key-b"
+        else:
+            result = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+            following = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+            assert result[:2] == following[:2] == (200, "ok")
+
+    assert calls == ["Bearer key-a"] * 4 + ["Bearer key-b"] * (4 if all_fail else 2)
+    assert spy.advanced == ([first.id, second.id] if all_fail else [first.id])
+    assert ring.cursor == (first.id if all_fail else second.id)
+    assert spy.exhausted == []
+    assert all(entry["key_id"] == second.id and entry["quota_rotated"] is False for entry in recorded)
+
+
+@pytest.mark.asyncio
+async def test_programming_failure_does_not_rotate_or_become_an_upstream_error(
+    ring: MemoryKeyDao, spy: RingSpy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await add_key(label="a", api_key="key-a")
+    second = await add_key(label="b", api_key="key-b")
+
+    def broken_request(_request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("programming failure")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(broken_request)) as upstream:
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: upstream)
+        with pytest.raises(RuntimeError, match="programming failure"):
+            await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+
+    _assert_ring_untouched(ring, spy, first, second)
 
 
 @pytest.mark.asyncio
@@ -375,29 +530,37 @@ def _assert_ring_untouched(ring: MemoryKeyDao, spy: RingSpy, *keys: TavilyApiKey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("upstream_status", [200, 401, 500])
+@pytest.mark.parametrize("prior_failures", [0, 1])
 async def test_response_ceiling_crossed_mid_stream_aborts_with_502(
     ring: MemoryKeyDao,
     limits: SimpleNamespace,
     spy: RingSpy,
     recorded: list[dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    upstream_status: int,
+    prior_failures: int,
 ) -> None:
     limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 10
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
-    oversized = FakeResponse(200, chunks=[b"123456", b"789012", b"never-read"])
+    oversized = FakeResponse(upstream_status, chunks=[b"123456", b"789012", b"never-read"])
     healthy = FakeResponse(200, '{"ok":true}')
-    calls = use_upstream(monkeypatch, [oversized, healthy])
+    calls = use_upstream(
+        monkeypatch, [*[FakeResponse(500, "failed") for _ in range(prior_failures)], oversized, healthy]
+    )
 
     with pytest.raises(TavilyResponseTooLargeError) as exc:
-        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+        await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
 
     assert not isinstance(exc.value, TavilyProxyError)
     assert exc.value.status_code == 502
     assert exc.value.bytes_read == 12
     assert oversized.stream.sent == 12
     assert oversized.stream.closed
-    assert len(calls) == 1
+    assert len(calls) == prior_failures + 1
     _assert_ring_untouched(ring, spy, first, second)
     assert [entry["local_failure"] for entry in recorded] == [exc.value]
 
@@ -435,12 +598,14 @@ async def test_response_ceiling_counts_decoded_bytes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
 async def test_deadline_expiring_mid_stream_aborts_with_504(
     ring: MemoryKeyDao,
     spy: RingSpy,
     clock: FakeClock,
     recorded: list[dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
 ) -> None:
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
@@ -448,7 +613,7 @@ async def test_deadline_expiring_mid_stream_aborts_with_504(
     calls = use_upstream(monkeypatch, [slow, FakeResponse(200, "{}")])
 
     with pytest.raises(TavilyDeadlineExceededError) as exc:
-        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+        await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
 
     assert not isinstance(exc.value, TavilyProxyError)
     assert exc.value.status_code == 504
@@ -471,13 +636,16 @@ async def test_deadline_expiring_during_rotation_stops_before_next_key(
     first = await add_key(label="a", api_key="key-a")
     second = await add_key(label="b", api_key="key-b")
     spy.on_advance = lambda: clock.advance(31)
-    calls = use_upstream(monkeypatch, [FakeResponse(432, '{"detail":{"error":"plan limit"}}'), FakeResponse(200, "{}")])
+    calls = use_upstream(
+        monkeypatch,
+        [*[FakeResponse(432, '{"detail":{"error":"plan limit"}}') for _ in range(4)], FakeResponse(200, "{}")],
+    )
 
     with pytest.raises(TavilyDeadlineExceededError) as exc:
         await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
 
     assert exc.value.bytes_read == 0
-    assert len(calls) == 1
+    assert len(calls) == 4
     # The quota rotation that happened inside the budget stands; nothing local touched the ring afterwards.
     assert spy.exhausted == [first.id]
     assert spy.advanced == [first.id]
@@ -490,12 +658,16 @@ async def test_deadline_expiring_during_rotation_stops_before_next_key(
 
 
 @pytest.mark.asyncio
-async def test_one_deadline_spans_the_transient_retry(
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("failed_attempts", [1, 4])
+async def test_one_deadline_spans_retries_and_failover(
     ring: MemoryKeyDao,
     limits: SimpleNamespace,
     spy: RingSpy,
     clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    failed_attempts: int,
 ) -> None:
     limits.TAVILY_PROXY_DEADLINE_SECONDS = 120.0
     first = await add_key(label="a", api_key="key-a")
@@ -503,21 +675,29 @@ async def test_one_deadline_spans_the_transient_retry(
     calls = use_upstream(
         monkeypatch,
         [
-            FakeResponse(500, "boom", on_send=lambda: clock.advance(100)),
+            *[
+                FakeResponse(500, "boom", on_send=lambda: clock.advance(100 / failed_attempts))
+                for _ in range(failed_attempts)
+            ],
             FakeResponse(200, '{"ok":true}', on_send=lambda: clock.advance(30)),
         ],
     )
 
     with pytest.raises(TavilyDeadlineExceededError):
-        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+        await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
 
-    assert [auth for _m, _u, auth in calls] == ["Bearer key-a", "Bearer key-a"]
-    _assert_ring_untouched(ring, spy, first, second)
-    assert second.last_used_at is None
+    assert [auth for _m, _u, auth in calls] == ["Bearer key-a"] * failed_attempts + [
+        "Bearer key-b" if failed_attempts == 4 else "Bearer key-a"
+    ]
+    assert spy.advanced == ([first.id] if failed_attempts == 4 else [])
+    assert spy.exhausted == []
+    assert ring.cursor == (second.id if failed_attempts == 4 else first.id)
+    assert first.exhausted_until is second.exhausted_until is None
+    assert (second.last_used_at is not None) == (failed_attempts == 4)
 
 
 @pytest.mark.asyncio
-async def test_deadline_spent_before_the_retry_does_not_resend(
+async def test_deadline_spent_before_retry_does_not_rotate(
     ring: MemoryKeyDao,
     spy: RingSpy,
     clock: FakeClock,
@@ -535,28 +715,102 @@ async def test_deadline_spent_before_the_retry_does_not_resend(
 
 
 @pytest.mark.asyncio
-async def test_deadline_covers_the_env_key_fallback(
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("failures", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("failure_status", [401, 432, 433, 500, None])
+async def test_env_key_fallback_retries_until_success_or_four_failures(
+    ring: MemoryKeyDao,
+    limits: SimpleNamespace,
+    spy: RingSpy,
+    recorded: list[dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    failures: int,
+    failure_status: int | None,
+) -> None:
+    limits.TAVILY_API_KEY = "env-key"
+    stored = await add_key(label="a", api_key="key-a")
+    stored.status = "disabled"
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        attempt = len(requests)
+        if attempt <= failures:
+            if failure_status is None:
+                raise httpx.ConnectError(f"failed {attempt}", request=request)
+            return httpx.Response(failure_status, text=f"failed {attempt}", headers={"x-attempt": str(attempt)})
+        return httpx.Response(200, text="ok", headers={"x-attempt": str(attempt)})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        monkeypatch.setattr(client_mod, "tavily_client", lambda: upstream)
+        if failures == 4 and failure_status is None:
+            with pytest.raises(TavilyProxyError) as exc:
+                await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+            assert (exc.value.status_code, exc.value.body) == (502, "Tavily upstream unavailable")
+            assert isinstance(exc.value.__cause__, httpx.ConnectError)
+            assert str(exc.value.__cause__) == "failed 4"
+        else:
+            status, body, headers = await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
+            assert (status, body) == ((failure_status, "failed 4") if failures == 4 else (200, "ok"))
+            assert headers["x-attempt"] == str(min(failures + 1, 4))
+
+    assert [(request.method, str(request.url), request.headers["authorization"]) for request in requests] == [
+        ("POST", f"https://api.tavily.com/{path}", "Bearer env-key")
+    ] * min(failures + 1, 4)
+    _assert_ring_untouched(ring, spy, stored)
+    assert stored.last_used_at is None
+    assert len(recorded) == 1
+    assert recorded[0]["key_id"] is None
+    assert recorded[0]["quota_rotated"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "crawl"])
+@pytest.mark.parametrize("prior_failures", [0, 1])
+@pytest.mark.parametrize("limit", ["deadline", "response"])
+async def test_env_key_fallback_local_limits_are_terminal(
     ring: MemoryKeyDao,
     limits: SimpleNamespace,
     spy: RingSpy,
     clock: FakeClock,
     recorded: list[dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    prior_failures: int,
+    limit: str,
 ) -> None:
     limits.TAVILY_API_KEY = "env-key"
+    limits.TAVILY_PROXY_MAX_RESPONSE_BYTES = 10
     stored = await add_key(label="a", api_key="key-a")
     stored.status = "disabled"
-    slow = FakeResponse(200, chunks=[b"abc", b"def"], after_chunk=lambda: clock.advance(31))
-    calls = use_upstream(monkeypatch, [slow])
+    if limit == "deadline":
+        limited = FakeResponse(
+            200, chunks=[b"abc", b"def"], after_chunk=lambda: clock.advance(11 if prior_failures else 31)
+        )
+        failure = TavilyDeadlineExceededError
+    else:
+        limited = FakeResponse(200, chunks=[b"123456", b"789012", b"never-read"])
+        failure = TavilyResponseTooLargeError
+    calls = use_upstream(
+        monkeypatch,
+        [
+            *[FakeResponse(401, "failed", on_send=lambda: clock.advance(20)) for _ in range(prior_failures)],
+            limited,
+            FakeResponse(200, "ok"),
+        ],
+    )
 
-    with pytest.raises(TavilyDeadlineExceededError) as exc:
-        await proxy_tavily(method="POST", path="search", headers={}, content=b"{}")
+    with pytest.raises(failure) as exc:
+        await proxy_tavily(method="POST", path=path, headers={}, content=b"{}")
 
-    assert [auth for _m, _u, auth in calls] == ["Bearer env-key"]
-    assert slow.stream.closed
-    assert spy.exhausted == []
-    assert spy.advanced == []
+    assert exc.value.bytes_read == (6 if limit == "deadline" else 12)
+    assert [auth for _m, _u, auth in calls] == ["Bearer env-key"] * (prior_failures + 1)
+    assert limited.stream.closed
+    _assert_ring_untouched(ring, spy, stored)
+    assert len(recorded) == 1
     assert recorded[0]["key_id"] is None
+    assert recorded[0]["quota_rotated"] is False
     assert recorded[0]["local_failure"] is exc.value
 
 
@@ -868,9 +1122,10 @@ async def test_every_attempt_and_later_call_shares_one_open_client(ring: MemoryK
     _ = ring
     _ = await add_key(label="a", api_key="key-a")
     _ = await add_key(label="b", api_key="key-b")
+    _ = await add_key(label="c", api_key="key-c")
     shared_wire.responses = [
-        FakeResponse(500, "boom"),
-        FakeResponse(432, '{"detail":{"error":"plan limit"}}'),
+        *[FakeResponse(500, "boom") for _ in range(4)],
+        *[FakeResponse(432, '{"detail":{"error":"plan limit"}}') for _ in range(4)],
         FakeResponse(200, '{"results":[]}'),
         FakeResponse(200, "{}"),
     ]
@@ -879,12 +1134,9 @@ async def test_every_attempt_and_later_call_shares_one_open_client(ring: MemoryK
     second = await proxy_tavily(method="POST", path="crawl", headers={}, content=b"{}")
 
     assert (first[0], second[0]) == (200, 200)
-    assert [request.headers["authorization"] for request in shared_wire.requests] == [
-        "Bearer key-a",
-        "Bearer key-a",
-        "Bearer key-b",
-        "Bearer key-b",
-    ]
+    assert [request.headers["authorization"] for request in shared_wire.requests] == (
+        ["Bearer key-a"] * 4 + ["Bearer key-b"] * 4 + ["Bearer key-c"] * 2
+    )
     assert len(shared_wire.built) == 1
     assert shared_wire.built[0]["follow_redirects"] is False
     limits = shared_wire.built[0]["limits"]
@@ -945,7 +1197,7 @@ async def test_authenticated_http_boundary_rotates_and_forwards_search_and_crawl
 
     def upstream(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if len(requests) == 1:
+        if len(requests) <= 4:
             return httpx.Response(432, json={"detail": {"error": "plan limit"}})
         if request.url.path == "/search":
             return httpx.Response(200, json={"results": [{"url": "https://example.org", "content": "found"}]})
@@ -987,18 +1239,14 @@ async def test_authenticated_http_boundary_rotates_and_forwards_search_and_crawl
     assert map_response.status_code == 404
     assert search.json()["results"][0]["content"] == "found"
     assert crawl.json()["results"][0]["raw_content"] == "page"
-    assert [str(request.url) for request in requests] == [
-        "https://api.tavily.com/search",
-        "https://api.tavily.com/search",
-        "https://api.tavily.com/crawl",
+    assert [str(request.url) for request in requests] == ["https://api.tavily.com/search"] * 5 + [
+        "https://api.tavily.com/crawl"
     ]
-    assert [request.headers["authorization"] for request in requests] == [
-        "Bearer upstream-first",
-        "Bearer upstream-second",
-        "Bearer upstream-second",
-    ]
-    assert requests[0].content == requests[1].content == b'{"query":"question"}'
-    assert requests[2].content == b'{"url":"https://example.org"}'
+    assert [request.headers["authorization"] for request in requests] == ["Bearer upstream-first"] * 4 + [
+        "Bearer upstream-second"
+    ] * 2
+    assert [request.content for request in requests[:5]] == [b'{"query":"question"}'] * 5
+    assert requests[5].content == b'{"url":"https://example.org"}'
     assert first.exhausted_until is not None
     assert ring.cursor == second.id
     assert availability.await_args_list[0].args == (agent, sha256(token.encode()).digest())
@@ -1045,6 +1293,7 @@ async def test_set_cookie_is_never_replayed_on_a_later_call_retry_or_redirect(
 ) -> None:
     _ = ring
     _ = await add_key(label="a", api_key="key-a")
+    _ = await add_key(label="b", api_key="key-b")
     cookie = {"set-cookie": "sid=agent-a; Path=/; Domain=api.tavily.com"}
     shared_wire.responses = [
         FakeResponse(302, headers={"location": "https://api.tavily.com/search/moved", **cookie}),

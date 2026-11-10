@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link } from 'react-router-dom'
 import { z } from 'zod'
+import { toast } from 'sonner'
 
 import { AuthShell } from '@/components/auth/auth-shell'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { forgotPasswordRequest } from '@/lib/auth-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
+import { authSession } from '@/lib/auth-session'
 
 const schema = z.object({
   email: z.string().trim().min(1, 'Enter your email').email('Enter a valid email').max(254),
@@ -21,7 +23,6 @@ type FormValues = z.infer<typeof schema>
 
 export function ForgotPasswordPage() {
   const formId = useId()
-  const [formError, setFormError] = useState<string | null>(null)
   const [sent, setSent] = useState(false)
   const {
     register,
@@ -34,19 +35,14 @@ export function ForgotPasswordPage() {
   })
 
   async function onSubmit(values: FormValues) {
-    setFormError(null)
+    const owner = authSession.capture()
     try {
       await forgotPasswordRequest(values.email.trim().toLowerCase())
-      setSent(true)
+      if (authSession.isCurrent(owner)) setSent(true)
     } catch (error) {
-      setFormError(
-        error instanceof ApiError
-          ? (formatApiDetail(error.detail) ??
-            (error.status === 400
-              ? 'Password reset is currently unavailable. Contact your operator.'
-              : 'Unable to send reset email. Try again.'))
-          : 'Unable to send reset email. Try again.',
-      )
+      if (authSession.isCurrent(owner)) toast.error(userFacingRequestError(error,
+        error instanceof ApiError && error.status === 400
+          ? 'Password reset is currently unavailable. Contact your operator.' : 'Unable to send reset email. Try again.'))
     }
   }
 
@@ -63,12 +59,6 @@ export function ForgotPasswordPage() {
       brandBody="Reset links from this site stay on MaraClaw member sign-in, not the admin console."
       highlights={memberAuthHighlights}
     >
-      {formError ? (
-        <div role="alert" className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive">
-          {formError}
-        </div>
-      ) : null}
-
       {sent ? (
         <div className="space-y-4">
           <p className="rounded-xl border border-border/80 bg-muted/40 px-3.5 py-3 text-sm text-muted-foreground">

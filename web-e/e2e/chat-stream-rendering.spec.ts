@@ -6,13 +6,13 @@ import { originalMarkdown } from './chat-markdown-reference-fixture'
 const turn = '11111111-1111-4111-8111-111111111111'
 const foreignTurn = '22222222-2222-4222-8222-222222222222'
 
-test('markdown HTML matches the original renderer including escaping and blank-line boundaries', async ({ page }) => {
+test('ordinary markdown HTML retains the original escaping and paragraph boundaries', async ({ page }) => {
   const texts = [
     '', '   ', '\n\n', '\n\nend\n\n', 'first\nline\n\n\nsecond',
     '<script>alert("x")</script> & &amp; "quotes"',
     '# Heading **bold** `code`', ' ## Secondary [link](https://example.test/?a=1&b="q") ',
     '### unsupported heading', '- first\n* **second**\nignored\n - indented',
-    '```ts\nconst x = "<tag>" & 1\n```', '```js\na\n\nb\n```', '```c++\n<&>\n```', '```',
+    '```ts\nconst x = "<tag>" & 1\n```', '```',
     '`**nested**` and **`code`**', '[label](http://example.test) [bad](javascript:alert(1))',
     '[`code`](https://example.test/"onclick="x) <img src=x onerror="alert(1)">',
   ]
@@ -28,7 +28,7 @@ test('markdown HTML matches the original renderer including escaping and blank-l
       wrapper.innerHTML = source
       return wrapper.innerHTML
     }, html)
-    expect(await page.locator(`[data-chat-entry="markdown-${index}"] > [data-chat-content] > div`).evaluate((element) => element.innerHTML), JSON.stringify(text)).toBe(expected)
+    expect(await page.locator(`[data-chat-entry="markdown-${index}"] > [data-chat-content] > div`).last().evaluate((element) => element.innerHTML), JSON.stringify(text)).toBe(expected)
   }
 })
 

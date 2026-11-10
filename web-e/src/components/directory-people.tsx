@@ -3,7 +3,8 @@ import { useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
-import { ApiError } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { RequestErrorToast } from '@/components/request-error-toast'
 
 export function PersonCardList({ loading, error, count, empty, errorFallback, children }: {
   readonly loading: boolean
@@ -22,9 +23,7 @@ export function PersonCardList({ loading, error, count, empty, errorFallback, ch
   }
   if (error) {
     return (
-      <p className="text-sm text-destructive">
-        {error instanceof ApiError ? error.message : errorFallback}
-      </p>
+      <RequestErrorToast error={error} message={userFacingRequestError(error, errorFallback)} />
     )
   }
   if (count === 0) return <p className="text-sm text-muted-foreground">{empty}</p>

@@ -3,6 +3,7 @@ import { useId, useState, type FormEventHandler, type ReactNode } from 'react'
 import { FormProvider, useForm, useFormContext } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -128,7 +129,7 @@ function ToolDetailsForm({ tool, tenantId, onClose, onSubmit, pending, errorMess
             <label className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" className="size-4 accent-primary" {...register('is_default')} />Default</label>
           </div>
         </fieldset>
-        {errorMessage ? <p role="alert" className="text-sm text-destructive">{errorMessage}</p> : null}
+        {errorMessage ? <ErrorToast message={errorMessage} /> : null}
         <div className="flex flex-wrap gap-3">
           <Button type="submit" className={toolButtonClass} disabled={pending || !tool && !tenantId}>{pending ? 'Saving…' : tool ? 'Save details' : 'Create MCP tool'}</Button>
           <Button type="button" variant="outline" className={toolButtonClass} disabled={pending} onClick={onClose}>Cancel</Button>

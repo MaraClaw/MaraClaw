@@ -1,22 +1,17 @@
-"""Classify Tavily upstream failures for rotate-vs-retry, and name the proxy's own local limits."""
+"""Classify Tavily quota failures for cooldown, and name the proxy's own local limits."""
 
 from __future__ import annotations
 
 from typing import final
 
 # Tavily's documented key/plan usage limits: 432 (key or plan limit) and 433 (pay-as-you-go limit). A 429 is a
-# rate limit that clears on its own, so it is passed through without exhausting the key.
+# rate limit that clears on its own, so failover does not exhaust that key.
 _QUOTA_STATUSES = frozenset({432, 433})
 
 
 def is_quota_error(status_code: int) -> bool:
     """Return True when the response means this key is exhausted and we should rotate."""
     return status_code in _QUOTA_STATUSES
-
-
-def is_transient_error(status_code: int) -> bool:
-    """Return True for same-key retry (not a reason to burn the next key)."""
-    return status_code >= 500 or status_code == 408
 
 
 class TavilyLimitError(Exception):

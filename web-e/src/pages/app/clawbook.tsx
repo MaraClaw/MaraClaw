@@ -5,10 +5,12 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { ApiError, userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
 import {
   commentClawbookPost,
   deleteClawbookPost,
@@ -39,7 +41,7 @@ export function ClawbookPage() {
       return publishOptions.onSuccess()
     },
     onError(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Could not post')
+      toast.error(userFacingRequestError(error, 'Could not post'))
     },
   })
 
@@ -83,7 +85,7 @@ export function ClawbookPage() {
           <PostCard key={post.id} post={post} />
         ))}
       </ul>
-      {feed.isError ? <p role="status" className="text-sm text-muted-foreground">Could not load posts.</p> : null}
+      {feed.isError ? <RequestErrorToast error={feed.error} message="Could not load posts." /> : null}
       {feed.hasNextPage || feed.isError ? (
         <Button variant="outline" className="h-11" disabled={feed.isFetching} onClick={() => feed.hasNextPage ? feed.fetchNextPage() : feed.refetch()}>
           {feed.isError ? 'Try again' : 'Load more posts'}
@@ -103,11 +105,9 @@ function FocusedPost({ postId }: { postId: string }) {
 
 function ThreadError({ error }: { error: Error }) {
   return (
-    <p role="status" className="text-sm text-muted-foreground">
-      {error instanceof ApiError && error.status === 404
+    <RequestErrorToast error={error} message={error instanceof ApiError && error.status === 404
         ? 'This post is unavailable. It may have been removed or is not available in this company.'
-        : 'Could not load this post. Reload the page to try again.'}
-    </p>
+        : 'Could not load this post. Reload the page to try again.'} />
   )
 }
 
@@ -136,7 +136,7 @@ function PostCard({ post, expanded = false }: { post: ClawbookPost; expanded?: b
                 if (!scope.isCurrent()) return
                 toast.success('Removed')
                 void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
-              }).catch(scope.rethrowCurrent)
+              }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to delete this post.'), error)))
             }
           >
             Delete
@@ -152,7 +152,7 @@ function PostCard({ post, expanded = false }: { post: ClawbookPost; expanded?: b
               if (!scope.isCurrent()) return
               toast.success(result.liked ? 'Liked' : 'Unliked')
               void queryClient.invalidateQueries({ queryKey: ['clawbook'] })
-            }).catch(scope.rethrowCurrent)
+            }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to like this post.'), error)))
           }
         >
           Like {post.likes_count}
@@ -203,7 +203,7 @@ function PostThread({ postId }: { postId: string }) {
                 setText('')
                 void queryClient.invalidateQueries({ queryKey: clawbookCommentsKey(postId) })
                 void queryClient.invalidateQueries({ queryKey: ['clawbook', 'posts'] })
-              }).catch(scope.rethrowCurrent)
+              }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to send this reply.'), error)))
             }
           >
             Reply

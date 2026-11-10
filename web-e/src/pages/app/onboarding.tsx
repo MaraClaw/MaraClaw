@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { markOnboardingSkipped } from '@/lib/workspace-api'
 import type { AssistantStartFailure } from '@/lib/onboarding-api'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { formatApiDetail, userFacingRequestError } from '@/lib/http'
 
 const schema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -44,7 +44,7 @@ export function OnboardingPage() {
     },
     startFailed: setStartFailure,
     error(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to create assistant')
+      toast.error(userFacingRequestError(error, 'Unable to create assistant'))
     },
   }))
 
@@ -75,7 +75,7 @@ export function OnboardingPage() {
         </div>
         {startFailure && (
           <p role="alert" className="text-sm text-destructive">
-            Your assistant was saved, but could not start. {startFailure.message} Retry starting the same assistant.
+            Your assistant was saved, but could not start. {formatApiDetail(startFailure.message)} Retry starting the same assistant.
           </p>
         )}
         <div className="flex gap-2">

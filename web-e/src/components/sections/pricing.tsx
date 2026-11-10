@@ -1,24 +1,27 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { OrganizationAdmissionForm } from '@/components/sections/organization-admission-form'
 import { Button } from '@/components/ui/button'
 import { fetchOrganizationPlans } from '@/lib/organization-admissions-api'
 import type { OrganizationPlan } from '@/lib/organization-admissions-api'
+import { authSession } from '@/lib/auth-session'
 
 type Catalog =
   | { readonly status: 'loading' }
-  | { readonly status: 'error' }
+  | { readonly status: 'error'; readonly error: unknown }
   | { readonly status: 'ready'; readonly plans: readonly OrganizationPlan[] }
 
 function PricingCatalog({ retry }: { readonly retry: () => void }) {
   const [catalog, setCatalog] = useState<Catalog>({ status: 'loading' })
 
   useEffect(() => {
+    const owner = authSession.capture()
     const controller = new AbortController()
     fetchOrganizationPlans(controller.signal).then(
-      ({ plans }) => { if (!controller.signal.aborted) setCatalog({ status: 'ready', plans }) },
-      () => { if (!controller.signal.aborted) setCatalog({ status: 'error' }) },
+      ({ plans }) => { if (!controller.signal.aborted && authSession.isCurrent(owner)) setCatalog({ status: 'ready', plans }) },
+      (error: unknown) => { if (!controller.signal.aborted && authSession.isCurrent(owner)) setCatalog({ status: 'error', error }) },
     )
     return () => controller.abort()
   }, [])
@@ -30,7 +33,7 @@ function PricingCatalog({ retry }: { readonly retry: () => void }) {
       break
     case 'error':
       content = <div className="mt-10 space-y-4 text-center">
-        <p role="alert" className="text-[17px] text-destructive">Organization plans could not be loaded.</p>
+        <RequestErrorToast error={catalog.error} message="Organization plans could not be loaded." />
         <Button variant="outline" onClick={retry}>Retry plans</Button>
       </div>
       break

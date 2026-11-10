@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/layout/auth-shell'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { PasswordField } from '@/components/ui/password-field'
 import { useSessionCurrent } from '@/hooks/use-auth'
@@ -29,12 +30,10 @@ const schema = z
 type FormValues = z.infer<typeof schema>
 
 export function ResetPasswordPage() {
-  const formId = useId()
   const isCurrent = useSessionCurrent()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const token = useMemo(() => searchParams.get('token')?.trim() ?? '', [searchParams])
-  const formErrorId = `${formId}-form-error`
   const [formError, setFormError] = useState<string | null>(null)
 
   const {
@@ -121,20 +120,13 @@ export function ResetPasswordPage() {
       }
     >
       {formError ? (
-        <div
-          id={formErrorId}
-          role="alert"
-          className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
-        >
-          {formError}
-        </div>
+        <ErrorToast message={formError} />
       ) : null}
 
       <form
         className="space-y-4"
         onSubmit={handleSubmit(onSubmit)}
         noValidate
-        aria-describedby={formError ? formErrorId : undefined}
       >
         <PasswordField
           label="New password"

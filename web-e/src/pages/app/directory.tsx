@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useSearchParams } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { PersonCard, PersonCardList } from '@/components/directory-people'
 import { OrgDepartments } from '@/components/org-departments'
@@ -113,11 +114,9 @@ export function DirectoryPage() {
         ) : null}
         {users.isError ? (
           <div className="space-y-3">
-            <p role="alert" className="text-sm text-destructive">
-              {userFacingRequestError(users.error, users.isFetchNextPageError
+            <RequestErrorToast error={users.error} message={userFacingRequestError(users.error, users.isFetchNextPageError
                 ? 'Unable to load more people.'
-                : users.data ? 'Unable to refresh people.' : 'Unable to load people.')}
-            </p>
+                : users.data ? 'Unable to refresh people.' : 'Unable to load people.')} />
             <Button
               variant="outline"
               className="min-h-11"

@@ -3,7 +3,9 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { userFacingRequestError } from '@/lib/http'
+import { showRequestError } from '@/lib/request-error-toast'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { createKeyResult, listCompanyReports, membersWithoutOkr, syncOkrRelationships, triggerOkrOutreach } from '@/lib/okr-api'
 
 export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; readonly enabled: boolean }) {
@@ -12,12 +14,13 @@ export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; re
   const gaps = useQuery({ queryKey: ['okr', 'gaps'], queryFn: membersWithoutOkr, enabled })
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : fallback)
+    toast.error(userFacingRequestError(error, fallback))
   }
   return (
     <>
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">Company reports</h2>
+        {company.isError ? <RequestErrorToast error={company.error} message="Unable to load company reports. Try again." /> : null}
         {(company.data ?? []).map((item) => (
           <article key={item.id} className="rounded-xl border border-border p-3 text-sm">
             <p className="font-medium">
@@ -52,9 +55,9 @@ export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; re
               Nudge missing OKRs
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">
+          {gaps.isError ? <RequestErrorToast error={gaps.error} message="Unable to load members without OKRs. Try again." /> : <p className="text-sm text-muted-foreground">
             {gaps.data?.total ?? 0} tracked members without an OKR this period.
-          </p>
+          </p>}
           <ul className="space-y-1 text-sm">
             {(gaps.data?.members_without_okr ?? []).slice(0, 20).map((member) => (
               <li key={`${member.type}-${member.id}`}>
@@ -87,7 +90,7 @@ export function AddKeyResult({ objectiveId, onAdded }: { readonly objectiveId: s
           void createKeyResult(objectiveId, { title: title.trim(), target_value: 100 }).then(scope.effect(() => {
             setTitle('')
             onAdded()
-          })).catch(scope.rethrowCurrent)
+          })).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to add this key result. Try again.'), error)))
         }}
       >
         KR

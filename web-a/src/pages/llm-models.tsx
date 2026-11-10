@@ -8,6 +8,8 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
+import { showErrorToast } from '@/lib/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -391,9 +393,7 @@ export function LlmModelsPage() {
               </div>
             </details>
             {formError ? (
-              <p className="text-sm text-destructive sm:col-span-2" role="alert">
-                {formError}
-              </p>
+              <ErrorToast message={formError} />
             ) : null}
             <div className="sm:col-span-2">
               <Button type="submit" disabled={isSubmitting || !tenantId}>
@@ -405,11 +405,11 @@ export function LlmModelsPage() {
         </CardContent>
       </Card>
 
+      {companies.isError ? <ErrorToast error={companies.error} message="Could not load companies for models." /> : null}
+      {providers.isError ? <ErrorToast error={providers.error} message="Could not load model providers." /> : null}
       {models.isLoading ? <p className="text-sm text-muted-foreground">Loading models…</p> : null}
       {models.error ? (
-        <p className="text-sm text-destructive">
-          {models.error instanceof ApiError ? models.error.message : 'Failed to load models'}
-        </p>
+        <ErrorToast error={models.error} message={models.error instanceof ApiError ? models.error.message : 'Failed to load models'} />
       ) : null}
       {!models.isLoading && tenantId && (models.data ?? []).length === 0 ? (
         <p className="text-sm text-muted-foreground">No models yet. Add one so agents can reply.</p>
@@ -516,15 +516,18 @@ function GrokSubscriptionCard({
           </div>
         ) : null}
         {failed ? (
-          <p className="text-sm text-destructive" role="alert">
-            {status.data?.detail || 'Grok sign-in did not complete. Start again.'}
+          <p className="text-sm text-muted-foreground" role="status">
+            {status.data?.status === 'expired'
+              ? 'This Grok sign-in has expired. Start again to get a new sign-in code.'
+              : status.data?.status === 'denied'
+                ? 'Grok sign-in was denied. Start again when you are ready to try again.'
+                : 'Grok sign-in could not be completed. Start again to try again.'}
           </p>
         ) : null}
         {startError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {startError}
-          </p>
+          <ErrorToast error={start.error} message={startError} />
         ) : null}
+        {status.isError ? <ErrorToast error={status.error} message="Could not check Grok sign-in. Try again." /> : null}
         <div>
           <Button
             type="button"
@@ -633,7 +636,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
         toast.success(`Connected in ${result.latency_ms} ms`)
         return
       }
-      toast.error(result.error || 'The provider rejected this configuration')
+      showErrorToast(result.error || 'The provider rejected this configuration')
     },
     onError: (error) => {
       toast.error(error instanceof ApiError ? error.message : 'Could not test this model')

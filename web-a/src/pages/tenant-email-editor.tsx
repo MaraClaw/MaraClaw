@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
@@ -89,7 +90,7 @@ export function TenantEmailEditor({ tenantId, saved, recipient }: Props) {
         }}>{resetting.isPending ? 'Removing SMTP configuration…' : 'Remove SMTP configuration'}</Button>
       </div>
     </fieldset>
-    {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
+    {failure ? <ErrorToast message={failure} /> : null}
     <p role="status" className="text-sm text-muted-foreground">{pending ? saving.isPending ? 'Saving SMTP settings…' : testing.isPending ? 'Sending a test using the saved configuration…' : 'Removing organization SMTP…' : result}</p>
   </form>
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -58,9 +59,9 @@ function TransferDetail({ id }: { readonly id: string }) {
       <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })}>Refresh status</Button>
     </div>
     {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer request…</p> : null}
-    {query.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load this transfer. Refresh to try again.')}</p> : null}
-    {withdraw.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(withdraw.error, 'Unable to withdraw. Refresh the status before trying again.')}</p> : null}
-    {entryError ? <p role="alert" className="text-sm text-destructive">{entryError}</p> : null}
+    {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load this transfer. Refresh to try again.')} /> : null}
+    {withdraw.isError ? <RequestErrorToast error={withdraw.error} message={userFacingRequestError(withdraw.error, 'Unable to withdraw. Refresh the status before trying again.')} /> : null}
+    {entryError ? <RequestErrorToast message={entryError} /> : null}
     {request ? <>
       <section aria-label="Transfer status" className="space-y-3 rounded-xl border border-border p-4">
         <Badge variant="outline">{transferStatuses[request.status].label}</Badge>

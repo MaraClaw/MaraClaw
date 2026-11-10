@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -35,7 +36,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
         return <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">Loading members...</p>
       case 'error':
         return <div className="space-y-3">
-          <p role="status" className="text-base leading-normal text-destructive sm:text-sm">{userFacingRequestError(roster.error, 'Unable to load department members. Try again.')}</p>
+          <RequestErrorToast error={roster.error} message={userFacingRequestError(roster.error, 'Unable to load department members. Try again.')} />
           <Button type="button" variant="outline" disabled={roster.isFetching} onClick={scope.effect(() => { void roster.refetch() })}>Retry</Button>
         </div>
       case 'success':
@@ -69,7 +70,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
-        setFieldError('A department with this name already exists. Choose another name.')
+        setSaveError('A department with this name already exists. Choose another name.')
         input.current?.focus()
       } else {
         setSaveError(userFacingRequestError(error, 'Unable to save the department name. Try again.'))
@@ -138,7 +139,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
               />
               {fieldError ? <p id={`${inputId}-error`} role="status" className="text-sm text-destructive">{fieldError}</p> : null}
             </div>
-            {saveError ? <p role="status" className="text-sm text-destructive">{saveError}</p> : null}
+            {saveError ? <RequestErrorToast message={saveError} /> : null}
             <div className="flex flex-wrap gap-3">
               <Button type="submit" disabled={rename.isPending}>{rename.isPending ? 'Saving...' : 'Save'}</Button>
               <Button type="button" variant="outline" disabled={rename.isPending} onClick={() => {

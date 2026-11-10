@@ -1,6 +1,7 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Textarea } from '@/components/ui/textarea'
 import type { InstalledAgentSkill } from '@/lib/agent-skills-api'
 import { filterSkillMentions, findSkillMention, insertSkillMention, resolveSkillMentionSegments } from '@/lib/chat/skill-mentions'
@@ -124,9 +125,9 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
     {open ? <section id={`${id}-skills`} aria-label="Installed skills" aria-busy={!hasData && skillsQuery.isFetching}
       className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-xl overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-elevated">
       <p className="px-3 py-2 text-sm font-medium">Installed skills</p>
-      {hasData && skillsQuery.isError ? <p role="status" className="px-3 pb-2 text-sm text-muted-foreground">Could not refresh installed skills. Showing cached skills.</p> : null}
+      {hasData && skillsQuery.isError ? <RequestErrorToast error={skillsQuery.error} message="Could not refresh installed skills. Showing cached skills." /> : null}
       {!hasData && skillsQuery.isFetching ? <p role="status" className="px-3 pb-3 text-sm text-muted-foreground">Loading installed skills…</p>
-        : !hasData && skillsQuery.isError ? <p role="alert" className="px-3 pb-3 text-sm text-destructive">Could not load installed skills. Keep typing, or reopen @ to try again.</p>
+        : !hasData && skillsQuery.isError ? <RequestErrorToast error={skillsQuery.error} message="Could not load installed skills. Keep typing, or reopen @ to try again." />
           : choices.length ? <div className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1">
             {choices.map((skill, index) => <button key={skill.path} ref={index === activeIndex ? activeOptionRef : undefined}
               type="button" aria-current={index === activeIndex ? 'true' : undefined}

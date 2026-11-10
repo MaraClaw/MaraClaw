@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useAgentDeletionApproval, useAgentDeletionDetail } from '@/hooks/use-agent-deletions'
@@ -62,7 +63,7 @@ function DeletionReview({ request, ready }: { readonly request: AgentDeletionDet
       </ul>}
     </CardContent></Card>
     <p role="status" className="text-sm">{approval.isSuccess ? 'Your approval was recorded.' : request.viewer.has_approved ? 'You have already approved this request.' : ''}</p>
-    {approval.isError ? <p role="alert" className="text-sm text-destructive">{agentLifecycleError(approval.error)}</p> : null}
+    {approval.isError ? <ErrorToast error={approval.error} message={agentLifecycleError(approval.error)} /> : null}
     {request.status === 'pending' ? <Card><CardHeader><h2 className="font-display text-lg font-semibold">Approve deletion</h2></CardHeader><CardContent className="flex flex-col items-start gap-4">
       <p className="text-sm leading-relaxed">Approval may immediately delete this agent when the requirement is met. Deletion cannot be undone. Private chats and files are not shown in this review.</p>
       <p className="text-sm text-muted-foreground">{request.viewer.has_viewed ? 'Your detail review has been recorded.' : 'Reload the details to record your review before approving.'}</p>
@@ -89,7 +90,7 @@ export function AgentDeletionRequestDetailPage() {
     {!parsed.success ? <p role="alert" className="text-sm text-destructive">This request link is invalid. Return to deletion requests.</p> : <>
       {detail.isPending ? <Card><CardContent role="status">Loading deletion request...</CardContent></Card> : null}
       {detail.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
-        <p role="alert" className="text-sm">Unable to load this request. Check your access and connection, then try again.</p>
+        <ErrorToast error={detail.error} message="Unable to load this request. Check your access and connection, then try again." />
         <Button variant="outline" disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>Reload details</Button>
       </CardContent></Card> : null}
       {detail.data ? <DeletionReview key={detail.data.id} request={detail.data} ready={detail.isSuccess && detail.isFetchedAfterMount && !detail.isFetching} /> : null}

@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -51,7 +52,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
   const deleting = useRef(false)
   const wasConfirming = useRef(false)
   const wasEditing = useRef(false)
-  const { register, handleSubmit, reset, setError, setFocus, clearErrors, formState: { errors } } = useForm<FormValues>({
+  const { register, handleSubmit, reset, setFocus, clearErrors, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { name: department.name, description: department.description },
   })
@@ -73,9 +74,6 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
     wasConfirming.current = confirming
   }, [confirming])
 
-  useEffect(() => {
-    if (editing && !rename.isPending && (errors.name?.type === 'server' || errors.root?.server)) setFocus('name')
-  }, [editing, rename.isPending, errors.name?.type, errors.root?.server, setFocus])
 
   function cancel() {
     reset({ name: department.name, description: department.description })
@@ -99,7 +97,8 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
         const message = duplicate
           ? 'A department with this name already exists. Use a different name.'
           : error instanceof ApiError ? error.message : 'Could not update department. Check your connection and try again.'
-        setError(duplicate ? 'name' : 'root.server', { type: 'server', message })
+        toast.error(message)
+        setFocus('name')
       },
     })
   }
@@ -147,7 +146,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
             </p>
             {preview.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading deletion preview…</p> : preview.isError ? (
               <div className="space-y-2">
-                <p role="alert" className="text-sm text-destructive">Could not load deletion preview. Try again before deleting.</p>
+                <ErrorToast error={preview.error} message="Could not load deletion preview. Try again before deleting." />
                 <Button type="button" variant="outline" size="sm" className="h-11 sm:h-9" onClick={() => { confirmHeading.current?.focus(); void preview.refetch() }}>Retry preview</Button>
               </div>
             ) : preview.data ? (
@@ -160,9 +159,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
               </div>
             ) : null}
             {deletion.isError ? (
-              <p role="alert" className="text-sm text-destructive wrap-anywhere">
-                {deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete department. Check your connection and try again.'}
-              </p>
+              <ErrorToast error={deletion.error} message={deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete department. Check your connection and try again.'} />
             ) : null}
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" disabled={deletion.isPending} onClick={cancelDeletion}>
@@ -181,7 +178,6 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
             className="space-y-3"
             aria-label={`Edit ${department.name}`}
             aria-busy={rename.isPending}
-            aria-describedby={errors.root?.server ? `${formId}-error` : undefined}
             onSubmit={handleSubmit(onSave)}
             onKeyDown={(event) => {
               if (event.key === 'Escape' && !event.nativeEvent.isComposing && !rename.isPending) {
@@ -215,9 +211,6 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
                 className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
                 {...register('description')} />
             </div>
-            {errors.root?.server ? (
-              <p id={`${formId}-error`} role="alert" className="text-sm text-destructive">{errors.root.server.message}</p>
-            ) : null}
             <div className="flex flex-wrap gap-2">
               <Button type="submit" size="sm" className="h-11 sm:h-9" disabled={rename.isPending}>
                 {rename.isPending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
