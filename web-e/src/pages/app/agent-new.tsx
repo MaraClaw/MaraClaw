@@ -13,7 +13,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { RequestErrorToast } from '@/components/request-error-toast'
+import { userFacingRequestError } from '@/lib/http'
 import { listOrgDepartments } from '@/lib/org-departments-api'
 import { createAgent, listTemplates } from '@/lib/workspace-api'
 
@@ -83,7 +84,7 @@ export function AgentNewPage() {
       navigate(`/app/agents/${agent.id}/chat`)
     },
     onError(error) {
-      toast.error(error instanceof ApiError ? (formatApiDetail(error.detail) ?? error.message) : 'Unable to create agent')
+      toast.error(userFacingRequestError(error, 'Unable to create agent'))
     },
   })
 
@@ -109,6 +110,7 @@ export function AgentNewPage() {
 
   return (
     <div className="mx-auto max-w-lg space-y-6 p-6">
+      {templates.isError ? <RequestErrorToast error={templates.error} message="Unable to load agent templates. Try again." /> : null}
       <div>
         <Button
           type="button"
@@ -177,12 +179,13 @@ export function AgentNewPage() {
               {departments.isPending
                 ? 'Loading org departments...'
                 : departments.isError
-                  ? 'Unable to load org departments. Try again or choose another visibility.'
+                  ? ''
                   : departments.data?.length === 0
                     ? 'No org departments yet. Ask a company admin to create one, or choose another visibility.'
                     : ''}
             </p>
             {departments.isError || retryButton ? (
+              <>{departments.isError ? <RequestErrorToast error={departments.error} message="Unable to load org departments. Try again or choose another visibility." /> : null}
               <Button
                 type="button"
                 variant="outline"
@@ -199,7 +202,7 @@ export function AgentNewPage() {
                 })}
               >
                 Retry departments
-              </Button>
+              </Button></>
             ) : null}
             <p id="department-admin-hint" className="text-sm text-muted-foreground">Company admins manage org departments and membership.</p>
             {departmentError ? <p id="department-error" className="text-sm text-destructive">{departmentError}</p> : null}
