@@ -1,6 +1,7 @@
 import { useImperativeHandle, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { AdmissionInboxGate } from '@/components/layout/admission-access-gate'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -130,17 +131,17 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
         <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? 'Mark all read covers ALL active notifications matching this category, including those not loaded.' : 'Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.'}</p>
         <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking active unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
         {unreadQuery.isError ? <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive">Unable to check unread notifications.</p>
+          <RequestErrorToast error={unreadQuery.error} message="Unable to check unread notifications." />
           <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={scope.effect(() => void unreadQuery.refetch())}>Retry unread count</Button>
         </div> : null}
       </div>
       <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Their read status is unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored to Active. Their read status is unchanged.' : archive.isSuccess ? 'Notification archived. Its read status is unchanged.' : restore.isSuccess ? 'Notification restored to Active.' : markRead.isSuccess ? 'Notification marked as read.' : markSelected.isSuccess ? 'Selected notifications marked as read.' : markSelectedUnread.isSuccess ? 'Selected notifications marked as unread.' : markAll.isSuccess ? `All active notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
-      {markSelectedUnread.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(markSelectedUnread.error, 'Unable to mark selected notifications as unread. Your selection is kept. Try again.')}</p> : null}
-      {markRead.isError || markAll.isError || markSelected.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(markRead.error ?? markAll.error ?? markSelected.error, 'Unable to mark notifications as read. Try again.')}</p> : null}
-      {archive.isError || restore.isError || archiveSelected.isError || restoreSelected.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error, archiveSelected.isError || restoreSelected.isError ? 'Unable to move selected notifications. Your selection is kept. Try again.' : 'Unable to move this notification. Try again.')}</p> : null}
+      {markSelectedUnread.isError ? <RequestErrorToast error={markSelectedUnread.error} message={userFacingRequestError(markSelectedUnread.error, 'Unable to mark selected notifications as unread. Your selection is kept. Try again.')} /> : null}
+      {markRead.isError || markAll.isError || markSelected.isError ? <RequestErrorToast error={markRead.error ?? markAll.error ?? markSelected.error} message={userFacingRequestError(markRead.error ?? markAll.error ?? markSelected.error, 'Unable to mark notifications as read. Try again.')} /> : null}
+      {archive.isError || restore.isError || archiveSelected.isError || restoreSelected.isError ? <RequestErrorToast error={archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error} message={userFacingRequestError(archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error, archiveSelected.isError || restoreSelected.isError ? 'Unable to move selected notifications. Your selection is kept. Try again.' : 'Unable to move this notification. Try again.')} /> : null}
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading notifications…</p> : null}
       {query.isError && !query.isFetchNextPageError ? <div className="space-y-3 rounded-xl border border-border p-4">
-        <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')}</p>
+        <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')} />
         <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</Button>
       </div> : null}
       <ul aria-label="Notifications" className="space-y-2">
@@ -170,7 +171,7 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
           </li>
         })}
       </ul>
-      {query.isFetchNextPageError ? <p role="alert" className="text-sm text-destructive">Unable to load more notifications. Try again.</p> : null}
+      {query.isFetchNextPageError ? <RequestErrorToast error={query.error} message="Unable to load more notifications. Try again." /> : null}
       {query.hasNextPage ? <Button variant="outline" className={actionClass} disabled={query.isFetching || pending} onClick={() => {
         const loadedPages = query.data?.pages.length ?? 0
         void query.fetchNextPage()?.then(scope.effect((result) => { if (result.isSuccess && (result.data?.pages.length ?? 0) > loadedPages) selection.loadedMore() }))
