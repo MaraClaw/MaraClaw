@@ -24,8 +24,7 @@ Scope: console navigation, notification entry point and shared screen chrome.
    `agentDeletionReviewOnly` (`/agent-deletion-requests`) uses `canReviewAgentDeletions`:
    active `org_admin`, not a platform admin, with a `tenant_id`.
 6. `paymentReviewOnly` (`/transfer-payments`) uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
-   Active platform admins pass. An org admin needs an active genesis account whose `/api/tenants/me`
-   is its own active default end-user organization; the entry stays hidden while that lookup is pending or failed.
+   Only active platform admins pass, using the canonical platform flag or role, without a tenant lookup.
 7. Under `mustChangePassword`, surviving nav entries other than `/settings`
    render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.

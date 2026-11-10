@@ -33,7 +33,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - `mustChangePassword` is true when the token response, `user` or `identity` flag says so. `ProtectedRoute` redirects to `/settings`; Settings stays open until cleared and legacy `/account` redirects there. After `PUT /api/auth/me/password`, call `refreshReplacement` with the captured owner and replacement access token.
 - Only an authenticated 401 expires the session (see `src/lib/AGENTS.md`). A 403, including `must_change_password`, is a plain `ApiError` and keeps the token.
 - Companies + Search + OpenClaw updates require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
-- Narrower gates (non-PA org admin for Broadcast and Invitations, genesis for Admissions, active own-org admin for Agent deletions, default-org genesis or PA for Payments) live in `src/lib/types/auth.ts` and `transfer-review-access.ts`; route guard and nav entry must use the same predicate.
+- Narrower gates (non-PA org admin for Broadcast and Invitations, genesis for Admissions, active own-org admin for Agent deletions, active PA only for Payments) live in `src/lib/types/auth.ts` and `transfer-review-access.ts`; route guard and nav entry must use the same predicate.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 
