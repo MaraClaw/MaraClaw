@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from datetime import date
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.domain.okr import KeyResultStatus, PeriodFrequency
 from app.core.json_types import JsonObject
@@ -61,6 +62,23 @@ class ObjectiveOut(BaseModel):
     status: str
     created_at: str
     key_results: list[KeyResultOut] = []
+
+
+class ObjectivePageOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: list[ObjectiveOut]
+    next_cursor: str | None
+
+
+class ObjectivePageQuery(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    period_start: date | None = None
+    period_end: date | None = None
+    owner_types: list[Literal["company", "user", "agent"]] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: str | None = Field(default=None, max_length=4096)
 
 
 class ObjectiveCreate(BaseModel):

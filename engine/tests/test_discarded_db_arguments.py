@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.records.agent import AgentRecord
+from app.records.org import OrgMemberRecord
 from app.services import gogcli_persistence, okr_agent_hook, tool_config
 from app.services.agent_manager import AgentManager
 from app.services.autonomy_service import AutonomyService
@@ -101,6 +102,16 @@ async def test_okr_canonical_call_binds_new_member(monkeypatch: pytest.MonkeyPat
     agent = AgentRecord(id=uuid4(), name="OKR", creator_id=uuid4(), tenant_id=tenant_id)
     lookup = AsyncMock(return_value=agent)
     create = AsyncMock()
+    connection = AsyncMock()
+    connection.fetchone.return_value = {"tenant_id": tenant_id}
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    monkeypatch.setattr(okr_agent_hook, "connection_ctx", lambda: context)
+    monkeypatch.setattr(
+        okr_agent_hook.org_member_dao,
+        "get",
+        AsyncMock(return_value=OrgMemberRecord(member_id, "Joining member", tenant_id=tenant_id)),
+    )
     monkeypatch.setattr(okr_agent_hook, "_get_okr_agent", lookup)
     monkeypatch.setattr(okr_agent_hook.agent_relationship_dao, "get_for_agent_and_member", AsyncMock(return_value=None))
     monkeypatch.setattr(okr_agent_hook.agent_relationship_dao, "create", create)

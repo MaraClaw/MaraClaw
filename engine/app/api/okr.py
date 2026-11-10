@@ -20,8 +20,9 @@ POST      /api/okr/trigger-member-outreach         (P4 onboarding: fire OKR Agen
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.auth import get_current_user
 from app.core.domain.channels import ChannelType
@@ -35,13 +36,13 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.notification_dao import notification_dao
 from app.dao.okr_dao import (
+    ObjectivePageScope,
     okr_key_result_dao,
     okr_objective_dao,
     okr_progress_log_dao,
     work_report_dao,
 )
 from app.dao.okr_settings_dao import okr_settings_dao
-from app.dao.org_member_dao import org_member_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.records.okr import (
@@ -71,6 +72,8 @@ from app.schemas.okr import (
     MemberDailyReportUpsert,
     ObjectiveCreate,
     ObjectiveOut,
+    ObjectivePageOut,
+    ObjectivePageQuery,
     ObjectiveUpdate,
     OKRSettingsOut,
     OKRSettingsUpdate,
@@ -78,8 +81,10 @@ from app.schemas.okr import (
     ProgressUpdate,
     WorkReportOut,
 )
+from app.services.okr_cursor import encode_objective_cursor, parse_objective_cursor
 from app.services.okr_owners import owner_names, resolve_owner
 from app.services.okr_periods import advance_period, compute_current_period, compute_period_for_date
+from app.services.okr_relationships import sync_okr_agent_relationships as _sync_okr_agent_relationships
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
 regeneration_router = APIRouter(prefix="/api/okr", tags=["okr"])
@@ -107,40 +112,6 @@ def _require_tenant_id(user: UserRecord) -> uuid.UUID:
     if tenant_id is None:
         raise HTTPException(status_code=400, detail="Tenant context required")
     return tenant_id
-
-
-async def _sync_okr_agent_relationships(tenant_id: uuid.UUID, okr_agent_id: uuid.UUID) -> None:
-    """Auto-connect the OKR Agent to all active org members and company-visible agents."""
-    _ = await agent_relationship_dao.delete_for_agent(okr_agent_id)
-    _ = await agent_agent_relationship_dao.delete_for_agent(okr_agent_id)
-
-    for member_id in await org_member_dao.list_active_ids_for_tenant(tenant_id):
-        _ = await agent_relationship_dao.create(
-            obj_in={
-                "agent_id": okr_agent_id,
-                "member_id": member_id,
-                "relation": "team_member",
-                "description": "OKR tracking - auto-linked via Sync Relationships",
-            }
-        )
-
-    for agent in await agent_dao.list_active_nonsystem_for_tenant(
-        tenant_id, exclude_id=okr_agent_id, company_only=True
-    ):
-        _ = await agent_agent_relationship_dao.create(
-            obj_in={
-                "agent_id": okr_agent_id,
-                "target_agent_id": agent.id,
-                "relation": "collaborator",
-            }
-        )
-
-    try:
-        from app.api.relationships import _regenerate_relationships_file
-
-        await _regenerate_relationships_file(okr_agent_id)
-    except Exception as error:
-        logger.warning(f"[OKR] Failed to regenerate relationships file: {error}")
 
 
 async def _get_or_create_settings(tenant_id: uuid.UUID) -> OKRSettingsRecord:
@@ -370,7 +341,13 @@ async def sync_okr_relationships(user: UserRecord = Depends(get_current_user)) -
     if not settings.okr_agent_id:
         raise HTTPException(404, "OKR Agent not found for this tenant. Enable OKR in Company Settings first.")
     okr_agent_id = settings.okr_agent_id
-    await _sync_okr_agent_relationships(_require_tenant_id(user), okr_agent_id)
+    await _sync_okr_agent_relationships(_require_tenant_id(user), okr_agent_id, user)
+    try:
+        from app.api.relationships import _regenerate_relationships_file
+
+        await _regenerate_relationships_file(okr_agent_id)
+    except Exception as error:
+        logger.opt(exception=error).warning("[OKR] Failed to regenerate relationships file")
     return {"status": "ok", "okr_agent_id": str(okr_agent_id)}
 
 
@@ -508,6 +485,41 @@ async def list_objectives(
         return names.get((obj.owner_type, obj.owner_id)) if obj.owner_type in ("user", "agent") else None
 
     return [_obj_to_out(o, krs_by_obj.get(o.id, []), owner_name=_resolve_name(o)) for o in objectives]
+
+
+@router.get("/objectives/page", response_model=ObjectivePageOut)
+async def list_objectives_page(
+    query: Annotated[ObjectivePageQuery, Query()], user: UserRecord = Depends(get_current_user)
+) -> ObjectivePageOut:
+    """Page objectives while keeping each retained objective's complete key results."""
+    tenant_id = _require_tenant_id(user)
+    if query.period_start is None or query.period_end is None:
+        settings = await _get_or_create_settings(tenant_id)
+        ps, pe = _compute_current_period(settings.period_frequency, settings.period_length_days)
+    else:
+        ps, pe = query.period_start, query.period_end
+    if pe < ps:
+        raise HTTPException(422, "period_end must not precede period_start")
+    scope = ObjectivePageScope(tenant_id, ps, pe, tuple(sorted(set(query.owner_types))))
+    after = parse_objective_cursor(query.cursor, scope)
+    rows = await okr_objective_dao.list_page(scope, limit=query.limit, after=after)
+    objectives = rows[: query.limit]
+    next_cursor = encode_objective_cursor(scope, objectives[-1]) if len(rows) > query.limit else None
+    if not objectives:
+        return ObjectivePageOut(items=[], next_cursor=None)
+    krs_by_obj: dict[uuid.UUID, list[OKRKeyResultRecord]] = {}
+    for kr in await okr_key_result_dao.list_for_objectives([obj.id for obj in objectives]):
+        krs_by_obj.setdefault(kr.objective_id, []).append(kr)
+    names = await owner_names(tenant_id, objectives)
+    return ObjectivePageOut(
+        items=[
+            _obj_to_out(
+                obj, krs_by_obj.get(obj.id, []), names.get((obj.owner_type, obj.owner_id)) if obj.owner_id else None
+            )
+            for obj in objectives
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @router.post("/objectives", response_model=ObjectiveOut)

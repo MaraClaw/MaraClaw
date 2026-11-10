@@ -10,6 +10,7 @@ import re
 import uuid
 from typing import Any, NotRequired, TypedDict
 
+from app.core.acl_locks import lock_tenants
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.security import hash_password_async
@@ -21,6 +22,7 @@ from app.dao import (
     tenant_dao,
     user_dao,
 )
+from app.db.session import optional_connection_ctx
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.org import OrgMemberRecord
 from app.records.tenant import TenantRecord
@@ -190,30 +192,28 @@ class RegistrationService:
                     "quota_agent_ttl_hours": tenant.default_agent_ttl_hours,
                 }
 
-        user = await user_dao.create(
-            obj_in={
-                "identity_id": identity.id,
-                "tenant_id": tenant_id,
-                "display_name": name,
-                "role": role,
-                "registration_source": registration_source,
-                "is_active": is_active or identity.is_platform_admin,
-                **quota,
-            }
-        )
-        user.identity = identity
-
-        # Link to OrgMember if exists
-        await self.bind_org_member(user)
-
-        # Create Participant record
-        _ = await participant_dao.create_for_user(
-            user.id,
-            display_name=user.display_name,
-            avatar_url=user.avatar_url,
-        )
-
-        return user
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                await lock_tenants(db, (tenant_id,))
+            user = await user_dao.create(
+                obj_in={
+                    "identity_id": identity.id,
+                    "tenant_id": tenant_id,
+                    "display_name": name,
+                    "role": role,
+                    "registration_source": registration_source,
+                    "is_active": is_active or identity.is_platform_admin,
+                    **quota,
+                }
+            )
+            user.identity = identity
+            await self.bind_org_member(user)
+            _ = await participant_dao.create_for_user(
+                user.id,
+                display_name=user.display_name,
+                avatar_url=user.avatar_url,
+            )
+            return user
 
     # ── SSO flows ────────────────────────────────────────────────────────────
 
@@ -305,6 +305,12 @@ class RegistrationService:
 
     async def bind_org_member(self, user: UserRecord) -> None:
         """Find and bind OrgMember to user based on email/phone and tenant_id."""
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                await lock_tenants(db, (user.tenant_id,))
+            await self._bind_org_member_locked(user)
+
+    async def _bind_org_member_locked(self, user: UserRecord) -> None:
         if not user.tenant_id:
             return
 
@@ -353,6 +359,12 @@ class RegistrationService:
 
     async def ensure_web_org_member(self, user: UserRecord) -> OrgMemberRecord | None:
         """Ensure the user has a dedicated platform OrgMember record in their tenant."""
+        async with optional_connection_ctx() as db:
+            if db is not None:
+                await lock_tenants(db, (user.tenant_id,))
+            return await self._ensure_web_org_member_locked(user)
+
+    async def _ensure_web_org_member_locked(self, user: UserRecord) -> OrgMemberRecord | None:
         if not user.tenant_id:
             return None
 

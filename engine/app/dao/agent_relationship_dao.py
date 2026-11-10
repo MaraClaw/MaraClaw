@@ -140,8 +140,24 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
             )
             return [_relationship_with_member(row) for row in rows]
 
-    async def list_for_agent_with_members_and_providers(self, agent_id: UUID) -> list[AgentRelationshipRecord]:
+    async def list_page_ids(self, agent_id: UUID, limit: int, after_id: UUID | None = None) -> list[UUID]:
+        """Select stable relationship keys before hydrating a retained display page."""
+        boundary = " AND id > %(after_id)s" if after_id is not None else ""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id FROM agent_relationships WHERE agent_id = %(agent_id)s"
+                f"{boundary} ORDER BY id ASC LIMIT %(limit)s",
+                {"agent_id": agent_id, "after_id": after_id, "limit": limit},
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
+
+    async def list_for_agent_with_members_and_providers(
+        self, agent_id: UUID, *, relationship_ids: Sequence[UUID] | None = None
+    ) -> list[AgentRelationshipRecord]:
         """Relationships with org member + identity provider labels for the API."""
+        if relationship_ids is not None and not relationship_ids:
+            return []
+        retained = " AND r.id = ANY(%(ids)s)" if relationship_ids is not None else ""
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT "
@@ -159,8 +175,8 @@ class AgentRelationshipDAO(BaseDAO[AgentRelationshipRecord]):
                 "FROM agent_relationships r "
                 "LEFT JOIN org_members m ON m.id = r.member_id "
                 "LEFT JOIN identity_providers p ON p.id = m.provider_id "
-                "WHERE r.agent_id = %(agent_id)s",
-                {"agent_id": agent_id},
+                f"WHERE r.agent_id = %(agent_id)s{retained} ORDER BY r.id ASC",
+                {"agent_id": agent_id, "ids": list(relationship_ids) if relationship_ids is not None else None},
             )
             return [_relationship_with_member(row, include_provider=True) for row in rows]
 

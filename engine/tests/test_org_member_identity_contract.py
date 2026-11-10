@@ -208,6 +208,19 @@ async def test_provider_deletion_keeps_member_and_relationship(store: IdentitySt
     assert store.connection.execute("SELECT id FROM identity_providers").fetchall() == []
 
 
+async def test_relationship_keyset_pages_keep_unique_relationship_keys_and_agent_scope(store: IdentityStore):
+    member_id = store.member(1)
+    for value in (503, 501, 502):
+        store.insert("agent_relationships", {"id": UUID(int=value), "agent_id": AGENT_ID, "member_id": member_id})
+    store.insert("agent_relationships", {"id": UUID(int=500), "agent_id": UUID(int=401), "member_id": member_id})
+
+    first = await agent_relationship_dao.list_page_ids(AGENT_ID, 2)
+    final = await agent_relationship_dao.list_page_ids(AGENT_ID, 2, first[-1])
+
+    assert first == [UUID(int=501), UUID(int=502)]
+    assert final == [UUID(int=503)]
+
+
 @pytest.mark.parametrize("purpose", ["permissions", "okr", "relationships"])
 async def test_permission_and_okr_membership_remains_tenant_scoped(store: IdentityStore, purpose: str):
     # Given

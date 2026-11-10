@@ -33,6 +33,17 @@ type SearchAnalyticsOrgRanking = SearchAnalyticsOrgRankingProjection
 type SearchAnalyticsTrendingQuery = SearchAnalyticsTrendingQueryProjection
 
 
+class SearchAnalyticsDashboard(TypedDict):
+    start: datetime
+    end: datetime
+    tenant_id: str | None
+    system_summary: SearchAnalyticsSummary
+    selected_summary: SearchAnalyticsSummary
+    timeseries: list[SearchAnalyticsTimeBucket]
+    orgs: list[SearchAnalyticsOrgRanking]
+    trending: list[SearchAnalyticsTrendingQuery]
+
+
 class SearchAnalyticsExportConfig(TypedDict):
     export_enabled: bool
     include_raw: bool

@@ -175,6 +175,12 @@ export type AgentPermissionUserAccess = z.infer<typeof AgentPermissionUserAccess
 export const AgentPermissionUpdateSchema = z.looseObject({ ["access_level"]: PermissionAccessLevelSchema.optional(), ["department_ids"]: z.union([z.array(z.guid()), z.null()]).optional(), ["scope_ids"]: z.array(z.guid()).optional(), ["scope_type"]: AgentSharingModeSchema.optional(), ["user_access"]: z.array(AgentPermissionUserAccessSchema).optional() });
 export type AgentPermissionUpdate = z.infer<typeof AgentPermissionUpdateSchema>;
 
+export const AgentRelationshipInSchema = z.looseObject({ ["description"]: z.string().optional(), ["relation"]: z.string().optional(), ["target_agent_id"]: z.string() });
+export type AgentRelationshipIn = z.infer<typeof AgentRelationshipInSchema>;
+
+export const AgentRelationshipBatchInSchema = z.looseObject({ ["relationships"]: z.array(AgentRelationshipInSchema) });
+export type AgentRelationshipBatchIn = z.infer<typeof AgentRelationshipBatchInSchema>;
+
 export const AgentSetupMCPRetrySchema = z.strictObject({ ["server_id"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 512).regex(new RegExp("^\\S+$", "u")) });
 export type AgentSetupMCPRetry = z.infer<typeof AgentSetupMCPRetrySchema>;
 
@@ -400,6 +406,9 @@ export type ClawhubInstallIn = z.infer<typeof ClawhubInstallInSchema>;
 export const ClickRequestSchema = z.looseObject({ ["button"]: z.string().optional(), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string(), ["x"]: z.number().refine(Number.isInteger), ["y"]: z.number().refine(Number.isInteger) });
 export type ClickRequest = z.infer<typeof ClickRequestSchema>;
 
+export const CollaborationAcknowledgementSchema = z.looseObject({ ["status"]: z.intersection(z.literal("ok"), z.string()) });
+export type CollaborationAcknowledgement = z.infer<typeof CollaborationAcknowledgementSchema>;
+
 export const CompanyConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["unset"]: z.array(z.string()).optional() });
 export type CompanyConfigOperations = z.infer<typeof CompanyConfigOperationsSchema>;
 
@@ -575,6 +584,15 @@ export type HTTPValidationError = z.infer<typeof HTTPValidationErrorSchema>;
 export const HandoverRequestSchema = z.looseObject({ ["new_creator_id"]: z.guid() });
 export type HandoverRequest = z.infer<typeof HandoverRequestSchema>;
 
+export const RelationshipMemberSummarySchema = z.looseObject({ ["avatar_url"]: z.union([z.string(), z.null()]), ["department_path"]: z.string(), ["email"]: z.union([z.string(), z.null()]), ["is_platform_user"]: z.boolean(), ["name"]: z.string(), ["provider_name"]: z.union([z.string(), z.null()]), ["provider_type"]: z.union([z.string(), z.null()]), ["title"]: z.string(), ["user_id"]: z.union([z.string(), z.null()]) });
+export type RelationshipMemberSummary = z.infer<typeof RelationshipMemberSummarySchema>;
+
+export const HumanRelationshipResponseSchema = z.looseObject({ ["access_allowed"]: z.boolean(), ["access_status"]: z.string(), ["access_status_reason"]: z.union([z.string(), z.null()]), ["description"]: z.string(), ["id"]: z.string(), ["member"]: z.union([RelationshipMemberSummarySchema, z.null()]), ["member_id"]: z.string(), ["relation"]: z.string(), ["relation_label"]: z.string() });
+export type HumanRelationshipResponse = z.infer<typeof HumanRelationshipResponseSchema>;
+
+export const HumanRelationshipPageResponseSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(HumanRelationshipResponseSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type HumanRelationshipPageResponse = z.infer<typeof HumanRelationshipPageResponseSchema>;
+
 export const IdentityBindRequestSchema = z.looseObject({ ["code"]: z.string(), ["provider_type"]: z.string(), ["state"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 128) });
 export type IdentityBindRequest = z.infer<typeof IdentityBindRequestSchema>;
 
@@ -747,6 +765,9 @@ export type ObjectiveCreate = z.infer<typeof ObjectiveCreateSchema>;
 export const ObjectiveOutSchema = z.looseObject({ ["created_at"]: z.string(), ["description"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.string(), ["key_results"]: z.array(KeyResultOutSchema).optional(), ["owner_id"]: z.union([z.string(), z.null()]).optional(), ["owner_name"]: z.union([z.string(), z.null()]).optional(), ["owner_type"]: z.string(), ["period_end"]: z.string(), ["period_start"]: z.string(), ["status"]: z.string(), ["title"]: z.string() });
 export type ObjectiveOut = z.infer<typeof ObjectiveOutSchema>;
 
+export const ObjectivePageOutSchema = z.looseObject({ ["items"]: z.array(ObjectiveOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ObjectivePageOut = z.infer<typeof ObjectivePageOutSchema>;
+
 export const ObjectiveUpdateSchema = z.looseObject({ ["description"]: z.union([z.string(), z.null()]).optional(), ["status"]: z.union([z.string(), z.null()]).optional(), ["title"]: z.union([z.string(), z.null()]).optional() });
 export type ObjectiveUpdate = z.infer<typeof ObjectiveUpdateSchema>;
 
@@ -888,6 +909,12 @@ export type RegisterInitResponse = z.infer<typeof RegisterInitResponseSchema>;
 export const RegistrationConfigResponseSchema = z.looseObject({ ["invitation_code_required"]: z.boolean() });
 export type RegistrationConfigResponse = z.infer<typeof RegistrationConfigResponseSchema>;
 
+export const RelationshipInSchema = z.looseObject({ ["description"]: z.string().optional(), ["member_id"]: z.string(), ["relation"]: z.string().optional() });
+export type RelationshipIn = z.infer<typeof RelationshipInSchema>;
+
+export const RelationshipBatchInSchema = z.looseObject({ ["relationships"]: z.array(RelationshipInSchema) });
+export type RelationshipBatchIn = z.infer<typeof RelationshipBatchInSchema>;
+
 export const AdmissionApplicantSchema = z.looseObject({ ["email"]: z.union([z.string(), z.null()]), ["id"]: z.guid() });
 export type AdmissionApplicant = z.infer<typeof AdmissionApplicantSchema>;
 
@@ -943,9 +970,6 @@ export type ScheduleUpdate = z.infer<typeof ScheduleUpdateSchema>;
 export const ScreenshotRequestSchema = z.looseObject({ ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type ScreenshotRequest = z.infer<typeof ScreenshotRequestSchema>;
 
-export const SearchAnalyticsExportStatusSchema = z.looseObject({ ["bucket"]: z.union([z.string(), z.null()]), ["capture_enabled"]: z.boolean(), ["export_enabled"]: z.boolean(), ["exported"]: z.number().refine(Number.isInteger), ["exporting"]: z.number().refine(Number.isInteger), ["include_raw"]: z.boolean(), ["last_exported_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.string(), z.null()]), ["pending"]: z.number().refine(Number.isInteger), ["prefix"]: z.string(), ["skipped"]: z.number().refine(Number.isInteger) });
-export type SearchAnalyticsExportStatus = z.infer<typeof SearchAnalyticsExportStatusSchema>;
-
 export const SearchAnalyticsOrgRankingSchema = z.looseObject({ ["event_count"]: z.number().refine(Number.isInteger), ["name"]: z.string(), ["quota_count"]: z.number().refine(Number.isInteger), ["tenant_id"]: z.union([z.string(), z.null()]) });
 export type SearchAnalyticsOrgRanking = z.infer<typeof SearchAnalyticsOrgRankingSchema>;
 
@@ -964,6 +988,12 @@ export type SearchAnalyticsTimeBucket = z.infer<typeof SearchAnalyticsTimeBucket
 
 export const SearchAnalyticsTrendingQuerySchema = z.looseObject({ ["distinct_agents"]: z.number().refine(Number.isInteger), ["distinct_orgs"]: z.number().refine(Number.isInteger), ["hits"]: z.number().refine(Number.isInteger), ["kind"]: z.string(), ["query_hash"]: z.string(), ["query_normalized"]: z.string() });
 export type SearchAnalyticsTrendingQuery = z.infer<typeof SearchAnalyticsTrendingQuerySchema>;
+
+export const SearchAnalyticsDashboardSchema = z.looseObject({ ["end"]: z.iso.datetime({ offset: true, local: true }), ["orgs"]: z.array(SearchAnalyticsOrgRankingSchema), ["selected_summary"]: SearchAnalyticsSummarySchema, ["start"]: z.iso.datetime({ offset: true, local: true }), ["system_summary"]: SearchAnalyticsSummarySchema, ["tenant_id"]: z.union([z.string(), z.null()]), ["timeseries"]: z.array(SearchAnalyticsTimeBucketSchema), ["trending"]: z.array(SearchAnalyticsTrendingQuerySchema) });
+export type SearchAnalyticsDashboard = z.infer<typeof SearchAnalyticsDashboardSchema>;
+
+export const SearchAnalyticsExportStatusSchema = z.looseObject({ ["bucket"]: z.union([z.string(), z.null()]), ["capture_enabled"]: z.boolean(), ["export_enabled"]: z.boolean(), ["exported"]: z.number().refine(Number.isInteger), ["exporting"]: z.number().refine(Number.isInteger), ["include_raw"]: z.boolean(), ["last_exported_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.string(), z.null()]), ["pending"]: z.number().refine(Number.isInteger), ["prefix"]: z.string(), ["skipped"]: z.number().refine(Number.isInteger) });
+export type SearchAnalyticsExportStatus = z.infer<typeof SearchAnalyticsExportStatusSchema>;
 
 export const SelectedNotificationsRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
 export type SelectedNotificationsRequest = z.infer<typeof SelectedNotificationsRequestSchema>;

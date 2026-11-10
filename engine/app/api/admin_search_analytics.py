@@ -18,6 +18,7 @@ from app.dao.analytics_projection_contracts import (
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.records.user import UserRecord
 from app.schemas.operator_response_analytics import (
+    SearchAnalyticsDashboard,
     SearchAnalyticsExportConfig,
     SearchAnalyticsExportStatus,
     SearchAnalyticsExportStatusPassthrough,
@@ -71,6 +72,31 @@ def _window(start: datetime | None, end: datetime | None) -> tuple[datetime, dat
     if resolved_end - resolved_start > _MAX_RANGE:
         raise HTTPException(status_code=400, detail="range cannot exceed 90 days")
     return resolved_start, resolved_end
+
+
+@router.get("/dashboard", response_model=SearchAnalyticsDashboard)
+async def get_search_analytics_dashboard(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    tenant_id: UUID | None = None,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> SearchAnalyticsDashboard:
+    del current_user
+    window_start, window_end = _window(start, end)
+    payload = await web_search_event_dao.dashboard(start=window_start, end=window_end, tenant_id=tenant_id)
+    system_summary: SearchAnalyticsSummary = {**payload["system_summary"], "scope": "system"}
+    return {
+        "start": window_start,
+        "end": window_end,
+        "tenant_id": str(tenant_id) if tenant_id is not None else None,
+        "system_summary": system_summary,
+        "selected_summary": (
+            {**payload["selected_summary"], "scope": "org"} if tenant_id is not None else system_summary
+        ),
+        "timeseries": payload["timeseries"],
+        "orgs": payload["orgs"],
+        "trending": payload["trending"],
+    }
 
 
 @router.get("/summary", response_model=SearchAnalyticsSummary)

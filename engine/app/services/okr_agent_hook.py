@@ -2,31 +2,48 @@
 
 import uuid
 
+from app.core.acl_locks import lock_agent, lock_tenants
 from app.core.logging import logger
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.dao.org_member_dao import org_member_dao
+from app.dao.user_dao import user_dao
+from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 
 
 async def hook_new_org_member(member_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     """When a new OrgMember is created or bound, bind them to the system OKR Agent if it exists."""
-    okr_agent = await _get_okr_agent(tenant_id)
-    if not okr_agent:
-        return
-
-    existing = await agent_relationship_dao.get_for_agent_and_member(okr_agent.id, member_id)
-    if not existing:
-        _ = await agent_relationship_dao.create(
-            obj_in={
-                "agent_id": okr_agent.id,
-                "member_id": member_id,
-                "relation": "okr_coordinator",
-                "description": "",
-            }
-        )
-        logger.info(f"[OKR Hook] Auto-bound OrgMember {member_id} to OKR Agent {okr_agent.id}")
+    async with connection_ctx() as db:
+        await lock_tenants(db, (tenant_id,))
+        okr_agent = await _get_okr_agent(tenant_id)
+        if not okr_agent:
+            return
+        await lock_agent(db, okr_agent.id, tenant_id)
+        member = await org_member_dao.get(member_id)
+        if member is None or member.tenant_id != tenant_id or member.status != "active":
+            return
+        if member.user_id is not None:
+            user = await user_dao.get_with_identity(member.user_id, fresh=True)
+            if (
+                user is None
+                or not user.is_active
+                or user.tenant_id != tenant_id
+                or (user.identity is not None and not user.identity.is_active)
+            ):
+                return
+        existing = await agent_relationship_dao.get_for_agent_and_member(okr_agent.id, member_id)
+        if not existing:
+            _ = await agent_relationship_dao.create(
+                obj_in={
+                    "agent_id": okr_agent.id,
+                    "member_id": member_id,
+                    "relation": "okr_coordinator",
+                    "description": "",
+                }
+            )
+            logger.info(f"[OKR Hook] Auto-bound OrgMember {member_id} to OKR Agent {okr_agent.id}")
 
 
 async def sync_okr_agent_platform_members(tenant_id: uuid.UUID) -> int:
@@ -36,15 +53,33 @@ async def sync_okr_agent_platform_members(tenant_id: uuid.UUID) -> int:
     startup/backfill path covers users who already existed before OKR was
     enabled or before the hook was introduced.
     """
+    async with connection_ctx() as db:
+        await lock_tenants(db, (tenant_id,))
+        return await _sync_locked_platform_members(tenant_id)
+
+
+async def _sync_locked_platform_members(tenant_id: uuid.UUID) -> int:
     okr_agent = await _get_okr_agent(tenant_id)
     if not okr_agent:
         return 0
 
+    async with connection_ctx() as db:
+        await lock_agent(db, okr_agent.id, tenant_id)
     existing_member_ids = await agent_relationship_dao.list_member_ids_for_agent(okr_agent.id)
     members = await org_member_dao.list_active_with_user_for_tenant(tenant_id)
     added = 0
     for member in members:
         if member.id in existing_member_ids:
+            continue
+        if member.user_id is None:
+            continue
+        user = await user_dao.get_with_identity(member.user_id, fresh=True)
+        if (
+            user is None
+            or not user.is_active
+            or user.tenant_id != tenant_id
+            or (user.identity is not None and not user.identity.is_active)
+        ):
             continue
         _ = await agent_relationship_dao.create(
             obj_in={

@@ -71,6 +71,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "onboarding",
         "organization",
         "organization_admissions",
+        "relationships",
         "schedules",
         "tasks",
         "tools",
