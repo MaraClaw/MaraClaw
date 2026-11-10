@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useId } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -40,7 +41,7 @@ export function ToolsPage() {
           {companies.data?.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
         </Select>
         {companies.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading companies…</p> : null}
-        {companies.isError ? <div className="space-y-2"><p role="alert" className="text-sm text-destructive">Could not load companies.</p><Button variant="outline" className={toolButtonClass} onClick={() => { void companies.refetch() }}>Retry loading companies</Button></div> : null}
+        {companies.isError ? <div className="space-y-2"><ErrorToast error={companies.error} message="Could not load companies." /><Button variant="outline" className={toolButtonClass} onClick={() => { void companies.refetch() }}>Retry loading companies</Button></div> : null}
       </div> : <p className="text-sm font-medium">Company context: your organization</p>}
       <p id="tools-company-help" className="text-sm leading-relaxed text-muted-foreground">{concreteCompany
         ? 'This selection scopes catalog visibility, new MCP tools and built-in source configuration. Each record shows its ownership; company selection does not change who owns it. Available actions follow the permissions returned by the server for this context.'

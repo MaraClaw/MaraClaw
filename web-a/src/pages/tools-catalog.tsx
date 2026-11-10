@@ -3,6 +3,7 @@ import { Plus, RefreshCw, Wrench } from 'lucide-react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { listTools } from '@/lib/tools-api'
@@ -55,7 +56,7 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
     {editor ? <div ref={panel} tabIndex={-1} className="min-w-0 outline-none" key={editor.kind === 'create' ? 'create' : `${editor.kind}-${editor.tool.id}`}><ToolsEditorPending.Provider value={setPendingActions}>{renderEditor()}</ToolsEditorPending.Provider></div> : null}
     {catalog.isPending ? <p role="status" className="py-8 text-sm text-muted-foreground">Loading tools…</p> : null}
     {catalog.isError ? <Card><CardContent className="space-y-4">
-      <p role="alert" className="text-sm text-destructive">Could not load the tool catalog. Check your company selection and permissions, then retry.</p>
+      <ErrorToast error={catalog.error} message="Could not load the tool catalog. Check your company selection and permissions, then retry." />
       <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}>Retry loading tools</Button>
     </CardContent></Card> : null}
     {catalog.isSuccess && catalog.data.length === 0 ? <Card><CardContent className="space-y-2 py-4 text-center">
