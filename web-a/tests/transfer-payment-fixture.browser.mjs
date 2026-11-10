@@ -11,12 +11,12 @@ export function paymentFixture(receipt, options) {
   const user = {
     id: uuid(9801), identity_id: uuid(9802), email: 'payment-reviewer@example.test', display_name: 'Synthetic Reviewer',
     avatar_url: null, role: options.role ?? 'platform_admin', is_platform_admin: options.platformFlag ?? false,
-    is_genesis: options.genesis ?? true, tenant_id: pendingTransfer.source_tenant_id, is_active: true,
+    is_genesis: options.genesis ?? true, tenant_id: pendingTransfer.source_tenant_id, is_active: options.active ?? true,
     email_verified: true, must_change_password: options.forcePassword ?? false, created_at: '2026-10-20T00:00:00Z',
   }
   const state = {
     ...options, receipt, user, row: structuredClone(pendingTransfer), calls: [], barriers: [], inFlight: new Set(),
-    listStatus: 200, detailStatus: 200, decisionStatus: 200, tenantStatus: 200,
+    listStatus: 200, detailStatus: 200, decisionStatus: 200,
   }
   state.middleware = (request, response) => {
     const work = respond(state, request, response)
@@ -29,9 +29,7 @@ function reply(state, call) {
   const { path, method, params, payload } = call
   if (path === '/api/auth/me') return { body: state.user }
   if (path === '/api/notifications/unread-count') return { body: { unread_count: 0 } }
-  if (path === '/api/tenants/me') return state.tenantStatus === 200
-    ? { body: { id: state.user.tenant_id, is_active: true, is_default_end_user_org: state.defaultOrg ?? true } }
-    : { status: state.tenantStatus, body: { detail: 'Synthetic tenant access unavailable' } }
+  if (path === '/api/admin/search-analytics/summary' || path === '/api/admin/search-analytics/orgs') return { status: 403, body: { detail: 'Synthetic inactive account' } }
   if (path === listPath) {
     assert.equal(method, 'GET'); assert.deepEqual(params, { view: 'pending', limit: '50' })
     return state.listStatus === 200 ? { body: { items: state.empty ? [] : [state.row], next_cursor: null } }

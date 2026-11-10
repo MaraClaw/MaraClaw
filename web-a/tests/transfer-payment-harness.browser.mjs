@@ -16,7 +16,7 @@ const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'
 export async function runPayments(exercise) {
   assert.equal(process.env.OMO_BROWSER_ENGINE, undefined, 'Owned browser requires an unset OMO_BROWSER_ENGINE; never bypass the restriction')
   await access(tempRoot)
-  const work = await mkdtemp(join(tempRoot, 'payment-review-runtime-'))
+  const work = await mkdtemp(join(process.env.TMPDIR ?? tempRoot, 'payment-review-runtime-'))
   const output = await mkdtemp(join(tempRoot, 'payment-review-evidence-'))
   const receipt = { status: 'running', work, output, syntheticOnly: true, matrix, scenarios: [], assertions: [], captures: [], requests: [], violations: [], cleanup: { barriersCreated: 0, barriersReleased: 0 }, proxyDisabled: false }
   let active, server, browser, omowright, executable
@@ -68,7 +68,8 @@ export async function runPayments(exercise) {
         window.clearInterval = (id) => { polls.delete(id); cancel(id); };
         window.__runSyntheticPaymentPoll = () => { for (const callback of [...polls.values()]) callback(); };
       }` : ''
-      await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('maraclaw-admin-token','synthetic-payment-token');localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});${pollClock}` }, session)
+      const tokenSetup = state.anonymous ? '' : "localStorage.setItem('maraclaw-admin-token','synthetic-payment-token');"
+      await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `${tokenSetup}localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});${pollClock}` }, session)
       const go = async (path = '/transfer-payments') => {
         await page.goto(`${server.resolvedUrls.local[0]}${path.slice(1)}`)
         await manager.repin(tab.targetId, viewport)
@@ -84,6 +85,7 @@ export async function runPayments(exercise) {
     } finally {
       for (const barrier of state.barriers) barrier.release()
       await tab.close(); tabs.delete(tab); await browser.close(); browser = undefined
+      receipt.cleanup.browserInstancesClosed = (receipt.cleanup.browserInstancesClosed ?? 0) + 1
       await bounded(Promise.all(state.inFlight)); active = undefined; await persist()
     }
   }
