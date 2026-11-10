@@ -2,6 +2,7 @@ import { useState, type ComponentProps } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -78,8 +79,8 @@ function AdmissionDetail({ id }: { readonly id: string }) {
         <Button className="h-auto min-h-11 whitespace-normal" variant="outline" disabled={query.isFetching || opening || withdraw.isPending} onClick={scope.effect(() => { void query.refetch() })}>Refresh status</Button>
       </div>
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading request…</p> : null}
-      {query.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load this request. Refresh to try again.')}</p> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load this request. Refresh to try again.')} /> : null}
+      {error ? <RequestErrorToast message={error} /> : null}
       {request ? (
         <>
           <section aria-label="Admission status" className="space-y-3 rounded-xl border border-border p-4">
