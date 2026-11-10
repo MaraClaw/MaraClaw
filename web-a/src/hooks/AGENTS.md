@@ -10,7 +10,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `notification-options.ts`: notification keys, reads, read/archive/restore cache updates.
 - `agent-deletion-options.ts`: deletion queue/detail reads and the approval mutation.
 - `agent-transfer-options.ts`: transfer source/recipient reads and the ownership-transfer mutation.
-- `transfer-review-options.ts`: payment queue/detail/tenant-capability reads and the decision mutation.
+- `transfer-review-options.ts`: payment queue/detail reads and the decision mutation.
 - `invitation-options.ts`: tenant-keyed invitation history, send and revoke.
 - `broadcast-options.ts`: broadcast email-status polling.
 
@@ -55,8 +55,8 @@ Scope: query-option factories, context providers, session ownership and consumer
    and `canApproveAgentDeletion` holds (pending, `can_approve`, `has_viewed`, not `has_approved`); it never POSTs on a stale view.
    Success stores the detail, then invalidates deletion queries, notifications, `['admin-users']`, `['admin-user']`
    and `['admin-companies']`. A 403 or 409 cancels and invalidates deletion queries.
-9. `useTransferReviewAccess` looks up `/api/tenants/me` (`['admin-transfer-review-tenant', tenantId]`) only for
-   `canInspectReviewTenant` and no lock. `canReview` requires no lock, no tenant-lookup error and `canReviewTransferPayments`.
+9. `useTransferReviewAccess().canReview` requires no password-change lock and `canReviewTransferPayments`
+   (active platform admin only), without a tenant capability lookup.
    Queue and detail are enabled only by `canReview` and poll every 30 seconds. `transferDecisionOptions` throws a local 403
    when not allowed. Queue pages key on `['admin-transfer-payments','list',view,cursor]`. Success cancels polls, sets detail, removes the decided request from every cached `pending` page, replaces it in `recent` pages and invalidates transfers plus notifications;
    only a 409 invalidates on error.
