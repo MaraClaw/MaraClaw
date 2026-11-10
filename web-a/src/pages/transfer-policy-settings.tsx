@@ -4,6 +4,7 @@ import { useEffect, useId, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -43,7 +44,7 @@ export function TransferPolicySettings() {
             {policy.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer policy…</p> : null}
             {policy.isError ? (
               <div className="flex flex-col items-start gap-3">
-                <p role="alert" className="text-sm text-destructive">{policy.error instanceof ApiError ? policy.error.message : 'Could not load the transfer policy.'}</p>
+                <ErrorToast error={policy.error} message={policy.error instanceof ApiError ? policy.error.message : 'Could not load the transfer policy.'} />
                 <Button type="button" variant="outline" disabled={policy.isFetching} onClick={() => { void policy.refetch() }}>{policy.isFetching ? 'Loading…' : 'Retry loading policy'}</Button>
               </div>
             ) : null}
@@ -124,7 +125,7 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
           </div>
           <Button type="submit" className="h-auto min-h-11 self-start whitespace-normal">{saving.isPending ? 'Saving policy…' : 'Save transfer policy'}</Button>
         </fieldset>
-        {saving.isError ? <p role="alert" className="text-sm text-destructive">{saving.error instanceof ApiError ? saving.error.message : 'Could not confirm the saved policy. Your draft is kept; retry saving or reload to check the current policy.'}</p> : null}
+    {saving.isError ? <ErrorToast error={saving.error} message={saving.error instanceof ApiError ? saving.error.message : 'Could not confirm the saved policy. Your draft is kept; retry saving or reload to check the current policy.'} /> : null}
         <p role="status" className="text-sm text-muted-foreground">{saving.isPending ? 'Saving transfer policy. Please wait.' : isDirty ? 'Unsaved changes. The current saved policy above remains in effect.' : saving.isSuccess ? 'Transfer policy saved.' : null}</p>
       </form>
     </>
