@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import type { SessionOut } from '@/lib/engine-contracts.generated'
 import { userFacingRequestError } from '@/lib/http'
@@ -40,7 +41,7 @@ export function SessionList({ agentId, sessions, activeId, hasMore, loadingMore,
           </Link>
         </li>)}
       </ul>
-      {error ? <p role="alert" className="text-xs text-destructive">{userFacingRequestError(error, 'Could not load older conversations.')}</p> : null}
+      {error ? <RequestErrorToast error={error} message={userFacingRequestError(error, 'Could not load older conversations.')} /> : null}
       {hasMore ? <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore}>
         {loadingMore ? 'Loading older conversations…' : error ? 'Retry older conversations' : 'Load older conversations'}
       </Button> : null}
