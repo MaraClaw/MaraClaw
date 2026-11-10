@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -49,7 +50,7 @@ function parseLoginError(error: unknown): {
   if (detail && typeof detail === 'object' && 'needs_verification' in detail) {
     const v = detail as NeedsVerificationDetail
     return {
-      formMessage: v.message ?? 'Please verify your email to continue.',
+      formMessage: formatApiDetail(v.message) ?? 'Please verify your email to continue.',
       needsVerification: v,
     }
   }
@@ -73,7 +74,7 @@ function parseLoginError(error: unknown): {
   }
 
   return {
-    formMessage: formatApiDetail(detail) ?? 'Unable to sign in. Try again.',
+    formMessage: error.message,
   }
 }
 
@@ -86,7 +87,6 @@ export function LoginPage() {
   const formId = useId()
   const identifierId = `${formId}-identifier`
   const passwordId = `${formId}-password`
-  const formErrorId = `${formId}-form-error`
   const identifierErrorId = `${formId}-identifier-error`
   const passwordErrorId = `${formId}-password-error`
 
@@ -109,7 +109,6 @@ export function LoginPage() {
   const {
     register,
     handleSubmit,
-    setError,
     setFocus,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({
@@ -191,7 +190,6 @@ export function LoginPage() {
       const parsed = parseLoginError(error)
       setFormError(parsed.formMessage)
       if (parsed.field) {
-        setError(parsed.field, { type: 'server', message: parsed.formMessage })
         setFocus(parsed.field)
       } else if (errors.login_identifier) {
         setFocus('login_identifier')
@@ -396,13 +394,7 @@ export function LoginPage() {
                 </div>
 
                 {formError ? (
-                  <div
-                    id={formErrorId}
-                    role="alert"
-                    className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
-                  >
-                    {formError}
-                  </div>
+                  <ErrorToast message={formError} />
                 ) : null}
 
                 {tenantChoices ? (
@@ -471,7 +463,6 @@ export function LoginPage() {
                     className="space-y-4"
                     onSubmit={handleSubmit(onSubmit)}
                     noValidate
-                    aria-describedby={formError ? formErrorId : undefined}
                   >
                     <div className="space-y-2">
                       <Label htmlFor={identifierId}>Email</Label>
