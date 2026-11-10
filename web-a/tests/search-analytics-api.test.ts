@@ -3,9 +3,77 @@ import test from 'node:test'
 import { z } from 'zod'
 
 import {
+  getSearchAnalyticsDashboard,
   getSearchAnalyticsExportStatus, getSearchAnalyticsOrgs, getSearchAnalyticsSummary,
   getSearchAnalyticsTimeseries, getSearchAnalyticsTrending,
 } from '../src/lib/search-analytics-api.ts'
+import { ApiError } from '../src/lib/http.ts'
+
+const metrics = {
+  scope: 'system', event_count: 100, error_count: 4, quota_count: 2, unique_orgs: 3,
+  unique_agents: 7, unattributed_count: 1, avg_latency_ms: 12.5,
+  by_kind: [{ kind: 'search', event_count: 100 }],
+}
+const envelope = {
+  start: '2026-10-01T00:00:00Z', end: '2026-10-08T00:00:00Z', tenant_id: 'selected-company',
+  system_summary: metrics, selected_summary: { ...metrics, scope: 'org', event_count: 25 },
+  timeseries: [{ date: '2026-10-02', event_count: 25, error_count: 1, quota_count: 0 }],
+  orgs: [{ tenant_id: 'another-company', name: 'Global leader', event_count: 60, quota_count: 2 }],
+  trending: [{ query_hash: 'hash', query_normalized: 'normalized query', kind: 'search', hits: 4, distinct_agents: 2, distinct_orgs: 1 }],
+}
+
+test('dashboard validates mixed scopes and forwards every window and tenant filter', async (context) => {
+  // Given
+  const fetch = context.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(envelope))
+  // When
+  const result = await getSearchAnalyticsDashboard({ start: envelope.start, end: envelope.end, tenantId: 'org/a?&=' })
+  // Then: the public wire contract preserves independent global/scoped aggregates.
+  assert.deepEqual(result, envelope)
+  const url = new URL(String(fetch.mock.calls[0]?.arguments[0]), 'https://example.test')
+  assert.equal(url.pathname, '/api/admin/search-analytics/dashboard')
+  assert.deepEqual([...url.searchParams], [['start', envelope.start], ['end', envelope.end], ['tenant_id', 'org/a?&=']])
+})
+
+test('dashboard propagates query cancellation through transport and rejects its late body', async (context) => {
+  // Given
+  const response = Promise.withResolvers<Response>()
+  let signal: AbortSignal | null | undefined
+  context.mock.method(globalThis, 'fetch', (_url: RequestInfo | URL, options?: RequestInit) => {
+    signal = options?.signal
+    return response.promise
+  })
+  const controller = new AbortController()
+  const pending = getSearchAnalyticsDashboard({}, controller.signal)
+  const rejected = assert.rejects(pending, (error) => error instanceof DOMException && error.name === 'AbortError')
+  // When
+  controller.abort()
+  response.resolve(Response.json(envelope))
+  // Then
+  await rejected
+  assert.equal(signal?.aborted, true)
+})
+
+for (const response of [
+  { ...envelope, system_summary: { ...metrics, event_count: null } },
+  { ...envelope, selected_summary: { ...metrics, scope: 'all' } },
+  { ...envelope, timeseries: [{ date: '2026-10-02', event_count: '25', error_count: 0, quota_count: 0 }] },
+  { ...envelope, orgs: {} },
+  { ...envelope, trending: [{ query_hash: 'hash', hits: 4 }] },
+  { system_summary: metrics },
+]) test('dashboard rejects malformed aggregates instead of inventing defaults', async (context) => {
+  // Given
+  context.mock.method(globalThis, 'fetch', async () => Response.json(response))
+  // When / Then
+  await assert.rejects(getSearchAnalyticsDashboard({}), z.ZodError)
+})
+
+test('dashboard preserves server failure without legacy endpoint fallback', async (context) => {
+  // Given
+  const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Aggregation unavailable' }, { status: 503 }))
+  // When / Then
+  await assert.rejects(getSearchAnalyticsDashboard({}), (error) => error instanceof ApiError && error.status === 503 && error.message === 'Aggregation unavailable')
+  assert.equal(fetch.mock.callCount(), 1)
+})
 
 test('summary adapts omitted generated defaults for the analytics UI', async (context) => {
   // Given
