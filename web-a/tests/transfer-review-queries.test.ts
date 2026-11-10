@@ -5,10 +5,11 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import { notificationKeys } from '../src/hooks/notification-options.ts'
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { ownQueryClient } from '../src/hooks/session-query-client.ts'
-import { reviewTenantOptions, transferDecisionOptions, transferDetailOptions, transferReviewKeys, transferReviewsOptions } from '../src/hooks/transfer-review-options.ts'
+import { transferDecisionOptions, transferDetailOptions, transferReviewKeys, transferReviewsOptions } from '../src/hooks/transfer-review-options.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { createFixture } from './helpers.ts'
+import { canReviewTransferPayments } from '../src/lib/transfer-review-access.ts'
+import { adminUser, createFixture } from './helpers.ts'
 import type { TransferReviewPage } from '../src/lib/transfer-reviews-api.ts'
 import { admittedTransfer, pendingTransfer } from './transfer-review-fixtures.ts'
 
@@ -23,14 +24,20 @@ test('review pages are keyed by view and cursor', () => {
   assert.deepEqual(transferReviewKeys.list('pending', 'next').slice(0, 2), transferReviewKeys.lists)
 })
 
-test('disabled access, queue and invalid detail observers make no requests', (t) => {
+test('denied reviewers and invalid details make no payment read requests', (t) => {
   // Given
   const client = new QueryClient()
   t.after(() => client.clear())
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json([]))
-  const observers = [new QueryObserver(client, reviewTenantOptions(null, false)), new QueryObserver(client, transferReviewsOptions('pending', null, false)), new QueryObserver(client, transferDetailOptions(null, true))]
+  const denied = [null, { ...adminUser(), is_genesis: true, tenant_id: pendingTransfer.source_tenant_id }, adminUser(), { ...adminUser(), role: 'platform_admin', is_active: false }] as const
+  const observers = denied.flatMap((user) => [
+    new QueryObserver(client, transferReviewsOptions('pending', null, canReviewTransferPayments(user))),
+    new QueryObserver(client, transferDetailOptions(pendingTransfer.id, canReviewTransferPayments(user))),
+  ])
+  const invalidDetail = new QueryObserver(client, transferDetailOptions(null, true))
   // When
   for (const observer of observers) t.after(observer.subscribe(() => undefined))
+  t.after(invalidDetail.subscribe(() => undefined))
   // Then
   assert.equal(fetch.mock.callCount(), 0)
 })
@@ -120,7 +127,7 @@ test('a retired-session payment decision cannot update or invalidate caches', as
   assert.equal(client.getQueryState(notificationKeys.unread)?.isInvalidated, false)
 })
 
-test('retiring a session cancels the current-tenant capability lookup', async (t) => {
+test('retiring a session cancels the payment detail read', async (t) => {
   // Given
   const { policy } = createFixture()
   const client = new QueryClient()
@@ -129,12 +136,12 @@ test('retiring a session cancels the current-tenant capability lookup', async (t
   const response = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<AbortSignal | null | undefined>()
   t.mock.method(globalThis, 'fetch', (_url: RequestInfo | URL, options?: RequestInit) => { started.resolve(options?.signal); return response.promise })
-  const query = client.fetchQuery(reviewTenantOptions(pendingTransfer.source_tenant_id, true))
+  const query = client.fetchQuery(transferDetailOptions(pendingTransfer.id, true))
   const rejected = assert.rejects(query)
   const signal = await started.promise
   // When
   policy.replace('replacement-token')
-  response.resolve(Response.json({ id: pendingTransfer.source_tenant_id, is_active: true, is_default_end_user_org: true }))
+  response.resolve(Response.json(pendingTransfer))
   await rejected
   // Then
   assert.equal(signal?.aborted, true)

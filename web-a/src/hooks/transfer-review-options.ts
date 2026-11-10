@@ -2,7 +2,7 @@ import { queryOptions, skipToken, type QueryClient } from '@tanstack/react-query
 
 import { ApiError } from '../lib/http.ts'
 import {
-  decideTransferPayment, fetchReviewTenant, fetchTransferDetail, fetchTransferReviews,
+  decideTransferPayment, fetchTransferDetail, fetchTransferReviews,
   type TransferDecision, type TransferId, type TransferReviewPage, type TransferReviewView, type TransferSummary,
 } from '../lib/transfer-reviews-api.ts'
 import { notificationKeys } from './notification-options.ts'
@@ -12,16 +12,6 @@ export const transferReviewKeys = {
   lists: ['admin-transfer-payments', 'list'] as const,
   list: (view: TransferReviewView, cursor: string | null) => ['admin-transfer-payments', 'list', view, cursor] as const,
   detail: (id: TransferId | null) => ['admin-transfer-payments', 'detail', id] as const,
-  tenant: (tenantId: string | null) => ['admin-transfer-review-tenant', tenantId] as const,
-}
-
-export function reviewTenantOptions(tenantId: string | null, enabled: boolean) {
-  return queryOptions({
-    queryKey: transferReviewKeys.tenant(tenantId),
-    queryFn: ({ signal }) => fetchReviewTenant(signal),
-    enabled: enabled && tenantId !== null,
-    retry: false,
-  })
 }
 
 export function transferReviewsOptions(view: TransferReviewView, cursor: string | null, enabled: boolean) {
