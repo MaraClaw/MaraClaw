@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { getOnboardingStatus, wasOnboardingSkipped } from '@/lib/workspace-api'
 import { agentExistenceOptions } from '@/lib/agents-query'
 import { Button } from '@/components/ui/button'
@@ -27,7 +28,7 @@ export function OnboardingGate({ children }: { readonly children?: ReactNode }) 
   const onOnboarding = location.pathname.startsWith('/app/onboarding')
   if (!hasAgents && !completed && !skip && !onOnboarding && (agents.isError || onboarding.isError)) {
     return <div className="space-y-3 p-6">
-      <p role="alert" className="text-sm text-destructive">Could not check onboarding. Try again.</p>
+      <RequestErrorToast error={agents.error ?? onboarding.error} message="Could not check onboarding. Try again." />
       <Button variant="outline" disabled={agents.isFetching || onboarding.isFetching} onClick={() => {
         void agents.refetch()
         void onboarding.refetch()
