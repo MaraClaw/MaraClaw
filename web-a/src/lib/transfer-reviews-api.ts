@@ -35,16 +35,12 @@ export const transferDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
   reason: transferReasonSchema.nullable().optional(),
 }).readonly()
-export const reviewTenantSchema = z.object({
-  id: z.uuid(), is_active: z.boolean(), is_default_end_user_org: z.boolean(),
-}).readonly()
 
 export type TransferId = z.infer<typeof transferIdSchema>
 export type TransferReviewView = z.infer<typeof transferReviewViewSchema>
 export type TransferReviewPage = z.infer<typeof transferReviewPageSchema>
 export type TransferSummary = z.infer<typeof transferSummarySchema>
 export type TransferDecision = z.infer<typeof transferDecisionSchema>
-export type ReviewTenant = z.infer<typeof reviewTenantSchema>
 
 export async function fetchTransferReviews(view: TransferReviewView, cursor: string | null = null, signal?: AbortSignal) {
   const query = new URLSearchParams({ view, limit: String(TRANSFER_REVIEW_LIMIT) })
@@ -61,8 +57,4 @@ export async function decideTransferPayment(id: TransferId, decision: TransferDe
     schema: transferSummarySchema,
     method: 'POST', body: transferDecisionSchema.parse(decision),
   })
-}
-
-export async function fetchReviewTenant(signal?: AbortSignal) {
-  return apiRequest('/api/tenants/me', { schema: reviewTenantSchema, signal })
 }
