@@ -2,6 +2,7 @@ import { Building2, Lock, Users } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { AuthShell } from '@/components/auth/auth-shell'
 import { AdmissionPending } from '@/components/auth/admission-pending'
 import { InvitationCode } from '@/components/auth/invitation-code'
@@ -78,11 +79,11 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
   }
   if (pendingAdmission === true) return <Navigate to="/app/notifications?category=admissions" replace />
   if (pendingAdmission === null) return error
-    ? <p role="alert" className="p-6 text-sm text-destructive">{error}</p>
+    ? <div className="space-y-3 p-6"><RequestErrorToast message={error} /><Button variant="outline" onClick={() => window.location.reload()}>Retry admission status</Button></div>
     : <p role="status" className="p-6 text-sm text-muted-foreground">Checking admission status…</p>
   return <AuthShell headingId={headingId} title="Join an organization" description="Validate your invitation to see the company, then confirm that you want to join."
     brandTitle="Land in the right workspace" brandBody="Only the company that invited you is shown. No organization directory or domain matching is needed." highlights={highlights}>
-    {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}
+    {error ? <RequestErrorToast message={error} /> : null}
     {user?.email_verified === false ? <p className="mb-4 text-sm text-muted-foreground">Verify your email before joining a company.</p> : null}
     {result && 'request' in result && result.status === 'pending' ? <AdmissionPending request={result.request} /> : null}
     <InvitationCode invitation={invitation} disabled={busy || result !== null || user?.email_verified === false} />
