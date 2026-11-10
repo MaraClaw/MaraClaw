@@ -4,6 +4,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -101,7 +102,7 @@ export function BroadcastPage() {
       <div ref={feedback} tabIndex={-1} role={sendError ? 'alert' : 'status'} className="empty:hidden focus-visible:outline-2 focus-visible:outline-ring">
         {sendError ? (
           <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-card p-4 text-sm">
-            <p className="font-medium text-destructive">Broadcast failed: {broadcastFailureMessage(sendError)}</p>
+          <ErrorToast error={sendError} message={broadcastFailureMessage(sendError)} />
             <p>Your draft is kept below. Review it again before another attempt. A failed request does not guarantee that nothing was sent.</p>
           </div>
         ) : result ? (
