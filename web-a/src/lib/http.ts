@@ -7,7 +7,9 @@ export class ApiError extends Error {
   readonly detail: unknown
 
   constructor(status: number, detail: unknown, message?: string) {
-    super(message ?? formatApiDetail(detail) ?? `Request failed (${status})`)
+    super(formatApiDetail(message) ?? formatApiDetail(detail) ?? (status >= 500
+      ? 'The server is temporarily unavailable. Please try again shortly.'
+      : `Request failed (${status})`))
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
@@ -16,22 +18,25 @@ export class ApiError extends Error {
 
 export function formatApiDetail(detail: unknown): string | null {
   if (detail == null) return null
-  if (typeof detail === 'string') return detail
+  if (typeof detail === 'string') {
+    const text = detail.trim()
+    return text && text.length <= 500 && !/<[^>]*>|&lt;|&#0*60;|&#x0*3c;/iu.test(text) ? text : null
+  }
   if (typeof detail === 'object') {
     const obj = detail as Record<string, unknown>
-    if (typeof obj.message === 'string') return obj.message
-    if (typeof obj.detail === 'string') return obj.detail
+    if (typeof obj.message === 'string') return formatApiDetail(obj.message)
+    if (typeof obj.detail === 'string') return formatApiDetail(obj.detail)
     if (Array.isArray(obj.detail)) {
-      return obj.detail
+      return formatApiDetail(obj.detail
         .map((item) => {
-          if (typeof item === 'string') return item
+          if (typeof item === 'string') return formatApiDetail(item)
           if (item && typeof item === 'object' && 'msg' in item) {
-            return String((item as { msg: unknown }).msg)
+            return formatApiDetail(item.msg)
           }
           return null
         })
         .filter(Boolean)
-        .join(' ')
+        .join(' '))
     }
   }
   return null
