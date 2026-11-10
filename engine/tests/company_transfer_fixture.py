@@ -86,9 +86,6 @@ async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Tra
     async def validate(*_args: object, **_kwargs: object) -> None:
         return None
 
-    async def fallback() -> TenantRecord:
-        return source
-
     async def policy() -> TransferPolicy:
         return TransferPolicy(fee_amount_minor=3700, currency="USD", instructions="Offline payment reference")
 
@@ -117,7 +114,6 @@ async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Tra
     monkeypatch.setattr(requests, "validate_method", validate)
     monkeypatch.setattr(requests, "get_transfer_policy", policy)
     monkeypatch.setattr(guards, "get_transfer_policy", policy)
-    monkeypatch.setattr(review, "get_fallback_org", fallback)
     monkeypatch.setattr(admission_service, "send_notification", notice)
     monkeypatch.setattr(review, "send_notification", notice)
     monkeypatch.setattr(review, "send_system_email", email)

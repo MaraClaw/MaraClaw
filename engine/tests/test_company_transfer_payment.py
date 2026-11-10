@@ -152,18 +152,20 @@ async def test_free_consent_creates_admission_without_payment_review(transfer_fi
     assert fixture.applicant.tenant_id == fixture.source.id
 
 
-@pytest.mark.parametrize(("role", "genesis"), [("org_admin", False), ("member", True), ("member", False)])
-async def test_arbitrary_default_org_member_cannot_review_payment(
+@pytest.mark.parametrize(
+    ("role", "genesis"), [("org_admin", True), ("org_admin", False), ("member", True), ("member", False)]
+)
+async def test_default_org_non_platform_admin_cannot_review_payment(
     transfer_fixture: TransferFixture, role: str, genesis: bool
 ) -> None:
-    # Given a default-org user without the genesis org-admin combination.
+    # Given a default-org user without platform-admin authority, including its genesis org admin.
     fixture = transfer_fixture
     reviewer = UserRecord(id=uuid4(), tenant_id=fixture.source.id, role=UserRole(role), is_genesis=genesis)
     fixture.users[reviewer.id] = reviewer
     # When payment-review authority is requested.
     with pytest.raises(HTTPException) as error:
         await require_payment_reviewer(reviewer.id)
-    # Then no arbitrary org admin/member gets access.
+    # Then no default-org admin or member gets payment-review access.
     assert error.value.status_code == 403
 
 
