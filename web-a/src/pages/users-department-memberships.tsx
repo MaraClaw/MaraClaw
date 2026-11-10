@@ -3,7 +3,6 @@ import { useId } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import type { Department } from '@/lib/departments-api'
-import { ApiError } from '@/lib/http'
 
 export function DepartmentMemberships({
   name,
@@ -27,7 +26,7 @@ export function DepartmentMemberships({
   readonly onChange: (departmentIds: readonly string[]) => void
 }) {
   const id = useId()
-  const description = `${id}-hint ${id}-status${error ? ` ${id}-error` : ''}`
+  const description = `${id}-hint ${id}-status`
 
   return (
     <fieldset
@@ -80,11 +79,6 @@ export function DepartmentMemberships({
         {saving ? 'Saving departments…' : loading ? 'Loading departments…' : !available ? 'Departments unavailable'
           : departmentIds.length ? `${departmentIds.length} selected` : 'Unassigned'}
       </p>
-      {error ? (
-        <p id={`${id}-error`} className="text-xs text-destructive">
-          {error instanceof ApiError ? error.message : 'Could not update departments. Try again.'}
-        </p>
-      ) : null}
     </fieldset>
   )
 }
