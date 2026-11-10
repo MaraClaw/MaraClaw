@@ -2,6 +2,7 @@ import { useInfiniteQuery } from '@/hooks/session-workspace'
 import { Loader2, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,9 +34,9 @@ export function AgentsListPage() {
         </div>
       ) : null}
 
-      {query.isError && !query.data ? (
+      {query.isError && !query.isFetchNextPageError ? (
         <div className="space-y-3">
-          <p role="alert" className="text-sm text-destructive">Could not load agents. Try again.</p>
+          <RequestErrorToast error={query.error} message="Could not load agents. Try again." />
           <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry loading agents</Button>
         </div>
       ) : null}
@@ -74,7 +75,7 @@ export function AgentsListPage() {
       </div>
       {query.hasNextPage ? (
         <div className="space-y-3">
-          {query.isFetchNextPageError ? <p role="alert" className="text-sm text-destructive">Could not load more agents. Your loaded agents are still available.</p> : null}
+          {query.isFetchNextPageError ? <RequestErrorToast error={query.error} message="Could not load more agents. Your loaded agents are still available." /> : null}
           <Button variant="outline" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
             {query.isFetchingNextPage ? 'Loading more agents...' : query.isFetchNextPageError ? 'Retry loading more' : 'Load more'}
           </Button>
