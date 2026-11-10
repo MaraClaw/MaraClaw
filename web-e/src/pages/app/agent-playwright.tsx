@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { listAgentToolsWithConfig, listFiles, updateAgentTools, type AgentOut } from '@/lib/workspace-api'
 
 const BROWSER_TOOLS = [
@@ -85,14 +86,16 @@ export function AgentPlaywrightPage() {
           </li>
         ))}
       </ul>
-      {browserTools.length === 0 ? (
+      {tools.isError ? <RequestErrorToast error={tools.error} message="Unable to load browser tools. Try again." /> : null}
+      {tools.isSuccess && browserTools.length === 0 ? (
         <p className="text-sm text-muted-foreground">No browser tools are installed on this agent yet.</p>
       ) : null}
 
       <section>
         <h3 className="text-sm font-semibold">Crabbox / Playwright reports</h3>
+        {reports.isError ? <RequestErrorToast error={reports.error} message="Unable to load browser reports. Try again." /> : null}
         {crabbox.isError ? (
-          <p className="mt-2 text-sm text-muted-foreground">No `.crabbox` folder in this workspace.</p>
+          <RequestErrorToast error={crabbox.error} message="Unable to load the .crabbox folder. Try again." />
         ) : (
           <ul className="mt-2 space-y-1 text-sm">
             {(reports.data ?? crabbox.data ?? []).map((file) => (
