@@ -2,10 +2,12 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { userFacingRequestError } from '@/lib/http'
+import { authSession } from '@/lib/auth-session'
 import {
   organizationAdmissionSchema,
   requestOrganizationAdmission,
@@ -21,12 +23,13 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
   })
 
   const submit = handleSubmit(async (values) => {
+    const owner = authSession.capture()
     setError(null)
     try {
       await requestOrganizationAdmission(values)
-      setSuccess(true)
+      if (authSession.isCurrent(owner)) setSuccess(true)
     } catch (cause) {
-      setError(userFacingRequestError(cause, 'We could not send your request. Please try again.'))
+      if (authSession.isCurrent(owner)) setError(userFacingRequestError(cause, 'We could not send your request. Please try again.'))
     }
   })
 
@@ -98,7 +101,7 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
             {isSubmitting ? 'Sending request...' : 'Create organization'}
           </Button>
         </fieldset>
-        {error && <p role="alert" className="mt-4 text-[17px] text-destructive sm:text-base">{error}</p>}
+        {error && <RequestErrorToast message={error} />}
         <div role="status" aria-live="polite" aria-atomic="true" className="mt-4 text-[17px] leading-relaxed sm:text-base">
           {isSubmitting && 'Sending your organization request.'}
           {success && 'Your request is pending genesis platform-admin review. Once approved, your organization will be created and the genesis admin\'s initial login credentials will be emailed to the address you submitted. The first login requires a password change. Payment is separate.'}
