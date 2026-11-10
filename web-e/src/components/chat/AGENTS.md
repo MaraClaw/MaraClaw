@@ -29,7 +29,7 @@ Scope: message bodies, attachment dialogs, native download controls, local previ
   attachment-office/office-viewer use `@/lib/office-preview`; history-control uses `@/lib/http` for `ApiError` text; markdown/PDF import no `lib` modules.
 - `ChatMessageContent` normalizes text with `getChatMessageText`; only assistant text uses `ChatMarkdown`.
   Markdown escapes source before substitutions; links match HTTP(S), open a new tab with `noreferrer`.
-  Supported blocks: fenced code, heading markers, unordered lists, paragraphs; inline code and bold.
+  Supported blocks: fenced code (including blank lines), heading markers, unordered lists, paragraphs and pipe tables with delimiter alignment; inline code and bold. Tables may follow prose without a blank line and scroll horizontally inside the response. Assistant copy uses exact `message.content`, never rendered text or attachment-aware display normalization.
 - `AttachmentPreviewBody` retries by remounting `PreviewAttempt`; cleanup aborts its request.
   Publish results only while the signal and workspace scope remain current.
   The 20 MiB cap comes from `MAX_PREVIEW_BYTES` in `src/lib/http.ts`, checked against metadata and streamed bytes.
