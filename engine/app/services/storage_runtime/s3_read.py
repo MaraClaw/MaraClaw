@@ -12,7 +12,14 @@ from typing import Protocol, TypeIs
 import anyio
 from botocore.exceptions import ClientError
 
-from app.services.storage_runtime.base import MaterializedFile
+from app.core.json_types import json_as_int
+from app.services.storage_runtime.base import (
+    MaterializedFile,
+    StorageReadLimitExceededError,
+    StorageSnapshot,
+    StorageVersion,
+    content_hash_bytes,
+)
 from app.services.storage_runtime.bounded import read_bounded
 
 _COPY_CHUNK_BYTES = 64 * 1024
@@ -28,16 +35,25 @@ def _is_response_body(value: object) -> TypeIs[_ResponseBody]:
     return callable(getattr(value, "read", None)) and callable(getattr(value, "close", None))
 
 
-def _open_body(get_object: Callable[[], Mapping[str, object]], range_offset: int | None = None) -> _ResponseBody:
+def _get_response(get_object: Callable[[], Mapping[str, object]]) -> Mapping[str, object]:
     try:
-        response = get_object()
+        return get_object()
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
             raise FileNotFoundError from exc
         raise
+
+
+def _response_body(response: Mapping[str, object]) -> _ResponseBody:
     body = response["Body"]
     if not _is_response_body(body):
         raise TypeError("S3 get_object response is missing a readable, closable Body")
+    return body
+
+
+def _open_body(get_object: Callable[[], Mapping[str, object]], range_offset: int | None = None) -> _ResponseBody:
+    response = _get_response(get_object)
+    body = _response_body(response)
     if range_offset is not None:
         content_range = str(response.get("ContentRange", ""))
         parsed = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
@@ -72,6 +88,31 @@ def read_object(
             read_bounded(body, max_bytes, range_read=True)
             if range_offset is not None
             else read_bounded(body, max_bytes)
+        )
+
+
+def read_object_snapshot(get_object: Callable[[], Mapping[str, object]], key: str, max_bytes: int) -> StorageSnapshot:
+    """Own one GET, bounded content, identity and close even when abandoned."""
+    response = _get_response(get_object)
+    with closing(_response_body(response)) as body:
+        declared_size = json_as_int(response.get("ContentLength"))
+        if declared_size > max_bytes:
+            raise StorageReadLimitExceededError(max_bytes, declared_size)
+        data = read_bounded(body, max_bytes)
+        etag = str(response.get("ETag") or "").strip('"')
+        return StorageSnapshot(
+            data=data,
+            version=StorageVersion(
+                key=key,
+                exists=True,
+                is_dir=False,
+                size=len(data),
+                modified_at=str(response.get("LastModified") or ""),
+                etag=etag,
+                version_id=str(response.get("VersionId") or ""),
+                content_hash=etag,
+            ),
+            sha256=content_hash_bytes(data),
         )
 
 

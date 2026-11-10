@@ -380,7 +380,8 @@ async def test_s3_bounded_read_closes_body_on_read_error(monkeypatch):
 
 @pytest.mark.parametrize("phase", ["get", "read"])
 @pytest.mark.parametrize("outcome", ["success", "overflow", "error"])
-async def test_s3_cancelled_awaiter_leaves_worker_owning_body_until_close(monkeypatch, phase, outcome):
+@pytest.mark.parametrize("snapshot", [False, True])
+async def test_s3_cancelled_awaiter_leaves_worker_owning_body_until_close(monkeypatch, phase, outcome, snapshot):
     backend = S3StorageBackend(bucket="bucket")
     blocked, release, closed = Event(), Event(), Event()
     owners: list[int] = []
@@ -415,7 +416,8 @@ async def test_s3_cancelled_awaiter_leaves_worker_owning_body_until_close(monkey
             return {"Body": body}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
-    task = asyncio.create_task(backend.read_bytes_bounded("report.bin", 8))
+    operation = backend.read_snapshot_bounded if snapshot else backend.read_bytes_bounded
+    task = asyncio.create_task(operation("report.bin", 8))
     try:
         assert await anyio.to_thread.run_sync(blocked.wait, 10)
         task.cancel()
