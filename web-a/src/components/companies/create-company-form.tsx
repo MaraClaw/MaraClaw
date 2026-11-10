@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -149,9 +150,7 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
             />
           </div>
           {formError ? (
-            <p className="text-sm text-destructive sm:col-span-2" role="alert">
-              {formError}
-            </p>
+            <ErrorToast message={formError} />
           ) : null}
           <div className="sm:col-span-2">
             <Button type="submit" disabled={isSubmitting}>
