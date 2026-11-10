@@ -3,6 +3,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -100,9 +101,7 @@ function PlatformAdminCompanyDeletion({ company }: { readonly company: CompanySt
         </div>
         {preview.error ? (
           <div className="flex flex-col items-start gap-3">
-            <p role="alert" className="text-sm text-destructive">
-              Preview failed: {preview.error instanceof ApiError ? preview.error.message : 'Could not load deletion preview'}
-            </p>
+            <ErrorToast error={preview.error} message={preview.error instanceof ApiError ? preview.error.message : 'Could not load deletion preview'} />
             <Button ref={retryButton} type="button" variant="outline" className={buttonMotion} disabled={preview.isFetching} onClick={() => {
               if (!active.current || !isSessionCurrent()) return
               focusRequested.current = true
@@ -145,9 +144,7 @@ function PlatformAdminCompanyDeletion({ company }: { readonly company: CompanySt
           </>
         ) : null}
         {deletion.error ? (
-          <p role="alert" className="text-sm text-destructive">
-            Deletion failed: {deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete company'}
-          </p>
+          <ErrorToast error={deletion.error} message={deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete company'} />
         ) : null}
       </CardContent>
     </Card>

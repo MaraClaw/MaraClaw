@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { CreateCompanyForm } from '@/components/companies/create-company-form'
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -79,9 +80,7 @@ export function CompaniesPage() {
 
       {companies.isLoading ? <p className="text-sm text-muted-foreground">Loading companies…</p> : null}
       {companies.error ? (
-        <p className="text-sm text-destructive">
-          {companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'}
-        </p>
+        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'} />
       ) : null}
 
       {!companies.isLoading && !companies.error && rows.length === 0 ? (
