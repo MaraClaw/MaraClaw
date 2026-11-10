@@ -16,7 +16,6 @@ from app.services.storage_runtime.base import (
     StorageBackend,
     StorageReadLimitExceededError,
     WriteCondition,
-    content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import read_bounded
 from app.services.workspace_collaboration import normalize_workspace_path
@@ -86,11 +85,10 @@ async def _materialize_storage_entry(
     _ = await anyio.to_thread.run_sync(_write_local_file, target, data)
 
 
-def _write_local_file(target: Path, data: bytes) -> str:
-    """Write ``data`` under a new parent and return its content hash, off the event loop."""
+def _write_local_file(target: Path, data: bytes) -> None:
+    """Write ``data`` under a new parent, off the event loop."""
     target.parent.mkdir(parents=True, exist_ok=True)
     _ = target.write_bytes(data)
-    return content_hash_bytes(data)
 
 
 async def _prepare_temp_workspace(
@@ -138,26 +136,25 @@ async def _materialize_storage_path_with_budget(
 ) -> None:
     if await storage.is_file(storage_key):
         remaining = TOOL_MATERIALIZE_MAX_TOTAL_BYTES - budget["total"]
-        version = await storage.get_version_bounded(storage_key, TOOL_MATERIALIZE_MAX_FILE_BYTES)
         try:
-            data = await storage.read_bytes_bounded(storage_key, min(TOOL_MATERIALIZE_MAX_FILE_BYTES, remaining))
-        except StorageReadLimitExceededError:
-            if remaining >= TOOL_MATERIALIZE_MAX_FILE_BYTES:
+            snapshot = await storage.read_snapshot_bounded(storage_key, min(TOOL_MATERIALIZE_MAX_FILE_BYTES, remaining))
+        except StorageReadLimitExceededError as exc:
+            if remaining >= TOOL_MATERIALIZE_MAX_FILE_BYTES or exc.size_bytes > TOOL_MATERIALIZE_MAX_FILE_BYTES:
                 raise
             return
         target = _safe_local_target(local_root, rel_path)
         if target is None:
             return
-        base_hash = await anyio.to_thread.run_sync(_write_local_file, target, data)
+        await anyio.to_thread.run_sync(_write_local_file, target, snapshot.data)
         normalized_rel = normalize_workspace_path(rel_path)
         manifest[normalized_rel] = TempWorkspaceManifestEntry(
             rel_path=normalized_rel,
             storage_key=storage_key,
-            base_version_token=version.token,
-            base_hash=base_hash,
-            size=len(data),
+            base_version_token=snapshot.version.token,
+            base_hash=snapshot.sha256,
+            size=len(snapshot.data),
         )
-        budget["total"] += len(data)
+        budget["total"] += len(snapshot.data)
         return
     if await storage.is_dir(storage_key):
         target = _safe_local_target(local_root, rel_path)
