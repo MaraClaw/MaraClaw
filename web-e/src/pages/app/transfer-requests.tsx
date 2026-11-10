@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useInfiniteQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -25,7 +26,7 @@ export function TransferRequests({ refreshVersion }: { readonly refreshVersion: 
     <p className="text-sm text-muted-foreground">Paid transfers need payment review before destination admission. These requests are separate from the admission status filter below.</p>
     {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer requests…</p> : null}
     {query.isFetchingNextPage ? <p role="status" className="text-sm text-muted-foreground">Loading older transfer requests…</p> : null}
-    {query.isError ? <p role="alert" className="text-sm text-destructive">{userFacingRequestError(query.error, 'Unable to load transfer requests. Refresh to try again.')}</p> : null}
+    {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load transfer requests. Refresh to try again.')} /> : null}
     {items?.length === 0 ? <p className="text-sm text-muted-foreground">No transfer requests yet.</p> : null}
     <ul aria-label="Transfer requests" aria-busy={query.isFetching} className="space-y-3">
       {items?.map((request) => <li key={request.id} className="space-y-2 rounded-xl border border-border p-4 text-sm">
