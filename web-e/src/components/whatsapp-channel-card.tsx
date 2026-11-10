@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { WhatsAppPersonalCard } from '@/components/whatsapp-personal-card'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -14,7 +15,7 @@ export function WhatsAppChannelCard({ agentId, cloud }: { readonly agentId: stri
     retry: false,
   })
   if (mode.isPending) return <p role="status">Loading WhatsApp setup…</p>
-  if (mode.isError) return <div className="space-y-2"><p role="alert">Unable to load WhatsApp setup.</p><Button type="button" variant="outline" className="text-base sm:text-sm" onClick={scope.effect(() => void mode.refetch())}>Retry WhatsApp setup</Button></div>
+  if (mode.isError) return <div className="space-y-2"><RequestErrorToast error={mode.error} message="Unable to load WhatsApp setup." /><Button type="button" variant="outline" className="text-base sm:text-sm" onClick={scope.effect(() => void mode.refetch())}>Retry WhatsApp setup</Button></div>
   const value = selected ?? mode.data
   return <div className="min-w-0 space-y-3">
     <fieldset className="flex flex-wrap gap-3">

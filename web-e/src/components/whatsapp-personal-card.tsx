@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
 import { changePersonalConnection, getPersonalStatus, type PersonalStatus } from '@/lib/whatsapp-api'
@@ -24,7 +25,7 @@ export function WhatsAppPersonalCard({ agentId }: { readonly agentId: string }) 
     <p className="max-w-prose text-lg text-muted-foreground sm:text-sm">Unofficial WhatsApp automation may be restricted or suspend your account. Use an account you own and accept this risk before connecting.</p>
     <p className="max-w-prose text-lg text-muted-foreground sm:text-sm">First version: newly authored text in your own self-chat only. No contacts, groups, media, history, edits, or proactive messages. One WhatsApp mode and account can be active per agent; connecting here replaces Cloud setup.</p>
     <p role="status" aria-atomic="true" className="text-lg sm:text-sm">{view.loading ? 'Loading personal connection…' : view.busy ? 'Updating personal connection…' : status ? stateText(status.state) : ''}</p>
-    {view.error ? <p role="alert" className="max-w-prose text-lg text-destructive sm:text-sm">{view.error}</p> : null}
+    {view.error ? <RequestErrorToast message={view.error} /> : null}
     {status?.account_hint ? <p className="break-all text-lg sm:text-sm">Account: {status.account_hint}</p> : null}
     {status?.error_code ? <p className="max-w-prose text-lg text-destructive sm:text-sm">{failureText(status.error_code)}</p> : null}
     {qr ? <div className="space-y-2">
