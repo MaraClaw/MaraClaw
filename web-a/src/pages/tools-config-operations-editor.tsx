@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from 'react'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { JsonObject } from '@/lib/tools-api'
@@ -34,7 +35,8 @@ export function ToolConfigOperationsEditor({ tool, pending, error, onSave, onPro
           {fields.map((field) => <ToolConfigField key={field.key} field={field} edit={edits[field.key]} stored={Object.hasOwn(tool.config, field.key)} disabled={pending} onChange={(edit) => setEdits((previous) => ({ ...previous, [field.key]: edit }))} />)}
         </div>
         {fields.length === 0 ? <p className="text-sm text-muted-foreground">No supported fields. Use the explicit whole replacement editor for this tool.</p> : null}
-        {validation || error ? <p role="alert" className="text-sm text-destructive">{validation ?? error}</p> : null}
+        {validation ? <p role="alert" className="text-sm text-destructive">{validation}</p> : null}
+        {error ? <ErrorToast message={error} /> : null}
         <div className="flex flex-wrap gap-3">
           <Button type="submit" className={toolButtonClass} disabled={pending || !changed}>{pending ? 'Working…' : 'Save fields'}</Button>
           {onProbe ? <Button type="button" variant="outline" className={toolButtonClass} disabled={pending} onClick={() => operations(onProbe)}>Test saved + draft</Button> : null}

@@ -3,6 +3,7 @@ import { useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { patchToolConfig, probeSavedTool, updateTool } from '@/lib/tools-api'
@@ -71,7 +72,7 @@ function ToolConfigReplacement({ tool, tenantId, onClose }: {
           <label className="flex min-h-11 items-start gap-3 py-3 text-sm"><input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-primary" {...register('confirmed')} disabled={mutation.isPending} aria-invalid={!!errors.confirmed} aria-describedby={errors.confirmed ? `${id}-confirmed-error` : undefined} />I understand this replaces all previous configuration and removes omitted values.</label>
           {errors.confirmed ? <p id={`${id}-confirmed-error`} role="alert" className="text-sm text-destructive">{errors.confirmed.message}</p> : null}
         </div>
-        {mutation.errorMessage ? <p role="alert" className="text-sm text-destructive">{mutation.errorMessage}</p> : null}
+        {mutation.errorMessage ? <ErrorToast message={mutation.errorMessage} /> : null}
         <div className="flex flex-wrap gap-3">
           <Button type="submit" variant="destructive" className={toolButtonClass} disabled={mutation.isPending}>{mutation.isPending ? 'Replacing…' : 'Replace entire configuration'}</Button>
           <Button type="button" variant="outline" className={toolButtonClass} disabled={mutation.isPending} onClick={close}>Cancel</Button>
