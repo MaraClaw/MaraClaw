@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -105,9 +106,7 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
           })}
         </ol>
       ) : null}
-      {history.isError ? <p role="alert" className="text-sm text-destructive">
-        {olderError ? 'Could not load older activity. Your loaded actions are still available.' : 'Could not load activity. Please try again.'}
-      </p> : null}
+      {history.isError ? <RequestErrorToast error={history.error} message={olderError ? 'Could not load older activity. Your loaded actions are still available.' : 'Could not load activity. Please try again.'} /> : null}
       <div className="flex flex-wrap gap-2">
         {history.hasNextPage ? (
           <Button type="button" variant="outline" className="min-w-40" disabled={history.isFetching || history.isPaused}
