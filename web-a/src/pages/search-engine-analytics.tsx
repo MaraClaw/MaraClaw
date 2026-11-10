@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
@@ -189,7 +190,9 @@ export function SearchEngineAnalytics() {
         </div>
       </div>
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <ErrorToast error={dashboard.error} message={error} /> : null}
+      {companies.isError ? <ErrorToast error={companies.error} message="Could not load companies for search analytics." /> : null}
+      {exportStatus.isError ? <ErrorToast error={exportStatus.error} message="Could not load search export status." /> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
@@ -349,12 +352,11 @@ export function SearchAnalyticsSnapshot() {
         </Button>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {orgs.isError ? <ErrorToast error={orgs.error} message="Could not load organization search analytics." /> : null}
         {summary.isLoading || orgs.isLoading ? (
           <p className="text-sm text-muted-foreground">Loading last 7 days…</p>
-        ) : summary.error instanceof ApiError ? (
-          <p className="text-sm text-destructive">{summary.error.message}</p>
         ) : summary.error ? (
-          <p className="text-sm text-destructive">Failed to load search analytics</p>
+          <ErrorToast error={summary.error} message={summary.error instanceof ApiError ? summary.error.message : 'Failed to load search analytics'} />
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-4">

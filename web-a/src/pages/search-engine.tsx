@@ -9,6 +9,7 @@ import { z } from 'zod'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Badge } from '@/components/ui/badge'
+import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -231,9 +232,7 @@ export function SearchEnginePage() {
               />
             </div>
             {formError ? (
-              <p className="text-sm text-destructive sm:col-span-2" role="alert">
-                {formError}
-              </p>
+              <ErrorToast message={formError} />
             ) : null}
             <div className="sm:col-span-2">
               <Button type="submit" disabled={isSubmitting}>
@@ -247,9 +246,7 @@ export function SearchEnginePage() {
 
       {keys.isLoading ? <p className="text-sm text-muted-foreground">Loading keys…</p> : null}
       {keys.error ? (
-        <p className="text-sm text-destructive">
-          {keys.error instanceof ApiError ? keys.error.message : 'Failed to load keys'}
-        </p>
+        <ErrorToast error={keys.error} message={keys.error instanceof ApiError ? keys.error.message : 'Failed to load keys'} />
       ) : null}
 
       {!keys.isLoading && (keys.data ?? []).length === 0 ? (
