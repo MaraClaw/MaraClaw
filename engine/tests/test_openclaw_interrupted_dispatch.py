@@ -169,7 +169,7 @@ def _entry(message: GatewayMessageRecord, evidence: Evidence) -> str:
 
 
 def guest(root: Path, message: GatewayMessageRecord, evidence: Evidence) -> None:
-    """Write the guest database as OpenClaw 2026.11.2 leaves it."""
+    """Write the guest database as OpenClaw 2026.11.3 leaves it."""
     assert message.reply_binding_id is not None
     key = _session_key(uuid4() if evidence.foreign_session else message.reply_binding_id)
     path = root / "agents/main/agent/openclaw-agent.sqlite"
