@@ -16,6 +16,7 @@ import anyio
 from app.core.logging import logger
 from app.dao.task_dao import task_dao
 from app.records.task import TaskClaim
+from app.runtime.tasks import loop_progress
 from app.services.llm.background_guard import ScheduleLeaseLostError
 
 TASK_LEASE_SECONDS: Final = 120
@@ -23,6 +24,7 @@ TASK_RENEW_SECONDS: Final = 30
 LEASE_CANCEL_MARGIN_SECONDS: Final = 5
 RECOVERY_INTERVAL_SECONDS: Final = 30
 RECOVERY_BATCH: Final = 100
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 RECOVERY_LOG: Final = "⚠️ Execution lease expired; the task was returned to pending and was not rerun"
 _LOCAL_WINDOW_SECONDS: Final = TASK_LEASE_SECONDS - LEASE_CANCEL_MARGIN_SECONDS
 _EXPIRED: Final = "Task execution lease expired before it could be renewed"
@@ -145,9 +147,11 @@ async def recover_expired_leases() -> int:
 
 async def task_lease_recovery_loop() -> None:
     """Worker-role loop; the only place expired leases are recovered, with no startup sweep."""
+    progress = loop_progress()
     while True:
         try:
             recovered = await recover_expired_leases()
+            progress.beat()
             if recovered:
                 logger.warning("[TaskLease] Returned {} task(s) with expired leases to pending", recovered)
         except Exception as error:
