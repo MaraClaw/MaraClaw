@@ -27,6 +27,7 @@ from app.services.openclaw_transcript import (
     open_transcript,
     recover_media,
 )
+from app.services.quota_guard import AgentExpired
 from app.services.response_identity import ResponseGuard, response_guard
 from app.services.shared_chat import shared_session_id
 
@@ -199,11 +200,16 @@ class DelayedReplyRecovery:
                     await _publish(binding, message)
                 if not page:
                     self._idle[binding.id] = _Idle(source.hint, now)
-            except HTTPException as error:
-                if error.status_code not in (403, 404, 409):
-                    raise
+            except AgentExpired:
+                continue
             except OSError, SQLiteError:
                 logger.warning("[OpenClaw] delayed reply read failed agent={}", binding.agent_id)
+            except Exception as error:
+                if isinstance(error, HTTPException) and error.status_code in (403, 404, 409):
+                    continue
+                logger.warning(
+                    "[OpenClaw] delayed reply binding failed agent={} error={}", binding.agent_id, type(error).__name__
+                )
         return count
 
 
