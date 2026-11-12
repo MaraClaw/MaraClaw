@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pywhales import DockerClient
 from pywhales.exceptions import NoSuchContainer, NoSuchImage
 
+from app.config import get_settings
 from app.services.guest_identity import AGENT_LABEL
+from app.services.guest_image import image_repository, is_local_reference
 from app.services.guest_probe import probe_guest
 
 
@@ -28,12 +30,6 @@ class ContainerInfo:
 _DIGEST_LINE = re.compile(r"^Digest: (sha256:[0-9a-f]{64})$")
 
 
-def _repository(reference: str) -> str:
-    """The reference without its tag (a colon followed by a slash belongs to a registry port)."""
-    head, separator, tail = reference.rpartition(":")
-    return head if separator and "/" not in tail else reference
-
-
 class UpgradeDocker:
     def __init__(self, client: DockerClient) -> None:
         self.client: DockerClient = client
@@ -46,7 +42,7 @@ class UpgradeDocker:
         prints names the pulled manifest; ``repo@digest`` cannot be retargeted. A digest-pinned
         configuration is pulled too (it may not be cached locally) and then inspected as is.
         """
-        if "@" not in reference and "/" not in _repository(reference):
+        if is_local_reference(reference):
             try:
                 return self.client.image.inspect(reference).id
             except NoSuchImage as exc:
@@ -55,7 +51,9 @@ class UpgradeDocker:
                     "build-openclaw-local-dockerfile.sh "
                     "on the worker's Docker daemon before retrying the upgrade"
                 ) from exc
-        stream = self.client.image.pull(reference, stream_logs=True)
+        stream = self.client.image.pull(
+            reference, stream_logs=True, timeout=get_settings().OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS
+        )
         if not isinstance(stream, Iterator):
             raise OSError(f"docker pull of {reference} did not stream its log")
         digest: str | None = None
@@ -68,7 +66,7 @@ class UpgradeDocker:
             return self.client.image.inspect(reference).id
         if digest is None:
             raise OSError(f"docker pull of {reference} reported no digest")
-        return self.client.image.inspect(f"{_repository(reference)}@{digest}").id
+        return self.client.image.inspect(f"{image_repository(reference)}@{digest}").id
 
     def inspect(self, reference: str) -> ContainerInfo | None:
         try:

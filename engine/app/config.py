@@ -186,6 +186,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
     OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES: int = Field(default=0, ge=0)
+    # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
+    OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
+    # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.
+    OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_guest_memory_capacity(self) -> Settings:

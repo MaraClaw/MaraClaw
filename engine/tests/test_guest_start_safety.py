@@ -10,12 +10,13 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as module
+from app.services import agent_manager as module, guest_admission as admission
 from app.services.agent_manager import AgentManager
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
@@ -25,11 +26,29 @@ from builtin_keyword_fakes import IncludeAllKeyword
 class Docker:
     def __init__(self) -> None:
         self.container = self
+        self.image = self
         self.guests: dict[str, SimpleNamespace] = {}
         self.runs: list[dict[str, object]] = []
         self.removed: list[str] = []
         self.failures: list[bytes] = []
         self.listings: list[object] = []
+        self.image_present = True
+        self.exists_failure: Exception | None = None
+        self.pull_failure: DockerException | None = None
+        self.pulls: list[tuple[str, dict[str, object]]] = []
+        self.events: list[str] = []
+
+    def exists(self, _reference: str) -> bool:
+        if self.exists_failure is not None:
+            raise self.exists_failure
+        return self.image_present
+
+    def pull(self, reference: str, **kwargs: object) -> None:
+        self.events.append("pull")
+        self.pulls.append((reference, kwargs))
+        if self.pull_failure is not None:
+            raise self.pull_failure
+        self.image_present = True
 
     def add(self, agent: AgentRecord, *, memory: int = 20, status: str = "running") -> SimpleNamespace:
         guest = SimpleNamespace(
@@ -37,7 +56,8 @@ class Docker:
             name=guest_container_name(agent.id),
             config=SimpleNamespace(labels={AGENT_LABEL: str(agent.id)}),
             host_config=SimpleNamespace(memory=memory, port_bindings={}),
-            state=SimpleNamespace(status=status),
+            state=SimpleNamespace(status=status, restarting=False),
+            restart_count=0,
             mounts=[SimpleNamespace(destination="/home/node/custom-state")],
         )
         self.guests[guest.id] = guest
@@ -59,10 +79,12 @@ class Docker:
 
     def list(self, *, filters: object, **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[SimpleNamespace]:
         assert kwargs["all"]
+        self.events.append("list")
         self.listings.append(filters)
         return [guest for guest in self.guests.values() if guest.state.status in ("running", "restarting")]
 
     def run(self, _image: str, _command: builtins.list[str], **kwargs: object) -> SimpleNamespace:
+        self.events.append("run")
         self.runs.append(kwargs)
         labels = kwargs["labels"]
         assert isinstance(labels, dict)
@@ -181,6 +203,48 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     assert (run.get("memory"), run.get("memory_swap"), run.get("cpus"), run.get("pids_limit")) == (20, 20, 1.0, 512)
     assert run["publish"] == [("127.0.0.1:18888", module.settings.OPENCLAW_GATEWAY_PORT)]
     assert docker.listings == []
+
+
+@pytest.mark.parametrize(
+    ("reference", "present", "failure", "pulls", "replaced"),
+    [
+        pytest.param("registry.example/team/openclaw:1", True, None, 0, True, id="present"),
+        pytest.param("registry.example/team/openclaw:1", False, None, 1, True, id="registry-missing-is-pulled"),
+        pytest.param("registry.example/team/openclaw:1", False, "pull", 1, False, id="registry-pull-fails"),
+        pytest.param("registry.example/team/openclaw:1", False, "inspect", 0, False, id="registry-inspect-malformed"),
+        pytest.param("arm64-openclaw:2026.11.3", False, None, 0, False, id="local-missing-is-never-pulled"),
+        pytest.param(f"sha256:{'a' * 64}", False, None, 0, False, id="image-id-missing-is-never-pulled"),
+    ],
+)
+async def test_guest_image_is_settled_before_admission(env, monkeypatch, reference, present, failure, pulls, replaced):
+    # Given aggregate admission is on, a running guest, and a replacement image in the given local state.
+    manager, docker, agent = env
+    monkeypatch.setattr(admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)
+    docker.image_present = present
+    if failure == "pull":
+        docker.pull_failure = DockerException(["docker", "pull", reference], 1, stderr=b"pull access denied")
+    if failure == "inspect":
+        docker.exists_failure = ParsingError("Missing inspect identity")
+    # When the guest is replaced onto that image.
+    if replaced:
+        result = await manager.replace_container(agent, image=reference)
+        # Then a missing registry image is pulled once under the configured deadline, strictly before admission
+        # lists the host's guests and before `run`, which never pulls implicitly.
+        assert result == agent.container_id
+        assert docker.removed == ["old"]
+        assert docker.events == [*["pull"] * pulls, "list", "run"]
+        assert docker.runs[0].get("pull") == "never"
+    else:
+        with pytest.raises(GuestStartPreflightError) as refused:
+            await manager.replace_container(agent, image=reference)
+        # Then the failure precedes admission and every destructive step: nothing is listed, stopped or created.
+        assert refused.value.code == "runtime_failed"
+        assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
+        assert docker.removed == docker.runs == docker.listings == []
+        assert docker.events == ["pull"] * pulls
+    assert [(pulled, kwargs.get("timeout")) for pulled, kwargs in docker.pulls] == [
+        (reference, module.settings.OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS)
+    ] * pulls
 
 
 @pytest.mark.parametrize(

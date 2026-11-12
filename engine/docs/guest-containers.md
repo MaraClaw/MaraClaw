@@ -63,13 +63,40 @@ are removed does it materialize storage and apply workspace/config/auth writes.
 Local storage files that are already their own materialization source are left
 untouched, including SQLite databases and their WAL/SHM files. The new guest is
 recorded `creating`; its readiness owner (ordinary start or upgrade) publishes
-the final runtime state. Preparation, admission and ownership refusal leave the
+the final runtime state. Preparation, image, admission and ownership refusal leave the
 old guest's files untouched. Writes after cutover are **not transactional or
 rolled back**; a failure then clears the removed runtime and reports
 `runtime_failed`. Remote hydration holds admission until creation finishes,
 including first creation with no old guest; upgrades skip workspace rehydration.
-Preparation is not image-pull validation or a guarantee of Docker creation.
+Preparation is no guarantee that Docker creation succeeds; the guest image is
+checked separately, [before admission](#guest-image-before-admission).
 Replacement is not atomic; failure after removal can leave no guest.
+
+### Guest Image Before Admission
+
+After preparation succeeds, and before aggregate admission, the ownership check and
+any stop or remove of the old guest, the engine checks that the guest image exists on
+the Docker daemon ([image check](../app/services/guest_image.py), called from
+`AgentManager.replace_container`). A present image needs nothing more. A missing one
+is handled by the form of its reference, the same rule
+[upgrades](openclaw-updates.md#image-preparation-and-retry) apply:
+
+| Missing reference | Outcome |
+|---|---|
+| Bare name without a digest or repository slash (for example `arm64-openclaw:2026.11.3`), or an image ID such as `sha256:...` | Local-only, never pulled. The start fails with a preflight error, code `runtime_failed`. The operator must build the image on that Docker daemon |
+| Namespaced/registry or digest-pinned reference | Pulled once, bounded by `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`. A failed or timed-out pull fails the start with `runtime_failed` |
+
+A refusal is logged as a warning with the image reference and its cause. A Docker
+error, an expired CLI deadline or a malformed image inspection answer during the
+check is logged the same way and is also reported as `runtime_failed`.
+
+Each of these failures happens before anything destructive runs, so the old guest,
+its recorded container ID and port, and the workspace are untouched. The pull holds
+only the per-agent flock, never the shared `_guest_admission` lock, so one slow pull
+cannot block other agents' starts. Container creation then runs with Docker's pull
+policy `never`, so `docker run` cannot start an implicit pull inside the admission
+lock. If the image is deleted between the check and creation, creation fails as a
+normal Docker run failure.
 
 ### Readiness Deadlines And Cancellation
 
@@ -155,6 +182,46 @@ replacement or operator-managed change. Inspect them and plan maintenance before
 replacement; do not assume older guests already have the defaults. Docker
 `unless-stopped` restart behavior is separate and does not reapply these settings
 or pass through engine admission.
+
+### Docker CLI And Image Pull Deadlines
+
+The [settings](../app/config.py) define two deadlines:
+
+| Setting | Default | Constraint |
+|---|---:|---|
+| `OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS` | `120` (2 minutes) | `0` to `3600` seconds; `0` leaves Docker CLI launches unbounded |
+| `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS` | `1800` (30 minutes) | Above `0`, up to `86400` seconds |
+
+`OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS` is the deadline for each Docker CLI launch made
+by the [guest-management Docker client](../app/services/agent_manager.py)
+(`agent_manager.docker_client`, built in `AgentManager._connect_docker`): inspect,
+list, run, stop, remove, start and short exec. When it expires, the local CLI process
+is killed and reaped, and the call fails as a Docker error (`DockerTimeout`, a
+`DockerException`), so existing error handling applies. For example, container status
+reads report `error`.
+
+An expired launch has an **unknown** daemon-side outcome: the daemon may still
+complete a run, stop or remove. The engine does not retry blindly. Recovery is the
+next start's [owned-guest check](../app/services/guest_identity.py), which inspects
+the recorded container, the canonical name and the legacy short name, and accepts
+only a container labelled with this agent's `maraclaw.agent_id`.
+
+Calls that carry their own deadline keep it: native gateway turns
+([RPC](../app/services/openclaw_gateway_rpc.py),
+[stream](../app/services/openclaw_gateway_stream.py)), which use a fixed 940 seconds,
+and image pulls. The pull deadline is `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`, for
+a registry or digest-pinned guest image on ordinary starts and replacements and on
+[OpenClaw upgrades](openclaw-updates.md#image-preparation-and-retry). The sandbox
+Docker backend uses its own client and is not affected.
+
+Both values come from the settings object that `get_settings` caches, so a running
+engine process keeps the value it first read; changing either needs a restart. The
+CLI deadline is applied when the Docker client is constructed in
+`AgentManager._connect_docker`: when `agent_manager` is imported, and again only if
+Docker was unavailable then and `reacquire_docker_client` builds the client later (the
+upgrade worker calls it). The pull deadline is read each time a pull starts, in the
+[image check](../app/services/guest_image.py) and in the
+[upgrade pull](../app/services/openclaw_update_docker.py).
 
 ## Optional Aggregate Memory Admission
 

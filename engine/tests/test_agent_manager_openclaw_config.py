@@ -1,11 +1,16 @@
 import json
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
+from pywhales import DockerClient
 from pywhales.exceptions import NoSuchContainer
 
 from app.config import Settings, get_settings
@@ -67,6 +72,11 @@ class RecordingContainerApi:
             raise self.remove_error
 
 
+class RecordingImageApi:
+    def exists(self, _reference):
+        return True
+
+
 class RecordingDockerClient:
     def __init__(self, inspect_result=None, inspect_error=None, stop_error=None, remove_error=None, run_error=None):
         self.container = RecordingContainerApi(
@@ -75,6 +85,7 @@ class RecordingDockerClient:
             stop_error=stop_error,
             remove_error=remove_error,
         )
+        self.image = RecordingImageApi()
         self.run_error = run_error
         self.run_args = None
         self.run_kwargs = None
@@ -789,3 +800,40 @@ async def test_lifecycle_methods_treat_missing_pywhales_client_as_docker_error(m
     assert status == {"running": False, "status": "error"}
     assert agent.container_id == "container-without-cli"
     assert agent.container_port == 19876
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS", "inf"),
+        ("OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS", "nan"),
+        ("OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS", -1),
+        ("OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS", 0),
+        ("OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS", "inf"),
+    ],
+)
+def test_docker_deadline_settings_reject_values_the_client_cannot_take(name, value):
+    # Given a deadline the Docker client would refuse while the engine imports its manager.
+    # When settings load it.
+    with pytest.raises(ValidationError) as rejected:
+        Settings(**{name: value})
+    # Then startup fails at configuration instead, on that field and not on an unrelated local value.
+    assert (name,) in [error["loc"] for error in rejected.value.errors()]
+
+
+@pytest.mark.parametrize(("deadline", "seconds", "expected"), [(0.5, 30, "error"), (0, 1, "not_found")])
+def test_docker_cli_launches_end_at_the_configured_deadline(monkeypatch, deadline, seconds, expected):
+    # Given a Docker CLI that answers "no such container" only after sleeping.
+    script = f"import sys, time; time.sleep({seconds}); sys.exit('Error: No such container: guest')"
+    monkeypatch.setattr(
+        agent_manager_module, "DockerClient", partial(DockerClient, client_call=[sys.executable, "-c", script])
+    )
+    monkeypatch.setattr(agent_manager_module.settings, "OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS", deadline)
+    manager = AgentManager()
+    agent: Any = SimpleNamespace(container_id="guest", status="running")
+    # When status is read through the manager's own client.
+    started = monotonic()
+    status = manager.get_container_status(agent)
+    # Then a launch past the deadline is killed and reported, while a zero deadline lets it finish.
+    assert status == {"running": False, "status": expected}
+    assert monotonic() - started < 15
