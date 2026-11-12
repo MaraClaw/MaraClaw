@@ -42,7 +42,12 @@ Real parallelism is also bounded by OpenClaw's `agents.defaults.maxConcurrent`
 Guest resource limits apply only when creating a new or replacement guest.
 The required worker loop
 `openclaw_dispatch_reconciler` wakes pending lane heads in keyset pages of 50, with a
-one-second scan interval. A second, independent delivered-page cursor completes a
+one-second scan interval. A page walks the partial `ix_gateway_messages_pending_order`
+index from its cursor, so a tick reads pending rows only up to its page of heads. On a
+large existing `gateway_messages`, build that index and `ix_gateway_messages_agent_created`
+(the newest-first agent listing) with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and the
+baseline definitions before rerunning bootstrap: the baseline's plain `CREATE INDEX`
+blocks writes to the table while it builds. A second, independent delivered-page cursor completes a
 delivered turn with a fixed interruption notice (through `settle_native_report`, so
 the next queue head wakes) only on exact guest evidence read by
 `openclaw_interrupted_inputs`: the live `session_nodes` restart-recovery tombstone for

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import ClassVar, final
+from datetime import UTC, datetime
+from typing import ClassVar, Final, final
 from uuid import UUID
 
 from app.dao.gateway_message_delivery_dao import GatewayMessageDeliveryDAO
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedClaim
 from app.records.personal_burst import BURST_CANCELLED_RESULT
+
+# Below every row: unlike ``after IS NULL OR``, a row bound stays an index condition when the plan is generic.
+_DISPATCH_START: Final = (datetime.min.replace(tzinfo=UTC), UUID(int=0))
 
 _COLUMNS = (
     "id",
@@ -213,12 +216,12 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
         self, limit: int, *, after: tuple[datetime, UUID] | None = None
     ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
         """Page pending lane heads without replaying any delivered work."""
+        after_time, after_id = after or _DISPATCH_START
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('g')} FROM gateway_messages g "
                 "LEFT JOIN personal_burst_batches b ON b.gateway_id = g.id "
-                "WHERE g.status = 'pending' AND (%(after_time)s::timestamptz IS NULL "
-                "OR (g.created_at, g.id) > (%(after_time)s, %(after_id)s)) "
+                "WHERE g.status = 'pending' AND (g.created_at, g.id) > (%(after_time)s, %(after_id)s) "
                 "AND (b.gateway_id IS NULL OR b.state != 'pending' OR b.ready_at <= clock_timestamp()) "
                 "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR ("
                 "NOT EXISTS (SELECT 1 FROM gateway_messages d WHERE d.agent_id = g.agent_id "
@@ -227,11 +230,7 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
                 "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
                 "AND (p.created_at, p.id) < (g.created_at, g.id)))) "
                 "ORDER BY g.created_at, g.id LIMIT %(limit)s",
-                {
-                    "after_time": after[0] if after else None,
-                    "after_id": after[1] if after else None,
-                    "limit": limit + 1,
-                },
+                {"after_time": after_time, "after_id": after_id, "limit": limit + 1},
             )
         messages = [self.record_factory(row) for row in rows[:limit]]
         last = messages[-1] if len(rows) > limit else None

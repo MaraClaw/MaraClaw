@@ -243,3 +243,42 @@ async def test_delivered_lane_index_serves_the_delivered_probe(pooled_database: 
         )
     # Then the NOT EXISTS probe shape is answered from the partial delivered index.
     assert any("ix_gateway_messages_delivered_lane" in str(next(iter(row.values()))) for row in rows)
+
+
+async def test_pending_order_index_starts_the_dispatch_walk_at_its_cursor(pooled_database: ReceiptDatabase) -> None:
+    # Given the dispatch keyset walk planned generically, as a server-side prepared statement may run it.
+    db = pooled_database
+    async with transaction(db.first):
+        await db.first.execute("SET LOCAL plan_cache_mode = force_generic_plan")
+        await db.first.execute("SET LOCAL enable_seqscan = off")
+        await db.first.execute("SET LOCAL enable_sort = off")
+        await db.first.execute(
+            "PREPARE dispatch_walk (timestamptz, uuid) AS SELECT g.id FROM gateway_messages g "
+            "WHERE g.status = 'pending' AND (g.created_at, g.id) > ($1, $2) ORDER BY g.created_at, g.id LIMIT 51"
+        )
+        rows = await db.first.fetchall(
+            "EXPLAIN EXECUTE dispatch_walk ('2026-11-01T00:00:00Z', '00000000-0000-0000-0000-000000000000')"
+        )
+        await db.first.execute("DEALLOCATE dispatch_walk")
+    plan = "\n".join(str(next(iter(row.values()))) for row in rows)
+    # Then the walk starts at the cursor inside the partial pending index, with no sort of every pending row.
+    assert "ix_gateway_messages_pending_order" in plan, plan
+    assert "Index Cond" in plan, plan
+    assert "Sort" not in plan, plan
+
+
+async def test_agent_listing_index_serves_newest_first_without_a_sort(pooled_database: ReceiptDatabase) -> None:
+    # Given the planner barred from sequential scans and sorts.
+    db = pooled_database
+    async with transaction(db.first):
+        await db.first.execute("SET LOCAL enable_seqscan = off")
+        await db.first.execute("SET LOCAL enable_sort = off")
+        rows = await db.first.fetchall(
+            "EXPLAIN SELECT id FROM gateway_messages WHERE agent_id = %(agent)s "
+            "ORDER BY created_at DESC NULLS LAST LIMIT 50",
+            {"agent": db.agent.id},
+        )
+    plan = "\n".join(str(next(iter(row.values()))) for row in rows)
+    # Then the newest-first listing of every status reads one agent's index range in order.
+    assert "ix_gateway_messages_agent_created" in plan, plan
+    assert "Sort" not in plan, plan
