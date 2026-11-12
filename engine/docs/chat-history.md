@@ -17,8 +17,11 @@ reassignment. Committed message mutations invalidate even cached older pages.
 Sender display-name changes do not update session revisions; cached names can
 remain stale until their existing 30-second TTL expires. There is deliberately
 no participant-to-session invalidation trigger: agent updates lock
-agent → participant, while message persistence locks session → agent. Acquiring
-session locks from participant updates would invert that order and can deadlock.
+agent → participant, while message persistence locks agent → session
+(`chat_session_dao.lock_for_agent` takes the agent row `FOR KEY SHARE` first, the
+order native claims and settlements use). Acquiring session locks from participant
+updates would add a participant → session order that message persistence does not
+follow.
 
 ## Existing databases
 

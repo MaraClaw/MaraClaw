@@ -107,7 +107,7 @@ async def accept_submission(
         require_writable_session(session)
         if not attachments_available:
             raise InvalidChatAttachmentsError
-        await check_agent_expired(agent.id)
+        await check_agent_expired(agent.id, mark=False)
         current_history = history
         if shared:
             current_history = convert_chat_messages_to_llm_format(

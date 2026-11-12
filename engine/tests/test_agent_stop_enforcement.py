@@ -421,6 +421,19 @@ async def test_repeated_quota_expiry_never_calls_docker(monkeypatch):
     stop.assert_not_awaited()
 
 
+async def test_unmarked_expiry_check_refuses_without_the_locking_write(monkeypatch):
+    # Given: an agent past its expiry time that no check has marked yet.
+    agent = replace(_agent(), expires_at=datetime.now(UTC) - timedelta(minutes=1))
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
+    mark = AsyncMock()
+    monkeypatch.setattr(agent_dao, "mark_expired_stopped", mark)
+    # When: a turn transaction checks expiry without marking.
+    with pytest.raises(quota_guard.AgentExpired):
+        await quota_guard.check_agent_expired(agent.id, mark=False)
+    # Then: the turn is refused without the write that takes exclusive tenant and agent locks.
+    mark.assert_not_awaited()
+
+
 @pytest.mark.parametrize("operation", ["send", "report"])
 async def test_stop_winning_lock_denies_send_and_report(monkeypatch, operation):
     # Given: auth saw the old snapshot while a stop transaction owns the tenant lock.

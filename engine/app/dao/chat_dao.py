@@ -72,6 +72,9 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
 
     async def lock_for_agent(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
         async with self.session() as db:
+            # Claims and settlements lock the agent, then the session. Locking the session first would deadlock with
+            # them as soon as this transaction's chat or gateway INSERT takes the agent foreign-key lock.
+            await db.execute("SELECT 1 FROM agents WHERE id = %(agent_id)s FOR KEY SHARE", {"agent_id": agent_id})
             row = await db.fetchone(
                 f"SELECT {self._select_list()} FROM chat_sessions "
                 "WHERE id = %(session_id)s AND agent_id = %(agent_id)s FOR UPDATE",
