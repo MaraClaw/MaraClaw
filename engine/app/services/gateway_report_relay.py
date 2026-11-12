@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from secrets import randbelow
-from typing import assert_never, override
+from typing import Final, assert_never, override
 
 import anyio
 from anyio.abc import TaskGroup
@@ -24,6 +24,7 @@ from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.gateway_report_delivery import GatewayReportDeliveryRecord, TerminalReason
 from app.records.outbound_plan import OutboundProvider
+from app.runtime.tasks import loop_progress
 from app.services.agent_work_eligibility import agent_work_blocking_codes
 from app.services.channels.outbound_errors import ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_identity import preflight_outbound
@@ -266,6 +267,7 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
 
 
 MAX_IN_FLIGHT = 20
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
 async def _run_claim(
@@ -321,6 +323,7 @@ async def start_gateway_report_relay(*, idle_timeout: float = 1.0, clock: Callab
     Claims continuously with at most MAX_IN_FLIGHT deliveries running. When nothing is due it waits for a wake
     (same-process signal or Redis subscriber) and otherwise polls every ``idle_timeout`` seconds.
     """
+    progress = loop_progress()
     slots = anyio.Semaphore(MAX_IN_FLIGHT)
     with listen() as wake:
         async with anyio.create_task_group() as tasks:
@@ -330,6 +333,7 @@ async def start_gateway_report_relay(*, idle_timeout: float = 1.0, clock: Callab
                 wake.clear()
                 try:
                     count = len(await _claim_into(tasks, slots, clock, wake.set))
+                    progress.beat()
                 except Exception as exc:
                     logger.warning("[GatewayReportRelay] batch failed: {}", exc)
                     count = 0
