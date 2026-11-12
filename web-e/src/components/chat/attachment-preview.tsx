@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { Translation } from '@/components/translation'
 import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
@@ -18,21 +20,22 @@ class RendererBoundary extends Component<{ readonly children: ReactNode }, { rea
   static getDerivedStateFromError() { return { failed: true } }
   render() {
     return this.state.failed
-      ? <p role="alert" className="text-sm text-destructive">Preview could not be displayed. Download the file to view it.</p>
+      ? <p role="alert" className="text-sm text-destructive"><Translation id="Preview could not be displayed. Download the file to view it." /></p>
       : this.props.children
   }
 }
 
 function PreviewRenderer({ preview }: { readonly preview: AttachmentPreview }) {
+  const { t: translate } = useTranslation()
   switch (preview.renderer) {
     case 'image': return <AttachmentImage bytes={preview.bytes} metadata={preview.metadata} />
-    case 'pdf': return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading PDF viewer…</p>}>
+    case 'pdf': return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">{translate("Loading PDF viewer…")}</p>}>
       <AttachmentPdf bytes={preview.bytes} />
     </Suspense>
-    case 'office': return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading Office viewer…</p>}>
+    case 'office': return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">{translate("Loading Office viewer…")}</p>}>
       <AttachmentOffice bytes={preview.bytes} name={preview.metadata.name} />
     </Suspense>
-    case 'unsupported': return <p role="status" className="text-sm text-muted-foreground">Preview is not supported for this file type. Download it to view it.</p>
+    case 'unsupported': return <p role="status" className="text-sm text-muted-foreground">{translate("Preview is not supported for this file type. Download it to view it.")}</p>
     default: return assertNever(preview)
   }
 }
@@ -47,6 +50,7 @@ export function AttachmentPreviewBody({ agentId, path }: { readonly agentId: str
 function PreviewAttempt({ agentId, path, onRetry }: {
   readonly agentId: string; readonly path: string; readonly onRetry: () => void
 }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   useEffect(() => {
@@ -57,7 +61,7 @@ function PreviewAttempt({ agentId, path, onRetry }: {
         if (controller.signal.aborted || !scope.isCurrent()) return
         const message = error instanceof BinaryLimitError || (error instanceof ApiError && error.status === 413)
           ? new BinaryLimitError().message
-          : userFacingRequestError(error, 'Preview is unavailable. Try again or download the file.')
+          : userFacingRequestError(error, translate("Preview is unavailable. Try again or download the file."))
         if (error instanceof BinaryLimitError) setState({ status: 'failed', message })
         else {
           showRequestError(message, error)
@@ -66,13 +70,13 @@ function PreviewAttempt({ agentId, path, onRetry }: {
       },
     )
     return () => controller.abort()
-  }, [scope, agentId, path])
+  }, [scope, agentId, path, translate])
 
   switch (state.status) {
-    case 'loading': return <p role="status" className="text-sm text-muted-foreground">Checking access and loading preview…</p>
+    case 'loading': return <p role="status" className="text-sm text-muted-foreground">{translate("Checking access and loading preview…")}</p>
     case 'failed': return <div className="space-y-4">
       {state.message ? <p role="alert" className="text-sm text-destructive">{state.message}</p> : null}
-      <Button type="button" variant="outline" className="min-h-11" onClick={onRetry}>Retry preview</Button>
+      <Button type="button" variant="outline" className="min-h-11" onClick={onRetry}>{translate("Retry preview")}</Button>
     </div>
     case 'ready': return <RendererBoundary><PreviewRenderer preview={state.preview} /></RendererBoundary>
     default: return assertNever(state)

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -6,6 +7,7 @@ import { controlScreenshot, type ControlLease, type ControlResult, type Credenti
 import { ApiError, userFacingRequestError } from '@/lib/http'
 
 export function useControlLease(scope: SessionQueryScope) {
+  const { t: translate } = useTranslation()
   const [lease, setLease] = useState<ControlLease | null>(null)
   const owner = useRef<ControlLease | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
@@ -41,8 +43,8 @@ export function useControlLease(scope: SessionQueryScope) {
     setBusy(false)
     busyOwner.current = null
     dragFrom.current = null
-    if (lost) toast.error('Control ended because the session lock was lost. Take control again to continue.')
-  }, [isCurrent])
+    if (lost) toast.error(translate("Control ended because the session lock was lost. Take control again to continue."))
+  }, [isCurrent, translate])
 
   function start(next: ControlLease) {
     setCaptureError('')
@@ -94,11 +96,11 @@ export function useControlLease(scope: SessionQueryScope) {
           return
         }
       }
-      toast.error(userFacingRequestError(error, 'Unable to update the remote session'), { id: 'control-request-error' })
+      toast.error(userFacingRequestError(error, translate("Unable to update the remote session")), { id: 'control-request-error' })
     } finally {
       if (release && releasing.current === captured) releasing.current = null
     }
-  }, [end, isCurrent, scope])
+  }, [end, isCurrent, scope, translate])
 
   useEffect(() => {
     if (!lease) return

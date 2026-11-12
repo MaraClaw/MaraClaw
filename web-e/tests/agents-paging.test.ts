@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query'
 import react from '@vitejs/plugin-react'
-import { createElement, type ComponentType, type Context } from 'react'
+import { createElement, type ComponentType, type Context, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { createServer } from 'vite'
@@ -94,6 +94,7 @@ test('cached agents remain visible with a retry and toast after a failed refetch
   })
   context.after(async () => { await server.close(); await rm(cacheDir, { recursive: true, force: true }) })
   const AgentsListPage: ComponentType = (await server.ssrLoadModule('/src/pages/app/agents-list.tsx'))['AgentsListPage']
+  const TranslationProvider: ComponentType<{ readonly children?: ReactNode }> = (await server.ssrLoadModule('/src/hooks/translation-provider.tsx'))['TranslationProvider']
   const WorkspaceSessionContext: Context<SessionQueryScope | null> = (await server.ssrLoadModule('/src/hooks/session-workspace.ts'))['WorkspaceSessionContext']
   const client = new QueryClient({ defaultOptions: { queries: { refetchOnMount: false } } })
   context.after(() => client.clear())
@@ -102,8 +103,8 @@ test('cached agents remain visible with a retry and toast after a failed refetch
   context.mock.method(globalThis, 'fetch', async () => response())
   const observer = new InfiniteQueryObserver(client, agentPageOptions())
   context.after(() => observer.destroy())
-  const render = () => renderToStaticMarkup(createElement(MemoryRouter, null,
-    createElement(WorkspaceSessionContext, { value: scope }, createElement(AgentsListPage))))
+  const render = () => renderToStaticMarkup(createElement(TranslationProvider, null, createElement(MemoryRouter, null,
+    createElement(WorkspaceSessionContext, { value: scope }, createElement(AgentsListPage)))))
 
   const first = await observer.refetch()
   assert.equal(first.isSuccess, true)

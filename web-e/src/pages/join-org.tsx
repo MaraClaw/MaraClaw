@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Building2, Lock, Users } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
@@ -24,9 +25,10 @@ const highlights = [
 ]
 
 export function JoinOrgPage() {
+  const { t: translate } = useTranslation()
   const { status, user } = useAuth()
   const code = useInvitationLink()
-  if (status === 'loading') return <p role="status" className="p-6 text-sm text-muted-foreground">Loading…</p>
+  if (status === 'loading') return <p role="status" className="p-6 text-sm text-muted-foreground">{translate("Loading…")}</p>
   if (status === 'anonymous') return <Navigate to="/login" replace state={{ from: { pathname: code ? `/transfer#code=${encodeURIComponent(code)}` : '/join' } }} />
   if (userMustChangePassword(user)) return <Navigate to="/app/settings" replace />
   if (user?.tenant_id) return <Navigate to="/app" replace />
@@ -41,6 +43,7 @@ function JoinSession({ initialCode }: { readonly initialCode: string }) {
 }
 
 function JoinForm({ initialCode }: { readonly initialCode: string }) {
+  const { t: translate } = useTranslation()
   const headingId = useId()
   const { owner, user, isCurrent } = useAuth()
   const invitation = useInvitationPreview(initialCode)
@@ -57,10 +60,10 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
         if (!controller.signal.aborted && isCurrent(owner)) setPendingAdmission(pending)
       })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted && isCurrent(owner)) setError(userFacingRequestError(cause, 'Unable to check admission status. Refresh to try again.'))
+        if (!controller.signal.aborted && isCurrent(owner)) setError(userFacingRequestError(cause, translate("Unable to check admission status. Refresh to try again.")))
       })
     return () => controller.abort()
-  }, [owner, isCurrent])
+  }, [owner, isCurrent, translate])
   async function choose(invited: boolean) {
     if (!isCurrent(owner) || submitting.current || (invited && !invitation.preview)) return
     submitting.current = true
@@ -72,24 +75,24 @@ function JoinForm({ initialCode }: { readonly initialCode: string }) {
       setResult(joined)
       await enter(joined)
     } catch (cause) {
-      if (isCurrent(owner)) setError(userFacingRequestError(cause, 'Unable to join or open the workspace. Try again.'))
+      if (isCurrent(owner)) setError(userFacingRequestError(cause, translate("Unable to join or open the workspace. Try again.")))
     } finally {
       if (isCurrent(owner)) { submitting.current = false; setBusy(false) }
     }
   }
   if (pendingAdmission === true) return <Navigate to="/app/notifications?category=admissions" replace />
   if (pendingAdmission === null) return error
-    ? <div className="space-y-3 p-6"><RequestErrorToast message={error} /><Button variant="outline" onClick={() => window.location.reload()}>Retry admission status</Button></div>
-    : <p role="status" className="p-6 text-sm text-muted-foreground">Checking admission status…</p>
-  return <AuthShell headingId={headingId} title="Join an organization" description="Validate your invitation to see the company, then confirm that you want to join."
-    brandTitle="Land in the right workspace" brandBody="Only the company that invited you is shown. No organization directory or domain matching is needed." highlights={highlights}>
+    ? <div className="space-y-3 p-6"><RequestErrorToast message={error} /><Button variant="outline" onClick={() => window.location.reload()}>{translate("Retry admission status")}</Button></div>
+    : <p role="status" className="p-6 text-sm text-muted-foreground">{translate("Checking admission status…")}</p>
+  return <AuthShell headingId={headingId} title={translate("Join an organization")} description={translate("Validate your invitation to see the company, then confirm that you want to join.")}
+    brandTitle={translate("Land in the right workspace")} brandBody={translate("Only the company that invited you is shown. No organization directory or domain matching is needed.")} highlights={highlights}>
     {error ? <RequestErrorToast message={error} /> : null}
-    {user?.email_verified === false ? <p className="mb-4 text-sm text-muted-foreground">Verify your email before joining a company.</p> : null}
+    {user?.email_verified === false ? <p className="mb-4 text-sm text-muted-foreground">{translate("Verify your email before joining a company.")}</p> : null}
     {result && 'request' in result && result.status === 'pending' ? <AdmissionPending request={result.request} /> : null}
     <InvitationCode invitation={invitation} disabled={busy || result !== null || user?.email_verified === false} />
     {invitation.preview || result ? <Button className="h-11 w-full" disabled={busy || user?.email_verified === false || (result !== null && 'request' in result && result.status === 'pending')} onClick={() => void choose(Boolean(invitation.preview))}>
-      {busy ? 'Opening workspace…' : result ? 'Open joined workspace' : 'Join organization'}
+      {busy ? translate("Opening workspace…") : result ? translate("Open joined workspace") : translate("Join organization")}
     </Button> : null}
-    <Button variant="outline" className="mt-4 h-11 w-full" disabled={busy || result !== null} onClick={() => void choose(false)}>Continue in default workspace</Button>
+    <Button variant="outline" className="mt-4 h-11 w-full" disabled={busy || result !== null} onClick={() => void choose(false)}>{translate("Continue in default workspace")}</Button>
   </AuthShell>
 }

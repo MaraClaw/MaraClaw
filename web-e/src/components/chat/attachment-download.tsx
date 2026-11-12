@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Download } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -7,6 +8,7 @@ import { userFacingRequestError } from '@/lib/http'
 import { fileTicketUrl, mintFileDownloadTicket } from '@/lib/workspace-api'
 
 export function AttachmentDownload({ agentId, path }: { readonly agentId: string; readonly path: string }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const active = useRef(false)
   const pending = useRef(false)
@@ -26,7 +28,7 @@ export function AttachmentDownload({ agentId, path }: { readonly agentId: string
       link.rel = 'noreferrer'
       link.click()
     } catch (error) {
-      if (active.current && scope.isCurrent()) toast.error(userFacingRequestError(error, 'Could not download this file. Try again.'))
+      if (active.current && scope.isCurrent()) toast.error(userFacingRequestError(error, translate("Could not download this file. Try again.")))
     } finally {
       pending.current = false
       if (active.current && scope.isCurrent()) setBusy(false)
@@ -34,6 +36,6 @@ export function AttachmentDownload({ agentId, path }: { readonly agentId: string
   }
 
   return <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={busy} onClick={() => void download()}>
-    <Download className="size-4" aria-hidden />{busy ? 'Preparing…' : 'Download'}
+    <Download className="size-4" aria-hidden />{busy ? translate("Preparing…") : translate("Download")}
   </Button>
 }

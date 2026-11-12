@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
@@ -24,6 +25,7 @@ export function AgentRelationshipsPage() {
 }
 
 function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const canManage = agent.access_level === 'manage'
   const prefix = ['rels', agent.id, 'page']
@@ -47,22 +49,22 @@ function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
       void navigation.reset()
       if (!navigation.isCurrent()) return
       setMemberId('')
-      toast.success('Relationship saved')
+      toast.success(translate("Relationship saved"))
     },
     onError() {
-      if (navigation.isCurrent()) toast.error('Unable to save relationship')
+      if (navigation.isCurrent()) toast.error(translate("Unable to save relationship"))
     },
   })
   const remove = useMutation({
     mutationFn: (id: string) => deleteRelationship(agent.id, id),
     onSuccess() { void navigation.reset() },
-    onError() { if (navigation.isCurrent()) toast.error('Unable to remove relationship') },
+    onError() { if (navigation.isCurrent()) toast.error(translate("Unable to remove relationship")) },
   })
   const cursorRejected = rows.error instanceof ApiError && rows.error.status === 400
 
   return (
     <div className="mx-auto max-w-2xl space-y-4 p-6">
-      <h2 className="font-display text-lg font-semibold">People this agent works with</h2>
+      <h2 className="font-display text-lg font-semibold">{translate("People this agent works with")}</h2>
       {canManage ? (
         <form
           className="flex flex-wrap gap-2"
@@ -74,38 +76,38 @@ function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
         >
           <Select
             className="min-w-48 flex-1"
-            aria-label="Choose a person"
+            aria-label={translate("Choose a person")}
             value={memberId}
             onChange={scope.effect((event) => setMemberId(event.target.value))}
           >
-            <option value="">Choose a person</option>
+            <option value="">{translate("Choose a person")}</option>
             {(candidates.data ?? []).map((row) => (
               <option key={row.id} value={row.id}>
                 {row.name || row.email}
               </option>
             ))}
           </Select>
-          <Select fit aria-label="Relationship" value={relation} onChange={scope.effect((event) => setRelation(event.target.value))}>
+          <Select fit aria-label={translate("Relationship")} value={relation} onChange={scope.effect((event) => setRelation(event.target.value))}>
             {RELATIONS.map((item) => (
               <option key={item} value={item}>
                 {item.replaceAll('_', ' ')}
               </option>
             ))}
           </Select>
-          <Button type="submit" disabled={!memberId || add.isPending}>Add</Button>
+          <Button type="submit" disabled={!memberId || add.isPending}>{translate("Add")}</Button>
         </form>
       ) : null}
-      {rows.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading relationships…</p> : null}
+      {rows.isLoading ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading relationships…")}</p> : null}
       {rows.isError ? (
         <div className="space-y-2">
-          <RequestErrorToast error={rows.error} message={userFacingRequestError(rows.error, 'Unable to load relationships.')} />
+          <RequestErrorToast error={rows.error} message={userFacingRequestError(rows.error, translate("Unable to load relationships."))} />
           <Button size="sm" variant="outline" onClick={() => cursorRejected ? navigation.reset() : rows.refetch()}>
-            {cursorRejected ? 'Restart relationships' : 'Retry relationships'}
+            {cursorRejected ? translate("Restart relationships") : translate("Retry relationships")}
           </Button>
         </div>
       ) : null}
-      {rows.data?.items.length === 0 ? <p className="text-sm text-muted-foreground">No relationships yet.</p> : null}
-      <ul className="space-y-2" aria-label="Relationships">
+      {rows.data?.items.length === 0 ? <p className="text-sm text-muted-foreground">{translate("No relationships yet.")}</p> : null}
+      <ul className="space-y-2" aria-label={translate("Relationships")}>
         {(rows.data?.items ?? []).map((row) => (
           <li key={row.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
             <div>
@@ -121,19 +123,18 @@ function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
                   disabled={remove.isPending}
                   onClick={() => remove.mutate(row.id)}
                 >
-                  Remove
-                </Button>
+                  {translate("Remove")}</Button>
               ) : null}
             </div>
           </li>
         ))}
       </ul>
-      <nav aria-label="Relationship pages" className="flex items-center gap-3">
-        <Button size="sm" variant="outline" disabled={navigation.page === 1 || rows.isFetching} onClick={navigation.previous}>Previous</Button>
-        <span role="status" className="text-sm text-muted-foreground">Page {navigation.page}</span>
+      <nav aria-label={translate("Relationship pages")} className="flex items-center gap-3">
+        <Button size="sm" variant="outline" disabled={navigation.page === 1 || rows.isFetching} onClick={navigation.previous}>{translate("Previous")}</Button>
+        <span role="status" className="text-sm text-muted-foreground">{translate("Page")}{' '}{navigation.page}</span>
         <Button size="sm" variant="outline" disabled={!rows.data?.next_cursor || rows.isFetching} onClick={() => {
           if (rows.data?.next_cursor) navigation.next(rows.data.next_cursor)
-        }}>Next</Button>
+        }}>{translate("Next")}</Button>
       </nav>
     </div>
   )

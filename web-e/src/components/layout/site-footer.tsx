@@ -1,7 +1,10 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useState } from 'react'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { Separator } from '@/components/ui/separator'
+import { LanguageSelector } from '@/components/language-selector'
+import { useAuth } from '@/hooks/use-auth'
 
 const footerLinks = [
   {
@@ -35,6 +38,8 @@ const footerLinks = [
 ]
 
 export function SiteFooter() {
+  const { t: translate, owned } = useTranslation()
+  const { status } = useAuth()
   const [year] = useState(() => new Date().getFullYear())
   return (
     <footer id="contact" className="section-band border-t border-border">
@@ -48,15 +53,12 @@ export function SiteFooter() {
               </span>
             </a>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              OpenClaw agents for teams and companies. Hire digital employees that
-              work across your tools, channels, and workflows - with enterprise
-              controls built in.
-            </p>
+              {translate("OpenClaw agents for teams and companies. Hire digital employees that work across your tools, channels, and workflows - with enterprise controls built in.")}</p>
           </div>
 
           {footerLinks.map((group) => (
             <div key={group.title} className="space-y-3">
-              <p className="text-sm font-semibold text-foreground">{group.title}</p>
+              <p className="text-sm font-semibold text-foreground">{owned(group.title)}</p>
               <ul className="space-y-2">
                 {group.links.map((link) => (
                   <li key={link.label}>
@@ -64,7 +66,7 @@ export function SiteFooter() {
                       href={link.href}
                       className="rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {link.label}
+                      {owned(link.label)}
                     </a>
                   </li>
                 ))}
@@ -76,8 +78,9 @@ export function SiteFooter() {
         <Separator className="my-10" />
 
         <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <p>© {year} MaraClaw. All rights reserved.</p>
-          <p className="tabular-nums">Powered by OpenClaw · Built for teams</p>
+          <p>© {year} {translate("MaraClaw. All rights reserved.")}</p>
+          <p className="tabular-nums">{translate("Powered by OpenClaw · Built for teams")}</p>
+          {status !== 'authenticated' ? <LanguageSelector /> : null}
         </div>
       </div>
     </footer>

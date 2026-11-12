@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
@@ -22,6 +23,7 @@ import {
 import { updateAgent, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentCredentialsPage() {
+  const { t: translate, owned } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
@@ -45,7 +47,7 @@ export function AgentCredentialsPage() {
 
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(userFacingRequestError(error, fallback))
+    toast.error(userFacingRequestError(error, owned(fallback)))
   }
 
   const add = useMutation({
@@ -60,7 +62,7 @@ export function AgentCredentialsPage() {
       setPlatform('')
       setLabel('')
       setCookies('')
-      toast.success('Credential stored')
+      toast.success(translate("Credential stored"))
       void queryClient.invalidateQueries({ queryKey: ['credentials', agent.id] })
     },
     onError(error) {
@@ -69,7 +71,7 @@ export function AgentCredentialsPage() {
   })
 
   if (!canManage) {
-    return <p className="p-6 text-sm text-muted-foreground">Only managers can see the cookie vault and gogcli.</p>
+    return <p className="p-6 text-sm text-muted-foreground">{translate("Only managers can see the cookie vault and gogcli.")}</p>
   }
 
   return (
@@ -77,10 +79,9 @@ export function AgentCredentialsPage() {
       <section className="space-y-3">
         {credentials.isError ? <RequestErrorToast error={credentials.error} message="Unable to load saved credentials. Try again." /> : null}
         <div>
-          <h2 className="font-display text-lg font-semibold">Cookie vault</h2>
+          <h2 className="font-display text-lg font-semibold">{translate("Cookie vault")}</h2>
           <p className="text-sm text-muted-foreground">
-            Encrypted session cookies for AgentBay logins. The JSON is never returned after save.
-          </p>
+            {translate("Encrypted session cookies for AgentBay logins. The JSON is never returned after save.")}</p>
         </div>
         <ul className="space-y-2">
           {(credentials.data ?? []).map((item) => (
@@ -88,40 +89,39 @@ export function AgentCredentialsPage() {
               <div>
                 <p className="text-sm font-medium">{item.display_name || item.platform}</p>
                 <p className="text-xs text-muted-foreground">
-                  {item.platform} · {item.has_cookies ? 'cookies stored' : 'empty'}
+                  {item.platform} · {item.has_cookies ? translate("cookies stored") : translate("empty")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant="soft">{item.status}</Badge>
+                <Badge variant="soft">{owned(item.status)}</Badge>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() =>
                     scope.isCurrent() && void deleteCredential(agent.id, item.id).then(() => {
                       if (!scope.isCurrent()) return
-                      toast.success('Removed')
+                      toast.success(translate("Removed"))
                       void queryClient.invalidateQueries({ queryKey: ['credentials', agent.id] })
                     }).catch((error: unknown) => fail(error, 'Unable to delete this credential. Try again.'))
                   }
                 >
-                  Delete
-                </Button>
+                  {translate("Delete")}</Button>
               </div>
             </li>
           ))}
         </ul>
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
-            <Label htmlFor="plat">Domain</Label>
+            <Label htmlFor="plat">{translate("Domain")}</Label>
             <Input id="plat" value={platform} onChange={scope.effect((event) => setPlatform(event.target.value))} placeholder="example.com" />
           </div>
           <div>
-            <Label htmlFor="clabel">Label</Label>
+            <Label htmlFor="clabel">{translate("Label")}</Label>
             <Input id="clabel" value={label} onChange={scope.effect((event) => setLabel(event.target.value))} />
           </div>
         </div>
         <div>
-          <Label htmlFor="cookies">cookies_json (array)</Label>
+          <Label htmlFor="cookies">{translate("cookies_json (array)")}</Label>
           <Textarea
             id="cookies"
             className="font-mono text-xs"
@@ -131,15 +131,14 @@ export function AgentCredentialsPage() {
           />
         </div>
         <Button size="sm" disabled={!platform.trim()} onClick={() => add.mutate()}>
-          Save credential
-        </Button>
+          {translate("Save credential")}</Button>
       </section>
 
       <section className="space-y-3 rounded-2xl border border-border p-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-display text-lg font-semibold">gogcli</h2>
-            <p className="text-sm text-muted-foreground">Google CLI inside the agent container. Needs a running container.</p>
+            <p className="text-sm text-muted-foreground">{translate("Google CLI inside the agent container. Needs a running container.")}</p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -148,26 +147,25 @@ export function AgentCredentialsPage() {
               onChange={(event) =>
                 scope.isCurrent() && void updateAgent(agent.id, { gogcli_enabled: event.target.checked }).then(() => {
                   if (!scope.isCurrent()) return
-                  toast.success(event.target.checked ? 'gogcli enabled' : 'gogcli disabled')
+                  toast.success(event.target.checked ? translate('gogcli enabled') : translate('gogcli disabled'))
                   void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
                 }).catch((error: unknown) => fail(error, 'Unable to update gogcli. Try again.'))
               }
             />
-            Enabled
-          </label>
+            {translate("Enabled")}</label>
         </div>
         {agent.gogcli_enabled ? (
           <>
             {gogcli.isError ? <RequestErrorToast error={gogcli.error} message="Unable to check Google sign-in status. Try again." /> : <p className="text-sm">
-              {gogcli.data?.authenticated ? `Signed in as ${gogcli.data.account_hint ?? 'account'}` : gogcli.data?.detail || 'Not signed in'}
+              {gogcli.data?.authenticated ? translate("Signed in as {account}", { account: gogcli.data.account_hint ?? translate("Account") }) : gogcli.data?.detail || translate("Not signed in")}
             </p>}
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
-                <Label htmlFor="kr">Keyring password</Label>
+                <Label htmlFor="kr">{translate("Keyring password")}</Label>
             <Input id="kr" type="password" value={password} onChange={scope.effect((event) => setPassword(event.target.value))} />
               </div>
               <div>
-                <Label htmlFor="gemail">Google account</Label>
+                <Label htmlFor="gemail">{translate("Google account")}</Label>
             <Input id="gemail" value={email} onChange={scope.effect((event) => setEmail(event.target.value))} />
               </div>
             </div>
@@ -178,12 +176,11 @@ export function AgentCredentialsPage() {
                 disabled={!password}
                 onClick={() =>
                   scope.isCurrent() && void setGogcliKeyring(agent.id, password)
-                    .then(scope.effect(() => toast.success('Keyring saved')))
+                    .then(scope.effect(() => toast.success(translate("Keyring saved"))))
                     .catch((error) => fail(error, 'Keyring failed'))
                 }
               >
-                Save keyring
-              </Button>
+                {translate("Save keyring")}</Button>
               <Button
                 size="sm"
                 disabled={!email}
@@ -197,8 +194,7 @@ export function AgentCredentialsPage() {
                     .catch((error) => fail(error, 'Could not start OAuth'))
                 }
               >
-                Start Google OAuth
-              </Button>
+                {translate("Start Google OAuth")}</Button>
             </div>
           </>
         ) : null}

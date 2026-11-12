@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Building2, Loader2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -21,6 +22,7 @@ import {
 import { cn } from '@/lib/utils'
 
 export function SsoCallbackPage() {
+  const { t: translate } = useTranslation()
   const formId = useId()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -78,7 +80,7 @@ export function SsoCallbackPage() {
         }
         if (intent === 'bind') {
           consumeSsoTransaction(transaction)
-          toast.success('Account linked')
+          toast.success(translate("Account linked"))
           navigate('/app/settings', { replace: true })
           return
         }
@@ -87,7 +89,7 @@ export function SsoCallbackPage() {
           const installedOwner = capture()
           if (!isCurrent(installedOwner)) return
           consumeSsoTransaction(transaction)
-          toast.success('Signed in')
+          toast.success(translate("Signed in"))
           const destination = continuation.current ?? (result.needs_org_confirm ? '/join' : '/app')
           continuation.current = null
           navigate(destination, { replace: true })
@@ -104,10 +106,10 @@ export function SsoCallbackPage() {
         consumeSsoTransaction(transaction)
         continuation.current = null
         if (!isCurrent(expectedOwner)) return
-        setError(userFacingRequestError(err, 'SSO sign-in failed.'))
+        setError(userFacingRequestError(err, translate("SSO sign-in failed.")))
       })
     return () => { cancelled = true }
-  }, [applySession, navigate, provider, code, storedState, validationError, transaction, capture, isCurrent])
+  }, [applySession, navigate, provider, code, storedState, validationError, transaction, capture, isCurrent, translate])
 
   async function chooseTenant(tenant: TenantChoice) {
     const expectedOwner = transaction.owner
@@ -124,7 +126,7 @@ export function SsoCallbackPage() {
         if (!applySession(expectedOwner, result)) return
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
-        toast.success(`Signed in to ${tenant.tenant_name}`)
+        toast.success(translate("Signed in to {organization}", { organization: tenant.tenant_name }))
         const destination = continuation.current ?? (result.needs_org_confirm ? '/join' : '/app')
         continuation.current = null
         navigate(destination, { replace: true })
@@ -132,7 +134,7 @@ export function SsoCallbackPage() {
     } catch (err) {
       continuation.current = null
       if (!isCurrent(expectedOwner)) return
-      setError(userFacingRequestError(err, 'Unable to finish SSO.'))
+      setError(userFacingRequestError(err, translate("Unable to finish SSO.")))
     } finally {
       if (isCurrent(expectedOwner)) setSelecting(null)
     }
@@ -141,14 +143,14 @@ export function SsoCallbackPage() {
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title={tenants ? 'Choose organization' : 'Signing in'}
+      title={tenants ? translate("Choose organization") : translate("Signing in")}
       description={
         tenants
-          ? 'This account belongs to more than one company. Select where to continue.'
-          : 'Finishing the company sign-in…'
+          ? translate("This account belongs to more than one company. Select where to continue.")
+          : translate("Finishing the company sign-in…")
       }
-      brandTitle="Continue with your company"
-      brandBody="SSO returns you to the member workspace, not the admin console."
+      brandTitle={translate("Continue with your company")}
+      brandBody={translate("SSO returns you to the member workspace, not the admin console.")}
       highlights={memberAuthHighlights}
     >
       {requestError ? <RequestErrorToast message={requestError} /> : null}
@@ -189,13 +191,12 @@ export function SsoCallbackPage() {
         </ul>
       ) : error ? (
         <Button asChild className="h-11 w-full">
-          <Link to="/login">Back to sign in</Link>
+          <Link to="/login">{translate("Back to sign in")}</Link>
         </Button>
       ) : (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden />
-          Completing sign-in…
-        </div>
+          {translate("Completing sign-in…")}</div>
       )}
     </AuthShell>
   )

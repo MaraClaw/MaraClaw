@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
@@ -22,6 +23,7 @@ type SkillMentionInputProps = {
 const composerTextClass = 'w-full whitespace-pre-wrap break-words rounded-xl border px-3.5 py-2.5 font-sans text-sm font-normal tracking-normal [scrollbar-gutter:stable]'
 
 export function SkillMentionInput({ agentName, value, onValueChange, onSend, textareaRef, skillsQuery, isCurrent, toolbar }: SkillMentionInputProps) {
+  const { t: translate } = useTranslation()
   const id = useId()
   const [selection, setSelection] = useState({ start: value.length, end: value.length })
   const [focused, setFocused] = useState(false)
@@ -122,11 +124,11 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
   }
 
   return <div className="relative min-w-0">
-    {open ? <section id={`${id}-skills`} aria-label="Installed skills" aria-busy={!hasData && skillsQuery.isFetching}
+    {open ? <section id={`${id}-skills`} aria-label={translate("Installed skills")} aria-busy={!hasData && skillsQuery.isFetching}
       className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-xl overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-elevated">
-      <p className="px-3 py-2 text-sm font-medium">Installed skills</p>
+      <p className="px-3 py-2 text-sm font-medium">{translate("Installed skills")}</p>
       {hasData && skillsQuery.isError ? <RequestErrorToast error={skillsQuery.error} message="Could not refresh installed skills. Showing cached skills." /> : null}
-      {!hasData && skillsQuery.isFetching ? <p role="status" className="px-3 pb-3 text-sm text-muted-foreground">Loading installed skills…</p>
+      {!hasData && skillsQuery.isFetching ? <p role="status" className="px-3 pb-3 text-sm text-muted-foreground">{translate("Loading installed skills…")}</p>
         : !hasData && skillsQuery.isError ? <RequestErrorToast error={skillsQuery.error} message="Could not load installed skills. Keep typing, or reopen @ to try again." />
           : choices.length ? <div className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1">
             {choices.map((skill, index) => <button key={skill.path} ref={index === activeIndex ? activeOptionRef : undefined}
@@ -138,7 +140,7 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
               <span className="break-all text-xs text-muted-foreground">{skill.path}</span>
             </button>)}
           </div> : <p role="status" className="px-3 pb-3 text-sm text-muted-foreground">
-            {skillsQuery.data?.length ? 'No matching installed skills.' : 'No skills installed for this agent.'}
+            {skillsQuery.data?.length ? translate("No matching installed skills.") : translate("No skills installed for this agent.")}
           </p>}
     </section> : null}
     <div className={cn(toolbar && 'rounded-xl border border-input shadow-xs has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/40')}>
@@ -149,7 +151,7 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
           ? <span key={segment.start} data-slot="skill-mention-chip" className="box-decoration-clone rounded-md bg-accent">{segment.text}</span>
           : segment.text)}{'\n'}
       </div>
-      <Textarea ref={textareaRef} aria-label={`Message ${agentName}`} value={value} placeholder={`Message ${agentName}…`}
+      <Textarea ref={textareaRef} aria-label={translate("Message {agent}", { agent: agentName })} value={value} placeholder={translate("Message {agent}…", { agent: agentName })}
       className={cn(composerTextClass, 'relative max-h-32 overflow-y-auto', toolbar && 'border-0 shadow-none focus-visible:ring-0')} onScroll={syncBackdropScroll}
       aria-controls={open ? `${id}-skills` : undefined} aria-describedby={`${id}-hint`} onKeyDown={onKeyDown}
       onChange={(event) => {
@@ -166,7 +168,7 @@ export function SkillMentionInput({ agentName, value, onValueChange, onSend, tex
     </div>
     {toolbar}
     </div>
-    <p id={`${id}-hint`} className="mt-1.5 text-xs text-muted-foreground">Type @ to use an installed skill.{open ? ' ↑↓ to choose · Enter or Tab to insert · Esc to close' : ''}</p>
-    <span role="status" className="sr-only">{open && current ? `${choices.length} installed skills. @${current.name}, ${activeIndex + 1} of ${choices.length}.` : ''}</span>
+    <p id={`${id}-hint`} className="mt-1.5 text-xs text-muted-foreground">{open ? translate("Type @ to use an installed skill. ↑↓ to choose · Enter or Tab to insert · Esc to close") : translate("Type @ to use an installed skill.")}</p>
+    <span role="status" className="sr-only">{open && current ? translate("{count} installed skills. @{name}, {position} of {count}.", { count: choices.length, name: current.name, position: activeIndex + 1 }) : ''}</span>
   </div>
 }

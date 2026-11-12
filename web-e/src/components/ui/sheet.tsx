@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { XIcon } from 'lucide-react'
 import * as React from 'react'
@@ -50,6 +51,7 @@ function SheetContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   side?: 'top' | 'right' | 'bottom' | 'left'
 }) {
+  const { t: translate } = useTranslation()
   return (
     <SheetPortal>
       <SheetOverlay />
@@ -72,7 +74,7 @@ function SheetContent({
         {children}
         <DialogPrimitive.Close className="ring-offset-background focus-visible:ring-ring absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none">
           <XIcon className="size-4" />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{translate("Close")}</span>
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </SheetPortal>

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,6 +8,7 @@ import { switchTenant } from '@/lib/auth-api'
 import type { JoinOrgResponse } from '@/lib/types/auth'
 
 export function useJoinedWorkspace() {
+  const { t: translate } = useTranslation()
   const { owner, isCurrent, refreshReplacement } = useAuth()
   const navigate = useNavigate()
   return useCallback(async (result: JoinOrgResponse) => {
@@ -25,7 +27,7 @@ export function useJoinedWorkspace() {
     } else token = result.access_token
     const installedOwner = await refreshReplacement(owner, token)
     if (!installedOwner || !isCurrent(installedOwner)) return
-    toast.success('Organization joined')
+    toast.success(translate("Organization joined"))
     navigate('/app', { replace: true })
-  }, [owner, isCurrent, refreshReplacement, navigate])
+  }, [owner, isCurrent, refreshReplacement, navigate, translate])
 }

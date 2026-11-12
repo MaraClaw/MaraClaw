@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { Eye, EyeOff, Lock } from 'lucide-react'
 import { useId, useState, type ComponentProps } from 'react'
 
@@ -19,6 +21,7 @@ export function PasswordField({
   disabled,
   ...props
 }: PasswordFieldProps) {
+  const { t: translate } = useTranslation()
   const autoId = useId()
   const fieldId = id ?? autoId
   const errorId = `${fieldId}-error`
@@ -45,7 +48,7 @@ export function PasswordField({
           type="button"
           className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           onClick={() => setShow((value) => !value)}
-          aria-label={show ? 'Hide password' : 'Show password'}
+          aria-label={show ? translate("Hide password") : translate("Show password")}
           disabled={disabled}
         >
           {show ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
@@ -53,7 +56,7 @@ export function PasswordField({
       </div>
       {error ? (
         <p id={errorId} className="text-xs text-destructive" role="alert">
-          {error}
+          <ValidationMessage message={error} />
         </p>
       ) : null}
     </div>

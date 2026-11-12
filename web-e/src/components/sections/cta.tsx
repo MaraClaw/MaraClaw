@@ -1,9 +1,11 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { ArrowRight } from 'lucide-react'
 
 import { Reveal } from '@/components/motion'
 import { Button } from '@/components/ui/button'
 
 export function Cta() {
+  const { t: translate } = useTranslation()
   return (
     <section id="cta" className="scroll-mt-20 pb-20 sm:pb-28">
       <div className="container-page">
@@ -19,21 +21,17 @@ export function Cta() {
             />
             <div className="relative mx-auto max-w-2xl">
               <h2 className="font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-                Put OpenClaw agents to work for your company
-              </h2>
+                {translate("Put OpenClaw agents to work for your company")}</h2>
               <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-                Explore the proposed organization plans and request approval for
-                your team and digital employees.
-              </p>
+                {translate("Explore the proposed organization plans and request approval for your team and digital employees.")}</p>
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <Button size="lg" asChild>
                   <a href="#pricing">
-                    View plans
-                    <ArrowRight className="size-4" aria-hidden />
+                    {translate("View plans")}<ArrowRight className="size-4" aria-hidden />
                   </a>
                 </Button>
                 <Button size="lg" variant="outline" asChild>
-                  <a href="#features">Review the platform</a>
+                  <a href="#features">{translate("Review the platform")}</a>
                 </Button>
               </div>
             </div>

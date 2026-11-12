@@ -1,4 +1,5 @@
 import type { AgentAccessReason } from '@/lib/engine-contracts.generated'
+import { useTranslation } from '@/hooks/use-translation'
 
 const labels = {
   creator: 'You created this agent',
@@ -9,5 +10,6 @@ const labels = {
 } satisfies Record<AgentAccessReason, string>
 
 export function AgentAccessExplanation({ reason }: { readonly reason: AgentAccessReason | null | undefined }) {
-  return reason ? <p className="text-base text-muted-foreground md:text-sm">{labels[reason]}</p> : null
+  const { owned } = useTranslation()
+  return reason ? <p className="text-base text-muted-foreground md:text-sm">{owned(labels[reason])}</p> : null
 }

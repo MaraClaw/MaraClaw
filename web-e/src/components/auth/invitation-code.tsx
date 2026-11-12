@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useId } from 'react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
@@ -10,17 +11,18 @@ export function InvitationCode({ invitation, disabled }: {
   readonly invitation: ReturnType<typeof useInvitationPreview>
   readonly disabled: boolean
 }) {
+  const { t: translate } = useTranslation()
   const id = useId()
   return <form className="mb-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void invitation.validate() }}>
     <div className="space-y-2">
-      <Label htmlFor={id}>Invitation code</Label>
+      <Label htmlFor={id}>{translate("Invitation code")}</Label>
       <Input id={id} required maxLength={256} autoComplete="off" value={invitation.code} disabled={disabled}
         onChange={(event) => invitation.edit(event.currentTarget.value)} />
       {invitation.error ? <RequestErrorToast message={invitation.error} /> : null}
     </div>
     <Button type="submit" variant={invitation.preview ? 'outline' : 'default'} className="h-11 w-full" disabled={disabled || invitation.busy || !invitation.code.trim()}>
-      {invitation.busy ? 'Validating invitation…' : 'Validate invitation'}
+      {invitation.busy ? translate("Validating invitation…") : translate("Validate invitation")}
     </Button>
-    {invitation.preview ? <p role="status" className="rounded-xl border border-border bg-muted/50 p-4 text-sm [overflow-wrap:anywhere]">Destination: <strong>{invitation.preview.tenant.name}</strong></p> : null}
+    {invitation.preview ? <p role="status" className="rounded-xl border border-border bg-muted/50 p-4 text-sm [overflow-wrap:anywhere]">{translate("Destination:")} <strong>{invitation.preview.tenant.name}</strong></p> : null}
   </form>
 }

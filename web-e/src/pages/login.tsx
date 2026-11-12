@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, Users } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
@@ -47,6 +49,7 @@ const highlights = [
 ]
 
 export function LoginPage() {
+  const { t: translate } = useTranslation()
   const { status, owner, capture, isCurrent, login, applySession, needsOrgConfirm } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -87,8 +90,7 @@ export function LoginPage() {
       <div className="flex min-h-svh items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <Loader2 className="size-4 animate-spin" aria-hidden />
-          Checking session…
-        </div>
+          {translate("Checking session…")}</div>
       </div>
     )
   }
@@ -112,7 +114,7 @@ export function LoginPage() {
         if (!applySession(expectedOwner, result)) return
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
-        toast.success('Signed in')
+        toast.success(translate("Signed in"))
         navigate(result.needs_org_confirm && !from.startsWith('/transfer#code=') ? '/join' : from, {
           replace: true,
           state: { suggested: result.suggested_org },
@@ -134,9 +136,9 @@ export function LoginPage() {
         return
       }
       if (error instanceof ApiError && error.status === 401) {
-        toast.error('Email or password is incorrect.')
+        toast.error(translate("Email or password is incorrect."))
       } else {
-        toast.error(userFacingRequestError(error, 'Unable to sign in. Try again.'))
+        toast.error(userFacingRequestError(error, translate("Unable to sign in. Try again.")))
       }
       setFocus('password')
     }
@@ -146,7 +148,7 @@ export function LoginPage() {
     const expectedOwner = owner
     if (!isCurrent(expectedOwner)) return
     if (!pendingIdentifier || !pendingPassword || !tenant.tenant_id) {
-      setFormError('This account needs a company. Create or join one first.')
+      setFormError(translate("This account needs a company. Create or join one first."))
       return
     }
     setSelectingTenantId(tenant.tenant_id)
@@ -161,14 +163,14 @@ export function LoginPage() {
         if (!applySession(expectedOwner, result)) return
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
-        toast.success(`Signed in to ${tenant.tenant_name}`)
+        toast.success(translate("Signed in to {organization}", { organization: tenant.tenant_name }))
         navigate(result.needs_org_confirm && !from.startsWith('/transfer#code=') ? '/join' : from, { replace: true })
         return
       }
-      toast.error('Unable to complete organization selection. Try again.')
+      toast.error(translate("Unable to complete organization selection. Try again."))
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      toast.error(userFacingRequestError(error, 'Unable to sign in. Try again.'))
+      toast.error(userFacingRequestError(error, translate("Unable to sign in. Try again.")))
     } finally {
       if (isCurrent(expectedOwner)) setSelectingTenantId(null)
     }
@@ -179,14 +181,14 @@ export function LoginPage() {
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title={tenantChoices ? 'Choose organization' : 'Sign in'}
+      title={tenantChoices ? translate("Choose organization") : translate("Sign in")}
       description={
         tenantChoices
-          ? 'This account belongs to more than one company. Select where to continue.'
-          : 'Member accounts only. Platform operators use the admin console.'
+          ? translate("This account belongs to more than one company. Select where to continue.")
+          : translate("Member accounts only. Platform operators use the admin console.")
       }
-      brandTitle="Your digital teammates, ready when you are"
-      brandBody="Sign in to join your company workspace and work with MaraClaw agents."
+      brandTitle={translate("Your digital teammates, ready when you are")}
+      brandBody={translate("Sign in to join your company workspace and work with MaraClaw agents.")}
       highlights={highlights}
     >
       {formError ? (
@@ -200,7 +202,7 @@ export function LoginPage() {
       ) : null}
 
       {tenantChoices ? (
-        <ul className="space-y-2" aria-label="Organizations">
+        <ul className="space-y-2" aria-label={translate("Organizations")}>
           {tenantChoices.map((tenant) => {
             const key = tenant.tenant_id ?? tenant.tenant_slug
             const busy = selectingTenantId === tenant.tenant_id
@@ -237,7 +239,7 @@ export function LoginPage() {
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
           <div className="space-y-2">
-            <Label htmlFor={identifierId}>Email</Label>
+            <Label htmlFor={identifierId}>{translate("Email")}</Label>
             <div className="relative">
               <Mail
                 className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -258,12 +260,12 @@ export function LoginPage() {
               />
             </div>
             {errors.login_identifier ? (
-              <p className="text-xs text-destructive">{errors.login_identifier.message}</p>
+              <p className="text-xs text-destructive"><ValidationMessage message={errors.login_identifier.message} /></p>
             ) : null}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor={passwordId}>Password</Label>
+            <Label htmlFor={passwordId}>{translate("Password")}</Label>
             <div className="relative">
               <Lock
                 className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -286,18 +288,17 @@ export function LoginPage() {
                 type="button"
                 className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                 onClick={() => setShowPassword((value) => !value)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-label={showPassword ? translate("Hide password") : translate("Show password")}
               >
                 {showPassword ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
               </button>
             </div>
             {errors.password ? (
-              <p className="text-xs text-destructive">{errors.password.message}</p>
+              <p className="text-xs text-destructive"><ValidationMessage message={errors.password.message} /></p>
             ) : null}
             <p className="text-right text-xs">
               <Link to="/forgot-password" className="font-medium text-primary underline-offset-4 hover:underline">
-                Forgot password?
-              </Link>
+                {translate("Forgot password?")}</Link>
             </p>
           </div>
 
@@ -305,10 +306,9 @@ export function LoginPage() {
             {isSubmitting ? (
               <>
                 <Loader2 className="size-4 animate-spin" aria-hidden />
-                Signing in…
-              </>
+                {translate("Signing in…")}</>
             ) : (
-              'Sign in'
+              translate("Sign in")
             )}
           </Button>
           <div className="pt-2">
@@ -318,10 +318,9 @@ export function LoginPage() {
       )}
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        New here?{' '}
+        {translate("New here?")}{' '}
         <Link to="/register" className="font-medium text-primary underline-offset-4 hover:underline">
-          Create an account
-        </Link>
+          {translate("Create an account")}</Link>
       </p>
     </AuthShell>
   )

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useState } from 'react'
 
 import { Input } from '@/components/ui/input'
@@ -17,6 +18,7 @@ export function ScheduleRecurrenceFields({ cron, timezone, onChange }: {
   readonly timezone: string
   readonly onChange: (cron: string) => void
 }) {
+  const { t: translate, owned, locale } = useTranslation()
   const scope = useWorkspaceSession()
   // Initialize on edit/reset only; typing a canonical custom cron must not change modes.
   const [recurrence, setRecurrence] = useState(() => recognizeScheduleRecurrence(cron))
@@ -43,18 +45,18 @@ export function ScheduleRecurrenceFields({ cron, timezone, onChange }: {
     <div className="grid min-w-0 gap-3">
       <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         <div className="grid min-w-0 gap-2">
-          <Label htmlFor="schedule-repeat">Repeat</Label>
+          <Label htmlFor="schedule-repeat">{translate("Repeat")}</Label>
           <Select id="schedule-repeat" value={recurrence.kind} aria-describedby={recurrence.kind === 'custom' ? 'schedule-cron-help' : undefined}
             onChange={scope.effect((event) => changeKind(event.target.value))}>
-            <option value="daily">Daily</option>
-            <option value="weekdays">Weekdays (Mon-Fri)</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-            <option value="custom">Custom cron</option>
+            <option value="daily">{translate("Daily")}</option>
+            <option value="weekdays">{translate("Weekdays (Mon-Fri)")}</option>
+            <option value="weekly">{translate("Weekly")}</option>
+            <option value="monthly">{translate("Monthly")}</option>
+            <option value="custom">{translate("Custom cron")}</option>
           </Select>
         </div>
         {'time' in recurrence ? <div className="grid min-w-0 gap-2">
-          <Label htmlFor="schedule-time">Time</Label>
+          <Label htmlFor="schedule-time">{translate("Time")}</Label>
           <Input id="schedule-time" name="schedule-time" type="time" step="60" required value={recurrence.time}
             aria-invalid={timeError} aria-describedby={`schedule-recurrence-summary${timeError ? ' schedule-time-error' : ''}`}
             onInvalid={scope.effect((event) => { event.preventDefault(); setTimeError(true); event.currentTarget.focus() })}
@@ -62,30 +64,30 @@ export function ScheduleRecurrenceFields({ cron, timezone, onChange }: {
         </div> : null}
       </div>
       {recurrence.kind === 'weekly' ? <div className="grid gap-2">
-        <Label htmlFor="schedule-weekday">Day of week</Label>
+        <Label htmlFor="schedule-weekday">{translate("Day of week")}</Label>
         <Select id="schedule-weekday" value={recurrence.weekday}
           onChange={scope.effect((event) => change({ ...recurrence, weekday: Number(event.target.value) }))}>
-          {scheduleWeekdays.map((day, index) => <option key={day} value={index}>{day}</option>)}
+          {scheduleWeekdays.map((day, index) => <option key={day} value={index}>{owned(day)}</option>)}
         </Select>
       </div> : null}
       {recurrence.kind === 'monthly' ? <div className="grid gap-2">
-        <Label htmlFor="schedule-month-day">Day of month</Label>
+        <Label htmlFor="schedule-month-day">{translate("Day of month")}</Label>
         <Select id="schedule-month-day" value={recurrence.monthDay} aria-describedby="schedule-month-day-help"
           onChange={scope.effect((event) => change({ ...recurrence, monthDay: Number(event.target.value) }))}>
           {monthDays.map((day) => <option key={day} value={day}>{day}</option>)}
         </Select>
-        <p id="schedule-month-day-help" className="text-xs text-muted-foreground">Days 1–28 are available every month. For other dates, use Custom cron.</p>
+        <p id="schedule-month-day-help" className="text-xs text-muted-foreground">{translate("Days 1–28 are available every month. For other dates, use Custom cron.")}</p>
       </div> : null}
       {recurrence.kind === 'custom' ? <div className="grid gap-2">
-        <Label htmlFor="schedule-cron">Cron</Label>
+        <Label htmlFor="schedule-cron">{translate("Cron")}</Label>
         <Input id="schedule-cron" required value={recurrence.cron} aria-describedby="schedule-cron-help"
           onChange={scope.effect((event) => change({ kind: 'custom', cron: event.target.value }))} />
-        <p id="schedule-cron-help" className="text-xs text-muted-foreground">Your expression is kept exactly as entered. Switching to a simple repeat option replaces it. The server checks cron syntax when you save.</p>
+        <p id="schedule-cron-help" className="text-xs text-muted-foreground">{translate("Your expression is kept exactly as entered. Switching to a simple repeat option replaces it. The server checks cron syntax when you save.")}</p>
       </div> : null}
       <p id="schedule-recurrence-summary" className="break-words text-sm text-muted-foreground">
-        {encodeScheduleRecurrence(recurrence) === null ? 'Choose a time to complete this schedule.' : describeScheduleRecurrence(recurrence)} · {timezone ? timezoneLabel(timezone) : 'Choose a timezone'}
+        {encodeScheduleRecurrence(recurrence) === null ? translate("Choose a time to complete this schedule.") : describeScheduleRecurrence(recurrence, locale)} · {timezone ? timezoneLabel(timezone) : translate("Choose a timezone")}
       </p>
-      {timeError ? <p id="schedule-time-error" role="status" className="text-sm text-destructive">Choose a time before saving.</p> : null}
+      {timeError ? <p id="schedule-time-error" role="status" className="text-sm text-destructive">{translate("Choose a time before saving.")}</p> : null}
     </div>
   )
 }

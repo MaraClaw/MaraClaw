@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -11,6 +12,7 @@ import { userFacingRequestError } from '@/lib/http'
 import { scheduleTimezoneError } from '@/lib/schedule-time'
 
 export function SettingsTimezoneCard() {
+  const { t: translate } = useTranslation()
   const { user, owner, isCurrent, refreshUser } = useAuth()
   const [mountedOwner] = useState(() => owner)
   const id = useId()
@@ -31,7 +33,7 @@ export function SettingsTimezoneCard() {
       setFeedback({ kind: 'success', message: 'Timezone updated. New schedules will use this preference.' })
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      toast.error(userFacingRequestError(error, 'Unable to update timezone. Try again.'))
+      toast.error(userFacingRequestError(error, translate("Unable to update timezone. Try again.")))
     } finally {
       if (isCurrent(expectedOwner)) setPending(false)
     }
@@ -39,13 +41,13 @@ export function SettingsTimezoneCard() {
 
   return <Card>
     <CardHeader>
-      <CardTitle>Timezone</CardTitle>
-      <CardDescription>Set the default for new schedules. Existing schedules keep their saved timezone.</CardDescription>
+      <CardTitle>{translate("Timezone")}</CardTitle>
+      <CardDescription>{translate("Set the default for new schedules. Existing schedules keep their saved timezone.")}</CardDescription>
     </CardHeader>
     <CardContent>
       <form className="space-y-4" aria-busy={pending} onSubmit={(event) => { event.preventDefault(); void save() }}>
         <div className="space-y-2">
-          <Label htmlFor={`${id}-timezone`}>Timezone</Label>
+          <Label htmlFor={`${id}-timezone`}>{translate("Timezone")}</Label>
           <TimezoneSelect id={`${id}-timezone`} value={timezone} disabled={pending}
             aria-invalid={feedback?.kind === 'error'} aria-describedby={`${id}-help${feedback ? ` ${id}-feedback` : ''}`}
             onChange={(event) => {
@@ -53,9 +55,9 @@ export function SettingsTimezoneCard() {
               setTimezone(event.target.value)
               setFeedback(null)
             }} />
-          <p id={`${id}-help`} className="text-xs text-muted-foreground">Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. Without a preference, new schedules use GMT +0 (UTC).</p>
+          <p id={`${id}-help`} className="text-xs text-muted-foreground">{translate("Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. Without a preference, new schedules use GMT +0 (UTC).")}</p>
         </div>
-        <Button type="submit" disabled={pending}>{pending ? 'Saving timezone...' : 'Save timezone'}</Button>
+        <Button type="submit" disabled={pending}>{pending ? translate("Saving timezone...") : translate("Save timezone")}</Button>
         {feedback ? <p id={`${id}-feedback`} role="status" className={feedback.kind === 'error' ? 'text-sm text-destructive' : 'text-sm text-muted-foreground'}>{feedback.message}</p> : null}
       </form>
     </CardContent>

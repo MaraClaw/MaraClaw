@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
@@ -21,6 +22,7 @@ import {
 } from '@/lib/workspace-api'
 
 export function AgentSkillsPage() {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
@@ -37,10 +39,10 @@ export function AgentSkillsPage() {
   })
 
   const importSkill = useMutation({
-    onError(error) { showRequestError(userFacingRequestError(error, 'Unable to install this skill. Try again.'), error) },
+    onError(error) { showRequestError(userFacingRequestError(error, translate("Unable to install this skill. Try again.")), error) },
     mutationFn: (skillId: string) => importSkillToAgent(agent.id, skillId),
     onSuccess() {
-      toast.success('Skill copied into the agent workspace')
+      toast.success(translate("Skill copied into the agent workspace"))
       void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
     },
   })
@@ -48,7 +50,7 @@ export function AgentSkillsPage() {
   return (
     <div className="grid gap-6 p-6 lg:grid-cols-2">
       <section className="space-y-3">
-        <h2 className="font-display text-lg font-semibold">Catalog</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Catalog")}</h2>
         {catalog.isError ? <RequestErrorToast error={catalog.error} message="Unable to load the skill catalog. Try again." /> : null}
         <ul className="space-y-2">
           {(catalog.data ?? []).map((skill) => (
@@ -58,8 +60,7 @@ export function AgentSkillsPage() {
                 <p className="text-xs text-muted-foreground">{skill.description}</p>
               </div>
               <Button size="sm" variant="outline" onClick={() => importSkill.mutate(skill.id)}>
-                Install
-              </Button>
+                {translate("Install")}</Button>
             </li>
           ))}
         </ul>
@@ -67,7 +68,7 @@ export function AgentSkillsPage() {
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold">ClawHub</h2>
         {clawhub.isError ? <RequestErrorToast error={clawhub.error} message="Unable to search ClawHub. Try again." /> : null}
-        <Input placeholder="Search ClawHub" value={query} onChange={scope.effect((event) => setQuery(event.target.value))} />
+        <Input placeholder={translate("Search ClawHub")} value={query} onChange={scope.effect((event) => setQuery(event.target.value))} />
         <ul className="space-y-2">
           {(clawhub.data ?? []).map((row) => (
             <li key={row.slug} className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
@@ -79,11 +80,10 @@ export function AgentSkillsPage() {
                 size="sm"
                 variant="outline"
                 onClick={() =>
-                  scope.isCurrent() && void installClawhub(row.slug).then(scope.effect(() => toast.success('Installed from ClawHub'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to install from ClawHub. Try again.'), error)))
+                  scope.isCurrent() && void installClawhub(row.slug).then(scope.effect(() => toast.success(translate("Installed from ClawHub")))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to install from ClawHub. Try again.")), error)))
                 }
               >
-                Add
-              </Button>
+                {translate("Add")}</Button>
             </li>
           ))}
         </ul>
@@ -95,25 +95,23 @@ export function AgentSkillsPage() {
             if (!skillUrl.trim()) return
             void importSkillFromUrl(skillUrl.trim()).then(() => {
               if (!scope.isCurrent()) return
-              toast.success('Imported from URL')
+              toast.success(translate("Imported from URL"))
               setSkillUrl('')
               void queryClient.invalidateQueries({ queryKey: ['skills'] })
-            }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to import this skill. Try again.'), error)))
+            }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to import this skill. Try again.")), error)))
           }}
         >
         <Input placeholder="https://…/skill.md" value={skillUrl} onChange={scope.effect((event) => setSkillUrl(event.target.value))} />
           <Button type="submit" size="sm" variant="outline">
-            Import URL
-          </Button>
+            {translate("Import URL")}</Button>
         </form>
       </section>
       <section className="space-y-3 lg:col-span-2">
-        <h2 className="font-display text-lg font-semibold">Browse skill files</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Browse skill files")}</h2>
         {browse.isError ? <RequestErrorToast error={browse.error} message="Unable to load skill files. Try again." /> : null}
         <div className="flex gap-2 text-xs">
         <button type="button" className="text-primary" onClick={scope.effect(() => setBrowsePath(''))}>
-            Root
-          </button>
+            {translate("Root")}</button>
           {browsePath ? <span className="text-muted-foreground">{browsePath}</span> : null}
         </div>
         <ul className="grid gap-2 sm:grid-cols-2">
@@ -129,7 +127,7 @@ export function AgentSkillsPage() {
                     setBrowseContent('')
                     return
                   }
-                  void browseSkillRead(entry.path).then(scope.effect((row) => setBrowseContent(row.content))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to read this skill file. Try again.'), error)))
+                  void browseSkillRead(entry.path).then(scope.effect((row) => setBrowseContent(row.content))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to read this skill file. Try again.")), error)))
                 }}
               >
                 {entry.is_dir ? '▸ ' : ''}

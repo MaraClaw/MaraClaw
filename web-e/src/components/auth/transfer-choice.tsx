@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useRef, useState } from 'react'
 
@@ -13,6 +14,7 @@ export function TransferChoice({ quote, busy, error, onCancel, onConfirm }: {
   readonly onCancel: () => void
   readonly onConfirm: (selection: TransferSelection) => void
 }) {
+  const { t: translate, locale } = useTranslation()
   const cancel = useRef<HTMLButtonElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const [choice, setChoice] = useState<'paid' | 'free' | null>(null)
@@ -31,39 +33,38 @@ export function TransferChoice({ quote, busy, error, onCancel, onConfirm }: {
           onCloseAutoFocus={(event) => { event.preventDefault(); returnFocus.current?.focus() }}
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
-          <Dialog.Title className="font-display text-xl font-semibold">Choose how to transfer</Dialog.Title>
+          <Dialog.Title className="font-display text-xl font-semibold">{translate("Choose how to transfer")}</Dialog.Title>
           <Dialog.Description className="text-sm text-muted-foreground">
-            A free transfer joins immediately when you confirm. A paid transfer joins automatically after payment approval. No separate destination approval is needed.
-          </Dialog.Description>
+            {translate("A free transfer joins immediately when you confirm. A paid transfer joins automatically after payment approval. No separate destination approval is needed.")}</Dialog.Description>
           <fieldset disabled={busy} className="space-y-3">
-            <legend className="sr-only">Transfer options</legend>
+            <legend className="sr-only">{translate("Transfer options")}</legend>
             <label className="flex min-h-11 cursor-pointer gap-3 rounded-xl border border-border p-4 text-sm">
               <input type="radio" name="transfer-choice" value="paid" checked={choice === 'paid'} onChange={() => { setChoice('paid'); setConsent(false) }} className="mt-1 size-4 shrink-0 accent-primary" />
-              <span className="space-y-1"><span className="block font-medium">Paid · Keep agents and integrations</span>
-                <span className="block">{formatMoney(quote.fee_amount_minor, quote.currency)} ({quote.currency})</span>
-                <span className="block text-muted-foreground">Keep your agents, integrations and content. Source organization models, tools and grants do not carry over; automation stops and needs reconfiguration.</span>
+              <span className="space-y-1"><span className="block font-medium">{translate("Paid · Keep agents and integrations")}</span>
+                <span className="block">{formatMoney(quote.fee_amount_minor, quote.currency, locale)} ({quote.currency})</span>
+                <span className="block text-muted-foreground">{translate("Keep your agents, integrations and content. Source organization models, tools and grants do not carry over; automation stops and needs reconfiguration.")}</span>
               </span>
             </label>
             <label className="flex min-h-11 cursor-pointer gap-3 rounded-xl border border-border p-4 text-sm">
               <input type="radio" name="transfer-choice" value="free" checked={choice === 'free'} onChange={() => { setChoice('free'); setConsent(false) }} className="mt-1 size-4 shrink-0 accent-primary" />
-              <span className="space-y-1"><span className="block font-medium">Free · Delete agents and integrations</span>
-                <span className="block text-muted-foreground">When you confirm, your agents expire and become unavailable. Integrations, credentials, permissions, relationships, schedules, triggers and public pages are deleted.</span>
+              <span className="space-y-1"><span className="block font-medium">{translate("Free · Delete agents and integrations")}</span>
+                <span className="block text-muted-foreground">{translate("When you confirm, your agents expire and become unavailable. Integrations, credentials, permissions, relationships, schedules, triggers and public pages are deleted.")}</span>
               </span>
             </label>
             {choice === 'free' ? <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm">
               <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.currentTarget.checked)} className="mt-1 size-4 shrink-0 accent-primary" />
-              <span>I explicitly agree to delete my agents and integrations when I confirm this transfer. I understand this cannot be undone.</span>
+              <span>{translate("I explicitly agree to delete my agents and integrations when I confirm this transfer. I understand this cannot be undone.")}</span>
             </label> : null}
           </fieldset>
-          <p className="text-sm text-muted-foreground">Historical chats, tasks, audit and activity records, accounting, Clawbook content, revisions, files and memory remain attributed to the source organization. With a free transfer they are retained for compliance, not erased, and you lose access.</p>
+          <p className="text-sm text-muted-foreground">{translate("Historical chats, tasks, audit and activity records, accounting, Clawbook content, revisions, files and memory remain attributed to the source organization. With a free transfer they are retained for compliance, not erased, and you lose access.")}</p>
           {choice === 'paid' ? <div className="space-y-2 rounded-xl bg-muted/50 p-4 text-sm">
-            <h2 className="font-medium">Payment instructions</h2>
-            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{quote.instructions || 'No payment instructions provided. Contact support before paying.'}</p>
-            <p className="text-muted-foreground">Payment approval joins the destination automatically. The submitted request saves the server’s fee and instructions; check its status before paying.</p>
+            <h2 className="font-medium">{translate("Payment instructions")}</h2>
+            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{quote.instructions || translate("No payment instructions provided. Contact support before paying.")}</p>
+            <p className="text-muted-foreground">{translate("Payment approval joins the destination automatically. The submitted request saves the server’s fee and instructions; check its status before paying.")}</p>
           </div> : null}
           {error ? <RequestErrorToast message={error} /> : null}
           <div className="flex flex-wrap justify-end gap-2">
-            <Button ref={cancel} variant="outline" className="min-h-11" disabled={busy} onClick={onCancel}>Cancel</Button>
+            <Button ref={cancel} variant="outline" className="min-h-11" disabled={busy} onClick={onCancel}>{translate("Cancel")}</Button>
             <Button variant={choice === 'free' ? 'secondary' : 'default'} className={`h-auto min-h-11 whitespace-normal ${choice === 'free' ? 'bg-destructive/12 text-destructive hover:bg-destructive/20' : ''}`} disabled={busy || choice === null || (choice === 'free' && !consent)}
               onClick={() => {
                 switch (choice) {
@@ -71,7 +72,7 @@ export function TransferChoice({ quote, busy, error, onCancel, onConfirm }: {
                   case 'free': if (consent) onConfirm({ transfer_choice: 'free', free_destructive_consent: true }); break
                   case null: break
                 }
-              }}>{busy ? 'Submitting…' : choice === 'paid' ? 'Request payment review' : choice === 'free' ? 'Confirm free transfer' : 'Choose an option'}</Button>
+              }}>{busy ? translate("Submitting…") : choice === 'paid' ? translate("Request payment review") : choice === 'free' ? translate("Confirm free transfer") : translate("Choose an option")}</Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

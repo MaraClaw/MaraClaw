@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from '@/hooks/use-translation'
 import { parseMarkdownTable, splitMarkdownBlocks } from './markdown-blocks'
 
 function escapeHtml(value: string): string {
@@ -17,13 +18,14 @@ function renderInline(text: string): string {
 }
 
 const MarkdownBlock = memo(function MarkdownBlock({ block }: { readonly block: string }) {
+  const { t: translate } = useTranslation()
   const trimmed = block.trim()
   if (trimmed.startsWith('```')) {
     const body = block.replace(/^\s*`{3,}[^\n]*\n?/, '').replace(/`{3,}\s*$/, '')
     return <pre className="overflow-x-auto rounded-lg bg-background/80 p-2 text-xs" dangerouslySetInnerHTML={{ __html: `<code>${escapeHtml(body)}</code>` }} />
   }
   const table = parseMarkdownTable(block)
-  if (table) return <div className="max-w-full overflow-x-auto rounded-lg border border-border [scrollbar-color:var(--muted-foreground)_transparent]" role="region" aria-label="Response table" tabIndex={0}>
+  if (table) return <div className="max-w-full overflow-x-auto rounded-lg border border-border [scrollbar-color:var(--muted-foreground)_transparent]" role="region" aria-label={translate('Response table')} tabIndex={0}>
     <table className="w-full border-collapse text-sm tabular-nums">
       <thead className="bg-muted/50"><tr>{table.header.map((cell, index) => <th key={index} scope="col" className="border-b border-border px-3 py-2 font-semibold" style={{ textAlign: table.alignments[index] }} dangerouslySetInnerHTML={{ __html: renderInline(cell) }} />)}</tr></thead>
       <tbody>{table.rows.map((row, rowIndex) => <tr key={rowIndex} className="border-b border-border last:border-0">

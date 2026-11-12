@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
@@ -29,6 +30,7 @@ import {
 } from '@/lib/workspace-api'
 
 function FileImagePreview({ agentId, path }: { agentId: string; path: string }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const [preview, dispatch] = useReducer(reduceFilePreview, undefined, () => createFilePreview(agentId, path))
   const { status, request } = preview
@@ -50,9 +52,9 @@ function FileImagePreview({ agentId, path }: { agentId: string; path: string }) 
 
   switch (preview.status) {
     case 'minting':
-      return <p className="mb-3 text-xs text-muted-foreground" role="status">Loading preview...</p>
+      return <p className="mb-3 text-xs text-muted-foreground" role="status">{translate("Loading preview...")}</p>
     case 'failed':
-      return <p className="mb-3 text-xs text-muted-foreground" role="status">Preview unavailable. Download the file to view it.</p>
+      return <p className="mb-3 text-xs text-muted-foreground" role="status">{translate("Preview unavailable. Download the file to view it.")}</p>
     case 'ready':
       return (
         <img
@@ -66,6 +68,7 @@ function FileImagePreview({ agentId, path }: { agentId: string; path: string }) 
 }
 
 export function AgentFilesPage() {
+  const { t: translate, locale } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { token } = useAuth()
@@ -82,10 +85,10 @@ export function AgentFilesPage() {
   const upload = useMutation({
     mutationFn: (file: File) => uploadWorkspaceFile(agent.id, file, path || 'workspace/knowledge_base'),
     onSuccess() {
-      toast.success('Uploaded')
+      toast.success(translate("Uploaded"))
       void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
     },
-    onError(error) { toast.error(userFacingRequestError(error, 'Upload failed')) },
+    onError(error) { toast.error(userFacingRequestError(error, translate("Upload failed"))) },
   })
 
   const listing = useInfiniteQuery(agentFilesQuery(scope, agent.id, path))
@@ -106,18 +109,18 @@ export function AgentFilesPage() {
       setVersion(data.version_token)
     },
     onError(error) {
-      toast.error(userFacingRequestError(error, 'Cannot read file'))
+      toast.error(userFacingRequestError(error, translate("Cannot read file")))
     },
   })
 
   const save = useMutation({
     mutationFn: () => writeFileContent(agent.id, selected!, draft, version),
     onSuccess() {
-      toast.success('Saved')
+      toast.success(translate("Saved"))
       void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
     },
     onError(error) {
-      toast.error(userFacingRequestError(error, 'Save failed'))
+      toast.error(userFacingRequestError(error, translate("Save failed")))
     },
   })
 
@@ -132,7 +135,7 @@ export function AgentFilesPage() {
       link.remove()
     },
     onError(error) {
-      toast.error(userFacingRequestError(error, 'Unable to start download. Try again.'))
+      toast.error(userFacingRequestError(error, translate("Unable to start download. Try again.")))
     },
   })
 
@@ -141,12 +144,11 @@ export function AgentFilesPage() {
       <aside className="border-b border-border p-3 md:border-r md:border-b-0">
         <div className="mb-2 flex items-center justify-between text-xs">
         <button type="button" className="text-primary" onClick={scope.effect(() => setPath(''))}>
-            Root
-          </button>
+            {translate("Root")}</button>
           <input
             type="file"
             className="w-24 text-[10px]"
-            aria-label="Upload workspace file"
+            aria-label={translate("Upload workspace file")}
             aria-describedby="workspace-upload-policy"
             disabled={!uploadPolicy.isSuccess || upload.isPending}
             onChange={(event) => {
@@ -155,7 +157,7 @@ export function AgentFilesPage() {
               event.target.value = ''
               if (!file) return
               if (file.size > uploadPolicy.data.workspace_file_max_bytes) {
-                toast.error(`File exceeds the ${formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes)} workspace upload limit.`)
+                toast.error(translate("File exceeds the {limit} workspace upload limit.", { limit: formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes, locale) }))
                 return
               }
               upload.mutate(file)
@@ -166,16 +168,16 @@ export function AgentFilesPage() {
           {uploadPolicy.isError ? <div className="space-y-2">
             <RequestErrorToast error={uploadPolicy.error} message="Could not load upload limits. Uploading is unavailable." />
             <Button type="button" size="sm" variant="outline" disabled={uploadPolicy.isFetching}
-              onClick={() => { if (scope.isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
+              onClick={() => { if (scope.isCurrent()) void uploadPolicy.refetch() }}>{translate("Retry upload limits")}</Button>
           </div> : <p role="status">{uploadPolicy.isSuccess
-            ? `All files, including images: up to ${formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes)}.`
-            : 'Loading upload limits…'}</p>}
+            ? translate("All files, including images: up to {limit}.", { limit: formatUploadLimit(uploadPolicy.data.workspace_file_max_bytes, locale) })
+            : translate("Loading upload limits…")}</p>}
         </div>
         {listing.isPaused || listing.isPending || listing.isFetchingNextPage || (!listing.isError && entries.length === 0) ? <p role="status" className="mb-2 text-xs text-muted-foreground">
-          {listing.isPaused ? 'You are offline. Files will load when you reconnect.'
-            : listing.isPending ? 'Loading files...'
-            : listing.isFetchingNextPage ? 'Loading more files...'
-            : !listing.isError && entries.length === 0 ? 'This folder is empty. Upload a file or return to Root.' : ''}
+          {listing.isPaused ? translate("You are offline. Files will load when you reconnect.")
+            : listing.isPending ? translate("Loading files...")
+            : listing.isFetchingNextPage ? translate("Loading more files...")
+            : !listing.isError && entries.length === 0 ? translate("This folder is empty. Upload a file or return to Root.") : ''}
         </p> : null}
         <ul className="space-y-1">
           {entries.map((entry) => (
@@ -204,7 +206,7 @@ export function AgentFilesPage() {
               if (listing.isFetchNextPageError || !listing.isError) void listing.fetchNextPage()
               else void listing.refetch()
             }}>
-            {listing.isError ? 'Retry loading files' : 'Load more files'}
+            {listing.isError ? translate("Retry loading files") : translate("Load more files")}
           </Button>
         ) : null}
       </aside>
@@ -225,19 +227,15 @@ export function AgentFilesPage() {
                       onClick={() => download.mutate(selected)}
                     >
                       {download.isPending ? <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : null}
-                      Download
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success('Locked for edit'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to lock this file.'), error)))}>
-                      Lock
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void unlockFile(agent.id, selected).then(scope.effect(() => toast.success('Unlocked'))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to unlock this file.'), error)))}>
-                      Unlock
-                    </Button>
+                      {translate("Download")}</Button>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void lockFile(agent.id, selected).then(scope.effect(() => toast.success(translate("Locked for edit")))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to lock this file.")), error)))}>
+                      {translate("Lock")}</Button>
+                    <Button size="sm" variant="outline" onClick={() => scope.isCurrent() && void unlockFile(agent.id, selected).then(scope.effect(() => toast.success(translate("Unlocked")))).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to unlock this file.")), error)))}>
+                      {translate("Unlock")}</Button>
                   </>
                 ) : null}
                 <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
-                  Save
-                </Button>
+                  {translate("Save")}</Button>
                 {canManage ? (
                   <Button
                     size="sm"
@@ -248,11 +246,10 @@ export function AgentFilesPage() {
                         if (!scope.isCurrent()) return
                         setSelected(null)
                         void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
-                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to delete this file.'), error)))
+                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to delete this file.")), error)))
                     }}
                   >
-                    Delete
-                  </Button>
+                    {translate("Delete")}</Button>
                 ) : null}
               </div>
             </div>
@@ -263,7 +260,7 @@ export function AgentFilesPage() {
             {revisions.isError ? <RequestErrorToast error={revisions.error} message="Unable to load file revisions. Try again." /> : null}
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">
-                <p className="text-xs font-medium">Revisions</p>
+                <p className="text-xs font-medium">{translate("Revisions")}</p>
                 <ul className="space-y-1">
                   {(revisions.data ?? []).slice(0, 8).map((rev) => (
                     <li key={rev.id} className="flex items-center justify-between text-xs">
@@ -276,14 +273,13 @@ export function AgentFilesPage() {
                         onClick={() =>
                           scope.isCurrent() && void restoreFileRevision(agent.id, rev.id).then(() => {
                             if (!scope.isCurrent()) return
-                            toast.success('Restored')
+                            toast.success(translate("Restored"))
                             void queryClient.invalidateQueries({ queryKey: ['files', agent.id] })
                             openFile.mutate(selected)
-                          }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to restore this revision.'), error)))
+                          }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to restore this revision.")), error)))
                         }
                       >
-                        Restore
-                      </Button>
+                        {translate("Restore")}</Button>
                     </li>
                   ))}
                 </ul>
@@ -291,7 +287,7 @@ export function AgentFilesPage() {
             ) : null}
           </>
         ) : (
-          <p className="p-6 text-sm text-muted-foreground">Select a file to read or edit.</p>
+          <p className="p-6 text-sm text-muted-foreground">{translate("Select a file to read or edit.")}</p>
         )}
       </section>
     </div>

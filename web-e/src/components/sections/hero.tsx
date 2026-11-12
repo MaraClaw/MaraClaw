@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, Bot, MessageSquare, ShieldCheck, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -7,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { fadeUp, staggerContainer } from '@/lib/motion'
 
 export function Hero() {
+  const { t: translate } = useTranslation()
   const reduce = useReducedMotion()
 
   return (
@@ -40,26 +42,22 @@ export function Hero() {
           <motion.div variants={reduce ? undefined : fadeUp}>
             <Badge variant="soft" className="mb-6 gap-1.5 px-3 py-1 text-[0.8125rem]">
               <Sparkles className="size-3.5" aria-hidden />
-              OpenClaw agents for teams & companies
-            </Badge>
+              {translate("OpenClaw agents for teams & companies")}</Badge>
           </motion.div>
 
           <motion.h1
             variants={reduce ? undefined : fadeUp}
             className="font-display text-4xl font-semibold tracking-tight text-foreground sm:text-5xl md:text-6xl md:leading-[1.05]"
           >
-            Hire digital employees that{' '}
-            <span className="text-gradient">actually ship work</span>
+            {translate("Hire digital employees that")}{' '}
+            <span className="text-gradient">{translate("actually ship work")}</span>
           </motion.h1>
 
           <motion.p
             variants={reduce ? undefined : fadeUp}
             className="mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg"
           >
-            MaraClaw is the enterprise platform for OpenClaw agents - role-ready
-            digital employees with tools, memory, channels, and governance so your
-            team can automate work without losing control.
-          </motion.p>
+            {translate("MaraClaw is the enterprise platform for OpenClaw agents - role-ready digital employees with tools, memory, channels, and governance so your team can automate work without losing control.")}</motion.p>
 
           <motion.div
             variants={reduce ? undefined : fadeUp}
@@ -67,12 +65,11 @@ export function Hero() {
           >
             <Button size="lg" asChild>
               <Link to="/register">
-                Create account
-                <ArrowRight className="size-4" aria-hidden />
+                {translate("Create account")}<ArrowRight className="size-4" aria-hidden />
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link to="/login">Sign in</Link>
+              <Link to="/login">{translate("Sign in")}</Link>
             </Button>
           </motion.div>
 
@@ -82,16 +79,14 @@ export function Hero() {
           >
             <li className="inline-flex shrink-0 items-center gap-2">
               <ShieldCheck className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
-              Multi-tenant controls
-            </li>
+              {translate("Multi-tenant controls")}</li>
             <li className="inline-flex shrink-0 items-center gap-2">
               <MessageSquare className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
               Feishu · WeCom · Slack · Google Chat · Discord · MS Teams · WhatsApp
             </li>
             <li className="inline-flex shrink-0 items-center gap-2">
               <Bot className="size-5 shrink-0 text-primary sm:size-[1.35rem]" aria-hidden />
-              20+ role templates
-            </li>
+              {translate("20+ role templates")}</li>
           </motion.ul>
         </motion.div>
       </div>

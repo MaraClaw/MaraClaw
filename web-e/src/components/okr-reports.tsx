@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -9,26 +10,26 @@ import { RequestErrorToast } from '@/components/request-error-toast'
 import { createKeyResult, listCompanyReports, membersWithoutOkr, syncOkrRelationships, triggerOkrOutreach } from '@/lib/okr-api'
 
 export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; readonly enabled: boolean }) {
+  const { t: translate, owned, formatNumber } = useTranslation()
   const scope = useWorkspaceSession()
   const company = useQuery({ queryKey: ['okr', 'company'], queryFn: listCompanyReports })
   const gaps = useQuery({ queryKey: ['okr', 'gaps'], queryFn: membersWithoutOkr, enabled })
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(userFacingRequestError(error, fallback))
+    toast.error(userFacingRequestError(error, owned(fallback)))
   }
   return (
     <>
       <section className="space-y-3">
-        <h2 className="font-display text-lg font-semibold">Company reports</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Company reports")}</h2>
         {company.isError ? <RequestErrorToast error={company.error} message="Unable to load company reports. Try again." /> : null}
         {(company.data ?? []).map((item) => (
           <article key={item.id} className="rounded-xl border border-border p-3 text-sm">
             <p className="font-medium">
-              {item.period_label} · {item.report_type}
+              {item.period_label} · {owned(item.report_type)}
             </p>
             <p className="text-xs text-muted-foreground">
-              {item.submitted_count} submitted · {item.missing_count} missing
-            </p>
+              {formatNumber(item.submitted_count)} {translate("submitted ·")}{' '}{formatNumber(item.missing_count)} {translate("missing")}</p>
             <p className="mt-2 line-clamp-6 whitespace-pre-wrap text-muted-foreground">{item.content}</p>
           </article>
         ))}
@@ -40,28 +41,25 @@ export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; re
               size="sm"
               variant="outline"
               onClick={() => scope.isCurrent() &&
-                void syncOkrRelationships().then(scope.effect(() => toast.success('Relationships synced'))).catch((error) => fail(error, 'Sync failed'))
+                void syncOkrRelationships().then(scope.effect(() => toast.success(translate("Relationships synced")))).catch((error) => fail(error, 'Sync failed'))
               }
             >
-              Sync relationships
-            </Button>
+              {translate("Sync relationships")}</Button>
             <Button
               size="sm"
               variant="outline"
               onClick={() => scope.isCurrent() &&
-                void triggerOkrOutreach().then(scope.effect(() => toast.success('Outreach started'))).catch((error) => fail(error, 'Outreach failed'))
+                void triggerOkrOutreach().then(scope.effect(() => toast.success(translate("Outreach started")))).catch((error) => fail(error, 'Outreach failed'))
               }
             >
-              Nudge missing OKRs
-            </Button>
+              {translate("Nudge missing OKRs")}</Button>
           </div>
           {gaps.isError ? <RequestErrorToast error={gaps.error} message="Unable to load members without OKRs. Try again." /> : <p className="text-sm text-muted-foreground">
-            {gaps.data?.total ?? 0} tracked members without an OKR this period.
-          </p>}
+            {formatNumber(gaps.data?.total ?? 0)} {translate("tracked members without an OKR this period.")}</p>}
           <ul className="space-y-1 text-sm">
             {(gaps.data?.members_without_okr ?? []).slice(0, 20).map((member) => (
               <li key={`${member.type}-${member.id}`}>
-                {member.display_name} <span className="text-muted-foreground">{member.type}</span>
+                {member.display_name} <span className="text-muted-foreground">{owned(member.type)}</span>
               </li>
             ))}
           </ul>
@@ -72,13 +70,14 @@ export function OkrReports({ isAdmin, enabled }: { readonly isAdmin: boolean; re
 }
 
 export function AddKeyResult({ objectiveId, onAdded }: { readonly objectiveId: string; readonly onAdded: () => void }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const [title, setTitle] = useState('')
   return (
     <div className="mt-3 flex gap-2">
       <Input
         className="h-9"
-        placeholder="Add a key result"
+        placeholder={translate("Add a key result")}
         value={title}
         onChange={scope.effect((event) => setTitle(event.target.value))}
       />
@@ -90,11 +89,10 @@ export function AddKeyResult({ objectiveId, onAdded }: { readonly objectiveId: s
           void createKeyResult(objectiveId, { title: title.trim(), target_value: 100 }).then(scope.effect(() => {
             setTitle('')
             onAdded()
-          })).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to add this key result. Try again.'), error)))
+          })).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to add this key result. Try again.")), error)))
         }}
       >
-        KR
-      </Button>
+        {translate("KR")}</Button>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useEffect, useRef, useState } from 'react'
@@ -36,6 +37,7 @@ export function AgentSchedulesPage() {
 }
 
 function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
+  const { t: translate, owned, locale, formatDate } = useTranslation()
   const scope = useWorkspaceSession()
   const { user } = useAuth()
   const isCreator = user?.id === agent.creator_id
@@ -70,7 +72,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
       void queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] })
     },
     onError(error) {
-      setSaveError(userFacingRequestError(error, 'Unable to save schedule. Check the cron and IANA timezone, then try again. If timezone data is unavailable, ask your admin to update it.'))
+      setSaveError(userFacingRequestError(error, translate("Unable to save schedule. Check the cron and IANA timezone, then try again. If timezone data is unavailable, ask your admin to update it.")))
     },
   })
   const run = useMutation({
@@ -86,15 +88,15 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
       const definite = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408
       if (definite) runIntents.current.delete(id)
       showRequestError(definite
-         ? userFacingRequestError(error, 'Unable to run schedule. Try again.')
-         : 'Acceptance could not be confirmed. Retry Run to check the same request without starting another run.', error)
+         ? userFacingRequestError(error, translate("Unable to run schedule. Try again."))
+         : translate("Acceptance could not be confirmed. Retry Run to check the same request without starting another run."), error)
       setRunMessages((messages) => ({ ...messages, [id]: definite ? '' : 'Retry Run to check the same request without starting another run.' }))
     },
   })
   const remove = useMutation({
     mutationFn: (id: string) => deleteSchedule(agent.id, id),
     onSuccess() { void queryClient.invalidateQueries({ queryKey: ['schedules', agent.id] }) },
-    onError(error) { toast.error(userFacingRequestError(error, 'Unable to delete schedule. Try again.')) },
+    onError(error) { toast.error(userFacingRequestError(error, translate("Unable to delete schedule. Try again."))) },
   })
 
   function requestRun(id: string) {
@@ -130,31 +132,31 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
         >
           <fieldset disabled={save.isPending} className="grid gap-3">
             <div className="grid gap-2">
-              <Label htmlFor="schedule-name">Name</Label>
+              <Label htmlFor="schedule-name">{translate("Name")}</Label>
               <Input id="schedule-name" required value={draft.name} onChange={scope.effect((event) => setDraft({ ...draft, name: event.target.value }))} />
             </div>
             <ScheduleRecurrenceFields key={editorVersion} cron={draft.cron_expr} timezone={draft.timezone}
               onChange={scope.effect((cron_expr) => setDraft({ ...draft, cron_expr }))} />
             <div className="grid gap-2">
-              <Label htmlFor="schedule-timezone">Timezone</Label>
+              <Label htmlFor="schedule-timezone">{translate("Timezone")}</Label>
               <TimezoneSelect id="schedule-timezone" ref={timezoneInput} value={draft.timezone}
                 aria-invalid={Boolean(timezoneError)} aria-describedby={`schedule-timezone-help${timezoneError ? ' schedule-timezone-error' : ''}`}
                 onChange={scope.effect((event) => { setDraft({ ...draft, timezone: event.target.value }); setTimezoneError(null) })} />
-              <p id="schedule-timezone-help" className="text-xs text-muted-foreground">Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. New schedules use your Settings preference, or GMT +0 (UTC).</p>
-              {timezoneError ? <p id="schedule-timezone-error" role="status" className="text-sm text-destructive">{timezoneError}</p> : null}
+              <p id="schedule-timezone-help" className="text-xs text-muted-foreground">{translate("Whole-hour offsets only, from GMT -12 to GMT +14. Fixed offsets do not change for daylight saving time. Saved regional timezones are preserved. New schedules use your Settings preference, or GMT +0 (UTC).")}</p>
+              {timezoneError ? <p id="schedule-timezone-error" role="status" className="text-sm text-destructive">{owned(timezoneError)}</p> : null}
             </div>
             <div className="grid min-w-0 gap-2">
-              <Label htmlFor="schedule-ends-at">End time (UTC)</Label>
+              <Label htmlFor="schedule-ends-at">{translate("End time (UTC)")}</Label>
               <Input key={editorVersion} id="schedule-ends-at" name="ends_at" ref={endTimeInput} type="datetime-local" step="any"
                 defaultValue={scheduleEndInput(editing?.ends_at)} aria-invalid={endTimeError}
                 aria-describedby={`schedule-ends-at-help${endTimeError ? ' schedule-ends-at-error' : ''}`}
                 onChange={scope.effect(() => setEndTimeError(false))}
                 onInvalid={scope.effect((event) => { event.preventDefault(); setEndTimeError(true); event.currentTarget.focus() })} />
-              <p id="schedule-ends-at-help" className="text-xs text-muted-foreground">Optional. Periodic runs stop before this UTC instant, regardless of the recurrence timezone. Leave blank for no end time. Manual runs remain available.</p>
-              {endTimeError ? <p id="schedule-ends-at-error" role="status" className="text-sm text-destructive">Enter a valid UTC date and time, or leave it blank.</p> : null}
+              <p id="schedule-ends-at-help" className="text-xs text-muted-foreground">{translate("Optional. Periodic runs stop before this UTC instant, regardless of the recurrence timezone. Leave blank for no end time. Manual runs remain available.")}</p>
+              {endTimeError ? <p id="schedule-ends-at-error" role="status" className="text-sm text-destructive">{translate("Enter a valid UTC date and time, or leave it blank.")}</p> : null}
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="schedule-instruction">Instruction</Label>
+              <Label htmlFor="schedule-instruction">{translate("Instruction")}</Label>
               <Textarea id="schedule-instruction" value={draft.instruction} onChange={scope.effect((event) => setDraft({ ...draft, instruction: event.target.value }))} />
             </div>
             <div className="grid gap-2">
@@ -162,48 +164,47 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                 <input id="schedule-notify-on-failure" name="notify_on_failure" type="checkbox" className="size-5 shrink-0 accent-primary"
                   checked={draft.notify_on_failure} aria-describedby="schedule-notify-on-failure-help"
                   onChange={scope.effect((event) => setDraft({ ...draft, notify_on_failure: event.target.checked }))} />
-                Notify me when a scheduled run fails
-              </Label>
-              <p id="schedule-notify-on-failure-help" className="text-xs text-muted-foreground">When on, sends you an in-app alert if a periodic scheduled run fails. Does not apply to manual runs.</p>
+                {translate("Notify me when a scheduled run fails")}</Label>
+              <p id="schedule-notify-on-failure-help" className="text-xs text-muted-foreground">{translate("When on, sends you an in-app alert if a periodic scheduled run fails. Does not apply to manual runs.")}</p>
             </div>
             <div className="flex gap-2">
-              <Button type="submit">{save.isPending ? 'Saving...' : editing ? 'Save schedule' : 'Add schedule'}</Button>
+              <Button type="submit">{save.isPending ? translate('Saving...') : editing ? translate("Save schedule") : translate("Add schedule")}</Button>
               {editing ? <Button type="button" variant="outline" onClick={scope.effect(() => {
                 setEditing(null); setDraft(createScheduleDraft(user?.timezone)); setTimezoneError(null); setSaveError(null)
                 setEndTimeError(false)
                 setEditorVersion((version) => version + 1)
-              })}>Cancel edit</Button> : null}
+              })}>{translate("Cancel edit")}</Button> : null}
             </div>
           </fieldset>
           {saveError ? <RequestErrorToast message={saveError} /> : null}
         </form>
       ) : (
-        <p className="text-sm text-muted-foreground">Only the agent creator can add or run schedules.</p>
+        <p className="text-sm text-muted-foreground">{translate("Only the agent creator can add or run schedules.")}</p>
       )}
       <p role="status" className={save.isPending ? 'max-w-xl text-sm text-muted-foreground' : 'sr-only'}>
-        {save.isPaused ? 'Waiting for connection to save schedule. Your draft is kept here.' : save.isPending ? 'Saving schedule...' : ''}
+        {save.isPaused ? translate("Waiting for connection to save schedule. Your draft is kept here.") : save.isPending ? translate("Saving schedule...") : ''}
       </p>
       <p role="status" className={schedules.isPending || schedules.fetchStatus === 'paused' ? 'text-sm text-muted-foreground' : 'sr-only'}>
-        {schedules.fetchStatus === 'paused' ? 'Waiting for connection to load schedules.' : schedules.isPending ? 'Loading schedules...' : ''}
+        {schedules.fetchStatus === 'paused' ? translate("Waiting for connection to load schedules.") : schedules.isPending ? translate("Loading schedules...") : ''}
       </p>
       {schedules.isError ? <div className="space-y-2">
-        <RequestErrorToast error={schedules.error} message={userFacingRequestError(schedules.error, 'Unable to load schedules. Try again.')} />
-        <Button variant="outline" disabled={schedules.isFetching} onClick={scope.effect(() => { void schedules.refetch() })}>Retry</Button>
+        <RequestErrorToast error={schedules.error} message={userFacingRequestError(schedules.error, translate("Unable to load schedules. Try again."))} />
+        <Button variant="outline" disabled={schedules.isFetching} onClick={scope.effect(() => { void schedules.refetch() })}>{translate("Retry")}</Button>
       </div> : null}
-      {schedules.data?.length === 0 ? <p className="text-sm text-muted-foreground">No schedules yet.</p> : null}
+      {schedules.data?.length === 0 ? <p className="text-sm text-muted-foreground">{translate("No schedules yet.")}</p> : null}
       <ul className="space-y-2">
         {(schedules.data ?? []).map((item) => (
           <li key={item.id} aria-label={item.name} className="flex flex-col gap-2 rounded-xl border border-border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 break-words">
               <p className="text-sm font-medium">{item.name}</p>
               <p className="text-xs text-muted-foreground">
-                {describeScheduleRecurrence(recognizeScheduleRecurrence(item.cron_expr))} · {timezoneLabel(item.timezone)} · next {formatScheduleNextRun(item)}
+                {describeScheduleRecurrence(recognizeScheduleRecurrence(item.cron_expr), locale)} · {timezoneLabel(item.timezone)} {translate("· next")}{' '}{formatScheduleNextRun(item, locale)}
               </p>
-              <p className="text-xs text-muted-foreground">{item.ends_at ? <>Ends before <time dateTime={item.ends_at}>
-                {new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(item.ends_at))}
+              <p className="text-xs text-muted-foreground">{item.ends_at ? <>{translate("Ends before")}{' '}<time dateTime={item.ends_at}>
+                  {formatDate(item.ends_at, { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' })}
                 {item.ends_at.match(/\.\d+/)?.[0] ?? ''} UTC
-              </time></> : 'No end time'}</p>
-              <p aria-live="polite" className="text-sm text-muted-foreground">{runMessages[item.id]}</p>
+              </time></> : translate("No end time")}</p>
+              <p aria-live="polite" className="text-sm text-muted-foreground">{owned(runMessages[item.id] ?? '')}</p>
               {isCreator && acceptedRun?.scheduleId === item.id ? <ScheduleRunReceipt key={acceptedRun.runId}
                 agentId={agent.id} scheduleId={item.id} runId={acceptedRun.runId} /> : null}
             </div>
@@ -212,8 +213,7 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                 <Button size="sm" variant="outline" disabled={save.isPending || run.isPending} onClick={() => {
                   if (scope.isCurrent()) requestRun(item.id)
                 }}>
-                  Run
-                </Button>
+                  {translate("Run")}</Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -228,19 +228,16 @@ function AgentSchedules({ agent }: { readonly agent: AgentOut }) {
                     setSaveError(null)
                   }}
                 >
-                  Edit
-                </Button>
+                  {translate("Edit")}</Button>
                 <Button size="sm" variant="outline" onClick={scope.effect(() => setHistoryId(item.id))}>
-                  History
-                </Button>
+                  {translate("History")}</Button>
                 <Button
                   size="sm"
                   variant="ghost"
                   disabled={save.isPending || remove.isPending}
                   onClick={() => remove.mutate(item.id)}
                 >
-                  Delete
-                </Button>
+                  {translate("Delete")}</Button>
               </div>
             ) : null}
           </li>

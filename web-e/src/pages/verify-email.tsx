@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2, Mail } from 'lucide-react'
 import { useEffect, useId, useMemo, useState } from 'react'
@@ -17,7 +19,7 @@ import type { SessionOwner } from '@/lib/auth-session'
 import { userFacingRequestError } from '@/lib/http'
 
 const schema = z.object({
-  token: z.string().trim().min(6, 'Enter the 6-digit code').max(512),
+  token: z.string().trim().min(6, 'Enter the 6-digit code').max(512, 'Verification code is too long'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -25,6 +27,7 @@ type FormValues = z.infer<typeof schema>
 type VerifyState = { email?: string }
 
 export function VerifyEmailPage() {
+  const { t: translate } = useTranslation()
   const formId = useId()
   const navigate = useNavigate()
   const location = useLocation()
@@ -56,7 +59,7 @@ export function VerifyEmailPage() {
     if (!applySession(expectedOwner, session)) return
     const installedOwner = capture()
     if (!isCurrent(installedOwner)) return
-    toast.success('Email verified')
+    toast.success(translate("Email verified"))
     navigate(session.needs_org_confirm ? '/join' : '/app', { replace: true })
   }
 
@@ -69,17 +72,17 @@ export function VerifyEmailPage() {
         if (cancelled || !applySession(expectedOwner, session)) return
         const installedOwner = capture()
         if (!isCurrent(installedOwner)) return
-        toast.success('Email verified')
+        toast.success(translate("Email verified"))
         navigate(session.needs_org_confirm ? '/join' : '/app', { replace: true })
       })
       .catch((error: unknown) => {
         if (cancelled || !isCurrent(expectedOwner)) return
-        toast.error(userFacingRequestError(error, 'Unable to verify. Try again.'))
+        toast.error(userFacingRequestError(error, translate("Unable to verify. Try again.")))
       })
     return () => {
       cancelled = true
     }
-  }, [applySession, codeFromQuery, navigate, mountedOwner, capture, isCurrent])
+  }, [applySession, codeFromQuery, navigate, mountedOwner, capture, isCurrent, translate])
 
   async function onSubmit(values: FormValues) {
     const expectedOwner = mountedOwner
@@ -89,7 +92,7 @@ export function VerifyEmailPage() {
       await consume(expectedOwner, values.token)
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      toast.error(userFacingRequestError(error, 'Unable to verify. Try again.'))
+      toast.error(userFacingRequestError(error, translate("Unable to verify. Try again.")))
     }
   }
 
@@ -97,7 +100,7 @@ export function VerifyEmailPage() {
     const expectedOwner = mountedOwner
     if (!isCurrent(expectedOwner)) return
     if (!email.trim()) {
-      setFormError('Enter the email you registered with, then resend.')
+      setFormError(translate("Enter the email you registered with, then resend."))
       return
     }
     setResending(true)
@@ -105,10 +108,10 @@ export function VerifyEmailPage() {
     try {
       await resendVerificationRequest(email.trim(), expectedOwner)
       if (!isCurrent(expectedOwner)) return
-      toast.success('If that account exists, a new code is on the way.')
+      toast.success(translate("If that account exists, a new code is on the way."))
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
-      toast.error(userFacingRequestError(error, 'Unable to resend.'))
+      toast.error(userFacingRequestError(error, translate("Unable to resend.")))
     } finally {
       if (isCurrent(expectedOwner)) setResending(false)
     }
@@ -117,10 +120,10 @@ export function VerifyEmailPage() {
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title="Verify your email"
-      description="Enter the 6-digit code we sent, or open the link from the message."
-      brandTitle="Confirm it is you"
-      brandBody="Unverified accounts cannot start a workspace session."
+      title={translate("Verify your email")}
+      description={translate("Enter the 6-digit code we sent, or open the link from the message.")}
+      brandTitle={translate("Confirm it is you")}
+      brandBody={translate("Unverified accounts cannot start a workspace session.")}
       highlights={memberAuthHighlights}
     >
       {formError ? (
@@ -131,7 +134,7 @@ export function VerifyEmailPage() {
 
       <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
         <div className="space-y-2">
-          <Label htmlFor={`${formId}-code`}>Verification code</Label>
+          <Label htmlFor={`${formId}-code`}>{translate("Verification code")}</Label>
           <Input
             id={`${formId}-code`}
             inputMode="numeric"
@@ -140,22 +143,21 @@ export function VerifyEmailPage() {
             disabled={isSubmitting}
             {...register('token')}
           />
-          {errors.token ? <p className="text-xs text-destructive">{errors.token.message}</p> : null}
+          {errors.token ? <p className="text-xs text-destructive"><ValidationMessage message={errors.token.message} /></p> : null}
         </div>
         <Button type="submit" className="h-11 w-full" disabled={isSubmitting}>
           {isSubmitting ? (
             <>
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              Verifying…
-            </>
+              {translate("Verifying…")}</>
           ) : (
-            'Verify email'
+            translate("Verify email")
           )}
         </Button>
       </form>
 
       <div className="mt-6 space-y-3 border-t border-border pt-6">
-        <Label htmlFor={`${formId}-email`}>Email for a new code</Label>
+        <Label htmlFor={`${formId}-email`}>{translate("Email for a new code")}</Label>
         <div className="relative">
           <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <Input
@@ -167,14 +169,13 @@ export function VerifyEmailPage() {
           />
         </div>
         <Button type="button" variant="outline" className="h-11 w-full" disabled={resending} onClick={() => void resend()}>
-          {resending ? 'Sending…' : 'Resend code'}
+          {resending ? translate("Sending…") : translate("Resend code")}
         </Button>
       </div>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
         <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-          Back to sign in
-        </Link>
+          {translate("Back to sign in")}</Link>
       </p>
     </AuthShell>
   )

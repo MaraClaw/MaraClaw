@@ -3,6 +3,7 @@ import * as React from 'react'
 
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { cn } from '@/lib/utils'
+import { useTranslation } from '@/hooks/use-translation'
 
 export type SectionRailItem<Id extends string = string> = {
   id: Id
@@ -25,6 +26,7 @@ export function SectionRailButton<Id extends string>({
   onSelect: (id: Id) => void
   buttonProps?: Omit<React.ComponentProps<'button'>, 'children' | 'onClick' | 'type'>
 }) {
+  const { owned } = useTranslation()
   return (
     <button
       type="button"
@@ -35,7 +37,7 @@ export function SectionRailButton<Id extends string>({
     >
       <NavIcon name={item.icon} active={active} className="size-[1.8rem] md:size-[2.4rem]" />
       <span className="max-w-full text-center text-[10px] font-medium leading-tight text-pretty md:text-[11px]">
-        {item.label}
+        {owned(item.label)}
       </span>
     </button>
   )
@@ -60,6 +62,7 @@ export function SectionRail<Id extends string>({
   itemProps?: (item: SectionRailItem<Id>, active: boolean) => React.ComponentProps<'button'>
   className?: string
 }) {
+  const { owned } = useTranslation()
   return (
     <nav
       role={role}
@@ -88,7 +91,7 @@ export function SectionRail<Id extends string>({
                     className="size-[1.8rem] md:size-[2.4rem]"
                   />
                   <span className="max-w-full text-center text-[10px] font-medium leading-tight text-pretty md:text-[11px]">
-                    {item.label}
+                    {owned(item.label)}
                   </span>
                 </>
               )}

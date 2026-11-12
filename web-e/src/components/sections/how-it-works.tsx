@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Check } from 'lucide-react'
 
 import { Reveal, Stagger, StaggerItem } from '@/components/motion'
@@ -25,20 +26,17 @@ const steps = [
 ]
 
 export function HowItWorks() {
+  const { t: translate, owned } = useTranslation()
   return (
     <section id="how-it-works" className="scroll-mt-20 py-20 sm:py-28">
       <div className="container-page">
         <Reveal className="mx-auto max-w-4xl text-center">
           <p className="text-sm font-semibold tracking-wide text-primary uppercase">
-            How it works
-          </p>
+            {translate("How it works")}</p>
           <h2 className="mt-3 whitespace-nowrap font-display text-[clamp(1.15rem,4.2vw,2.25rem)] font-semibold tracking-tight text-foreground">
-            From hire to high-output in only three steps
-          </h2>
+            {translate("From hire to high-output in only three steps")}</h2>
           <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-            MaraClaw is built for operators who want agents that feel employed -
-            not demos that forget who you are tomorrow.
-          </p>
+            {translate("MaraClaw is built for operators who want agents that feel employed - not demos that forget who you are tomorrow.")}</p>
         </Reveal>
 
         <Stagger className="relative mt-12 grid gap-4 md:grid-cols-3 md:gap-6">
@@ -108,7 +106,8 @@ export function HowItWorks() {
                             ? 'border-emerald-500 bg-emerald-500 text-white shadow-[0_8px_20px_-10px_oklch(0.6_0.16_150/0.7)]'
                             : 'border-primary bg-primary text-primary-foreground shadow-[0_8px_20px_-10px_oklch(0.5_0.14_38/0.55)]',
                         )}
-                        aria-label={`Step ${item.step} complete`}
+                        role="img"
+                        aria-label={translate("Step {step} complete", { step: item.step })}
                       >
                         <Check className="size-5" strokeWidth={2.5} aria-hidden />
                       </span>
@@ -124,26 +123,24 @@ export function HowItWorks() {
                               : 'text-primary',
                           )}
                         >
-                          Step {item.step}
+                          {translate("Step")}{' '}{item.step}
                         </p>
                         {isFinal ? (
                           <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-700 uppercase dark:text-emerald-300">
                             <Check className="size-3" strokeWidth={2.5} aria-hidden />
-                            Complete
-                          </span>
+                            {translate("Complete")}</span>
                         ) : (
                           <span className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-primary uppercase">
                             <Check className="size-3" strokeWidth={2.5} aria-hidden />
-                            Done
-                          </span>
+                            {translate("Done")}</span>
                         )}
                       </div>
 
                       <h3 className="mt-2 font-display text-xl font-semibold tracking-tight text-foreground">
-                        {item.title}
+                      {owned(item.title)}
                       </h3>
                       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                        {item.description}
+                      {owned(item.description)}
                       </p>
                     </div>
                   </div>

@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft, Loader2, Mail } from 'lucide-react'
 import { useId, useState } from 'react'
@@ -16,12 +18,13 @@ import { ApiError, userFacingRequestError } from '@/lib/http'
 import { authSession } from '@/lib/auth-session'
 
 const schema = z.object({
-  email: z.string().trim().min(1, 'Enter your email').email('Enter a valid email').max(254),
+  email: z.string().trim().min(1, 'Enter your email').email('Enter a valid email').max(254, 'Email is too long'),
 })
 
 type FormValues = z.infer<typeof schema>
 
 export function ForgotPasswordPage() {
+  const { t: translate } = useTranslation()
   const formId = useId()
   const [sent, setSent] = useState(false)
   const {
@@ -42,40 +45,37 @@ export function ForgotPasswordPage() {
     } catch (error) {
       if (authSession.isCurrent(owner)) toast.error(userFacingRequestError(error,
         error instanceof ApiError && error.status === 400
-          ? 'Password reset is currently unavailable. Contact your operator.' : 'Unable to send reset email. Try again.'))
+          ? translate("Password reset is currently unavailable. Contact your operator.") : translate("Unable to send reset email. Try again.")))
     }
   }
 
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title={sent ? 'Check your email' : 'Reset password'}
+      title={sent ? translate("Check your email") : translate("Reset password")}
       description={
         sent
-          ? 'If an account with that email exists, a reset link has been sent.'
-          : 'Enter the email for your member account. We will send a reset link if it matches.'
+          ? translate("If an account with that email exists, a reset link has been sent.")
+          : translate("Enter the email for your member account. We will send a reset link if it matches.")
       }
-      brandTitle="Get back into your workspace"
-      brandBody="Reset links from this site stay on MaraClaw member sign-in, not the admin console."
+      brandTitle={translate("Get back into your workspace")}
+      brandBody={translate("Reset links from this site stay on MaraClaw member sign-in, not the admin console.")}
       highlights={memberAuthHighlights}
     >
       {sent ? (
         <div className="space-y-4">
           <p className="rounded-xl border border-border/80 bg-muted/40 px-3.5 py-3 text-sm text-muted-foreground">
-            Sent to <span className="font-medium text-foreground">{getValues('email')}</span>. Check spam if
-            you do not see it.
-          </p>
+            {translate("Sent to")}{' '}<span className="font-medium text-foreground">{getValues('email')}</span>{translate(". Check spam if you do not see it.")}</p>
           <Button asChild variant="outline" className="h-11 w-full">
             <Link to="/login">
               <ArrowLeft className="size-4" aria-hidden />
-              Return to sign in
-            </Link>
+              {translate("Return to sign in")}</Link>
           </Button>
         </div>
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
           <div className="space-y-2">
-            <Label htmlFor={`${formId}-email`}>Email</Label>
+            <Label htmlFor={`${formId}-email`}>{translate("Email")}</Label>
             <div className="relative">
               <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
               <Input
@@ -87,16 +87,15 @@ export function ForgotPasswordPage() {
                 {...register('email')}
               />
             </div>
-            {errors.email ? <p className="text-xs text-destructive">{errors.email.message}</p> : null}
+            {errors.email ? <p className="text-xs text-destructive"><ValidationMessage message={errors.email.message} /></p> : null}
           </div>
           <Button type="submit" className="h-11 w-full" disabled={isSubmitting}>
             {isSubmitting ? (
               <>
                 <Loader2 className="size-4 animate-spin" aria-hidden />
-                Sending link…
-              </>
+                {translate("Sending link…")}</>
             ) : (
-              'Send reset link'
+              translate("Send reset link")
             )}
           </Button>
         </form>
@@ -104,8 +103,7 @@ export function ForgotPasswordPage() {
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
         <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-          Back to sign in
-        </Link>
+          {translate("Back to sign in")}</Link>
       </p>
     </AuthShell>
   )
