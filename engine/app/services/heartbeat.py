@@ -12,19 +12,21 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from typing import Final
 
 from app.core.domain.activity import ActivityAction
 from app.core.logging import logger, new_trace_id
 from app.core.notification_kinds import NotificationKind
 from app.core.tool_types import ToolDefinition
 from app.records.agent import AgentRecord
-from app.runtime.tasks import AdmissionClosedError, TaskAdmission
+from app.runtime.tasks import AdmissionClosedError, TaskAdmission, cancel_tasks, loop_progress
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.storage import agent_storage_key, get_storage_backend
 
 HEARTBEAT_INTERVAL_SECONDS = 60.0
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 _HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
 _HEARTBEAT_TASKS: set[asyncio.Task[None]] = set()
 _admission = TaskAdmission("Heartbeat", _HEARTBEAT_TASKS)
@@ -565,11 +567,30 @@ async def _claim_and_start_heartbeat(agent: AgentRecord, now: datetime, interval
     return 1
 
 
-async def _heartbeat_tick():
-    """One heartbeat tick: find agents due for heartbeat."""
+async def _report_tick_error(error: Exception) -> None:
+    from app.services.audit_logger import write_audit_log
+
+    logger.exception(f"Heartbeat tick error: {error}")
+    try:
+        await write_audit_log("heartbeat_error", {"error": str(error)[:300]})
+    except Exception as audit_error:
+        logger.warning(f"Failed to write heartbeat_error audit log: {audit_error}")
+
+
+async def _reconcile_stopped_containers() -> None:
+    from app.services.agent_stops import reconcile_stopped_containers
+
+    _ = new_trace_id()
+    try:
+        await reconcile_stopped_containers(datetime.now(UTC))
+    except Exception as e:
+        await _report_tick_error(e)
+
+
+async def _heartbeat_tick() -> bool:
+    """One heartbeat tick: find agents due for heartbeat; True once candidate selection and claims completed."""
     from app.dao.agent_dao import agent_dao
     from app.dao.tenant_dao import tenant_dao
-    from app.services.agent_stops import reconcile_stopped_containers
     from app.services.audit_logger import write_audit_log
     from app.services.timezone_utils import get_agent_timezone_sync
 
@@ -577,7 +598,6 @@ async def _heartbeat_tick():
     now = datetime.now(UTC)
 
     try:
-        await reconcile_stopped_containers(now)
         agents = list(await agent_dao.list_heartbeat_candidates())
 
         # Pre-load tenants for timezone resolution
@@ -622,22 +642,34 @@ async def _heartbeat_tick():
                 logger.warning(f"Failed to write heartbeat_tick audit log: {e}")
 
     except Exception as e:
-        logger.exception(f"Heartbeat tick error: {e}")
-        try:
-            await write_audit_log("heartbeat_error", {"error": str(e)[:300]})
-        except Exception as audit_error:
-            logger.warning(f"Failed to write heartbeat_error audit log: {audit_error}")
+        await _report_tick_error(e)
+        return False
+    return True
 
 
 async def start_heartbeat():
-    """Run the heartbeat loop, one tick per cadence, as a required worker loop; a failing tick never ends it."""
+    """Run the heartbeat loop, one tick per cadence, as a required worker loop; a failing tick never ends it.
+
+    The loop beats only after a tick's candidate selection and claims complete. Stopped-container
+    reconciliation (Docker) runs as this loop's single-flight child: started at a tick when none is in
+    flight, never awaited by a tick, never beating, cancelled and awaited when the loop ends.
+    """
     logger.info("💓 Agent heartbeat service started ({:.0f}s tick)", HEARTBEAT_INTERVAL_SECONDS)
-    while True:
-        try:
-            await _heartbeat_tick()
-        except Exception as error:
-            logger.exception("Heartbeat loop tick failed: {}", error)
-        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    progress = loop_progress()
+    reconciliation: asyncio.Task[None] | None = None
+    try:
+        while True:
+            if reconciliation is None or reconciliation.done():
+                reconciliation = asyncio.create_task(_reconcile_stopped_containers())
+            try:
+                if await _heartbeat_tick():
+                    progress.beat()
+            except Exception as error:
+                logger.exception("Heartbeat loop tick failed: {}", error)
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    finally:
+        if reconciliation is not None:
+            await cancel_tasks((reconciliation,))
 
 
 async def _notify_oneshot_error(

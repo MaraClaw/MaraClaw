@@ -239,23 +239,34 @@ async def test_disable_stops_only_after_owning_crud_commit(monkeypatch, rollback
     assert observed == ([] if rollback else [("fake", 1, None)])
 
 
-async def test_heartbeat_reconciles_before_listing_heartbeat_candidates(monkeypatch):
+async def test_heartbeat_loop_reconciles_independently_of_heartbeat_candidates(monkeypatch):
     # Given: no heartbeat-enabled agents, but a reconciler with pending expiry work.
     calls = []
+    reconciled = asyncio.Event()
 
     async def reconcile(now):
         calls.append("reconcile")
+        reconciled.set()
 
     async def candidates():
         calls.append("candidates")
         return []
 
+    async def cadence(_seconds):
+        await asyncio.Event().wait()
+
     monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", reconcile)
     monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", candidates)
-    # When: the worker ticks without any guest traffic.
-    await heartbeat._heartbeat_tick()
+    monkeypatch.setattr(heartbeat.asyncio, "sleep", cadence)
+    # When: the worker loop runs one tick without any guest traffic.
+    loop = asyncio.create_task(heartbeat.start_heartbeat())
+    try:
+        await asyncio.wait_for(reconciled.wait(), 1)
+    finally:
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
     # Then: reconciliation is independent of heartbeat eligibility.
-    assert calls == ["reconcile", "candidates"]
+    assert sorted(calls) == ["candidates", "reconcile"]
 
 
 async def test_actual_docker_stop_runs_off_event_loop(monkeypatch):
