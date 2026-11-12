@@ -3,7 +3,7 @@
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
 FROM docker:29.9.3-cli AS dockercli
 
-FROM node:26.13.0-trixie-slim AS whatsapp
+FROM node:26.13.1-trixie-slim AS whatsapp
 WORKDIR /bridge
 COPY connectors/whatsapp/package.json connectors/whatsapp/package-lock.json ./
 RUN npm ci
@@ -91,7 +91,7 @@ COPY --chown=maraclaw:maraclaw . .
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/package.json /app/connectors/whatsapp/package.json
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/dist/ /app/connectors/whatsapp/dist/
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/node_modules/ /app/connectors/whatsapp/node_modules/
-RUN test "$(node --version)" = "v26.13.0"
+RUN test "$(node --version)" = "v26.13.1"
 
 # Prove firecrawl-anydoc imports and converts in this image (not host-only).
 RUN python /app/scripts/verify_anydoc.py
