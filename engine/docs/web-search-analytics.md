@@ -49,6 +49,8 @@ s3://$BUCKET/web-search/dt=YYYY-MM-DD/hour=HH/{utc}_{instance}_{uuid}.jsonl.gz
 
 Partition clock is **export time** (UTC). `occurred_at` is inside each row. Object names are unique; files are never appended. Dedup key for consumers: `event_id`.
 
+The loop passes every 15 seconds and has a 300-second readiness progress budget. It beats after each drain (or, with export off or no bucket, each reclaim of `exporting` rows), including a pass whose S3 PUT failed and returned its batch to `pending`; an unexpected error does not beat. Hourly retention runs after the beat.
+
 Each JSON line includes `schema_version` (starts at `1`). Add columns additively; bump the version when a field meaning changes.
 
 IAM: write-only on `web-search/`. Bucket not public. PUTs set `ServerSideEncryption=AES256`.
