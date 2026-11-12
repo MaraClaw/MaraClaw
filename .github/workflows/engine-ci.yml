@@ -195,6 +195,11 @@ jobs:
           tests/test_channel_delivery_transport.py
           tests/test_whatsapp_reply_window_postgres.py
           tests/test_gateway_report_relay_contention_postgres.py
+          tests/test_gateway_report_relay_postgres.py
+          tests/test_gateway_report_credentials_postgres.py
+          tests/test_agent_work_delivery_postgres.py
+          tests/test_agent_work_trigger_postgres.py
+          tests/test_channel_shared_postgres.py
           tests/test_shared_gateway_postgres.py
           tests/test_shared_gateway_surface.py
           tests/test_openclaw_native_dispatch_postgres.py
