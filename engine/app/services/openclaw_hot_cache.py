@@ -14,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.services.llm.turn import ModelBundle
 
 _DEFAULT_TTL_SECONDS = 45.0
+_SWEEP_ABOVE = 4096
 type CacheValue = AgentRecord | ModelBundle | str | bool
 
 _store: dict[str, tuple[float, CacheValue]] = {}
@@ -37,7 +38,12 @@ def cache_get(key: str) -> CacheValue | None:
 def cache_set(key: str, value: CacheValue, *, ttl: float = _DEFAULT_TTL_SECONDS) -> None:
     if ttl <= 0:
         return
-    _store[key] = (_now() + ttl, value)
+    now = _now()
+    if len(_store) >= _SWEEP_ABOVE:
+        for stale, (expires, _value) in list(_store.items()):
+            if now >= expires:
+                del _store[stale]
+    _store[key] = (now + ttl, value)
 
 
 def cache_drop(key: str) -> None:

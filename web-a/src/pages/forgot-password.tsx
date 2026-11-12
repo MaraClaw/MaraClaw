@@ -13,6 +13,9 @@ import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { forgotPasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { useTranslation } from '@/hooks/use-translation'
+import { useLocalizedMessage } from '@/hooks/use-localized-message'
+import { message } from '@/lib/i18n'
 
 const schema = z.object({
   email: z
@@ -26,11 +29,12 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 export function ForgotPasswordPage() {
+  const { t, owned } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
   const emailId = `${formId}-email`
   const emailErrorId = `${formId}-email-error`
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formError, setFormError] = useLocalizedMessage()
   const [sent, setSent] = useState(false)
 
   const {
@@ -55,12 +59,12 @@ export function ForgotPasswordPage() {
         setFormError(
           formatApiDetail(error.detail) ??
             (error.status === 400
-              ? 'Password reset is currently unavailable. Contact your platform operator.'
-              : 'Unable to send reset email. Try again.'),
+              ? message('Password reset is currently unavailable. Contact your platform operator.')
+              : message('Unable to send reset email. Try again.')),
         )
         return
       }
-      setFormError('Unable to send reset email. Check your connection and try again.')
+      setFormError(message('Unable to send reset email. Check your connection and try again.'))
     }
   }
 
@@ -68,12 +72,12 @@ export function ForgotPasswordPage() {
     const email = getValues('email')
     return (
       <AuthShell
-        title="Check your email"
-        description="If an account with that email exists, a password reset link has been sent."
+        title={t('Check your email')}
+        description={t('If an account with that email exists, a password reset link has been sent.')}
         footer={
           <p className="text-center text-sm text-muted-foreground">
             <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-              Back to sign in
+              {t('Back to sign in')}
             </Link>
           </p>
         }
@@ -82,13 +86,12 @@ export function ForgotPasswordPage() {
           className="rounded-xl border border-border/80 bg-muted/40 px-3.5 py-3 text-sm text-muted-foreground"
           role="status"
         >
-          Sent to <span className="font-medium text-foreground">{email}</span>. The link expires after a
-          short time. Check spam if you do not see it.
+          {t('Sent to')} <span className="font-medium text-foreground">{email}</span>{t('. The link expires after a short time. Check spam if you do not see it.')}
         </div>
         <Button asChild variant="outline" className="mt-4 h-11 w-full">
           <Link to="/login">
             <ArrowLeft className="size-4" aria-hidden />
-            Return to sign in
+            {t('Return to sign in')}
           </Link>
         </Button>
       </AuthShell>
@@ -97,8 +100,8 @@ export function ForgotPasswordPage() {
 
   return (
     <AuthShell
-      title="Reset password"
-      description="Enter the email for your admin account. We will send a reset link if it matches an active identity."
+      title={t('Reset password')}
+      description={t('Enter the email for your admin account. We will send a reset link if it matches an active identity.')}
       footer={
         <p className="text-center text-sm text-muted-foreground">
           <Link
@@ -106,7 +109,7 @@ export function ForgotPasswordPage() {
             className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
           >
             <ArrowLeft className="size-3.5" aria-hidden />
-            Back to sign in
+            {t('Back to sign in')}
           </Link>
         </p>
       }
@@ -121,7 +124,7 @@ export function ForgotPasswordPage() {
         noValidate
       >
         <div className="space-y-2">
-          <Label htmlFor={emailId}>Email</Label>
+          <Label htmlFor={emailId}>{t('Email')}</Label>
           <div className="relative">
             <Mail
               className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -142,7 +145,7 @@ export function ForgotPasswordPage() {
           </div>
           {errors.email ? (
             <p id={emailErrorId} className="text-xs text-destructive" role="alert">
-              {errors.email.message}
+              {owned(errors.email.message)}
             </p>
           ) : null}
         </div>
@@ -151,10 +154,10 @@ export function ForgotPasswordPage() {
           {isSubmitting ? (
             <>
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              Sending link…
+              {t('Sending link…')}
             </>
           ) : (
-            'Send reset link'
+            t('Send reset link')
           )}
         </Button>
       </form>

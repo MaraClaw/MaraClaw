@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import type { ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/badge'
@@ -21,20 +22,21 @@ export function OpenClawUpdateCard({ update, heading = 'OpenClaw upgrade', submi
   readonly submitting?: boolean
   readonly children: ReactNode
 }) {
+  const { t: translate, owned } = useTranslation()
   return (
     <Card className="gap-4 bg-accent/40 [overflow-wrap:anywhere]">
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-base font-semibold">{heading}</h2>
-          {update.notice ? <Badge variant="soft">{update.notice.mandatory ? 'Mandatory' : 'Optional'}</Badge> : null}
+          <h2 className="font-display text-base font-semibold">{heading === 'OpenClaw upgrade' ? translate('OpenClaw upgrade') : heading}</h2>
+          {update.notice ? <Badge variant="soft">{update.notice.mandatory ? translate("Mandatory") : translate("Optional")}</Badge> : null}
         </div>
         {update.notice ? <p className="text-sm font-medium">{update.notice.title}</p> : null}
       </CardHeader>
       <CardContent className="space-y-4">
         <div role="status" aria-live="polite" aria-atomic="true" className="space-y-2 text-sm leading-relaxed">
-          <p>{submitting ? 'Requesting upgrade. Please wait…' : update.run ? runStatus(update.run) : update.notice ? 'An OpenClaw upgrade is available.' : 'OpenClaw is up to date.'}</p>
-          {update.required ? <p>You must complete this upgrade before continuing work with this agent.</p> : null}
-          {update.run?.failure_code ? <p>Failure reference: <code className="font-mono">{update.run.failure_code}</code></p> : null}
+          <p>{submitting ? translate("Requesting upgrade. Please wait…") : update.run ? owned(runStatus(update.run)) : update.notice ? translate("An OpenClaw upgrade is available.") : translate("OpenClaw is up to date.")}</p>
+          {update.required ? <p>{translate("You must complete this upgrade before continuing work with this agent.")}</p> : null}
+          {update.run?.failure_code ? <p>{translate("Failure reference:")}{' '}<code className="font-mono">{update.run.failure_code}</code></p> : null}
         </div>
         {children}
       </CardContent>

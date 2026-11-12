@@ -34,7 +34,7 @@ Personal QR WhatsApp bridge: private Node 26 ESM package `@maraclaw/whatsapp-bri
 ## Commands
 
 ```bash
-npm ci          # Node >=26; CI and Docker use 26.13.0
+npm ci          # Node >=26; CI and Docker use 26.13.1
 npm test        # builds, then node --test on the files listed in package.json
 npm run build   # tsc -p tsconfig.json
 ```

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 
@@ -10,6 +11,7 @@ import { userFacingRequestError } from '@/lib/http'
 import { showRequestError } from '@/lib/request-error-toast'
 
 export function SsoButtons() {
+  const { t: translate } = useTranslation()
   const location = useLocation()
   const { owner, isCurrent } = useAuth()
   const [providers, setProviders] = useState<AuthProvider[]>([])
@@ -24,11 +26,11 @@ export function SsoButtons() {
       .catch((error: unknown) => {
         if (!cancelled && isCurrent(expectedOwner)) {
           setProviders([])
-          showRequestError(userFacingRequestError(error, 'Unable to load sign-in providers. Try again.'), error)
+          showRequestError(userFacingRequestError(error, translate("Unable to load sign-in providers. Try again.")), error)
         }
       })
     return () => { cancelled = true }
-  }, [owner, isCurrent])
+  }, [owner, isCurrent, translate])
 
   if (providers.length === 0) return null
 
@@ -44,13 +46,13 @@ export function SsoButtons() {
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
       if (!(error instanceof Error)) throw error
-      showRequestError(userFacingRequestError(error, 'Unable to start SSO sign-in. Try again.'), error)
+      showRequestError(userFacingRequestError(error, translate("Unable to start SSO sign-in. Try again.")), error)
     }
   }
 
   return (
     <div className="space-y-2">
-      <p className="text-center text-xs text-muted-foreground">Or continue with</p>
+      <p className="text-center text-xs text-muted-foreground">{translate("Or continue with")}</p>
       <div className="grid gap-2">
         {providers.map((provider) => (
           <Button

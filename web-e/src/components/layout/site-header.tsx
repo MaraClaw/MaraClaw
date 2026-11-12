@@ -1,9 +1,11 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Menu } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { LanguageSelector } from '@/components/language-selector'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import {
@@ -27,6 +29,7 @@ const navItems = [
 ]
 
 export function SiteHeader() {
+  const { t: translate, owned } = useTranslation()
   const { status, logout } = useAuth()
   const signedIn = status === 'authenticated'
   const [scrolled, setScrolled] = useState(false)
@@ -55,46 +58,47 @@ export function SiteHeader() {
           </span>
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-0.5 lg:flex">
+        <nav aria-label={translate("Primary")} className="hidden items-center gap-0.5 lg:flex">
           {navItems.map((item) => (
             <a
               key={item.href}
               href={item.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {item.label}
+                {owned(item.label)}
             </a>
           ))}
         </nav>
 
         <div className="hidden items-center gap-2 lg:flex">
+          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           {signedIn ? (
             <>
               <Button variant="ghost" size="sm" asChild>
-                <Link to="/app">Workspace</Link>
+                <Link to="/app">{translate("Workspace")}</Link>
               </Button>
               <Button size="sm" variant="outline" onClick={logout}>
-                Sign out
-              </Button>
+                {translate("Sign out")}</Button>
             </>
           ) : (
             <>
               <Button variant="ghost" size="sm" asChild>
-                <Link to="/login">Sign in</Link>
+                <Link to="/login">{translate("Sign in")}</Link>
               </Button>
               <Button size="sm" asChild>
-                <a href="#pricing">View plans</a>
+                <a href="#pricing">{translate("View plans")}</a>
               </Button>
             </>
           )}
         </div>
 
         <div className="flex items-center gap-2 lg:hidden">
+          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="outline" size="icon" aria-label="Open menu">
+              <Button variant="outline" size="icon" aria-label={translate("Open menu")}>
                 <Menu />
               </Button>
             </SheetTrigger>
@@ -102,17 +106,17 @@ export function SiteHeader() {
               <SheetHeader>
                 <SheetTitle>MaraClaw</SheetTitle>
                 <SheetDescription>
-                  OpenClaw agents for teams and companies.
-                </SheetDescription>
+                  {translate("OpenClaw agents for teams and companies.")}</SheetDescription>
               </SheetHeader>
-              <nav className="flex flex-col gap-1 px-4 pt-4" aria-label="Mobile">
+              <nav className="flex flex-col gap-1 px-4 pt-4" aria-label={translate("Mobile")}>
+                {!signedIn ? <LanguageSelector /> : null}
                 {navItems.map((item) => (
                   <SheetClose key={item.href} asChild>
                     <a
                       href={item.href}
                       className="rounded-xl px-3 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
                     >
-                      {item.label}
+                      {owned(item.label)}
                     </a>
                   </SheetClose>
                 ))}
@@ -121,23 +125,23 @@ export function SiteHeader() {
                     <>
                       <SheetClose asChild>
                         <Button variant="outline" asChild>
-                          <Link to="/app">Workspace</Link>
+                          <Link to="/app">{translate("Workspace")}</Link>
                         </Button>
                       </SheetClose>
                       <SheetClose asChild>
-                        <Button onClick={logout}>Sign out</Button>
+                        <Button onClick={logout}>{translate("Sign out")}</Button>
                       </SheetClose>
                     </>
                   ) : (
                     <>
                       <SheetClose asChild>
                         <Button variant="outline" asChild>
-                          <Link to="/login">Sign in</Link>
+                          <Link to="/login">{translate("Sign in")}</Link>
                         </Button>
                       </SheetClose>
                       <SheetClose asChild>
                         <Button asChild>
-                          <a href="#pricing">View plans</a>
+                          <a href="#pricing">{translate("View plans")}</a>
                         </Button>
                       </SheetClose>
                     </>

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useInfiniteQuery, type QueryFunctionContext } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
@@ -18,6 +19,7 @@ export function ScheduleRunHistory({ agentId, scheduleId }: {
   readonly agentId: string
   readonly scheduleId: string
 }) {
+  const { t: translate, owned } = useTranslation()
   const scope = useWorkspaceSession()
   const headingId = useId()
   const filterId = useId()
@@ -25,12 +27,12 @@ export function ScheduleRunHistory({ agentId, scheduleId }: {
 
   return (
     <section aria-labelledby={headingId} className="space-y-3">
-      <h3 id={headingId} className="text-sm font-semibold">Run history</h3>
+      <h3 id={headingId} className="text-sm font-semibold">{translate("Run history")}</h3>
       <div className="grid max-w-xs gap-2">
-        <Label htmlFor={filterId}>Outcome</Label>
+        <Label htmlFor={filterId}>{translate("Outcome")}</Label>
         <Select id={filterId} value={outcome} onChange={scope.effect((event) => setOutcome(scheduleHistoryOutcomeSchema.parse(event.currentTarget.value)))}>
-          <option value="all">All outcomes</option>
-          {Object.entries(outcomeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <option value="all">{translate("All outcomes")}</option>
+          {Object.entries(outcomeLabels).map(([value, label]) => <option key={value} value={value}>{owned(label)}</option>)}
         </Select>
       </div>
       <HistoryPages key={outcome} agentId={agentId} scheduleId={scheduleId} outcome={outcome} />
@@ -43,6 +45,7 @@ function HistoryPages({ agentId, scheduleId, outcome }: {
   readonly scheduleId: string
   readonly outcome: ScheduleHistoryOutcome
 }) {
+  const { t: translate, owned, formatDate } = useTranslation()
   const scope = useWorkspaceSession()
   const instanceId = useId()
   const history = useInfiniteQuery({
@@ -58,29 +61,29 @@ function HistoryPages({ agentId, scheduleId, outcome }: {
 
   return (
     <>
-      {history.isPending || (history.isFetching && !history.data) ? <p role="status" className="text-sm text-muted-foreground">Loading run history...</p> : null}
+      {history.isPending || (history.isFetching && !history.data) ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading run history...")}</p> : null}
       {history.isError && !history.isFetching ? <div className="space-y-2">
         <RequestErrorToast error={history.error} message={userFacingRequestError(history.error,
-          history.isFetchNextPageError ? 'Unable to load older runs. Try again.' : 'Unable to load run history. Try again.')} />
+          history.isFetchNextPageError ? translate("Unable to load older runs. Try again.") : translate("Unable to load run history. Try again."))} />
         {!history.data ? <Button variant="outline" disabled={history.isFetching}
-          onClick={scope.effect(() => { void history.refetch() })}>Retry history</Button> : null}
+          onClick={scope.effect(() => { void history.refetch() })}>{translate("Retry history")}</Button> : null}
       </div> : null}
-      {history.isSuccess && rows.length === 0 ? <p className="text-sm text-muted-foreground">{outcome === 'all' ? 'No history yet.' : 'No runs with this outcome.'}</p> : null}
-      {rows.length > 0 ? <ul aria-label="Schedule runs" className="space-y-2">
+      {history.isSuccess && rows.length === 0 ? <p className="text-sm text-muted-foreground">{outcome === 'all' ? translate("No history yet.") : translate("No runs with this outcome.")}</p> : null}
+      {rows.length > 0 ? <ul aria-label={translate("Schedule runs")} className="space-y-2">
         {rows.map((row) => <li key={row.id} className="space-y-2 rounded-xl border border-border p-3">
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline">{outcomeLabels[row.status]}</Badge>
-            {row.created_at ? <time dateTime={row.created_at}>{new Date(row.created_at).toLocaleString()}</time> : <span>Time unavailable</span>}
+            <Badge variant="outline">{owned(outcomeLabels[row.status])}</Badge>
+            {row.created_at ? <time dateTime={row.created_at}>{formatDate(row.created_at, { dateStyle: 'medium', timeStyle: 'short' })}</time> : <span>{translate("Time unavailable")}</span>}
           </div>
-          <p className="whitespace-pre-wrap break-words text-sm">{row.summary || row.reply || row.instruction || 'No output recorded.'}</p>
+          <p className="whitespace-pre-wrap break-words text-sm">{row.summary || row.reply || row.instruction || translate("No output recorded.")}</p>
         </li>)}
       </ul> : null}
-      {history.isFetchingNextPage ? <p role="status" className="text-sm text-muted-foreground">Loading older runs...</p> : null}
+      {history.isFetchingNextPage ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading older runs...")}</p> : null}
       {history.hasNextPage ? <Button variant="outline" disabled={history.isFetching}
         onClick={scope.effect(() => { if (!history.isFetching) void history.fetchNextPage() })}>
-        {history.isFetchingNextPage ? 'Loading older runs...' : history.isFetchNextPageError ? 'Retry older runs' : 'Load older runs'}
+        {history.isFetchingNextPage ? translate("Loading older runs...") : history.isFetchNextPageError ? translate("Retry older runs") : translate("Load older runs")}
       </Button> : null}
-      {rows.length > 0 && !history.hasNextPage ? <p className="text-xs text-muted-foreground">No older runs.</p> : null}
+      {rows.length > 0 && !history.hasNextPage ? <p className="text-xs text-muted-foreground">{translate("No older runs.")}</p> : null}
     </>
   )
 }

@@ -16,7 +16,7 @@ npm test
 ## What CI runs
 
 - `../../.github/workflows/frontend-ci.yml`, `web-e` matrix entry, Unit tests: `npm test`.
-- Workflow Node version: `26.13.0`.
+- Workflow Node version: `26.13.1`.
 - Fixtures and `*.types.ts` files are typechecked but do not match the runtime test glob; `api-request.types.ts` is never executed.
 
 ## Conventions

@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,6 +13,9 @@ import { PasswordField } from '@/components/ui/password-field'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { resetPasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { useTranslation } from '@/hooks/use-translation'
+import { useLocalizedMessage } from '@/hooks/use-localized-message'
+import { message } from '@/lib/i18n'
 
 const schema = z
   .object({
@@ -30,11 +33,12 @@ const schema = z
 type FormValues = z.infer<typeof schema>
 
 export function ResetPasswordPage() {
+  const { t } = useTranslation()
   const isCurrent = useSessionCurrent()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const token = useMemo(() => searchParams.get('token')?.trim() ?? '', [searchParams])
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formError, setFormError] = useLocalizedMessage()
 
   const {
     register,
@@ -59,35 +63,35 @@ export function ResetPasswordPage() {
         new_password: values.new_password,
       })
       if (!isCurrent()) return
-      toast.success('Password updated. Sign in with your new password.')
+      toast.success(t('Password updated. Sign in with your new password.'))
       navigate('/login', { replace: true })
     } catch (error) {
       if (!isCurrent()) return
       if (error instanceof ApiError) {
         setFormError(
           formatApiDetail(error.detail) ??
-            'This reset link is invalid or has expired. Request a new one.',
+            message('This reset link is invalid or has expired. Request a new one.'),
         )
         return
       }
-      setFormError('Unable to update password. Check your connection and try again.')
+      setFormError(message('Unable to update password. Check your connection and try again.'))
     }
   }
 
   if (tokenMissing) {
     return (
       <AuthShell
-        title="Invalid reset link"
-        description="This password reset link is missing or incomplete. Request a new link from the sign-in page."
+        title={t('Invalid reset link')}
+        description={t('This password reset link is missing or incomplete. Request a new link from the sign-in page.')}
         footer={
           <div className="flex flex-col gap-2">
             <Button asChild className="h-11 w-full">
-              <Link to="/forgot-password">Request a new link</Link>
+              <Link to="/forgot-password">{t('Request a new link')}</Link>
             </Button>
             <Button asChild variant="ghost" className="h-11 w-full">
               <Link to="/login">
                 <ArrowLeft className="size-4" aria-hidden />
-                Back to sign in
+                {t('Back to sign in')}
               </Link>
             </Button>
           </div>
@@ -97,7 +101,7 @@ export function ResetPasswordPage() {
           role="alert"
           className="rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
         >
-          Open the full link from your email, or request a new password reset.
+          {t('Open the full link from your email, or request a new password reset.')}
         </div>
       </AuthShell>
     )
@@ -105,8 +109,8 @@ export function ResetPasswordPage() {
 
   return (
     <AuthShell
-      title="Choose a new password"
-      description="Enter a new password for your admin account. You will sign in again afterward."
+      title={t('Choose a new password')}
+      description={t('Enter a new password for your admin account. You will sign in again afterward.')}
       footer={
         <p className="text-center text-sm text-muted-foreground">
           <Link
@@ -114,7 +118,7 @@ export function ResetPasswordPage() {
             className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
           >
             <ArrowLeft className="size-3.5" aria-hidden />
-            Back to sign in
+            {t('Back to sign in')}
           </Link>
         </p>
       }
@@ -129,14 +133,14 @@ export function ResetPasswordPage() {
         noValidate
       >
         <PasswordField
-          label="New password"
+          label={t('New password')}
           autoComplete="new-password"
           disabled={isSubmitting}
           error={errors.new_password?.message}
           {...register('new_password')}
         />
         <PasswordField
-          label="Confirm new password"
+          label={t('Confirm new password')}
           autoComplete="new-password"
           disabled={isSubmitting}
           error={errors.confirm_password?.message}
@@ -147,10 +151,10 @@ export function ResetPasswordPage() {
           {isSubmitting ? (
             <>
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              Updating password…
+              {t('Updating password…')}
             </>
           ) : (
-            'Update password'
+            t('Update password')
           )}
         </Button>
       </form>

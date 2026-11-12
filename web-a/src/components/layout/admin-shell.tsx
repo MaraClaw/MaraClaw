@@ -5,6 +5,8 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useTranslation } from '@/hooks/use-translation'
+import type { PlainMessageKey } from '@/lib/translations'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
@@ -15,7 +17,7 @@ import { cn } from '@/lib/utils'
 
 const navItems: {
   to: string
-  label: string
+  label: PlainMessageKey
   icon: NavIconName
   end?: boolean
   platformAdminOnly?: boolean
@@ -105,6 +107,7 @@ function NavItems({
   readonly unreadCount?: number
 }) {
   const { mustChangePassword, user } = useAuth()
+  const { t, number } = useTranslation()
   const platformAdmin = isPlatformAdminUser(user)
   const paymentAccess = useTransferReviewAccess()
 
@@ -130,10 +133,10 @@ function NavItems({
                   ? 'text-muted-foreground/50'
                   : 'cursor-not-allowed text-muted-foreground/40',
               )}
-              title="Change your password to open the rest of the console"
+              title={t('Change your password to open the rest of the console')}
               aria-disabled="true"
             >
-              <NavItemContent icon={icon} label={label} compact={compact} dimmed />
+              <NavItemContent icon={icon} label={t(label)} compact={compact} dimmed />
             </span>
           )
         }
@@ -143,7 +146,7 @@ function NavItems({
             to={to}
             end={end}
             onClick={onNavigate}
-            aria-label={notificationCount === undefined ? undefined : `${label}, ${notificationCount} unread`}
+            aria-label={notificationCount === undefined ? undefined : t('{label}, {count} unread', { label: t(label), count: number(notificationCount) })}
             className={({ isActive }) =>
               navItemClass(
                 Boolean(compact),
@@ -159,7 +162,7 @@ function NavItems({
             {({ isActive }) => (
               <NavItemContent
                 icon={icon}
-                label={label}
+                label={t(label)}
                 compact={compact}
                 active={isActive}
                 unreadCount={notificationCount}
@@ -173,6 +176,7 @@ function NavItems({
 }
 
 export function AdminShell() {
+  const { t } = useTranslation()
   const { user, logout, mustChangePassword } = useAuth()
   const unread = useNotificationUnreadCount()
   const { pathname } = useLocation()
@@ -194,14 +198,14 @@ export function AdminShell() {
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
             <p className="font-display text-sm font-semibold">MaraClaw</p>
-            <p className="truncate text-xs text-muted-foreground">Admin Console</p>
+            <p className="truncate text-xs text-muted-foreground">{t('Admin Console')}</p>
           </div>
         </Link>
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Admin">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label={t('Admin')}>
           <NavItems unreadCount={unread.data?.unread_count} />
           {mustChangePassword ? (
             <p className="px-2 pt-2 text-center text-xs leading-relaxed text-muted-foreground">
-              Change your password in Settings to unlock the rest of the console.
+              {t('Change your password in Settings to unlock the rest of the console.')}
             </p>
           ) : null}
         </nav>
@@ -211,7 +215,7 @@ export function AdminShell() {
             <ThemeToggle />
             <Button variant="ghost" size="sm" className="flex-1" onClick={logout}>
               <LogOut className="size-3.5" aria-hidden />
-              Sign out
+              {t('Sign out')}
             </Button>
           </div>
         </div>
@@ -219,23 +223,23 @@ export function AdminShell() {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 border-b border-border px-4 py-3 md:hidden">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Link to="/" className="flex items-center gap-2">
               <MaraClawLogo className="size-8" />
-              <span className="font-display text-sm font-semibold">Admin</span>
+              <span className="font-display text-sm font-semibold">{t('Admin')}</span>
             </Link>
             <div className="flex items-center gap-1">
               <ThemeToggle />
               <Button variant="ghost" size="sm" onClick={logout}>
                 <LogOut className="size-3.5" aria-hidden />
-                Sign out
+                {t('Sign out')}
               </Button>
             </div>
           </div>
           <nav
             ref={mobileNav}
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
-            aria-label="Admin"
+            aria-label={t('Admin')}
           >
             <NavItems compact unreadCount={unread.data?.unread_count} />
           </nav>

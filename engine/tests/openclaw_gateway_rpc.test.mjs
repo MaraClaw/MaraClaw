@@ -15,12 +15,14 @@ class FakeSocket {
   constructor(url) {
     if (url !== "ws://127.0.0.1:18789") throw Error("wrong endpoint");
     this.listeners = {};
+    if (process.env.SCENARIO === "hung_close") setInterval(() => {}, 1000);
     queueMicrotask(() => this.emit({type:"event",event:"connect.challenge"}));
   }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   emit(frame) { this.listeners.message({data: JSON.stringify(frame)}); }
-  close() {}
+  close() { if (process.env.SCENARIO === "close_throws") throw new TypeError("close failed"); }
   send(raw) {
+    if (process.env.SCENARIO === "connect_send_error") throw new TypeError("boom");
     const frame = JSON.parse(raw);
     if (frame.method === "connect") {
       if (frame.params.auth.token !== "secret" || frame.params.minProtocol !== 4 || frame.params.maxProtocol !== 4)
@@ -35,6 +37,7 @@ class FakeSocket {
         frame.params.provider !== "provider" || frame.params.model !== "model/sub" || frame.params.timeout !== 900)
       throw Error("bad agent request");
     if (process.env.SCENARIO === "send_failed") throw new DOMException("closed", "InvalidStateError");
+    if (process.env.SCENARIO === "send_error") throw new TypeError("boom");
     const send = (payload) => this.emit({type:"res",id:frame.id,ok:true,payload});
     queueMicrotask(() => {
       if (process.env.SCENARIO === "disconnect") { this.listeners.close(); return; }
@@ -66,6 +69,7 @@ class FakeSocket {
       }
       if (process.env.SCENARIO !== "cached") send({runId:process.env.MESSAGE_ID,status:"accepted"});
       if (process.env.SCENARIO === "accepted_disconnect") { this.listeners.close(); return; }
+      if (process.env.SCENARIO === "handler_throws") { this.listeners.message({get data() { throw new RangeError("boom"); }}); return; }
       if (process.env.SCENARIO === "accepted_reject") { this.emit({type:"res",id:frame.id,ok:false}); return; }
       if (process.env.SCENARIO === "accepted_negative_mismatch") {
         this.emit({type:"res",id:frame.id,ok:false,payload:{runId:"wrong",status:"error"}}); return;
@@ -92,11 +96,11 @@ class FakeSocket {
 globalThis.WebSocket = FakeSocket;
 `;
 
-function spawnAdapter(scenario, requestOverrides, streamScript = null) {
+function spawnAdapter(scenario, requestOverrides, streamScript = null, tokenFile = "secret") {
   const directory = mkdtempSync(join(tmpdir(), "gateway-rpc-"));
   try {
     copyFileSync(source, join(directory, "gateway-rpc.mjs"));
-    writeFileSync(join(directory, ".openclaw-gateway-token"), "secret");
+    if (tokenFile !== null) writeFileSync(join(directory, ".openclaw-gateway-token"), tokenFile);
     writeFileSync(join(directory, "preload.mjs"), preload);
     writeFileSync(join(directory, "stream.json"), JSON.stringify(streamScript));
     writeFileSync(join(directory, "request.json"), JSON.stringify({version:1, messageId,
@@ -119,6 +123,12 @@ function runRaw(scenario) {
   return JSON.parse(child.stdout);
 }
 
+// Failures before any socket opens emit exactly this one line (no timing) and exit 0.
+function assertNotSubmitted(child, code) {
+  assert.equal(child.status, 0, `${child.error ?? ""}${child.stderr}`);
+  assert.equal(child.stdout, `${JSON.stringify({version:1, messageId, kind:"not_admitted", admission:"not_submitted", code})}\n`);
+}
+
 function run(scenario) {
   const { timing, ...outcome } = runRaw(scenario);
   assert.ok(timing && typeof timing === "object" && !Array.isArray(timing), `${scenario}: timing object`);
@@ -136,6 +146,60 @@ test("accepted and cached terminal results preserve ordered text", () => {
   }
 });
 
+test("a missing or empty gateway token is conclusively not submitted", () => {
+  for (const tokenFile of [null, "", " \n"]) {
+    assertNotSubmitted(spawnAdapter("accepted", {}, null, tokenFile), "missing_gateway_token");
+  }
+});
+
+test("an invalid request with a valid messageId is conclusively not submitted", () => {
+  const child = spawnAdapter("accepted", {message:""});
+  assertNotSubmitted(child, "invalid_request");
+  assert.match(child.stderr, /invalid request/);
+});
+
+test("a request without a UUID string messageId still fails without an outcome", () => {
+  for (const invalid of [undefined, null, "wrong", 123, [messageId]]) {
+    const child = spawnAdapter("accepted", {messageId:invalid});
+    assert.notEqual(child.status, 0);
+    assert.equal(child.stdout, "");
+    assert.match(child.stderr, /invalid request/);
+  }
+});
+
+test("a terminal outcome exits even when close hangs with a live handle or throws", () => {
+  for (const scenario of ["hung_close", "close_throws"]) {
+    const child = spawnAdapter(scenario, {});
+    assert.equal(child.status, 0, `${child.error ?? ""}${child.stderr}`);
+    assert.equal(child.stderr, "");
+    const { timing, ...outcome } = JSON.parse(child.stdout);
+    assert.deepEqual(outcome, {version:1, messageId, kind:"terminal", admission:"accepted",
+      runId:messageId, status:"ok", text:"first\nsecond", code:null});
+    assert.ok(Number.isInteger(timing.terminal));
+    assert.equal(child.stdout.split("\n").length, 2);
+  }
+});
+
+test("unexpected send errors after the challenge are conclusively not submitted", () => {
+  for (const scenario of ["connect_send_error", "send_error"]) {
+    const child = spawnAdapter(scenario, {});
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stderr, "");
+    const { timing, ...outcome } = JSON.parse(child.stdout);
+    assert.deepEqual(outcome, {version:1, messageId, kind:"not_admitted", admission:"not_submitted", code:"send_failed"});
+    assert.deepEqual(Object.keys(timing), scenario === "connect_send_error" ? [] : ["helloOk"]);
+  }
+});
+
+test("unexpected message handler errors preserve the accepted phase", () => {
+  const child = spawnAdapter("handler_throws", {});
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stderr, "");
+  const { timing, ...outcome } = JSON.parse(child.stdout);
+  assert.deepEqual(outcome, {version:1, messageId, kind:"uncertain", admission:"accepted", runId:messageId, code:"adapter_error"});
+  assert.deepEqual(Object.keys(timing), ["helloOk", "accepted"]);
+});
+
 test("an optional system prompt addendum is forwarded verbatim and must be a non-empty string", () => {
   const forwarded = spawnAdapter("prompt", {extraSystemPrompt:"keep your persona\nnever name the model"});
   assert.equal(forwarded.status, 0, forwarded.stderr);
@@ -145,7 +209,7 @@ test("an optional system prompt addendum is forwarded verbatim and must be a non
   assert.equal(JSON.parse(absent.stdout).text, "<absent>");
   for (const invalid of ["", 5, null]) {
     const child = spawnAdapter("prompt", {extraSystemPrompt:invalid});
-    assert.notEqual(child.status, 0, `${JSON.stringify(invalid)} must be rejected`);
+    assertNotSubmitted(child, "invalid_request");
     assert.match(child.stderr, /invalid request/);
   }
 });
@@ -330,6 +394,6 @@ test("without v2 stream:true the output is the single unchanged outcome line", (
 
 test("a version 2 request must say whether it streams", () => {
   for (const request of [{version:2}, {version:2, stream:"yes"}, {version:3, stream:true}]) {
-    assert.notEqual(spawnAdapter("accepted", request).status, 0);
+    assertNotSubmitted(spawnAdapter("accepted", request), "invalid_request");
   }
 });

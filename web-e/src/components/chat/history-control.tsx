@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -16,12 +17,13 @@ type HistoryControlProps = {
 }
 
 export function HistoryControl({ ready, loading, error, hasEarlier, loadingEarlier, earlierError, onRefresh, onLoadEarlier }: HistoryControlProps) {
+  const { t: translate } = useTranslation()
   const [keyboardActive, setKeyboardActive] = useState(false)
   return <div className="space-y-2 text-center text-sm text-muted-foreground">
-    {loading ? <p role="status">Loading conversation…</p> : null}
+    {loading ? <p role="status">{translate("Loading conversation…")}</p> : null}
     {error ? <div className="space-y-2">
-      <RequestErrorToast error={error} message={userFacingRequestError(error, ready ? 'Could not refresh this conversation.' : 'Could not load this conversation.')} />
-      <Button type="button" variant="outline" onClick={onRefresh}>Retry conversation</Button>
+      <RequestErrorToast error={error} message={userFacingRequestError(error, ready ? translate("Could not refresh this conversation.") : translate("Could not load this conversation."))} />
+      <Button type="button" variant="outline" onClick={onRefresh}>{translate("Retry conversation")}</Button>
     </div> : null}
     {ready ? <>
       {earlierError ? <RequestErrorToast error={earlierError} message="Could not load earlier messages. You can keep chatting." /> : null}
@@ -35,9 +37,9 @@ export function HistoryControl({ ready, loading, error, hasEarlier, loadingEarli
           setKeyboardActive(event.detail === 0)
           onLoadEarlier()
         }}>
-        {loadingEarlier ? 'Loading earlier messages…' : earlierError ? 'Retry earlier messages' : 'Load earlier messages'}
-      </Button> : <p role="status">Beginning of conversation</p>}
-      <span className="sr-only" role="status" aria-live="polite">{loadingEarlier ? 'Loading earlier messages' : ''}</span>
+        {loadingEarlier ? translate("Loading earlier messages…") : earlierError ? translate("Retry earlier messages") : translate("Load earlier messages")}
+      </Button> : <p role="status">{translate("Beginning of conversation")}</p>}
+      <span className="sr-only" role="status" aria-live="polite">{loadingEarlier ? translate("Loading earlier messages") : ''}</span>
     </> : null}
   </div>
 }

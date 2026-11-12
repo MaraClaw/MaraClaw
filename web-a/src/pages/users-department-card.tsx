@@ -12,6 +12,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { previewDepartmentDeletion, type Department } from '@/lib/departments-api'
 import { ApiError } from '@/lib/http'
 import { useDeleteDepartment, useRenameDepartment } from './users-department-queries'
@@ -29,6 +30,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
   readonly tenantId: string
   readonly onDeleted: () => void
 }) {
+  const { t, owned, number } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
   const rename = useRenameDepartment()
@@ -89,14 +91,14 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
       onSuccess: (updated) => {
         if (!isCurrent()) return
         setEditing(false)
-        toast.success(`Updated department “${updated.name}”`)
+        toast.success(t('Updated department “{name}”', { name: updated.name }))
       },
       onError: (error) => {
         if (!isCurrent()) return
         const duplicate = error instanceof ApiError && error.status === 409
         const message = duplicate
-          ? 'A department with this name already exists. Use a different name.'
-          : error instanceof ApiError ? error.message : 'Could not update department. Check your connection and try again.'
+          ? t('A department with this name already exists. Use a different name.')
+          : error instanceof ApiError ? error.message : t('Could not update department. Check your connection and try again.')
         toast.error(message)
         setFocus('name')
       },
@@ -115,7 +117,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
       onSuccess: () => {
         if (!isCurrent()) return
         onDeleted()
-        toast.success(`Deleted department “${department.name}”`)
+        toast.success(t('Deleted department “{name}”', { name: department.name }))
       },
       onSettled: () => { deleting.current = false },
     })
@@ -139,44 +141,44 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
             }}
           >
             <h3 ref={confirmHeading} tabIndex={-1} id={`${formId}-delete-title`} className="text-sm font-semibold wrap-anywhere">
-              Delete “{department.name}”?
+              {t('Delete “{name}”?', { name: department.name })}
             </h3>
             <p id={`${formId}-delete-consequence`} className="text-sm text-muted-foreground">
-              This permanently removes the department, its member assignments and its department-based agent access grants. Members and their other access stay unchanged. This cannot be undone.
+              {t('This permanently removes the department, its member assignments and its department-based agent access grants. Members and their other access stay unchanged. This cannot be undone.')}
             </p>
-            {preview.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading deletion preview…</p> : preview.isError ? (
+            {preview.isFetching ? <p role="status" className="text-sm text-muted-foreground">{t('Loading deletion preview…')}</p> : preview.isError ? (
               <div className="space-y-2">
-                <ErrorToast error={preview.error} message="Could not load deletion preview. Try again before deleting." />
-                <Button type="button" variant="outline" size="sm" className="h-11 sm:h-9" onClick={() => { confirmHeading.current?.focus(); void preview.refetch() }}>Retry preview</Button>
+                <ErrorToast error={preview.error} message={t('Could not load deletion preview. Try again before deleting.')} />
+                <Button type="button" variant="outline" size="sm" className="h-11 sm:h-9" onClick={() => { confirmHeading.current?.focus(); void preview.refetch() }}>{t('Retry preview')}</Button>
               </div>
             ) : preview.data ? (
               <div className="space-y-2 text-sm">
                 <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
-                  <dt>Department memberships</dt><dd className="tabular-nums">{preview.data.membership_count}</dd>
-                  <dt>Department-to-agent grants</dt><dd className="tabular-nums">{preview.data.agent_grant_count}</dd>
+              <dt>{t('Department memberships')}</dt><dd className="tabular-nums">{number(preview.data.membership_count)}</dd>
+              <dt>{t('Department-to-agent grants')}</dt><dd className="tabular-nums">{number(preview.data.agent_grant_count)}</dd>
                 </dl>
-                <p className="text-xs text-muted-foreground sm:text-sm">These associations will be removed, not people. Other access may remain. Counts may change before deletion.</p>
+                <p className="text-xs text-muted-foreground sm:text-sm">{t('These associations will be removed, not people. Other access may remain. Counts may change before deletion.')}</p>
               </div>
             ) : null}
             {deletion.isError ? (
-              <ErrorToast error={deletion.error} message={deletion.error instanceof ApiError ? deletion.error.message : 'Could not delete department. Check your connection and try again.'} />
+              <ErrorToast error={deletion.error} message={deletion.error instanceof ApiError ? deletion.error.message : t('Could not delete department. Check your connection and try again.')} />
             ) : null}
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" disabled={deletion.isPending} onClick={cancelDeletion}>
-                Cancel
+                {t('Cancel')}
               </Button>
               <Button type="button" variant="destructive" size="sm" className="h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 sm:h-9" disabled={deletion.isPending || !previewReady} onClick={onDelete}>
-                Delete department
+                {t('Delete department')}
               </Button>
             </div>
             <p role="status" className={deletion.isPending ? 'text-xs text-muted-foreground' : 'sr-only'}>
-              {deletion.isPending ? 'Deleting department…' : ''}
+              {deletion.isPending ? t('Deleting department…') : ''}
             </p>
           </fieldset>
         ) : editing ? (
           <form
             className="space-y-3"
-            aria-label={`Edit ${department.name}`}
+            aria-label={t('Edit {name}', { name: department.name })}
             aria-busy={rename.isPending}
             onSubmit={handleSubmit(onSave)}
             onKeyDown={(event) => {
@@ -189,7 +191,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
             noValidate
           >
             <div className="grid min-w-0 gap-1.5">
-              <Label htmlFor={`${formId}-name`}>Department name</Label>
+              <Label htmlFor={`${formId}-name`}>{t('Department name')}</Label>
               <Input
                 id={`${formId}-name`}
                 autoComplete="off"
@@ -200,13 +202,13 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
                 aria-describedby={errors.name ? `${formId}-name-error` : `${formId}-hint`}
                 {...register('name')}
               />
-              <p id={`${formId}-hint`} className="text-xs text-muted-foreground">Up to 100 characters.</p>
+              <p id={`${formId}-hint`} className="text-xs text-muted-foreground">{t('Up to 100 characters.')}</p>
               {errors.name ? (
-                <p id={`${formId}-name-error`} className="text-xs text-destructive">{errors.name.message}</p>
+                <p id={`${formId}-name-error`} className="text-xs text-destructive">{owned(errors.name.message)}</p>
               ) : null}
             </div>
             <div className="grid min-w-0 gap-1.5">
-              <Label htmlFor={`${formId}-description`}>Description (optional)</Label>
+              <Label htmlFor={`${formId}-description`}>{t('Description (optional)')}</Label>
               <textarea id={`${formId}-description`} rows={3} disabled={rename.isPending}
                 className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
                 {...register('description')} />
@@ -214,20 +216,20 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
             <div className="flex flex-wrap gap-2">
               <Button type="submit" size="sm" className="h-11 sm:h-9" disabled={rename.isPending}>
                 {rename.isPending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                Save department
+                {t('Save department')}
               </Button>
               <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" disabled={rename.isPending} onClick={cancel}>
-                Cancel
+                {t('Cancel')}
               </Button>
             </div>
             <p role="status" className={rename.isPending ? 'text-xs text-muted-foreground' : 'sr-only'}>
-              {rename.isPending ? 'Saving department…' : ''}
+              {rename.isPending ? t('Saving department…') : ''}
             </p>
           </form>
         ) : (
           <div className="space-y-2">
             <p className="min-w-0 text-sm font-medium leading-relaxed wrap-anywhere"><bdi>{department.name}</bdi></p>
-            <p className="whitespace-pre-wrap text-sm text-muted-foreground wrap-anywhere">{department.description || 'No description'}</p>
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground wrap-anywhere">{department.description || t('No description')}</p>
             <div className="flex flex-wrap gap-1">
             <Button
               ref={editButton}
@@ -241,10 +243,10 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
                 setEditing(true)
               }}
             >
-              Edit department<span className="sr-only"> for {department.name}</span>
+              {t('Edit department')}<span className="sr-only"> {t('for {name}', { name: department.name })}</span>
             </Button>
             <Button ref={mergeButton} type="button" variant="ghost" size="sm" className="h-11 sm:h-9" onClick={() => setMerging(true)}>
-              Merge<span className="sr-only"> {department.name}</span>
+              {t('Merge')}<span className="sr-only"> {department.name}</span>
             </Button>
             <Button
               ref={deleteButton}
@@ -254,7 +256,7 @@ export function DepartmentCard({ department, departments, tenantId, onDeleted }:
               className="h-11 text-destructive sm:h-9"
               onClick={() => { deletion.reset(); setPreviewAttempt((value) => value + 1); setConfirming(true) }}
             >
-              Delete<span className="sr-only"> {department.name}</span>
+              {t('Delete')}<span className="sr-only"> {department.name}</span>
             </Button>
             </div>
           </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery } from '@/hooks/session-workspace'
 import { Link, useOutletContext } from 'react-router-dom'
@@ -19,6 +20,7 @@ const BROWSER_TOOLS = [
 ]
 
 export function AgentPlaywrightPage() {
+  const { t: translate } = useTranslation()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
   const canManage = agent.access_level === 'manage'
@@ -44,25 +46,23 @@ export function AgentPlaywrightPage() {
       void queryClient.invalidateQueries({ queryKey: ['tools', agent.id] })
     },
     onError() {
-      toast.error('Unable to update browser tools')
+      toast.error(translate("Unable to update browser tools"))
     },
   })
 
   return (
     <div className="space-y-5 p-6">
       <div>
-        <h2 className="font-display text-lg font-semibold">Playwright / browser</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Playwright / browser")}</h2>
         <p className="text-sm text-muted-foreground">
-          AgentBay browser tools run Playwright inside the remote session. Crabbox captures land in the workspace when
-          gogcli browser tests run.
-        </p>
+          {translate("AgentBay browser tools run Playwright inside the remote session. Crabbox captures land in the workspace when gogcli browser tests run.")}</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" asChild>
-          <Link to={`/app/agents/${agent.id}/control`}>Take Control</Link>
+          <Link to={`/app/agents/${agent.id}/control`}>{translate("Take Control")}</Link>
         </Button>
         <Button size="sm" variant="outline" asChild>
-          <Link to={`/app/agents/${agent.id}/credentials`}>Cookie vault</Link>
+          <Link to={`/app/agents/${agent.id}/credentials`}>{translate("Cookie vault")}</Link>
         </Button>
       </div>
       <ul className="space-y-2">
@@ -73,7 +73,7 @@ export function AgentPlaywrightPage() {
               <p className="text-xs text-muted-foreground">{tool.description}</p>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="soft">{tool.enabled ? 'On' : 'Off'}</Badge>
+              <Badge variant="soft">{tool.enabled ? translate("On") : translate("Off")}</Badge>
               <label className="text-xs">
                 <input
                   type="checkbox"
@@ -88,11 +88,11 @@ export function AgentPlaywrightPage() {
       </ul>
       {tools.isError ? <RequestErrorToast error={tools.error} message="Unable to load browser tools. Try again." /> : null}
       {tools.isSuccess && browserTools.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No browser tools are installed on this agent yet.</p>
+        <p className="text-sm text-muted-foreground">{translate("No browser tools are installed on this agent yet.")}</p>
       ) : null}
 
       <section>
-        <h3 className="text-sm font-semibold">Crabbox / Playwright reports</h3>
+        <h3 className="text-sm font-semibold">{translate("Crabbox / Playwright reports")}</h3>
         {reports.isError ? <RequestErrorToast error={reports.error} message="Unable to load browser reports. Try again." /> : null}
         {crabbox.isError ? (
           <RequestErrorToast error={crabbox.error} message="Unable to load the .crabbox folder. Try again." />

@@ -28,6 +28,7 @@ export function chatUploadLimit(filename: string, policy: UploadPolicy): number 
   return policy.image_extensions.includes(extension) ? policy.chat_image_max_bytes : policy.chat_file_max_bytes
 }
 
-export function formatUploadLimit(bytes: number): string {
-  return bytes < 1024 * 1024 ? `${bytes.toLocaleString()} bytes` : `${bytes / (1024 * 1024)} MiB`
+export function formatUploadLimit(bytes: number, locale = 'en-US'): string {
+  const amount = bytes < 1024 * 1024 ? bytes : bytes / (1024 * 1024)
+  return `${amount.toLocaleString(locale)} ${bytes < 1024 * 1024 ? 'bytes' : 'MiB'}`
 }

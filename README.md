@@ -6,7 +6,7 @@
 
 Members work with digital employees through a browser workspace or configured messaging channels. Organization and platform administrators use a separate console to manage access, models, tools, and platform settings. The engine enforces tenant boundaries, persists work, and manages the OpenClaw guests that execute agent tasks.
 
-The diagrams below describe the implementation and checked-in launcher defaults reviewed on **2026-11-01**, with the search provider updated to Tavily on **2026-11-07**. Open an image to inspect it at full size. The [architecture documentation](docs/architectures/README.md) includes editable Mermaid sources, implementation references, and rendering instructions.
+The diagrams below describe the implementation and checked-in launcher defaults reviewed on **2026-11-01**, with the search provider updated to Tavily on **2026-11-07** and the engine dispatch and chat-flow diagrams updated on **2026-11-12**. Open an image to inspect it at full size. The [architecture documentation](docs/architectures/README.md) includes editable Mermaid sources, implementation references, and rendering instructions.
 
 ### 1. People and external services
 
@@ -34,7 +34,7 @@ PostgreSQL stores durable platform records, chat transcripts, gateway work, and 
 
 The default engine process runs with `PROCESS_ROLE=all`. It owns API realtime subscriptions, worker loops for scheduling and recovery, and configured messaging connectors. Roles can be split through configuration, but the launchers do not automatically deploy separate API, worker, and connector services; HTTP routers remain mounted for every role.
 
-Chat and channel intake authorize incoming work and hand it to OpenClaw dispatch. Guests report results through the gateway, which persists completion before attempting live notification. A worker-owned report relay separately handles durable messaging and agent-to-agent reply intents.
+Chat and channel intake authorize incoming work and hand it to OpenClaw dispatch. The engine runs each turn in the guest and settles the adapter's terminal result through the gateway layer, which persists completion before attempting live notification. A worker-owned report relay separately handles durable messaging and agent-to-agent reply intents.
 
 ![MaraClaw engine runtime ownership, dispatch, and reply delivery](docs/architectures/c4-components-engine.svg)
 
@@ -42,8 +42,8 @@ Chat and channel intake authorize incoming work and hand it to OpenClaw dispatch
 
 1. The member application obtains a single-use chat ticket over authenticated HTTP, then opens a ticket-authorized WebSocket. The engine rechecks access for submitted turns.
 2. The engine commits the user message, quota charge, session update, and gateway work together in PostgreSQL before acknowledging acceptance.
-3. After commit, it attempts a guarded wake of the agent guest. Authenticated guest polling provides another dispatch path; shared conversations have additional serialized-claim and retry restrictions.
-4. The guest executes the task and reports its result. The first accepted report commits completion and the assistant response, when non-empty, together with applicable reply intents.
+3. After commit, the engine wakes native dispatch, and a worker-owned reconciler rescans pending lane heads every second as the recovery path. Each turn runs in the label-proven guest through `docker exec` of the Node adapter ([`gateway-rpc.mjs`](engine/connectors/openclaw-dispatcher/gateway-rpc.mjs)) over the guest's local Gateway WebSocket; only a proven refusal before admission releases a claim, and shared conversations keep FIFO serialized claims.
+4. The adapter returns the terminal result, streaming web deltas when applicable, and the engine settles it. The first accepted completion commits the assistant response, when non-empty, together with applicable reply intents.
 5. The engine attempts to notify connected clients directly or through Redis routing. Live notification is best effort: missing an event does not erase the persisted transcript. The report relay handles applicable messaging and agent replies separately.
 
 ![MaraClaw chat flow from ticket authorization to durable completion](docs/architectures/c4-dynamic-chat.svg)

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
@@ -45,9 +46,10 @@ const TransferPage = lazy(() => import('@/pages/transfer').then((module) => ({ d
 const VerifyEmailPage = lazy(() => import('@/pages/verify-email').then((module) => ({ default: module.VerifyEmailPage })))
 
 export function AppRouter() {
+  const { t: translate } = useTranslation()
   return (
     <BrowserRouter>
-      <Suspense fallback={<div role="status" className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground">Loading…</div>}>
+      <Suspense fallback={<div role="status" className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground">{translate("Loading…")}</div>}>
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />

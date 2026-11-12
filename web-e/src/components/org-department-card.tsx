@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
@@ -13,6 +14,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
   readonly department: OrgDepartment
   readonly canEdit: boolean
 }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const inputId = useId()
   const rosterId = useId()
@@ -33,17 +35,17 @@ export function OrgDepartmentCard({ department, canEdit }: {
   const rosterContent = (() => {
     switch (roster.status) {
       case 'pending':
-        return <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">Loading members...</p>
+        return <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">{translate("Loading members...")}</p>
       case 'error':
         return <div className="space-y-3">
-          <RequestErrorToast error={roster.error} message={userFacingRequestError(roster.error, 'Unable to load department members. Try again.')} />
-          <Button type="button" variant="outline" disabled={roster.isFetching} onClick={scope.effect(() => { void roster.refetch() })}>Retry</Button>
+          <RequestErrorToast error={roster.error} message={userFacingRequestError(roster.error, translate("Unable to load department members. Try again."))} />
+          <Button type="button" variant="outline" disabled={roster.isFetching} onClick={scope.effect(() => { void roster.refetch() })}>{translate("Retry")}</Button>
         </div>
       case 'success':
         return roster.data.length === 0
-          ? <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">No members in this department yet.</p>
-          : <ul className="space-y-2 text-lg leading-normal sm:text-sm" aria-label={`${department.name} member names`}>
-            {roster.data.map((member) => <li key={member.membership_id} className="wrap-anywhere">{member.display_name?.trim() || 'Name unavailable'}</li>)}
+          ? <p role="status" className="text-base leading-normal text-muted-foreground sm:text-sm">{translate("No members in this department yet.")}</p>
+          : <ul className="space-y-2 text-lg leading-normal sm:text-sm" aria-label={translate('{department} member names', { department: department.name })}>
+            {roster.data.map((member) => <li key={member.membership_id} className="wrap-anywhere">{member.display_name?.trim() || translate("Name unavailable")}</li>)}
           </ul>
       default:
         return roster satisfies never
@@ -73,7 +75,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
         setSaveError('A department with this name already exists. Choose another name.')
         input.current?.focus()
       } else {
-        setSaveError(userFacingRequestError(error, 'Unable to save the department name. Try again.'))
+        setSaveError(userFacingRequestError(error, translate("Unable to save the department name. Try again.")))
       }
     },
   })
@@ -94,7 +96,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
       <CardContent className="space-y-4">
         {editing ? (
           <form
-            aria-label={`Rename ${department.name}`}
+            aria-label={translate("Rename {name}", { name: department.name })}
             aria-busy={rename.isPending}
             className="space-y-3"
             noValidate
@@ -121,7 +123,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
             }}
           >
             <div className="space-y-2">
-              <Label htmlFor={inputId}>Department name</Label>
+              <Label htmlFor={inputId}>{translate("Department name")}</Label>
               <Input
                 ref={input}
                 id={inputId}
@@ -141,10 +143,10 @@ export function OrgDepartmentCard({ department, canEdit }: {
             </div>
             {saveError ? <RequestErrorToast message={saveError} /> : null}
             <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={rename.isPending}>{rename.isPending ? 'Saving...' : 'Save'}</Button>
+              <Button type="submit" disabled={rename.isPending}>{rename.isPending ? 'Saving...' : translate("Save")}</Button>
               <Button type="button" variant="outline" disabled={rename.isPending} onClick={() => {
                 if (scope.isCurrent()) closeEditor()
-              }}>Cancel</Button>
+              }}>{translate("Cancel")}</Button>
             </div>
           </form>
         ) : (
@@ -154,7 +156,7 @@ export function OrgDepartmentCard({ department, canEdit }: {
               <Button
                 ref={editButton}
                 variant="outline"
-                aria-label={`Edit name for ${department.name}`}
+                aria-label={translate("Edit name for {name}", { name: department.name })}
                 disabled={rename.isPending}
                 onClick={scope.effect(() => {
                   setName(department.name)
@@ -163,19 +165,19 @@ export function OrgDepartmentCard({ department, canEdit }: {
                   rename.reset()
                   setEditing(true)
                 })}
-              >Edit name</Button>
+              >{translate("Edit name")}</Button>
             ) : null}
           </div>
         )}
         <Button
           type="button"
           variant="outline"
-          aria-label={`${expanded ? 'Hide' : 'Show'} members for ${department.name}`}
+          aria-label={expanded ? translate('Hide members for {department}', { department: department.name }) : translate('Show members for {department}', { department: department.name })}
           aria-expanded={expanded}
           aria-controls={rosterId}
           onClick={scope.effect(() => { setExpanded((current) => !current) })}
-        >{expanded ? 'Hide members' : 'Show members'}</Button>
-        <section id={rosterId} aria-label={`${department.name} members`} hidden={!expanded}>
+        >{expanded ? translate("Hide members") : translate("Show members")}</Button>
+        <section id={rosterId} aria-label={translate('{department} members', { department: department.name })} hidden={!expanded}>
           {expanded ? rosterContent : null}
         </section>
       </CardContent>

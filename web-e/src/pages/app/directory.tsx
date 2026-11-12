@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useInfiniteQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useSearchParams } from 'react-router-dom'
 
@@ -22,6 +23,7 @@ function isDirectoryTab(value: string | null): value is DirectoryTab {
 }
 
 export function DirectoryPage() {
+  const { t: translate, owned, formatNumber } = useTranslation()
   const scope = useWorkspaceSession()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
@@ -62,17 +64,16 @@ export function DirectoryPage() {
       <div className="min-w-0 bg-background px-5 py-4 md:col-start-2 md:row-start-1">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="font-display text-2xl font-semibold">Directory</h1>
+            <h1 className="font-display text-2xl font-semibold">{translate("Directory")}</h1>
             <p className="text-sm text-muted-foreground">
-              People and org departments in this company.
-            </p>
+              {translate("People and org departments in this company.")}</p>
           </div>
           {tab !== 'departments' ? (
             <Input
               type="search"
               className="h-9 max-w-xs"
-              placeholder="Search"
-              aria-label="Search directory"
+              placeholder={translate("Search")}
+              aria-label={translate("Search directory")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -83,7 +84,7 @@ export function DirectoryPage() {
         items={tabs}
         active={tab}
         onSelect={setTab}
-        label="Directory sections"
+        label={translate("Directory sections")}
         className="md:col-start-1 md:row-start-1 md:row-span-2"
       />
       <div className="min-h-0 space-y-5 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
@@ -94,18 +95,18 @@ export function DirectoryPage() {
           loading={users.isLoading}
           error={null}
           count={loadedUsers.length}
-          empty={query ? `No people match “${query}”.` : 'No people in this company yet.'}
-          errorFallback="Unable to load people"
+          empty={query ? translate('No people match “{query}”.', { query }) : translate('No people in this company yet.')}
+          errorFallback={translate('Unable to load people')}
         >
           {loadedUsers.map((user) => {
-            const name = user.display_name || user.email || 'Member'
+            const name = user.display_name || user.email || translate("Member")
             return (
               <PersonCard
                 key={user.id}
                 name={name}
                 avatarUrl={user.avatar_url}
                 description={user.email}
-                badge={roleLabel(user.role)}
+                badge={owned(roleLabel(user.role))}
                 detail={user.title}
               />
             )
@@ -115,16 +116,15 @@ export function DirectoryPage() {
         {users.isError ? (
           <div className="space-y-3">
             <RequestErrorToast error={users.error} message={userFacingRequestError(users.error, users.isFetchNextPageError
-                ? 'Unable to load more people.'
-                : users.data ? 'Unable to refresh people.' : 'Unable to load people.')} />
+                ? translate("Unable to load more people.")
+                : users.data ? translate("Unable to refresh people.") : translate("Unable to load people."))} />
             <Button
               variant="outline"
               className="min-h-11"
               disabled={users.isFetching}
               onClick={() => users.isFetchNextPageError ? users.fetchNextPage() : users.refetch()}
             >
-              Retry
-            </Button>
+              {translate("Retry")}</Button>
           </div>
         ) : null}
         {users.hasNextPage && !users.isFetchNextPageError ? (
@@ -134,11 +134,11 @@ export function DirectoryPage() {
             disabled={users.isFetching}
             onClick={() => users.fetchNextPage()}
           >
-            {users.isFetchingNextPage ? 'Loading more…' : 'Load more'}
+            {users.isFetchingNextPage ? translate("Loading more…") : translate("Load more")}
           </Button>
         ) : null}
         <p role="status" className="sr-only">
-          {users.isLoading ? 'Loading people.' : users.isFetchingNextPage ? 'Loading more people.' : `${loadedUsers.length} people loaded.`}
+          {users.isLoading ? translate("Loading people.") : users.isFetchingNextPage ? translate("Loading more people.") : translate('{count} people loaded.', { count: formatNumber(loadedUsers.length) })}
         </p>
         </>
       ) : null}

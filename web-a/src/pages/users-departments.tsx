@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { UserCard } from '@/components/users/user-card'
 import { TransferAgents } from '@/components/users/transfer-agents'
 import { useSessionCurrent } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
 import { groupDepartmentAssignments } from '@/lib/departments-api'
@@ -41,6 +42,7 @@ export function TenantUsers({
   readonly pending: boolean
   readonly onToggle: (row: AdminUser) => void
 }) {
+  const { t, owned } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
   const { departments, create, assign } = useDepartments(tenantId)
@@ -65,14 +67,14 @@ export function TenantUsers({
       onSuccess: (created) => {
         if (!isCurrent()) return
         reset()
-        toast.success(`Created department “${created.name}”`)
+        toast.success(t('Created department “{name}”', { name: created.name }))
       },
       onError: (error) => {
         if (!isCurrent()) return
         const duplicate = error instanceof ApiError && error.status === 409
         const message = duplicate
-          ? 'A department with this name already exists. Use a different name.'
-          : error instanceof ApiError ? error.message : 'Could not create department. Check your connection and try again.'
+          ? t('A department with this name already exists. Use a different name.')
+          : error instanceof ApiError ? error.message : t('Could not create department. Check your connection and try again.')
         toast.error(message)
       },
     })
@@ -82,9 +84,9 @@ export function TenantUsers({
     <>
       <Card>
         <CardHeader>
-          <CardTitle>Departments</CardTitle>
+          <CardTitle>{t('Departments')}</CardTitle>
           <CardDescription>
-            Create org departments for this company, then assign members below. Each person can belong to multiple departments.
+            {t('Create org departments for this company, then assign members below. Each person can belong to multiple departments.')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -96,7 +98,7 @@ export function TenantUsers({
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="grid min-w-0 flex-1 gap-1.5">
-                <Label htmlFor={`${formId}-name`}>Department name</Label>
+                <Label htmlFor={`${formId}-name`}>{t('Department name')}</Label>
                 <Input
                   id={`${formId}-name`}
                   autoComplete="off"
@@ -110,29 +112,29 @@ export function TenantUsers({
               </div>
               <Button type="submit" disabled={create.isPending}>
                 {create.isPending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                Create department
+                {t('Create department')}
               </Button>
             </div>
             <p id={`${formId}-name-hint`} className="text-xs text-muted-foreground">
-              Up to 100 characters.
+              {t('Up to 100 characters.')}
             </p>
             {errors.name ? (
-              <p id={`${formId}-name-error`} className="text-xs text-destructive">{errors.name.message}</p>
+              <p id={`${formId}-name-error`} className="text-xs text-destructive">{owned(errors.name.message)}</p>
             ) : null}
             <div className="grid min-w-0 gap-1.5">
-              <Label htmlFor={`${formId}-description`}>Description (optional)</Label>
+              <Label htmlFor={`${formId}-description`}>{t('Description (optional)')}</Label>
               <textarea id={`${formId}-description`} rows={3} disabled={create.isPending}
                 className="w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
                 {...register('description')} />
             </div>
             <p role="status" className={create.isPending ? 'text-xs text-muted-foreground' : 'sr-only'}>
-              {create.isPending ? 'Creating department…' : ''}
+              {create.isPending ? t('Creating department…') : ''}
             </p>
           </form>
-          {departments.isLoading ? <p className="text-sm text-muted-foreground" role="status">Loading departments…</p> : null}
+          {departments.isLoading ? <p className="text-sm text-muted-foreground" role="status">{t('Loading departments…')}</p> : null}
           {departments.error ? (
             <div className="flex flex-wrap items-center gap-2">
-              <ErrorToast error={departments.error} message={departments.error instanceof ApiError ? departments.error.message : 'Failed to load departments'} />
+              <ErrorToast error={departments.error} message={departments.error instanceof ApiError ? departments.error.message : t('Failed to load departments')} />
               <Button
                 type="button"
                 variant="ghost"
@@ -140,15 +142,15 @@ export function TenantUsers({
                 disabled={departments.isFetching}
                 onClick={() => void departments.refetch()}
               >
-                Retry
+                {t('Retry')}
               </Button>
             </div>
           ) : null}
           {departments.isSuccess && departments.data.departments.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No departments yet. Create one to start grouping members.</p>
+            <p className="text-sm text-muted-foreground">{t('No departments yet. Create one to start grouping members.')}</p>
           ) : null}
           {departments.data?.departments.length ? (
-            <ul className="grid items-start gap-3 sm:grid-cols-2" aria-label="Departments">
+            <ul className="grid items-start gap-3 sm:grid-cols-2" aria-label={t('Departments')}>
               {departments.data.departments.map((department) => (
                 <li key={department.id} className="min-w-0">
                   <DepartmentCard department={department} departments={departments.data.departments} tenantId={tenantId} onDeleted={() => setFocus('name')} />
@@ -163,7 +165,7 @@ export function TenantUsers({
           const isSaving = savingAssignment?.tenantId === tenantId && savingAssignment.userId === row.id
           const departmentIds = isSaving ? savingAssignment.departmentIds : assignments.get(row.id) ?? []
           const error = assign.variables?.tenantId === tenantId && assign.variables.userId === row.id ? assign.error : null
-          const name = row.display_name || row.email || 'user'
+          const name = row.display_name || row.email || t('user')
           return (
             <UserCard
               key={row.id}
@@ -184,8 +186,8 @@ export function TenantUsers({
                   saving={isSaving}
                   error={error}
                   onChange={(nextDepartmentIds) => assign.mutate({ tenantId, userId: row.id, departmentIds: nextDepartmentIds }, {
-                    onSuccess: fenceCallback(isCurrent, () => toast.success(`Departments updated for ${name}`)),
-                    onError: fenceCallback(isCurrent, (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : 'Could not update departments. Try again.')),
+                    onSuccess: fenceCallback(isCurrent, () => toast.success(t('Departments updated for {name}', { name }))),
+                    onError: fenceCallback(isCurrent, (saveError) => toast.error(saveError instanceof ApiError ? saveError.message : t('Could not update departments. Try again.'))),
                   })}
                 />
               ) : null}

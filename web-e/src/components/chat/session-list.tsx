@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -21,13 +22,13 @@ const isShared = (session: SessionOut) => session.source_channel === 'shared'
 const sessionLabel = (session: SessionOut) => isShared(session) ? 'Shared conversation' : session.username ?? session.title
 
 export function SessionList({ agentId, sessions, activeId, hasMore, loadingMore, error, onLoadMore }: SessionListProps) {
+  const { t: translate, locale } = useTranslation()
   const [open, setOpen] = useState(false)
   const listId = useId()
   if (!hasMore && !sessions.some((session) => !isShared(session))) return null
-  return <nav aria-label="Other conversations" className="text-sm">
+  return <nav aria-label={translate("Other conversations")} className="text-sm">
     <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)}>
-      Other conversations
-    </Button>
+      {translate("Other conversations")}</Button>
     {open ? <div id={listId} className="mt-2 space-y-2">
       <ul className="max-h-64 space-y-1 overflow-y-auto">
         {sessions.map((session) => <li key={session.id}>
@@ -37,13 +38,13 @@ export function SessionList({ agentId, sessions, activeId, hasMore, loadingMore,
             aria-current={session.id === activeId ? 'page' : undefined}
           >
             <span className="truncate">{sessionLabel(session)}</span>
-            {session.last_message_at ? <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(session.last_message_at)}</span> : null}
+            {session.last_message_at ? <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(session.last_message_at, undefined, locale)}</span> : null}
           </Link>
         </li>)}
       </ul>
-      {error ? <RequestErrorToast error={error} message={userFacingRequestError(error, 'Could not load older conversations.')} /> : null}
+      {error ? <RequestErrorToast error={error} message={userFacingRequestError(error, translate("Could not load older conversations."))} /> : null}
       {hasMore ? <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore}>
-        {loadingMore ? 'Loading older conversations…' : error ? 'Retry older conversations' : 'Load older conversations'}
+        {loadingMore ? translate("Loading older conversations…") : error ? translate("Retry older conversations") : translate("Load older conversations")}
       </Button> : null}
     </div> : null}
   </nav>

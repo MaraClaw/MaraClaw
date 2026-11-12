@@ -34,12 +34,14 @@ from app.services.openclaw_model_selection import (
     bundle_usable,
 )
 from app.services.openclaw_native_capacity import (
+    LaneKey,
     discard_waiting_lanes,
     release_turn,
     shutdown_native_capacity,
 )
 from app.services.openclaw_native_claims import claim_ordinary_turn
 from app.services.openclaw_native_dispatch import NativeDispatcher
+from app.services.openclaw_release_backoff import release_backoff
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.quota_guard import AgentExpired
@@ -178,11 +180,16 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
         except WorkspaceLockTimeoutError, GuestConfigWriteError, OpenClawUpdateGateError:
             # These adapter boundaries refuse before sending any RPC request.
             outcome_kind = "released"
+            _ = release_backoff.released(LaneKey.of(claimed))
             _ = await drain_on_cancel(gateway_message_dao.release_delivery(claimed))
             return
         timeline.mark("rpc_returned")
         timeline.adapter(outcome.timing)
         outcome_kind = outcome.kind
+        if isinstance(outcome, NotAdmittedOutcome):
+            _ = release_backoff.released(LaneKey.of(claimed))
+        else:
+            release_backoff.settled(LaneKey.of(claimed))
         match outcome:
             case NotAdmittedOutcome():
                 _ = await drain_on_cancel(gateway_message_dao.release_delivery(claimed))

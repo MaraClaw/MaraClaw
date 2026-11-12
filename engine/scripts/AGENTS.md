@@ -11,6 +11,7 @@ Engine-root operators, run from `engine/`. Not the same as `app/scripts/` (impor
 | `export_api_contracts.py`, `api_contract_registry.py`, `api_contract_document.py` | Offline exporter for `../contracts/api-contract.json`. Run as `python -m scripts.export_api_contracts` (hence `__init__.py`). Imports `app.main` but never enters lifespan; `--check` never writes. The registry owns `AUDITED_HTTP_MODULES`, enums and `PUBLIC_SCHEMA_NAMES`. |
 | `contract_codegen/` | Dependency-free Node generator: `generate.mjs` entry plus `compiler.mjs`, `constraints.mjs`, `document.mjs`. Never imports app code. |
 | `verify_anydoc.py` | Proves `firecrawl-anydoc` converts `tests/fixtures/anydoc/supported.docx`; the Dockerfile runs it at build time. |
+| `pg-throwaway.sh` | Disposable local PostgreSQL 18.6 for opt-in `*_postgres.py` tests and load tests: `start [--watchdog]`, `dsn`, `stop`. Always `--rm` (a bare `docker run postgres` leaks an anonymous volume per run), durability off, refuses to start under 10 GB host free space. |
 | `lint.sh` / `format.sh` / `test.sh` | Wrappers; none run the freeze scripts. `format.sh` mutates (`ruff check --fix`, then `ruff format`). |
 
 ## Workflows

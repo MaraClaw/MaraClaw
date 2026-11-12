@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
@@ -13,6 +14,7 @@ import { listPublishedPages, publishWorkspacePage, unpublishPage } from '@/lib/c
 import { listFiles, type AgentOut } from '@/lib/workspace-api'
 
 export function AgentPagesPage() {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const queryClient = useQueryClient()
@@ -27,22 +29,21 @@ export function AgentPagesPage() {
   const publish = useMutation({
     mutationFn: (filePath: string) => publishWorkspacePage(agent.id, filePath),
     onSuccess(page) {
-      toast.success(`Published ${page.title ?? page.source_path}`)
+      toast.success(translate("Published {title}", { title: page.title ?? page.source_path }))
       void queryClient.invalidateQueries({ queryKey: ['pages', agent.id] })
     },
     onError(error) {
-      toast.error(userFacingRequestError(error, 'Publish failed'))
+      toast.error(userFacingRequestError(error, translate("Publish failed")))
     },
   })
 
   return (
     <div className="grid min-h-[28rem] grid-cols-1 md:grid-cols-[240px_1fr]">
       <aside className="space-y-2 border-b border-border p-3 md:border-r md:border-b-0">
-        <p className="text-xs text-muted-foreground">HTML files in the workspace</p>
+        <p className="text-xs text-muted-foreground">{translate("HTML files in the workspace")}</p>
         {files.isError ? <RequestErrorToast error={files.error} message="Unable to load workspace files. Try again." /> : null}
         <button type="button" className="text-xs text-primary" onClick={scope.effect(() => setPath(''))}>
-          Root
-        </button>
+          {translate("Root")}</button>
         <ul className="space-y-1">
           {(files.data ?? []).map((file) => (
             <li key={file.path}>
@@ -57,7 +58,7 @@ export function AgentPagesPage() {
                   }
                   if (!canManage) return
                   if (!file.name.toLowerCase().endsWith('.html') && !file.name.toLowerCase().endsWith('.htm')) {
-                    toast.error('Only .html files can be published')
+                    toast.error(translate("Only .html files can be published"))
                     return
                   }
                   publish.mutate(file.path)
@@ -71,30 +72,27 @@ export function AgentPagesPage() {
       </aside>
       <div className="space-y-3 p-4">
         <div>
-          <h2 className="font-display text-lg font-semibold">Published pages</h2>
+          <h2 className="font-display text-lg font-semibold">{translate("Published pages")}</h2>
           {pages.isError ? <RequestErrorToast error={pages.error} message="Unable to load published pages. Try again." /> : null}
-          <p className="text-sm text-muted-foreground">Anyone with the link can open `/p/{'{id}'}` without signing in.</p>
+          <p className="text-sm text-muted-foreground">{translate("Anyone with the link can open `/p/")}{'{id}'}{translate("` without signing in.")}</p>
         </div>
         <ul className="space-y-2">
           {(pages.data ?? []).map((page) => (
             <li key={page.id} className="rounded-xl border border-border px-3 py-2">
               <p className="text-sm font-medium">{page.title || page.source_path}</p>
               <p className="text-xs text-muted-foreground">
-                {page.source_path} · {page.view_count} views
-              </p>
+                {page.source_path} · {page.view_count} {translate("views")}</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" asChild>
                   <a href={page.url} target="_blank" rel="noreferrer">
-                    Open
-                  </a>
+                    {translate("Open")}</a>
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => scope.isCurrent() && void navigator.clipboard.writeText(`${window.location.origin}${page.url}`).then(scope.effect(() => toast.success('Copied'))).catch(scope.rethrowCurrent)}
+                  onClick={() => scope.isCurrent() && void navigator.clipboard.writeText(`${window.location.origin}${page.url}`).then(scope.effect(() => toast.success(translate("Copied")))).catch(scope.rethrowCurrent)}
                 >
-                  Copy link
-                </Button>
+                  {translate("Copy link")}</Button>
                 {canManage ? (
                   <Button
                     size="sm"
@@ -102,13 +100,12 @@ export function AgentPagesPage() {
                     onClick={() =>
                       scope.isCurrent() && void unpublishPage(page.id).then(() => {
                         if (!scope.isCurrent()) return
-                        toast.success('Unpublished')
+                        toast.success(translate("Unpublished"))
                         void queryClient.invalidateQueries({ queryKey: ['pages', agent.id] })
-                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to unpublish this page. Try again.'), error)))
+                      }).catch(scope.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to unpublish this page. Try again.")), error)))
                     }
                   >
-                    Unpublish
-                  </Button>
+                    {translate("Unpublish")}</Button>
                 ) : null}
               </div>
             </li>
@@ -117,7 +114,7 @@ export function AgentPagesPage() {
         {canManage ? (
           <PublishPath onPublish={(value) => publish.mutate(value)} />
         ) : (
-          <p className="text-sm text-muted-foreground">You can view published links. Publishing needs manage access.</p>
+          <p className="text-sm text-muted-foreground">{translate("You can view published links. Publishing needs manage access.")}</p>
         )}
       </div>
     </div>
@@ -125,6 +122,7 @@ export function AgentPagesPage() {
 }
 
 function PublishPath({ onPublish }: { onPublish: (path: string) => void }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const [value, setValue] = useState('')
   return (
@@ -135,8 +133,7 @@ function PublishPath({ onPublish }: { onPublish: (path: string) => void }) {
         placeholder="workspace/site/index.html"
       />
       <Button size="sm" disabled={!value.trim()} onClick={scope.effect(() => onPublish(value.trim()))}>
-        Publish path
-      </Button>
+        {translate("Publish path")}</Button>
     </div>
   )
 }

@@ -2,8 +2,10 @@ import { Loader2 } from 'lucide-react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 
 export function ProtectedRoute() {
+  const { t } = useTranslation()
   const { status, isAdmin, mustChangePassword } = useAuth()
   const location = useLocation()
 
@@ -12,7 +14,7 @@ export function ProtectedRoute() {
       <div className="flex min-h-svh items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <Loader2 className="size-4 animate-spin" aria-hidden />
-          Loading console…
+          {t('Loading console…')}
         </div>
       </div>
     )

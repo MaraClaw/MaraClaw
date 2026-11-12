@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -33,6 +35,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 export function AgentNewPage() {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -80,11 +83,11 @@ export function AgentNewPage() {
       }),
     onSuccess(agent) {
       queryClient.setQueryData(['agent', agent.id], agent)
-      toast.success(`${agent.name} created`)
+      toast.success(translate('{name} created', { name: agent.name }))
       navigate(`/app/agents/${agent.id}/chat`)
     },
     onError(error) {
-      toast.error(userFacingRequestError(error, 'Unable to create agent'))
+      toast.error(userFacingRequestError(error, translate("Unable to create agent")))
     },
   })
 
@@ -120,23 +123,22 @@ export function AgentNewPage() {
           onClick={goBack}
         >
           <ArrowLeft className="size-4" aria-hidden />
-          Back
-        </Button>
-        <h1 className="font-display text-2xl font-semibold">New agent</h1>
-        <p className="text-sm text-muted-foreground">Private by default. Share with a department or the company if teammates should use it.</p>
+          {translate("Back")}</Button>
+        <h1 className="font-display text-2xl font-semibold">{translate("New agent")}</h1>
+        <p className="text-sm text-muted-foreground">{translate("Private by default. Share with a department or the company if teammates should use it.")}</p>
       </div>
       <form noValidate className="space-y-4" onSubmit={form.handleSubmit((values) => {
         if (mutation.isPending || (values.visibility === 'department' && departmentUnavailable)) return
         mutation.mutate(values)
       })}>
         <div className="space-y-2">
-          <Label htmlFor="name">Name</Label>
+          <Label htmlFor="name">{translate("Name")}</Label>
           <Input id="name" {...form.register('name')} />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="template">Template</Label>
+          <Label htmlFor="template">{translate("Template")}</Label>
           <Select id="template" {...form.register('template_id')}>
-            <option value="">None</option>
+            <option value="">{translate("None")}</option>
             {(templates.data ?? []).map((template) => (
               <option key={template.id} value={template.id}>
                 {template.name}
@@ -145,20 +147,20 @@ export function AgentNewPage() {
           </Select>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="role">Role</Label>
+          <Label htmlFor="role">{translate("Role")}</Label>
           <Textarea id="role" {...form.register('role_description')} />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="visibility">Visibility</Label>
+          <Label htmlFor="visibility">{translate("Visibility")}</Label>
           <Select id="visibility" {...form.register('visibility', { onChange: () => setRetryButton(null) })}>
-            <option value="private">Private (just me)</option>
-            <option value="company">Company-wide</option>
-            <option value="department">Department</option>
+            <option value="private">{translate("Private (just me)")}</option>
+            <option value="company">{translate("Company-wide")}</option>
+            <option value="department">{translate("Department")}</option>
           </Select>
         </div>
         {visibility === 'department' ? (
           <div className="space-y-2">
-            <Label htmlFor="department">Department (required)</Label>
+            <Label htmlFor="department">{translate("Department (required)")}</Label>
             <Select
               id="department"
               {...form.register('department_id')}
@@ -167,21 +169,20 @@ export function AgentNewPage() {
               aria-invalid={Boolean(departmentError)}
               aria-describedby={`department-description department-status department-admin-hint${departmentError ? ' department-error' : ''}`}
             >
-              <option value="">Choose a department</option>
+              <option value="">{translate("Choose a department")}</option>
               {(departments.data ?? []).map((department) => (
                 <option key={department.id} value={department.id}>{department.name}</option>
               ))}
             </Select>
             <p id="department-description" className="text-sm text-muted-foreground">
-              Members of this department can use the agent. You remain its creator and can manage it.
-            </p>
+              {translate("Members of this department can use the agent. You remain its creator and can manage it.")}</p>
             <p id="department-status" role="status" className="text-sm text-muted-foreground">
               {departments.isPending
-                ? 'Loading org departments...'
+                ? translate("Loading org departments...")
                 : departments.isError
                   ? ''
                   : departments.data?.length === 0
-                    ? 'No org departments yet. Ask a company admin to create one, or choose another visibility.'
+                    ? translate("No org departments yet. Ask a company admin to create one, or choose another visibility.")
                     : ''}
             </p>
             {departments.isError || retryButton ? (
@@ -201,10 +202,9 @@ export function AgentNewPage() {
                   }))
                 })}
               >
-                Retry departments
-              </Button></>
+                {translate("Retry departments")}</Button></>
             ) : null}
-            <p id="department-admin-hint" className="text-sm text-muted-foreground">Company admins manage org departments and membership.</p>
+            <p id="department-admin-hint" className="text-sm text-muted-foreground">{translate("Company admins manage org departments and membership.")}</p>
             {departmentError ? <p id="department-error" className="text-sm text-destructive">{departmentError}</p> : null}
           </div>
         ) : null}
@@ -217,16 +217,16 @@ export function AgentNewPage() {
             {...form.register('gogcli_enabled')}
           />
           <span className="min-w-0 space-y-1">
-            <span id="gogcli-label" className="block font-medium">Enable Google CLI (gogcli)</span>
-            <span id="gogcli-description" className="block text-muted-foreground">Adds Google CLI to the agent container.</span>
+            <span id="gogcli-label" className="block font-medium">{translate("Enable Google CLI (gogcli)")}</span>
+            <span id="gogcli-description" className="block text-muted-foreground">{translate("Adds Google CLI to the agent container.")}</span>
           </span>
         </label>
         <div className="space-y-2">
           <Button type="submit" disabled={!canCreate} aria-busy={mutation.isPending} aria-describedby={disabledReason ? 'create-disabled-reason' : undefined}>
             {mutation.isPending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-            {mutation.isPending ? 'Creating...' : 'Create'}
+            {mutation.isPending ? 'Creating...' : translate("Create")}
           </Button>
-          {disabledReason ? <p id="create-disabled-reason" className="text-sm text-muted-foreground">{disabledReason}</p> : null}
+        {disabledReason ? <p id="create-disabled-reason" className="text-sm text-muted-foreground"><ValidationMessage message={disabledReason} /></p> : null}
         </div>
       </form>
     </div>

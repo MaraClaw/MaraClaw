@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useId, useRef, useState } from 'react'
 
@@ -17,6 +18,7 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
   readonly agentName: string
   readonly upgrading: boolean
 }) {
+  const { t: translate, owned } = useTranslation()
   const scope = useWorkspaceSession()
   const reasonId = useId()
   const reasonInput = useRef<HTMLTextAreaElement>(null)
@@ -58,7 +60,7 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
         setOpen(false)
         return
       }
-      setError(userFacingRequestError(failure, 'Unable to request deletion. Check your connection and try again.'))
+      setError(userFacingRequestError(failure, translate("Unable to request deletion. Check your connection and try again.")))
     },
     onSettled() { submitting.current = false },
   })
@@ -74,17 +76,15 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
         <Dialog.Trigger asChild>
           <Button type="button" size="sm" variant="outline" className="min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             aria-disabled={!available} onClick={(event) => { if (!available) event.preventDefault() }}>
-            Request deletion
-          </Button>
+            {translate("Request deletion")}</Button>
         </Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content
             className="fixed top-1/2 left-1/2 z-50 max-h-[90svh] w-[calc(100%_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 space-y-4 overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-elevated">
-            <Dialog.Title className="font-display text-xl font-semibold">Request deletion</Dialog.Title>
+            <Dialog.Title className="font-display text-xl font-semibold">{translate("Request deletion")}</Dialog.Title>
             <Dialog.Description className="text-sm text-muted-foreground">
-              Request deletion of {agentName}. Nothing is deleted until two distinct organization admins or the genesis admin approve.
-            </Dialog.Description>
+              {translate("Request deletion of")}{' '}{agentName}{translate(". Nothing is deleted until two distinct organization admins or the genesis admin approve.")}</Dialog.Description>
             <form className="space-y-4" noValidate onSubmit={(event) => {
               event.preventDefault()
               if (!scope.isCurrent() || !available || submitting.current) return
@@ -100,18 +100,18 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
               submit.mutate(parsed.data)
             }}>
               <div className="space-y-2">
-                <Label htmlFor={reasonId}>Reason</Label>
+                <Label htmlFor={reasonId}>{translate("Reason")}</Label>
                 <Textarea ref={reasonInput} id={reasonId} name="reason" value={reason} disabled={submit.isPending}
                   aria-invalid={Boolean(reasonError)} aria-describedby={`${reasonId}-help${reasonError ? ` ${reasonId}-error` : ''}`}
                   onChange={scope.effect((event) => { setReason(event.target.value); setReasonError(null); setError(null) })} />
-                <p id={`${reasonId}-help`} className="text-sm text-muted-foreground">Required. Use 1–1,000 characters after trimming spaces.</p>
-                {reasonError ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{reasonError}</p> : null}
+                <p id={`${reasonId}-help`} className="text-sm text-muted-foreground">{translate("Required. Use 1–1,000 characters after trimming spaces.")}</p>
+                {reasonError ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{owned(reasonError)}</p> : null}
               </div>
               {error ? <RequestErrorToast message={error} /> : null}
               <div className="flex flex-wrap justify-end gap-2">
-                <Dialog.Close asChild><Button type="button" variant="outline" className="min-h-11">Cancel</Button></Dialog.Close>
+                <Dialog.Close asChild><Button type="button" variant="outline" className="min-h-11">{translate("Cancel")}</Button></Dialog.Close>
                 <Button type="submit" className="min-h-11" disabled={submit.isPending || !available}>
-                  {submit.isPending ? 'Submitting…' : 'Request deletion'}
+                  {submit.isPending ? translate("Submitting…") : translate("Request deletion")}
                 </Button>
               </div>
             </form>
@@ -119,13 +119,15 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
         </Dialog.Portal>
       </Dialog.Root>
       <p role="status" className="text-sm text-muted-foreground">
-        {knownPending ? `Deletion request pending.${pending ? ` ${pending.progress.counted_approvals} of ${pending.progress.required_approvals} organization admin approvals.` : ''} Nothing is deleted until two distinct organization admins or the genesis admin approve.`
-          : requests.isPending ? 'Checking deletion request status…' : ''}
+        {knownPending ? (pending
+          ? translate("Deletion request pending. {count} of {required} organization admin approvals. Nothing is deleted until two distinct organization admins or the genesis admin approve.", { count: pending.progress.counted_approvals, required: pending.progress.required_approvals })
+          : translate("Deletion request pending. Nothing is deleted until two distinct organization admins or the genesis admin approve."))
+          : requests.isPending ? translate("Checking deletion request status…") : ''}
       </p>
       {requests.isError ? <div className="space-y-2">
         <RequestErrorToast error={requests.error} message="Unable to load deletion request status. Retry before submitting another request." />
         <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={requests.isFetching}
-          onClick={scope.effect(() => { void requests.refetch() })}>Retry status</Button>
+          onClick={scope.effect(() => { void requests.refetch() })}>{translate("Retry status")}</Button>
       </div> : null}
     </div>
   )

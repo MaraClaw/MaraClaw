@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useImperativeHandle, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -26,6 +27,7 @@ function memberLink(link?: string | null): string | null {
 }
 
 export function NotificationsPage() {
+  const { t: translate, owned } = useTranslation()
   const [search, setSearch] = useSearchParams()
   const requested = search.get('category')
   const parsed = notificationCategorySchema.safeParse(requested ?? 'all')
@@ -36,9 +38,9 @@ export function NotificationsPage() {
   const scope = useWorkspaceSession()
 
   return <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-    <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold focus-visible:outline focus-visible:outline-ring">Inbox</h1>
+    <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold focus-visible:outline focus-visible:outline-ring">{translate("Inbox")}</h1>
     <div className="space-y-2">
-      <Label htmlFor="notification-category">Category</Label>
+      <Label htmlFor="notification-category">{translate("Category")}</Label>
       <Select id="notification-category" value={category} onChange={(event) => scope.effect(() => {
         const value = event.currentTarget.value
         const next = value === 'admissions' ? value : notificationCategorySchema.parse(value)
@@ -47,8 +49,8 @@ export function NotificationsPage() {
         if (next !== 'admissions') void scope.client.resetQueries({ queryKey: notificationKeys.list(next, view), exact: true })
         setSearch((current) => { const params = new URLSearchParams(current); params.set('category', next); return params })
       })()}>
-        {notificationCategories.map((value) => <option key={value} value={value}>{categoryLabels[value]}</option>)}
-        <option value="admissions">Admissions</option>
+        {notificationCategories.map((value) => <option key={value} value={value}>{owned(categoryLabels[value])}</option>)}
+        <option value="admissions">{translate("Admissions")}</option>
       </Select>
     </div>
     {category === 'admissions' ? <AdmissionsPage /> : <AdmissionInboxGate><NotificationContent category={category} view={view} setView={setView} heading={heading} resetErrorsRef={resetErrors} /></AdmissionInboxGate>}
@@ -62,6 +64,7 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
   readonly heading: RefObject<HTMLHeadingElement | null>
   readonly resetErrorsRef: RefObject<(() => void) | null>
 }) {
+  const { t: translate, owned, formatDate, formatNumber, locale } = useTranslation()
   const scope = useWorkspaceSession()
   const query = useInfiniteQuery(notificationListOptions(category, view))
   const unreadQuery = useQuery(notificationUnreadOptions(category))
@@ -96,7 +99,7 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {view === 'active' ? <Button variant="outline" className={actionClass} aria-describedby="notification-bulk-scope" disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAll.mutate(category) }}>
-          {markAll.isPending ? 'Marking all read…' : 'Mark all read'}
+          {markAll.isPending ? translate("Marking all read…") : translate("Mark all read")}
         </Button> : null}
       </div>
       <div className="flex flex-wrap items-center gap-3">
@@ -104,68 +107,67 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
           if (pending || selection.ids.length === 0) return
           resetErrors()
           markSelected.mutate([...selection.ids], { onSuccess: scope.effect(() => { if (selection.complete()) heading.current?.focus() }) })
-        }}>{markSelected.isPending ? 'Marking selected read…' : 'Mark selected read'}</Button>
+        }}>{markSelected.isPending ? translate("Marking selected read…") : translate("Mark selected read")}</Button>
         <Button variant="outline" className={actionClass} disabled={pending || selection.ids.length === 0} onClick={() => {
           if (pending || selection.ids.length === 0) return
           resetErrors()
           markSelectedUnread.mutate([...selection.ids], { onSuccess: scope.effect(() => { if (selection.complete()) heading.current?.focus() }) })
-        }}>{markSelectedUnread.isPending ? 'Marking selected unread…' : 'Mark selected unread'}</Button>
+        }}>{markSelectedUnread.isPending ? translate("Marking selected unread…") : translate("Mark selected unread")}</Button>
         <Button variant="outline" className={actionClass} disabled={pending || selection.ids.length === 0} onClick={() => {
           if (pending || selection.ids.length === 0) return
           resetErrors()
           moveSelected.mutate([...selection.ids], { onSuccess: scope.effect(() => { if (selection.complete()) heading.current?.focus() }) })
-        }}>{view === 'active' ? archiveSelected.isPending ? 'Archiving selected…' : 'Archive selected' : restoreSelected.isPending ? 'Restoring selected…' : 'Restore selected'}</Button>
-        <p role="status" className="text-sm text-muted-foreground">{selection.ids.length} selected (up to 200 loaded notifications)</p>
-        {selection.ids.length > 0 ? <Button variant="ghost" className={actionClass} onClick={selection.clear}>Clear selection</Button> : null}
+        }}>{view === 'active' ? archiveSelected.isPending ? translate("Archiving selected…") : translate("Archive selected") : restoreSelected.isPending ? translate("Restoring selected…") : translate("Restore selected")}</Button>
+        <p role="status" className="text-sm text-muted-foreground">{formatNumber(selection.ids.length)} {translate("selected (up to 200 loaded notifications)")}</p>
+        {selection.ids.length > 0 ? <Button variant="ghost" className={actionClass} onClick={selection.clear}>{translate("Clear selection")}</Button> : null}
       </div>
       <fieldset className="flex flex-wrap gap-2">
-        <legend className="sr-only">Inbox view</legend>
+        <legend className="sr-only">{translate("Inbox view")}</legend>
         {notificationViews.map((value) => <Button key={value} variant={view === value ? 'secondary' : 'outline'} className={actionClass} aria-pressed={view === value} onClick={scope.effect(() => {
           if (view === value) return
           resetErrors()
           void scope.client.resetQueries({ queryKey: notificationKeys.list(category, value), exact: true })
           setView(value)
-        })}>{viewLabels[value]}</Button>)}
+        })}>{owned(viewLabels[value])}</Button>)}
       </fieldset>
       <div className="space-y-2">
-        <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? 'Mark all read covers ALL active notifications matching this category, including those not loaded.' : 'Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.'}</p>
-        <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? 'Checking active unread notifications…' : `${unreadQuery.data} unread in ${categoryLabels[category]}`}</p>
+        <p id="notification-bulk-scope" className="text-sm text-muted-foreground">{view === 'active' ? translate("Mark all read covers ALL active notifications matching this category, including those not loaded.") : translate("Archived notifications keep their read status and do not count toward unread totals. Restore them to return them to Active.")}</p>
+        <p role="status" className="text-sm text-muted-foreground">{unreadQuery.data === undefined ? translate("Checking active unread notifications…") : translate("{count} unread in {category}", { count: formatNumber(unreadQuery.data), category: owned(categoryLabels[category]) })}</p>
         {unreadQuery.isError ? <div className="space-y-2">
           <RequestErrorToast error={unreadQuery.error} message="Unable to check unread notifications." />
-          <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={scope.effect(() => void unreadQuery.refetch())}>Retry unread count</Button>
+          <Button variant="outline" className={actionClass} disabled={unreadQuery.isFetching} onClick={scope.effect(() => void unreadQuery.refetch())}>{translate("Retry unread count")}</Button>
         </div> : null}
       </div>
-      <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Their read status is unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored to Active. Their read status is unchanged.' : archive.isSuccess ? 'Notification archived. Its read status is unchanged.' : restore.isSuccess ? 'Notification restored to Active.' : markRead.isSuccess ? 'Notification marked as read.' : markSelected.isSuccess ? 'Selected notifications marked as read.' : markSelectedUnread.isSuccess ? 'Selected notifications marked as unread.' : markAll.isSuccess ? `All active notifications in ${categoryLabels[markAll.variables]} marked as read.` : ''}</p>
-      {markSelectedUnread.isError ? <RequestErrorToast error={markSelectedUnread.error} message={userFacingRequestError(markSelectedUnread.error, 'Unable to mark selected notifications as unread. Your selection is kept. Try again.')} /> : null}
-      {markRead.isError || markAll.isError || markSelected.isError ? <RequestErrorToast error={markRead.error ?? markAll.error ?? markSelected.error} message={userFacingRequestError(markRead.error ?? markAll.error ?? markSelected.error, 'Unable to mark notifications as read. Try again.')} /> : null}
-      {archive.isError || restore.isError || archiveSelected.isError || restoreSelected.isError ? <RequestErrorToast error={archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error} message={userFacingRequestError(archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error, archiveSelected.isError || restoreSelected.isError ? 'Unable to move selected notifications. Your selection is kept. Try again.' : 'Unable to move this notification. Try again.')} /> : null}
-      {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading notifications…</p> : null}
+      <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? translate("Selected notifications archived. Their read status is unchanged.") : restoreSelected.isSuccess ? translate("Selected notifications restored to Active. Their read status is unchanged.") : archive.isSuccess ? translate("Notification archived. Its read status is unchanged.") : restore.isSuccess ? translate("Notification restored to Active.") : markRead.isSuccess ? translate("Notification marked as read.") : markSelected.isSuccess ? translate("Selected notifications marked as read.") : markSelectedUnread.isSuccess ? translate("Selected notifications marked as unread.") : markAll.isSuccess ? translate("All active notifications in {category} marked as read.", { category: owned(categoryLabels[markAll.variables]) }) : ''}</p>
+      {markSelectedUnread.isError ? <RequestErrorToast error={markSelectedUnread.error} message={userFacingRequestError(markSelectedUnread.error, translate("Unable to mark selected notifications as unread. Your selection is kept. Try again."))} /> : null}
+      {markRead.isError || markAll.isError || markSelected.isError ? <RequestErrorToast error={markRead.error ?? markAll.error ?? markSelected.error} message={userFacingRequestError(markRead.error ?? markAll.error ?? markSelected.error, translate("Unable to mark notifications as read. Try again."))} /> : null}
+      {archive.isError || restore.isError || archiveSelected.isError || restoreSelected.isError ? <RequestErrorToast error={archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error} message={userFacingRequestError(archive.error ?? restore.error ?? archiveSelected.error ?? restoreSelected.error, archiveSelected.isError || restoreSelected.isError ? translate("Unable to move selected notifications. Your selection is kept. Try again.") : translate("Unable to move this notification. Try again."))} /> : null}
+      {query.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading notifications…")}</p> : null}
       {query.isError && !query.isFetchNextPageError ? <div className="space-y-3 rounded-xl border border-border p-4">
-        <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load notifications. Check your connection and try again.')} />
-        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</Button>
+        <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, translate("Unable to load notifications. Check your connection and try again."))} />
+        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={() => void query.refetch()}>{translate("Retry")}</Button>
       </div> : null}
-      <ul aria-label="Notifications" className="space-y-2">
+      <ul aria-label={translate("Notifications")} className="space-y-2">
         {items.map((item) => {
           const link = memberLink(item.link)
           return <li key={item.id} className={cn('space-y-3 rounded-xl border border-border px-3 py-3', item.is_read ? 'bg-card' : 'bg-accent')}>
             <div className="space-y-1">
               <label className="flex min-h-11 w-fit items-center gap-3 text-sm text-muted-foreground">
-                <input type="checkbox" className="size-5 accent-primary" aria-label={`Select notification: ${item.title}`} checked={selection.ids.includes(item.id)} disabled={selection.ids.length >= 200 && !selection.ids.includes(item.id)} onChange={() => selection.toggle(item.id)} />
-                Select notification
-              </label>
+                <input type="checkbox" className="size-5 accent-primary" aria-label={translate("Select notification: {title}", { title: item.title })} checked={selection.ids.includes(item.id)} disabled={selection.ids.length >= 200 && !selection.ids.includes(item.id)} onChange={() => selection.toggle(item.id)} />
+                {translate("Select notification")}</label>
               <p className="text-sm font-medium">{item.title}</p>
               {item.body ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}
-              {item.created_at ? <time className="block text-xs text-muted-foreground" dateTime={item.created_at} title={new Date(item.created_at).toLocaleString()}>{relativeTime(item.created_at)}</time> : null}
+              {item.created_at ? <time className="block text-xs text-muted-foreground" dateTime={item.created_at} title={formatDate(item.created_at, { dateStyle: 'medium', timeStyle: 'short' })}>{relativeTime(item.created_at, undefined, locale)}</time> : null}
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {link ? <Button asChild variant="outline" className={actionClass}><Link to={link} aria-label={`Open notification: ${item.title}`}>Open notification</Link></Button> : null}
-              {!item.is_read ? <Button variant="ghost" className={actionClass} disabled={pending} aria-label={`Mark as read: ${item.title}`} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
-                {markRead.isPending && markRead.variables === item.id ? 'Marking as read…' : 'Mark as read'}
-              </Button> : <span className="text-xs text-muted-foreground">Read</span>}
-              {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Archive notification: ${item.title}`} onClick={() => { resetErrors(); archive.mutate(item.id) }}>
-                {archive.isPending && archive.variables === item.id ? 'Archiving…' : 'Archive'}
-              </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Restore notification: ${item.title}`} onClick={() => { resetErrors(); restore.mutate(item.id) }}>
-                {restore.isPending && restore.variables === item.id ? 'Restoring…' : 'Restore'}
+              {link ? <Button asChild variant="outline" className={actionClass}><Link to={link} aria-label={translate("Open notification: {title}", { title: item.title })}>{translate("Open notification")}</Link></Button> : null}
+              {!item.is_read ? <Button variant="ghost" className={actionClass} disabled={pending} aria-label={translate("Mark as read: {title}", { title: item.title })} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
+                {markRead.isPending && markRead.variables === item.id ? translate("Marking as read…") : translate("Mark as read")}
+              </Button> : <span className="text-xs text-muted-foreground">{translate("Read")}</span>}
+              {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={translate("Archive notification: {title}", { title: item.title })} onClick={() => { resetErrors(); archive.mutate(item.id) }}>
+                {archive.isPending && archive.variables === item.id ? translate("Archiving…") : translate("Archive")}
+              </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={translate("Restore notification: {title}", { title: item.title })} onClick={() => { resetErrors(); restore.mutate(item.id) }}>
+                {restore.isPending && restore.variables === item.id ? translate("Restoring…") : translate("Restore")}
               </Button>}
             </div>
           </li>
@@ -176,11 +178,11 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
         const loadedPages = query.data?.pages.length ?? 0
         void query.fetchNextPage()?.then(scope.effect((result) => { if (result.isSuccess && (result.data?.pages.length ?? 0) > loadedPages) selection.loadedMore() }))
       }}>
-        {query.isFetchingNextPage ? 'Loading more…' : query.isFetchNextPageError ? 'Retry load more' : 'Load more'}
+        {query.isFetchingNextPage ? translate("Loading more…") : query.isFetchNextPageError ? translate("Retry load more") : translate("Load more")}
       </Button> : null}
       {query.isSuccess && items.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
-        <p className="text-sm text-muted-foreground">{view === 'active' ? 'No active notifications yet. Refresh to check for new updates.' : 'No archived notifications in this category. Archive a notification from Active to keep it here.'}</p>
-        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={scope.effect(() => { selection.clear(); void scope.client.resetQueries({ queryKey: notificationKeys.list(category, view), exact: true }) })}>Refresh Inbox</Button>
+        <p className="text-sm text-muted-foreground">{view === 'active' ? translate("No active notifications yet. Refresh to check for new updates.") : translate("No archived notifications in this category. Archive a notification from Active to keep it here.")}</p>
+        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={scope.effect(() => { selection.clear(); void scope.client.resetQueries({ queryKey: notificationKeys.list(category, view), exact: true }) })}>{translate("Refresh Inbox")}</Button>
       </div> : null}
     </div>
   )

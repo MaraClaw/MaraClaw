@@ -1365,6 +1365,11 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (co
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id);
 
+-- Serves agent-scoped conversation reads (list_recent, list_for_agent_conversation) in created_at order.
+-- Add no dependency statistics on (agent_id, conversation_id): the planner costs a BitmapAnd of the single-column
+-- indexes as if they were independent, so an accurate estimate makes it sort the whole conversation instead.
+CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_conv_created ON chat_messages (agent_id, conversation_id, created_at DESC);
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
 ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
 WHERE client_submission_id IS NOT NULL;
@@ -1664,6 +1669,12 @@ CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
 CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
     ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered';
+-- Serves the pending_dispatch_page keyset walk, which stops after one page of lane heads.
+CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_order
+    ON gateway_messages (created_at, id) WHERE status = 'pending';
+-- Serves the newest-first agent listing of every status (gateway_message_dao.list_recent).
+CREATE INDEX IF NOT EXISTS ix_gateway_messages_agent_created
+    ON gateway_messages (agent_id, created_at DESC NULLS LAST);
 
 -- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
 -- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,

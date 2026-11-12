@@ -1,8 +1,10 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Check, Copy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
 export function ResponseCopy({ text }: { readonly text: string }) {
+  const { t: translate } = useTranslation()
   const [copy, setCopy] = useState({ source: '', status: '' })
   const copied = copy.source === text && copy.status === 'copied'
   useEffect(() => {
@@ -23,8 +25,8 @@ export function ResponseCopy({ text }: { readonly text: string }) {
     }
   }
   return <div className="flex min-h-11 items-center justify-end gap-2 whitespace-normal">
-    <span role="status" aria-live="polite" className="text-xs">{copy.source === text && copy.status === 'failed' ? 'Could not copy. Try again.' : copied ? 'Copied' : ''}</span>
-    <Button type="button" variant="ghost" size="icon" className="size-11 text-inherit" aria-label={copied ? 'Copied response' : 'Copy response'} title={copied ? 'Copied response' : 'Copy response'} onClick={() => void copyResponse()}>
+    <span role="status" aria-live="polite" className="text-xs">{copy.source === text && copy.status === 'failed' ? translate("Could not copy. Try again.") : copied ? translate("Copied") : ''}</span>
+    <Button type="button" variant="ghost" size="icon" className="size-11 text-inherit" aria-label={copied ? translate("Copied response") : translate("Copy response")} title={copied ? translate("Copied response") : translate("Copy response")} onClick={() => void copyResponse()}>
       {copied ? <Check className="size-4" aria-hidden /> : <Copy className="size-4" aria-hidden />}
     </Button>
   </div>

@@ -1,6 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -12,6 +11,9 @@ import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { changePasswordRequest } from '@/lib/auth-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
+import { useTranslation } from '@/hooks/use-translation'
+import { useLocalizedMessage } from '@/hooks/use-localized-message'
+import { message } from '@/lib/i18n'
 
 const schema = z
   .object({
@@ -34,8 +36,9 @@ const schema = z
 type FormValues = z.infer<typeof schema>
 
 export function SettingsPassword() {
+  const { t } = useTranslation()
   const { owner, mustChangePassword, refreshReplacement, isCurrent } = useAuth()
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formError, setFormError] = useLocalizedMessage()
 
   const {
     register,
@@ -65,25 +68,24 @@ export function SettingsPassword() {
       if (!installedOwner || !isCurrent(installedOwner)) return
       reset()
       toast.success(
-        wasForced ? 'Password updated. You can use the admin console now.' : 'Password updated',
+        t(wasForced ? 'Password updated. You can use the admin console now.' : 'Password updated'),
       )
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
       if (error instanceof ApiError) {
-        setFormError(formatApiDetail(error.detail) ?? 'Unable to update password.')
+        setFormError(formatApiDetail(error.detail) ?? message('Unable to update password.'))
         return
       }
-      setFormError('Unable to update password. Check your connection and try again.')
+      setFormError(message('Unable to update password. Check your connection and try again.'))
     }
   }
 
   return (
     <Card id="change-password" className="scroll-mt-6">
       <CardHeader>
-        <CardTitle>Change password</CardTitle>
+        <CardTitle>{t('Change password')}</CardTitle>
         <CardDescription>
-          Enter your current password, then choose a new one (at least 6 characters).
-          Password changes apply to your global identity across organizations.
+          {t('Enter your current password, then choose a new one (at least 6 characters). Password changes apply to your global identity across organizations.')}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -97,21 +99,21 @@ export function SettingsPassword() {
           noValidate
         >
           <PasswordField
-            label="Current password"
+            label={t('Current password')}
             autoComplete="current-password"
             disabled={isSubmitting}
             error={errors.old_password?.message}
             {...register('old_password')}
           />
           <PasswordField
-            label="New password"
+            label={t('New password')}
             autoComplete="new-password"
             disabled={isSubmitting}
             error={errors.new_password?.message}
             {...register('new_password')}
           />
           <PasswordField
-            label="Confirm new password"
+            label={t('Confirm new password')}
             autoComplete="new-password"
             disabled={isSubmitting}
             error={errors.confirm_password?.message}
@@ -122,10 +124,10 @@ export function SettingsPassword() {
             {isSubmitting ? (
               <>
                 <Loader2 className="size-4 animate-spin" aria-hidden />
-                Updating…
+                {t('Updating…')}
               </>
             ) : (
-              'Update password'
+              t('Update password')
             )}
           </Button>
         </form>

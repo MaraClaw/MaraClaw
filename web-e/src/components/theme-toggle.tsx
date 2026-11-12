@@ -1,9 +1,11 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Moon, Sun } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/hooks/use-theme'
 
 export function ThemeToggle({ className }: { className?: string }) {
+  const { t: translate } = useTranslation()
   const { resolvedTheme, toggleTheme } = useTheme()
   const isDark = resolvedTheme === 'dark'
 
@@ -14,8 +16,8 @@ export function ThemeToggle({ className }: { className?: string }) {
       size="icon"
       className={className}
       onClick={toggleTheme}
-      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label={isDark ? translate("Switch to light mode") : translate("Switch to dark mode")}
+      title={isDark ? translate("Switch to light mode") : translate("Switch to dark mode")}
     >
       <Sun
         className="size-4 scale-100 rotate-0 transition-[transform,opacity] duration-200 dark:scale-0 dark:-rotate-90 dark:opacity-0"

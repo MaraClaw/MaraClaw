@@ -17,8 +17,11 @@ reassignment. Committed message mutations invalidate even cached older pages.
 Sender display-name changes do not update session revisions; cached names can
 remain stale until their existing 30-second TTL expires. There is deliberately
 no participant-to-session invalidation trigger: agent updates lock
-agent → participant, while message persistence locks session → agent. Acquiring
-session locks from participant updates would invert that order and can deadlock.
+agent → participant, while message persistence locks agent → session
+(`chat_session_dao.lock_for_agent` takes the agent row `FOR KEY SHARE` first, the
+order native claims and settlements use). Acquiring session locks from participant
+updates would add a participant → session order that message persistence does not
+follow.
 
 ## Existing databases
 
@@ -39,3 +42,15 @@ configuration: `uv run python -m app.scripts.bootstrap_db` from `engine/`. This
 removes the incompatible trigger and restores message inserts, updates and deletes
 without adding a column or recreating the database. Such schemas continue to serve
 history uncached after the rerun.
+
+`ix_chat_messages_agent_conv_created` on `(agent_id, conversation_id,
+created_at DESC)` serves agent-scoped conversation reads
+(`chat_message_dao.list_recent`, `list_for_agent_conversation`) in order, so a
+recent-history read stops after its page instead of sorting the whole
+conversation. A bootstrap rerun builds it on an existing database with a plain
+`CREATE INDEX`, which blocks writes to `chat_messages` while it runs; on a large
+table, build it first with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and the
+baseline definition. Add no dependency statistics on `agent_id` and
+`conversation_id`: the planner costs a `BitmapAnd` of the single-column indexes
+as if both were independent, and an accurate estimate makes that plan, with its
+full-conversation sort, look cheaper.

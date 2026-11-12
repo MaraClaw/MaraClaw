@@ -13,6 +13,7 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.runtime.tasks import TaskAdmission
 from app.services.openclaw_native_capacity import LaneKey, native_capacity, turn_release
+from app.services.openclaw_release_backoff import release_backoff
 
 
 class NativeDispatcher:
@@ -33,6 +34,8 @@ class NativeDispatcher:
         if not self.admission.accepting:
             return False
         lane = LaneKey.of(pending)
+        if release_backoff.waiting(lane):
+            return True
         key = (agent.id, lane.lane)
         if key in self.running:
             self.again.add(key)
@@ -70,7 +73,7 @@ class NativeDispatcher:
             followup = False
             try:
                 row = await gateway_message_dao.lane_head(lane.probe())
-                if row is not None and self.accepting():
+                if row is not None and self.accepting() and not release_backoff.waiting(LaneKey.of(row)):
                     await self.run(agent, row.content, row.id)
                     release()
                     if self.accepting():

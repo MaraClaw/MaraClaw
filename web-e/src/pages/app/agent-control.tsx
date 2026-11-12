@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useRef, useState, type MouseEvent } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
@@ -25,6 +26,7 @@ import { useControlLease } from './use-control-lease'
 import { ControlCaptureFields } from './control-capture-fields'
 
 export function AgentControlPage() {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const [params, setParams] = useSearchParams()
@@ -66,7 +68,7 @@ export function AgentControlPage() {
       if (!control.isMounted()) return
       switch (result.status) {
         case 'already_locked':
-          toast.error('Someone else is controlling this session')
+          toast.error(translate("Someone else is controlling this session"))
           return
         case 'locked':
           break
@@ -85,10 +87,10 @@ export function AgentControlPage() {
           setDomain(url.url)
         }
       }
-      toast.success('Take Control locked. Agent tools pause until you unlock.')
+      toast.success(translate("Take Control locked. Agent tools pause until you unlock."))
     } catch {
       if (!control.isMounted()) return
-      toast.error('Unable to lock the session')
+      toast.error(translate("Unable to lock the session"))
     } finally {
       finish()
     }
@@ -105,11 +107,11 @@ export function AgentControlPage() {
         : { export_cookies: false }), true)
       if (!result || !control.isMounted()) return
       toast.success(
-        result.cookies_exported ? `Control released. Saved ${result.cookie_count ?? 0} cookies.` : 'Control released. No cookies saved.',
+        result.cookies_exported ? translate("Control released. Saved {count} cookies.", { count: result.cookie_count ?? 0 }) : translate("Control released. No cookies saved."),
       )
     } catch {
       if (!control.isMounted()) return
-      toast.error('Unable to unlock')
+      toast.error(translate("Unable to unlock"))
     } finally {
       finish()
     }
@@ -120,15 +122,14 @@ export function AgentControlPage() {
       {sessions.isError ? <RequestErrorToast error={sessions.error} message="Unable to load control sessions. Try again." /> : null}
       {sharedSession.isError ? <RequestErrorToast error={sharedSession.error} message="Unable to open the shared control session. Try again." /> : null}
       <div>
-        <h2 className="font-display text-lg font-semibold">Take Control</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Take Control")}</h2>
         <p className="text-sm text-muted-foreground">
-          Drive the live AgentBay browser or desktop. The agent waits while you are locked in.
-        </p>
+          {translate("Drive the live AgentBay browser or desktop. The agent waits while you are locked in.")}</p>
       </div>
       {captureError ? <RequestErrorToast message={captureError} /> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs">
-          <span className="text-muted-foreground">Chat session</span>
+          <span className="text-muted-foreground">{translate("Chat session")}</span>
           <Select
             className="mt-1"
             value={sessionId}
@@ -137,22 +138,22 @@ export function AgentControlPage() {
           >
             {availableSessions.map((session) => (
               <option key={session.id} value={session.id}>
-                {session.source_channel === 'shared' ? 'Shared conversation' : session.title}
+                {session.source_channel === 'shared' ? translate("Shared conversation") : session.title}
               </option>
             ))}
           </Select>
         </label>
         <label className="text-xs">
-          <span className="text-muted-foreground">Environment</span>
+          <span className="text-muted-foreground">{translate("Environment")}</span>
           <Select
             className="mt-1"
             value={envType}
             onChange={scope.effect((event) => setEnvType(event.target.value))}
             disabled={locked || busy}
           >
-            <option value="browser">Browser</option>
-            <option value="computer">Computer</option>
-            <option value="code">Code</option>
+            <option value="browser">{translate("Browser")}</option>
+            <option value="computer">{translate("Computer")}</option>
+            <option value="code">{translate("Code")}</option>
           </Select>
         </label>
       </div>
@@ -161,14 +162,12 @@ export function AgentControlPage() {
       <div className="flex flex-wrap gap-2">
         {locked ? (
           <Button size="sm" onClick={() => void unlock()} disabled={busy}>
-            Release control
-          </Button>
+            {translate("Release control")}</Button>
         ) : (
           <Button size="sm" onClick={() => void lock()} disabled={busy || !sessionId}>
-            Take control
-          </Button>
+            {translate("Take control")}</Button>
         )}
-        {['Enter', 'Tab', 'Escape', 'Backspace'].map((key) => (
+        {[translate("Enter"), translate("Tab"), translate("Escape"), translate("Backspace")].map((key) => (
           <Button
             key={key}
             size="sm"
@@ -183,9 +182,9 @@ export function AgentControlPage() {
       <div className="flex gap-2">
         <Input
           value={typed}
-          aria-label="Remote session text"
+          aria-label={translate("Remote session text")}
           onChange={scope.effect((event) => setTyped(event.target.value))}
-          placeholder="Type into the remote session"
+          placeholder={translate("Type into the remote session")}
           disabled={!locked || busy}
         />
         <Button
@@ -198,15 +197,14 @@ export function AgentControlPage() {
             })
           }}
         >
-          Send
-        </Button>
+          {translate("Send")}</Button>
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-muted/30">
         {screenshot ? (
           <img
             ref={imgRef}
             src={screenshot.startsWith('data:') ? screenshot : `data:image/jpeg;base64,${screenshot}`}
-            alt="Live AgentBay session"
+            alt={translate("Live AgentBay session")}
             className="max-h-[70vh] w-full cursor-crosshair object-contain"
             onClick={(event) => {
               if (!scope.isCurrent()) return
@@ -229,13 +227,12 @@ export function AgentControlPage() {
           />
         ) : (
           <p className="p-10 text-center text-sm text-muted-foreground">
-            {locked ? 'Waiting for a screenshot…' : 'Lock the session to start a live preview.'}
+            {locked ? translate("Waiting for a screenshot…") : translate("Lock the session to start a live preview.")}
           </p>
         )}
       </div>
       <Label className="text-xs text-muted-foreground">
-        Click to click. Drag for sliders. Cookies are saved only with a domain and an explicit save choice.
-      </Label>
+        {translate("Click to click. Drag for sliders. Cookies are saved only with a domain and an explicit save choice.")}</Label>
     </div>
   )
 }

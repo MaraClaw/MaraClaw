@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 
@@ -12,13 +13,14 @@ import { relativeTime } from '@/lib/relative-time'
 import type { AgentOut } from '@/lib/workspace-api'
 
 export function AgentActivityPage() {
+  const { t: translate } = useTranslation()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   if (agent.access_level !== 'manage') {
     return (
       <section className="space-y-4 p-6" aria-labelledby="activity-heading">
-        <h1 id="activity-heading" className="font-display text-xl font-semibold">Activity</h1>
-        <p className="text-sm text-muted-foreground">Only agent managers can view activity. Ask a manager for access.</p>
-        <Button variant="outline" asChild><Link to={`/app/agents/${encodeURIComponent(agent.id)}/chat`}>Return to chat</Link></Button>
+        <h1 id="activity-heading" className="font-display text-xl font-semibold">{translate("Activity")}</h1>
+        <p className="text-sm text-muted-foreground">{translate("Only agent managers can view activity. Ask a manager for access.")}</p>
+        <Button variant="outline" asChild><Link to={`/app/agents/${encodeURIComponent(agent.id)}/chat`}>{translate("Return to chat")}</Link></Button>
       </section>
     )
   }
@@ -26,6 +28,7 @@ export function AgentActivityPage() {
 }
 
 function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
+  const { t: translate, formatDate, locale } = useTranslation()
   const scope = useWorkspaceSession()
   const [draft, setDraft] = useState('')
   const [filter, setFilter] = useState('')
@@ -56,7 +59,7 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
       current ? { ...current, access_level: 'use' } : current)
   }, [denied, scope, agent.id])
 
-  if (denied) return <p role="alert" className="p-6 text-sm text-muted-foreground">Activity access is no longer available. Ask a manager for access.</p>
+  if (denied) return <p role="alert" className="p-6 text-sm text-muted-foreground">{translate("Activity access is no longer available. Ask a manager for access.")}</p>
 
   const items = [...new Map(history.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item])).values()]
   const olderError = history.isFetchNextPageError
@@ -64,40 +67,40 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
 
   return (
     <section className="max-w-2xl space-y-6 p-6" aria-labelledby="activity-heading">
-      <h1 id="activity-heading" className="font-display text-xl font-semibold">Activity</h1>
+      <h1 id="activity-heading" className="font-display text-xl font-semibold">{translate("Activity")}</h1>
       <form className="space-y-2" onSubmit={scope.effect((event) => {
         event.preventDefault()
         setFilter(draft)
       })}>
-        <Label htmlFor="activity-type">Action type (exact match)</Label>
+        <Label htmlFor="activity-type">{translate("Action type (exact match)")}</Label>
         <div className="flex flex-wrap gap-2">
           <Input id="activity-type" name="action_type" className="w-full sm:w-auto sm:flex-1" value={draft}
             onChange={scope.effect((event) => setDraft(event.target.value))} aria-describedby="activity-filter-help" />
-          <Button type="submit">Apply filter</Button>
-          <Button type="button" variant="outline" onClick={scope.effect(() => { setDraft(''); setFilter('') })}>Clear filter</Button>
+          <Button type="submit">{translate("Apply filter")}</Button>
+          <Button type="button" variant="outline" onClick={scope.effect(() => { setDraft(''); setFilter('') })}>{translate("Clear filter")}</Button>
         </div>
-        <p id="activity-filter-help" className="text-sm text-muted-foreground">Leave blank to show all action types.</p>
+        <p id="activity-filter-help" className="text-sm text-muted-foreground">{translate("Leave blank to show all action types.")}</p>
       </form>
       <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
-        {history.isPaused ? 'You’re offline. Activity will load when you reconnect.'
-          : history.isPending ? 'Loading activity…'
-          : history.isFetchingNextPage ? 'Loading older activity…'
+        {history.isPaused ? translate("You’re offline. Activity will load when you reconnect.")
+          : history.isPending ? translate("Loading activity…")
+          : history.isFetchingNextPage ? translate("Loading older activity…")
           : history.isError ? ''
-          : items.length === 0 ? 'No activity found. Clear the filter or refresh to check again.'
-          : windowed ? 'Showing up to 100 loaded actions. Refresh to return to the latest.'
-          : 'Newest activity first.'}
+          : items.length === 0 ? translate("No activity found. Clear the filter or refresh to check again.")
+          : windowed ? translate("Showing up to 100 loaded actions. Refresh to return to the latest.")
+          : translate("Newest activity first.")}
       </p>
       {items.length > 0 ? (
-        <ol aria-label="Agent activity" className="divide-y divide-border">
+        <ol aria-label={translate("Agent activity")} className="divide-y divide-border">
           {items.map((item) => {
             const timestamp = item.created_at === null ? Number.NaN : Date.parse(item.created_at)
             const createdAt = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null
             return (
               <li key={item.id} className="space-y-2 py-4 first:pt-0">
                 <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm text-muted-foreground">
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{item.action_type || 'Unknown action'}</span>
-                  {createdAt === null ? <span>Time unavailable</span> : (
-                    <time dateTime={createdAt} title={new Date(createdAt).toLocaleString()}>{relativeTime(createdAt)}</time>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{item.action_type || translate("Unknown action")}</span>
+                  {createdAt === null ? <span>{translate("Time unavailable")}</span> : (
+                    <time dateTime={createdAt} title={formatDate(createdAt, { dateStyle: 'medium', timeStyle: 'short' })}>{relativeTime(createdAt, undefined, locale)}</time>
                   )}
                 </div>
                 <p className="whitespace-pre-wrap text-base leading-relaxed [overflow-wrap:anywhere] sm:text-sm">{item.summary}</p>
@@ -111,12 +114,12 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
         {history.hasNextPage ? (
           <Button type="button" variant="outline" className="min-w-40" disabled={history.isFetching || history.isPaused}
             onClick={() => { if (!history.isFetching) void history.fetchNextPage() }}>
-            {olderError ? 'Retry older activity' : 'Load older activity'}
+            {olderError ? translate("Retry older activity") : translate("Load older activity")}
           </Button>
         ) : null}
         <Button type="button" variant="outline" disabled={history.isFetching || history.isPaused}
           onClick={scope.effect(() => { void scope.client.resetQueries({ queryKey: [...key, filter], exact: true }) })}>
-          {history.isError && !olderError ? 'Retry activity' : 'Refresh activity'}
+          {history.isError && !olderError ? translate("Retry activity") : translate("Refresh activity")}
         </Button>
       </div>
     </section>

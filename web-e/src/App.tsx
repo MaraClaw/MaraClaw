@@ -1,3 +1,4 @@
+import { Translation } from '@/components/translation'
 import { Component, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
 
@@ -15,15 +16,14 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
     if (this.state.error) {
       return (
         <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-background px-6 text-center">
-          <p className="font-display text-lg font-semibold">Something went wrong</p>
+          <p className="font-display text-lg font-semibold"><Translation id="Something went wrong" /></p>
           <p className="max-w-md text-sm text-muted-foreground">{this.state.error.message}</p>
           <button
             type="button"
             className="rounded-xl bg-primary px-4 py-2 text-sm text-primary-foreground"
             onClick={() => this.setState({ error: null })}
           >
-            Try again
-          </button>
+            <Translation id="Try again" /></button>
         </div>
       )
     }

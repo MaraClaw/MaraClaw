@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Reveal } from '@/components/motion'
 import {
   Accordion,
@@ -30,21 +31,18 @@ const faqs = [
 ]
 
 export function Faq() {
+  const { t: translate, owned } = useTranslation()
   return (
     <section id="faq" className="scroll-mt-20 py-20 sm:py-28">
       <div className="container-page">
         <div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:gap-14">
           <Reveal>
             <p className="text-sm font-semibold tracking-wide text-primary uppercase">
-              FAQ
-            </p>
+              {translate("FAQ")}</p>
             <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-              Questions teams ask first
-            </h2>
+              {translate("Questions teams ask first")}</h2>
             <p className="mt-4 max-w-md text-base leading-relaxed text-muted-foreground">
-              Short answers grounded in how MaraClaw is built - agents, tenancy,
-              channels, and control.
-            </p>
+              {translate("Short answers grounded in how MaraClaw is built - agents, tenancy, channels, and control.")}</p>
           </Reveal>
 
           <Reveal delay={0.06}>
@@ -53,10 +51,10 @@ export function Faq() {
                 {faqs.map((item, index) => (
                   <AccordionItem key={item.q} value={`item-${index}`}>
                     <AccordionTrigger className="text-foreground hover:text-primary">
-                      {item.q}
+                      {owned(item.q)}
                     </AccordionTrigger>
                     <AccordionContent className="text-muted-foreground">
-                      {item.a}
+                      {owned(item.a)}
                     </AccordionContent>
                   </AccordionItem>
                 ))}

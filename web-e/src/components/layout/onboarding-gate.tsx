@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -9,6 +10,7 @@ import { agentExistenceOptions } from '@/lib/agents-query'
 import { Button } from '@/components/ui/button'
 
 export function OnboardingGate({ children }: { readonly children?: ReactNode }) {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const location = useLocation()
   const agents = useQuery(agentExistenceOptions())
@@ -32,7 +34,7 @@ export function OnboardingGate({ children }: { readonly children?: ReactNode }) 
       <Button variant="outline" disabled={agents.isFetching || onboarding.isFetching} onClick={() => {
         void agents.refetch()
         void onboarding.refetch()
-      }}>Retry onboarding check</Button>
+      }}>{translate("Retry onboarding check")}</Button>
     </div>
   }
   if (scope.isCurrent() && agents.isSuccess && onboarding.isSuccess && !hasAgents && !completed && !skip && !onOnboarding) {

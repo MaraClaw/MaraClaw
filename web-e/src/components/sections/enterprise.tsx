@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { Building2, KeyRound, Layers3, LockKeyhole } from 'lucide-react'
 
 import { Reveal, Stagger, StaggerItem } from '@/components/motion'
@@ -30,6 +31,7 @@ const pillars = [
 ]
 
 export function Enterprise() {
+  const { t: translate, owned } = useTranslation()
   return (
     <section
       id="enterprise"
@@ -38,15 +40,11 @@ export function Enterprise() {
       <div className="container-page">
         <Reveal className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-semibold tracking-wide text-primary uppercase">
-            Enterprise
-          </p>
+            {translate("Enterprise")}</p>
           <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Control plane for a digital workforce
-          </h2>
+            {translate("Control plane for a digital workforce")}</h2>
           <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-            MaraClaw is not a single-user toy. It is a multi-tenant backend for
-            provisioning, supervising, and scaling OpenClaw agents across teams.
-          </p>
+            {translate("MaraClaw is not a single-user toy. It is a multi-tenant backend for provisioning, supervising, and scaling OpenClaw agents across teams.")}</p>
         </Reveal>
 
         <Stagger className="mt-12 grid gap-4 sm:grid-cols-2">
@@ -58,10 +56,10 @@ export function Enterprise() {
                 </span>
                 <div>
                   <h3 className="font-display text-lg font-semibold tracking-tight text-foreground">
-                    {pillar.title}
+                    {owned(pillar.title)}
                   </h3>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    {pillar.description}
+                    {owned(pillar.description)}
                   </p>
                 </div>
               </div>

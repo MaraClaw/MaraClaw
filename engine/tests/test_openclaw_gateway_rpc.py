@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from pywhales import ClientNotFoundError
 from pywhales.client_config import ParsingError
-from pywhales.exceptions import DockerException, ObservationTimeout
+from pywhales.exceptions import DockerException, ObservationCancelled, ObservationLimitError, ObservationTimeout
 
 from app.config import get_settings
 from app.dao.user_dao import user_dao
@@ -592,6 +592,92 @@ async def test_exec_failure_drops_the_cached_guest(monkeypatch, tmp_path):
     assert isinstance(await turn.run(), rpc.UncertainOutcome)
     assert isinstance(await turn.run(), rpc.UncertainOutcome)
     assert turn.resolutions == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (ObservationTimeout(), "exec_timeout"),
+        (ObservationLimitError("response", 16, 17), "output_limit"),
+        (ObservationCancelled(), "exec_cancelled"),
+    ],
+)
+async def test_exec_observation_failure_is_uncertain_and_drops_guest(monkeypatch, tmp_path, streaming, error, code):
+    turn = _Turn(monkeypatch, tmp_path, exec_error=error)
+    turn.cache.put(turn.agent, GuestIdentity("owned", "owned", str(turn.agent.id), ()))
+
+    async def streams(_message):
+        return streaming
+
+    async def guard(*_args):
+        return None
+
+    def execute(*_args):
+        raise error
+
+    monkeypatch.setattr(rpc, "streams_to_web", streams)
+    monkeypatch.setattr(rpc, "response_guard", guard)
+    monkeypatch.setattr(rpc.DeltaRelay, "execute", execute)
+    outcome = await turn.run()
+    assert outcome == rpc.UncertainOutcome(turn.message_id, "unknown", None, code)
+    assert turn.cache.get(turn.agent) is None
+    assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
+
+
+@pytest.mark.asyncio
+async def test_native_files_are_prepared_off_the_event_loop(monkeypatch, tmp_path):
+    turn = _Turn(monkeypatch, tmp_path)
+    loop_thread = current_thread()
+    prepared_off_loop: list[bool] = []
+
+    def prepare(_directory):
+        prepared_off_loop.append(current_thread() is not loop_thread)
+
+    monkeypatch.setattr(openclaw_gateway_config, "prepare_native_gateway_files", prepare)
+    assert isinstance(await turn.run(), rpc.TerminalOutcome)
+    assert prepared_off_loop == [True]
+
+
+@pytest.mark.asyncio
+async def test_identity_preparation_failure_is_not_submitted(monkeypatch, tmp_path):
+    turn = _Turn(monkeypatch, tmp_path)
+
+    async def identity(*_args):
+        raise RuntimeError("identity unavailable")
+
+    monkeypatch.setattr(rpc, "build_identity_context", identity)
+    outcome = await turn.run()
+    assert outcome == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "prepare_failed", None)
+    assert turn.executed == 0
+    assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["streams_to_web", "response_guard", "agent_get"])
+async def test_preparation_read_failure_is_not_submitted(monkeypatch, tmp_path, boundary):
+    turn = _Turn(monkeypatch, tmp_path)
+
+    async def streams(_message):
+        return True
+
+    async def fail(*_args):
+        raise RuntimeError("preparation unavailable")
+
+    async def guard(*_args):
+        return None
+
+    monkeypatch.setattr(rpc, "streams_to_web", streams)
+    monkeypatch.setattr(rpc, "response_guard", guard)
+    if boundary == "agent_get":
+        monkeypatch.setattr(rpc.agent_dao, "get", fail)
+    else:
+        monkeypatch.setattr(rpc, boundary, fail)
+    outcome = await turn.run()
+    assert outcome == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "prepare_failed", None)
+    assert turn.executed == 0
+    assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
 
 
 @pytest.mark.asyncio

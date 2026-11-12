@@ -17,7 +17,7 @@ npm test
 
 ## What CI runs
 
-- `../../.github/workflows/frontend-ci.yml`, `web-a` matrix entry: `contracts:check`, then Unit tests (`npm test`) on Node `26.13.0`.
+- `../../.github/workflows/frontend-ci.yml`, `web-a` matrix entry: `contracts:check`, then Unit tests (`npm test`) on Node `26.13.1`.
 - No standalone browser QA step; browser evidence does not imply CI execution.
 
 ## Conventions

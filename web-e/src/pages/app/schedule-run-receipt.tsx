@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
@@ -26,6 +27,7 @@ function isUnavailable(error: unknown) {
 
 /** Keyed by acceptance: no mutation callback may outlive this receipt. */
 export function ScheduleRunReceipt({ agentId, scheduleId, runId }: ScheduleRunTarget) {
+  const { t: translate, owned } = useTranslation()
   const scope = useWorkspaceSession()
   const lifetime = useRef(new AbortController())
   const target = useMemo(() => ({ agentId, scheduleId, runId }), [agentId, scheduleId, runId])
@@ -76,7 +78,7 @@ export function ScheduleRunReceipt({ agentId, scheduleId, runId }: ScheduleRunTa
         return
       }
       if (isUnavailable(error)) setAccessLost(true)
-      showRequestError(userFacingRequestError(error, 'Cancellation could not be confirmed. Check the run status before trying again.'), error)
+      showRequestError(userFacingRequestError(error, translate("Cancellation could not be confirmed. Check the run status before trying again.")), error)
     },
     onSettled: (_result, _error, signal) => { if (!signal.aborted) setCancelling(false) },
   })
@@ -85,24 +87,24 @@ export function ScheduleRunReceipt({ agentId, scheduleId, runId }: ScheduleRunTa
   }
 
   return (
-    <section aria-label="Current run" className="mt-2 space-y-2">
+    <section aria-label={translate("Current run")} className="mt-2 space-y-2">
       <div aria-live="polite" className="flex flex-wrap items-center gap-2 text-sm">
         {receipt.data && !receipt.isError && !accessLost ? <>
-          <Badge variant="outline">{statusLabels[receipt.data.status]}</Badge>
-          {receipt.data.status === 'pending' ? <span className="text-muted-foreground">Waiting to start.</span> : null}
-          {receipt.data.status === 'running' ? <span className="text-muted-foreground">Already running; cancellation is unavailable.</span> : null}
-          {receipt.data.status === 'unknown' ? <span className="text-muted-foreground">The final outcome is unavailable. Check history for details.</span> : null}
-        </> : <span className="text-muted-foreground">{receipt.isError || accessLost ? 'Run status unavailable.' : 'Loading run status…'}</span>}
+          <Badge variant="outline">{owned(statusLabels[receipt.data.status])}</Badge>
+          {receipt.data.status === 'pending' ? <span className="text-muted-foreground">{translate("Waiting to start.")}</span> : null}
+          {receipt.data.status === 'running' ? <span className="text-muted-foreground">{translate("Already running; cancellation is unavailable.")}</span> : null}
+          {receipt.data.status === 'unknown' ? <span className="text-muted-foreground">{translate("The final outcome is unavailable. Check history for details.")}</span> : null}
+        </> : <span className="text-muted-foreground">{receipt.isError || accessLost ? translate("Run status unavailable.") : translate("Loading run status…")}</span>}
       </div>
-      <p className="break-all text-xs text-muted-foreground">Run <code>{runId}</code></p>
-      {receipt.isError ? <RequestErrorToast error={receipt.error} message={userFacingRequestError(receipt.error, 'Unable to load run status. Try again.')} /> : null}
-      {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
+      <p className="break-all text-xs text-muted-foreground">{translate("Run")}{' '}<code>{runId}</code></p>
+      {receipt.isError ? <RequestErrorToast error={receipt.error} message={userFacingRequestError(receipt.error, translate("Unable to load run status. Try again."))} /> : null}
+      {message ? <p role="status" className="text-sm text-muted-foreground">{owned(message)}</p> : null}
       {receipt.data?.can_cancel && !accessLost && !isUnavailable(receipt.error) ? <Button size="sm" variant="outline" disabled={cancel.isPending}
         onClick={requestCancel}>
-        {cancel.isPending ? 'Cancelling…' : 'Cancel pending run'}
+        {cancel.isPending ? translate("Cancelling…") : translate("Cancel pending run")}
       </Button> : null}
       {receipt.isError && !isUnavailable(receipt.error) ? <Button size="sm" variant="outline" disabled={receipt.isFetching || cancel.isPending}
-        onClick={scope.effect(() => { void receipt.refetch() })}>Retry status</Button> : null}
+        onClick={scope.effect(() => { void receipt.refetch() })}>{translate("Retry status")}</Button> : null}
     </section>
   )
 }

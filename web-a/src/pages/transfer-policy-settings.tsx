@@ -14,10 +14,12 @@ import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { ApiError } from '@/lib/http'
 import { fetchTransferPolicy, updateTransferPolicy, type TransferPolicy } from '@/lib/transfer-policy-api'
 import { formatMinorAmount, transferPolicyDraftSchema, transferPolicyToDraft } from './transfer-policy-form'
+import { useTranslation } from '@/hooks/use-translation'
 
 const policyKey = ['admin-transfer-policy'] as const
 
 export function TransferPolicySettings() {
+  const { t } = useTranslation()
   const id = useId()
   const { mustChangePassword } = useAuth()
   const policy = useQuery({
@@ -30,22 +32,21 @@ export function TransferPolicySettings() {
   return (
     <Card role="region" aria-labelledby={`${id}-heading`}>
       <CardHeader>
-        <h2 id={`${id}-heading`} className="font-display text-lg font-semibold">Transfer fee and instructions</h2>
+        <h2 id={`${id}-heading`} className="font-display text-lg font-semibold">{t('Transfer fee and instructions')}</h2>
         <CardDescription>
-          Platform-wide policy shown to members when they create a transfer admission request.
-          Payment is verified manually; these settings do not collect or confirm payment or approve an admission.
+          {t('Platform-wide policy shown to members when they create a transfer admission request. Payment is verified manually; these settings do not collect or confirm payment or approve an admission.')}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-5 [overflow-wrap:anywhere]">
         {mustChangePassword ? (
-          <p className="text-sm text-muted-foreground"><a className="text-primary underline underline-offset-4" href="#change-password">Change your password</a> before viewing or updating this policy.</p>
+          <p className="text-sm text-muted-foreground"><a className="text-primary underline underline-offset-4" href="#change-password">{t('Change your password')}</a> {t('before viewing or updating this policy.')}</p>
         ) : (
           <>
-            {policy.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer policy…</p> : null}
+            {policy.isPending ? <p role="status" className="text-sm text-muted-foreground">{t('Loading transfer policy…')}</p> : null}
             {policy.isError ? (
               <div className="flex flex-col items-start gap-3">
-                <ErrorToast error={policy.error} message={policy.error instanceof ApiError ? policy.error.message : 'Could not load the transfer policy.'} />
-                <Button type="button" variant="outline" disabled={policy.isFetching} onClick={() => { void policy.refetch() }}>{policy.isFetching ? 'Loading…' : 'Retry loading policy'}</Button>
+                <ErrorToast error={policy.error} message={policy.error instanceof ApiError ? policy.error.message : t('Could not load the transfer policy.')} />
+                <Button type="button" variant="outline" disabled={policy.isFetching} onClick={() => { void policy.refetch() }}>{t(policy.isFetching ? 'Loading…' : 'Retry loading policy')}</Button>
               </div>
             ) : null}
             {policy.data ? <TransferPolicyForm policy={policy.data} /> : null}
@@ -57,6 +58,7 @@ export function TransferPolicySettings() {
 }
 
 function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
+  const { t, owned, number } = useTranslation()
   const id = useId()
   const queryClient = useQueryClient()
   const isSessionCurrent = useSessionCurrent()
@@ -82,7 +84,7 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
       queryClient.setQueryData(policyKey, saved)
       if (!active.current) return
       form.reset(transferPolicyToDraft(saved), { keepDirtyValues: false })
-      toast.success('Transfer policy saved')
+      toast.success(t('Transfer policy saved'))
     },
     onSettled: () => { submitting.current = false },
   })
@@ -90,10 +92,10 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
   return (
     <>
       <section aria-labelledby={`${id}-saved`} className="rounded-xl border border-border bg-background p-4">
-        <h3 id={`${id}-saved`} className="text-sm font-semibold">Current saved policy</h3>
+        <h3 id={`${id}-saved`} className="text-sm font-semibold">{t('Current saved policy')}</h3>
         <dl className="mt-3 flex flex-col gap-3 text-sm">
-          <div><dt className="text-muted-foreground">Transfer fee</dt><dd className="mt-1 font-medium tabular-nums">{policy.currency} {formatMinorAmount(policy.fee_amount_minor, policy.currency)}</dd></div>
-          <div><dt className="text-muted-foreground">Payment instructions</dt><dd className="mt-1 whitespace-pre-wrap leading-relaxed">{policy.instructions}</dd></div>
+          <div><dt className="text-muted-foreground">{t('Transfer fee')}</dt><dd className="mt-1 font-medium tabular-nums">{policy.currency} {number(Number(formatMinorAmount(policy.fee_amount_minor, policy.currency)), { maximumFractionDigits: 3 })}</dd></div>
+          <div><dt className="text-muted-foreground">{t('Payment instructions')}</dt><dd className="mt-1 whitespace-pre-wrap leading-relaxed">{policy.instructions}</dd></div>
         </dl>
       </section>
       <form noValidate className="flex flex-col gap-5" aria-busy={saving.isPending} onSubmit={form.handleSubmit((values) => {
@@ -102,31 +104,31 @@ function TransferPolicyForm({ policy }: { readonly policy: TransferPolicy }) {
         saving.mutate(values)
       })}>
         <fieldset disabled={saving.isPending} className="flex min-w-0 flex-col gap-5 disabled:opacity-60">
-          <legend className="sr-only">Edit transfer policy</legend>
+          <legend className="sr-only">{t('Edit transfer policy')}</legend>
           <div className="grid gap-5 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label htmlFor={`${id}-amount`}>Fee amount</Label>
+              <Label htmlFor={`${id}-amount`}>{t('Fee amount')}</Label>
               <Input id={`${id}-amount`} inputMode="decimal" autoComplete="off" aria-required="true" aria-invalid={Boolean(errors.amount)} aria-describedby={`${id}-amount-help ${errors.amount ? `${id}-amount-error` : ''}`} {...form.register('amount')} />
-              <p id={`${id}-amount-help`} className="text-xs text-muted-foreground">USD, EUR, GBP: up to 2 decimal places. VND, JPY: whole numbers only. KWD: up to 3 decimal places. Zero is allowed.</p>
-              {errors.amount ? <p id={`${id}-amount-error`} role="alert" className="text-sm text-destructive">{errors.amount.message}</p> : null}
+              <p id={`${id}-amount-help`} className="text-xs text-muted-foreground">{t('USD, EUR, GBP: up to 2 decimal places. VND, JPY: whole numbers only. KWD: up to 3 decimal places. Zero is allowed.')}</p>
+              {errors.amount ? <p id={`${id}-amount-error`} role="alert" className="text-sm text-destructive">{owned(errors.amount.message)}</p> : null}
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor={`${id}-currency`}>Currency</Label>
+              <Label htmlFor={`${id}-currency`}>{t('Currency')}</Label>
               <Input id={`${id}-currency`} className="uppercase" autoComplete="off" autoCapitalize="characters" spellCheck={false} aria-required="true" aria-invalid={Boolean(errors.currency)} aria-describedby={`${id}-currency-help ${errors.currency ? `${id}-currency-error` : ''}`} {...form.register('currency')} />
-              <p id={`${id}-currency-help`} className="text-xs text-muted-foreground">USD, EUR, GBP, VND, JPY, or KWD. Saved in uppercase.</p>
-              {errors.currency ? <p id={`${id}-currency-error`} role="alert" className="text-sm text-destructive">{errors.currency.message}</p> : null}
+              <p id={`${id}-currency-help`} className="text-xs text-muted-foreground">{t('USD, EUR, GBP, VND, JPY, or KWD. Saved in uppercase.')}</p>
+              {errors.currency ? <p id={`${id}-currency-error`} role="alert" className="text-sm text-destructive">{owned(errors.currency.message)}</p> : null}
             </div>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor={`${id}-instructions`}>Payment instructions</Label>
+            <Label htmlFor={`${id}-instructions`}>{t('Payment instructions')}</Label>
             <textarea id={`${id}-instructions`} rows={6} aria-required="true" aria-invalid={Boolean(errors.instructions)} aria-describedby={`${id}-instructions-help ${errors.instructions ? `${id}-instructions-error` : ''}`} className="min-h-36 w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 aria-invalid:border-destructive sm:text-sm" {...form.register('instructions')} />
-            <p id={`${id}-instructions-help`} className="text-xs text-muted-foreground">Required. Up to 4,000 characters. Explain how members should pay and how payment will be verified manually.</p>
-            {errors.instructions ? <p id={`${id}-instructions-error`} role="alert" className="text-sm text-destructive">{errors.instructions.message}</p> : null}
+            <p id={`${id}-instructions-help`} className="text-xs text-muted-foreground">{t('Required. Up to 4,000 characters. Explain how members should pay and how payment will be verified manually.')}</p>
+            {errors.instructions ? <p id={`${id}-instructions-error`} role="alert" className="text-sm text-destructive">{owned(errors.instructions.message)}</p> : null}
           </div>
-          <Button type="submit" className="h-auto min-h-11 self-start whitespace-normal">{saving.isPending ? 'Saving policy…' : 'Save transfer policy'}</Button>
+          <Button type="submit" className="h-auto min-h-11 self-start whitespace-normal">{t(saving.isPending ? 'Saving policy…' : 'Save transfer policy')}</Button>
         </fieldset>
-    {saving.isError ? <ErrorToast error={saving.error} message={saving.error instanceof ApiError ? saving.error.message : 'Could not confirm the saved policy. Your draft is kept; retry saving or reload to check the current policy.'} /> : null}
-        <p role="status" className="text-sm text-muted-foreground">{saving.isPending ? 'Saving transfer policy. Please wait.' : isDirty ? 'Unsaved changes. The current saved policy above remains in effect.' : saving.isSuccess ? 'Transfer policy saved.' : null}</p>
+    {saving.isError ? <ErrorToast error={saving.error} message={saving.error instanceof ApiError ? saving.error.message : t('Could not confirm the saved policy. Your draft is kept; retry saving or reload to check the current policy.')} /> : null}
+        <p role="status" className="text-sm text-muted-foreground">{saving.isPending ? t('Saving transfer policy. Please wait.') : isDirty ? t('Unsaved changes. The current saved policy above remains in effect.') : saving.isSuccess ? t('Transfer policy saved.') : null}</p>
       </form>
     </>
   )

@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 
 import { AdminShell } from '@/components/layout/admin-shell'
 import { useAuth } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
@@ -59,9 +60,10 @@ function AgentDeletionReviewRoute() {
 }
 
 export function AppRouter() {
+  const { t } = useTranslation()
   return (
     <BrowserRouter>
-      <Suspense fallback={<div role="status" className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground">Loading…</div>}>
+      <Suspense fallback={<div role="status" className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground">{t('Loading…')}</div>}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />

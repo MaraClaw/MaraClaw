@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
@@ -32,6 +33,7 @@ type AccessDraft = {
 }
 
 export function AgentPermissionsPage() {
+  const { t: translate, owned } = useTranslation()
   const session = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { user } = useAuth()
@@ -74,45 +76,44 @@ export function AgentPermissionsPage() {
       ])
       if (!session.isCurrent()) return
       setDraft((current) => current?.agentId === agentId ? null : current)
-      toast.success('Access updated')
+      toast.success(translate("Access updated"))
     },
     onError() {
-      toast.error('Unable to update access')
+      toast.error(translate("Unable to update access"))
     },
   })
 
   return (
     <div className="mx-auto max-w-xl space-y-6 p-6">
       <div>
-        <h2 className="font-display text-lg font-semibold">Who can use this agent</h2>
+        <h2 className="font-display text-lg font-semibold">{translate("Who can use this agent")}</h2>
         <p className="text-sm text-muted-foreground">
-          Current access: {perms.data?.effective_access_level ?? agent.access_level}.
+          {translate("Current access:")}{' '}{perms.data?.effective_access_level ?? agent.access_level}.
         </p>
       </div>
 
-      {perms.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading current access…</p> : null}
+      {perms.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading current access…")}</p> : null}
       {perms.isError ? (
         <div className="space-y-2">
           <RequestErrorToast error={perms.error} message="Unable to load current access. Reload it before saving changes." />
           <Button size="sm" variant="outline" disabled={perms.isFetching} onClick={session.effect(() => void perms.refetch())}>
-            Retry access
-          </Button>
+            {translate("Retry access")}</Button>
         </div>
       ) : null}
 
       {canManage ? (
         <div className="space-y-3">
           <div className="space-y-2">
-            <Label htmlFor="agent-access-scope">Who can use this agent</Label>
+            <Label htmlFor="agent-access-scope">{translate("Who can use this agent")}</Label>
             <Select
               id="agent-access-scope"
               value={scope}
               disabled={save.isPending || !perms.isSuccess}
               onChange={session.effect((event) => setDraft({ agentId: agent.id, scopeType: AgentSharingModeSchema.parse(event.target.value), departmentIds }))}
             >
-              <option value="private">Private (creator only)</option>
-              <option value="company">Whole company</option>
-              <option value="custom">Custom list</option>
+              <option value="private">{translate("Private (creator only)")}</option>
+              <option value="company">{translate("Whole company")}</option>
+              <option value="custom">{translate("Custom list")}</option>
             </Select>
           </div>
           <AgentDepartmentAccess
@@ -142,20 +143,19 @@ export function AgentPermissionsPage() {
               })
             }}
           >
-            Save access
-          </Button>
+            {translate("Save access")}</Button>
           <p id="agent-access-save-status" role="status" className="text-sm text-muted-foreground">
             {save.isPending
-              ? 'Saving access…'
+              ? translate("Saving access…")
               : perms.isFetching
-                ? 'Refreshing current access…'
+                ? translate("Refreshing current access…")
                 : isDirty
-                  ? 'You have unsaved changes.'
+                  ? translate("You have unsaved changes.")
                   : ''}
           </p>
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">Only managers can change who has access.</p>
+        <p className="text-sm text-muted-foreground">{translate("Only managers can change who has access.")}</p>
       )}
 
       <ul className="space-y-2">
@@ -170,11 +170,10 @@ export function AgentPermissionsPage() {
       {isCreator ? (
         <div className="space-y-2">
           <Label htmlFor="agent-handover" className="text-sm font-semibold">
-            Handover ownership
-          </Label>
+            {translate("Handover ownership")}</Label>
           {candidates.isError ? <RequestErrorToast error={candidates.error} message="Unable to load handover candidates. Try again." /> : null}
           <Select id="agent-handover" value={handoverId} onChange={session.effect((event) => setHandoverId(event.target.value))}>
-            <option value="">Choose a teammate</option>
+            <option value="">{translate("Choose a teammate")}</option>
             {(candidates.data ?? []).map((row) => (
               <option key={row.id} value={row.id}>
                 {row.name || row.email || row.id}
@@ -187,29 +186,28 @@ export function AgentPermissionsPage() {
             onClick={() =>
               session.isCurrent() && void handoverAgent(agent.id, handoverId).then(() => {
                 if (!session.isCurrent()) return
-                toast.success('Ownership transferred')
+                toast.success(translate("Ownership transferred"))
                 void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
-              }).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to transfer ownership.'), error)))
+              }).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to transfer ownership.")), error)))
             }
           >
-            Transfer
-          </Button>
+            {translate("Transfer")}</Button>
         </div>
       ) : null}
 
       {isCreator ? (
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold">Approvals</h3>
+          <h3 className="text-sm font-semibold">{translate("Approvals")}</h3>
           {approvals.isError ? <RequestErrorToast error={approvals.error} message="Unable to load approval requests. Try again." /> : null}
           {!approvals.isError && (approvals.data ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">No approval requests.</p>
+            <p className="text-sm text-muted-foreground">{translate("No approval requests.")}</p>
           ) : (
             <ul className="space-y-2">
               {(approvals.data ?? []).map((item) => (
                 <li key={item.id} className="rounded-xl border border-border px-3 py-2 text-sm">
                   <div className="flex items-center justify-between gap-2">
-                    <span>{item.action_type ?? 'action'}</span>
-                    <Badge variant="soft">{item.status}</Badge>
+                    <span>{item.action_type ?? translate("action")}</span>
+                <Badge variant="soft">{item.status ? owned(item.status) : null}</Badge>
                   </div>
                   {item.status === 'pending' ? (
                     <div className="mt-2 flex gap-2">
@@ -218,22 +216,20 @@ export function AgentPermissionsPage() {
                         onClick={() =>
                           session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'approve').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to approve this request.'), error)))
+                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to approve this request.")), error)))
                         }
                       >
-                        Approve
-                      </Button>
+                        {translate("Approve")}</Button>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() =>
                           session.isCurrent() && void resolveAgentApproval(agent.id, item.id, 'reject').then(session.effect(() =>
                             queryClient.invalidateQueries({ queryKey: ['approvals', agent.id] }),
-                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, 'Unable to reject this request.'), error)))
+                          )).catch(session.effect((error: unknown) => showRequestError(userFacingRequestError(error, translate("Unable to reject this request.")), error)))
                         }
                       >
-                        Reject
-                      </Button>
+                        {translate("Reject")}</Button>
                     </div>
                   ) : null}
                 </li>

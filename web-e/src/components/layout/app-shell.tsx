@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LogOut } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -38,6 +39,7 @@ function WorkspaceNavLink({
   unread: number
   compact?: boolean
 }) {
+  const { t: translate, owned } = useTranslation()
   const { pathname } = useLocation()
   const path = pathname.toLowerCase()
   const isActive = path === item.to || path.startsWith(`${item.to}/`) ||
@@ -82,14 +84,15 @@ function WorkspaceNavLink({
               compact ? 'text-xs' : 'text-sm',
             )}
           >
-            {item.label}
+              {owned(item.label)}
           </span>
-          {showUnread ? <span className="sr-only">{`, ${unread} unread`}</span> : null}
+          {showUnread ? <span className="sr-only">{translate(', {count} unread', { count: unread })}</span> : null}
     </Link>
   )
 }
 
 function AppShellFrame() {
+  const { t: translate } = useTranslation()
   const { pathname } = useLocation()
   const mobileNav = useRef<HTMLElement>(null)
   const scope = useWorkspaceSession()
@@ -121,11 +124,11 @@ function AppShellFrame() {
           <div className="min-w-0">
             <p className="font-display text-sm font-semibold">MaraClaw</p>
             <p className="truncate text-xs text-muted-foreground">
-              {tenantQuery.data?.name ?? 'Workspace'}
+              {tenantQuery.data?.name ?? translate("Workspace")}
             </p>
           </div>
         </Link>
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label="Workspace">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label={translate("Workspace")}>
           {visibleNav.map((item) => (
             <WorkspaceNavLink key={item.to} item={item} unread={unread} />
           ))}
@@ -136,8 +139,7 @@ function AppShellFrame() {
             <ThemeToggle />
             <Button variant="ghost" size="sm" className="flex-1" onClick={scope.effect(logout)}>
               <LogOut className="size-3.5" aria-hidden />
-              Sign out
-            </Button>
+              {translate("Sign out")}</Button>
           </div>
         </div>
       </aside>
@@ -147,14 +149,14 @@ function AppShellFrame() {
           <div className="flex items-center justify-between">
             <Link to={workspaceAllowed ? '/app/agents' : '/app/notifications'} className="flex items-center gap-2">
               <MaraClawLogo className="size-8" />
-              <span className="font-display text-sm font-semibold">Workspace</span>
+              <span className="font-display text-sm font-semibold">{translate("Workspace")}</span>
             </Link>
-            <ThemeToggle />
+            <div className="flex items-center gap-2"><ThemeToggle /></div>
           </div>
           <nav
             ref={mobileNav}
             className="mt-3 flex gap-1 overflow-x-auto pe-6 [scroll-padding-inline:1.5rem]"
-            aria-label="Workspace"
+            aria-label={translate("Workspace")}
           >
             {visibleNav.map((item) => (
               <WorkspaceNavLink key={item.to} item={item} unread={unread} compact />
@@ -163,9 +165,8 @@ function AppShellFrame() {
         </header>
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
           {tenantQuery.isLoading ? (
-            <div role="status" aria-label="Loading workspace" className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-              Loading your organization’s workspace…
-            </div>
+            <div role="status" aria-label={translate("Loading workspace")} className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+              {translate("Loading your organization’s workspace…")}</div>
           ) : workspaceAllowed && !organizationFeaturesAllowed && organizationPath ? (
             <Navigate to="/app/agents" replace />
           ) : (

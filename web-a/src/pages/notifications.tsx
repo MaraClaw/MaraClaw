@@ -1,4 +1,4 @@
-import { formatDistanceToNowStrict } from 'date-fns'
+import { useTranslation } from '@/hooks/use-translation'
 import { Archive, ArchiveRestore, ArrowRight, CheckCheck, Inbox, Mail } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -16,6 +16,7 @@ import { canReviewAgentDeletions } from '@/lib/types/auth'
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function NotificationsPage() {
+  const { t, owned, date, distance, number } = useTranslation()
   const { user } = useAuth()
   const [cursors, setCursors] = useState<readonly (string | null)[]>([null])
   const [view, setView] = useState<NotificationView>('active')
@@ -88,24 +89,24 @@ export function NotificationsPage() {
     <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus-visible:outline focus-visible:outline-ring">Inbox</h1>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Notifications for your admin account. Only active unread notifications count toward your badge.</p>
+          <h1 ref={heading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus-visible:outline focus-visible:outline-ring">{t('Inbox')}</h1>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t('Notifications for your admin account. Only active unread notifications count toward your badge.')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
           {view === 'active' ? <Button variant="outline" className={actionClass} disabled={pending || !hasUnread} onClick={() => { resetErrors(); markAllRead.mutate() }}>
             <CheckCheck className="size-4" aria-hidden />
-            {markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read'}
+            {t(markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read')}
           </Button> : null}
-          <Button variant="outline" className={actionClass} disabled={notifications.isFetching || pending} onClick={() => { changePage([null]); void resetFirstPage() }}>Refresh Inbox</Button>
+          <Button variant="outline" className={actionClass} disabled={notifications.isFetching || pending} onClick={() => { changePage([null]); void resetFirstPage() }}>{t('Refresh Inbox')}</Button>
         </div>
       </div>
 
       <fieldset className="flex flex-wrap gap-3">
-        <legend className="sr-only">Inbox view</legend>
+        <legend className="sr-only">{t('Inbox view')}</legend>
         {(['active', 'archived'] as const).map((value) => <Button key={value} variant={view === value ? 'secondary' : 'outline'} className={actionClass}
           aria-pressed={view === value} onClick={() => { if (value !== view) { changePage([null]); void resetFirstPage(value); setView(value) } }}>
           {value === 'active' ? <Inbox className="size-4" aria-hidden /> : <Archive className="size-4" aria-hidden />}
-          {value === 'active' ? 'Active' : 'Archived'}
+          {t(value === 'active' ? 'Active' : 'Archived')}
         </Button>)}
       </fieldset>
 
@@ -113,42 +114,42 @@ export function NotificationsPage() {
         <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
           <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             checked={selectedIds.length === Math.min(items.length, 200)} onChange={(event) => select(event.target.checked ? items.slice(0, 200).map((item) => item.id) : [])} />
-          Select this page
+          {t('Select this page')}
         </label>
         <Button variant="outline" className={`${actionClass} disabled:text-muted-foreground disabled:opacity-100`} disabled={pending || selectedIds.length === 0} onClick={() => setSelectedRead(true)}>
           <CheckCheck className="size-4" aria-hidden />
-          {markSelectedRead.isPending ? 'Marking selected as read...' : `Mark selected as read (${selectedIds.length})`}
+          {markSelectedRead.isPending ? t('Marking selected as read...') : t('Mark selected as read ({count})', { count: number(selectedIds.length) })}
         </Button>
         <Button variant="outline" className={`${actionClass} disabled:text-muted-foreground disabled:opacity-100`} disabled={pending || selectedIds.length === 0} onClick={() => setSelectedRead(false)}>
           <Mail className="size-4" aria-hidden />
-          {markSelectedUnread.isPending ? 'Marking selected as unread...' : `Mark selected as unread (${selectedIds.length})`}
+          {markSelectedUnread.isPending ? t('Marking selected as unread...') : t('Mark selected as unread ({count})', { count: number(selectedIds.length) })}
         </Button>
         <Button variant="outline" className={actionClass} disabled={pending || selectedIds.length === 0} onClick={moveSelection}>
           {view === 'active' ? <Archive className="size-4" aria-hidden /> : <ArchiveRestore className="size-4" aria-hidden />}
-          {view === 'active' ? archiveSelected.isPending ? 'Archiving selected...' : `Archive selected (${selectedIds.length})` : restoreSelected.isPending ? 'Restoring selected...' : `Restore selected (${selectedIds.length})`}
+          {view === 'active' ? archiveSelected.isPending ? t('Archiving selected...') : t('Archive selected ({count})', { count: number(selectedIds.length) }) : restoreSelected.isPending ? t('Restoring selected...') : t('Restore selected ({count})', { count: number(selectedIds.length) })}
         </Button>
-        <p role="status" className="w-full text-xs text-muted-foreground sm:text-sm">{selectedIds.length} selected on this page. Changing page or view clears the selection.</p>
+        <p role="status" className="w-full text-xs text-muted-foreground sm:text-sm">{t('{count} selected on this page. Changing page or view clears the selection.', { count: number(selectedIds.length) })}</p>
       </div> : null}
 
-      <p role="status" aria-atomic="true" className="sr-only">{archiveSelected.isSuccess ? 'Selected notifications archived. Read state unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored. Read state unchanged.' : archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markSelectedRead.isSuccess ? 'Selected notifications marked as read.' : markSelectedUnread.isSuccess ? 'Selected notifications marked as unread.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : ''}</p>
-      {mutationError ? <ErrorToast message={mutationError} /> : null}
+      <p role="status" aria-atomic="true" className="sr-only">{owned(archiveSelected.isSuccess ? 'Selected notifications archived. Read state unchanged.' : restoreSelected.isSuccess ? 'Selected notifications restored. Read state unchanged.' : archive.isSuccess ? 'Notification archived. Read state unchanged.' : restore.isSuccess ? 'Notification restored. Read state unchanged.' : markSelectedRead.isSuccess ? 'Selected notifications marked as read.' : markSelectedUnread.isSuccess ? 'Selected notifications marked as unread.' : markRead.isSuccess ? 'Notification marked as read.' : markAllRead.isSuccess ? 'All active notifications marked as read.' : '')}</p>
+      {mutationError ? <ErrorToast message={owned(mutationError) ?? ''} /> : null}
       {unread.isError ? <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-        <ErrorToast error={unread.error} message="Unread count could not be updated." />
-        <Button variant="outline" className={actionClass} disabled={unread.isFetching} onClick={() => { void unread.refetch() }}>Retry count</Button>
+        <ErrorToast error={unread.error} message={t('Unread count could not be updated.')} />
+        <Button variant="outline" className={actionClass} disabled={unread.isFetching} onClick={() => { void unread.refetch() }}>{t('Retry count')}</Button>
       </div> : null}
-      {notifications.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading notifications...</CardContent></Card> : null}
+      {notifications.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading notifications...')}</CardContent></Card> : null}
       {notifications.isError ? <Card><CardContent className="flex flex-wrap items-center justify-between gap-4">
-        <ErrorToast error={notifications.error} message="Unable to load notifications. Try again." />
-        <Button variant="outline" className={actionClass} disabled={notifications.isFetching} onClick={() => { void notifications.refetch() }}>Retry</Button>
+        <ErrorToast error={notifications.error} message={t('Unable to load notifications. Try again.')} />
+        <Button variant="outline" className={actionClass} disabled={notifications.isFetching} onClick={() => { void notifications.refetch() }}>{t('Retry')}</Button>
       </CardContent></Card> : null}
 
       {notifications.isSuccess && items.length === 0 ? <Card><CardContent className="flex flex-col items-center gap-3 py-6 text-center">
         <Inbox className="size-8 text-muted-foreground" aria-hidden />
-        <h2 className="font-display text-lg font-semibold">{cursors.length > 1 ? 'No more notifications' : view === 'active' ? 'No active notifications' : 'No archived notifications'}</h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">{cursors.length > 1 ? 'Return to the previous page to see earlier updates.' : view === 'active' ? 'New updates will appear here. Check Archived for saved notifications.' : 'Archive an active notification to keep it here without changing its read state.'}</p>
+        <h2 className="font-display text-lg font-semibold">{t(cursors.length > 1 ? 'No more notifications' : view === 'active' ? 'No active notifications' : 'No archived notifications')}</h2>
+        <p className="text-sm leading-relaxed text-muted-foreground">{t(cursors.length > 1 ? 'Return to the previous page to see earlier updates.' : view === 'active' ? 'New updates will appear here. Check Archived for saved notifications.' : 'Archive an active notification to keep it here without changing its read state.')}</p>
       </CardContent></Card> : null}
 
-      {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label="Notifications" aria-busy={pending}>
+      {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label={t('Notifications')} aria-busy={pending}>
         {items.map((item) => {
           const safeLink = safeNotificationLink(item.link)
           const link = safeLink?.startsWith('/agent-deletion-requests') && !canReviewAgentDeletions(user) ? null : safeLink
@@ -158,28 +159,28 @@ export function NotificationsPage() {
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <label className="flex min-h-11 cursor-pointer items-center gap-3 pr-2 text-sm text-foreground">
                     <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                      aria-label={`Select notification: ${item.title}`} checked={selectedIds.includes(item.id)}
+                      aria-label={t('Select notification: {title}', { title: item.title })} checked={selectedIds.includes(item.id)}
                       disabled={!selectedIds.includes(item.id) && selectedIds.length >= 200}
                       onChange={(event) => select(event.target.checked ? [...selectedIds, item.id] : selectedIds.filter((id) => id !== item.id))} />
-                    Select
+                    {t('Select')}
                   </label>
-                  <Badge variant={item.is_read ? 'secondary' : 'soft'}>{item.is_read ? 'Read' : 'Unread'}</Badge>
+                  <Badge variant={item.is_read ? 'secondary' : 'soft'}>{t(item.is_read ? 'Read' : 'Unread')}</Badge>
                   {item.sender_name ? <span>{item.sender_name}</span> : null}
-                  {item.created_at ? <time dateTime={item.created_at} title={new Date(item.created_at).toLocaleString()}>{formatDistanceToNowStrict(new Date(item.created_at), { addSuffix: true })}</time> : null}
+                  {item.created_at ? <time dateTime={item.created_at} title={date(item.created_at)}>{distance(item.created_at)}</time> : null}
                 </div>
                 <h2 className="font-display text-base font-semibold leading-snug">{item.title}</h2>
                 {item.body ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}
                 <div className="flex flex-wrap items-center gap-3">
-                  {link ? <Button asChild variant="outline" className={actionClass}><Link to={link} aria-label={`Open notification: ${item.title}`}>Open notification<ArrowRight className="size-4" aria-hidden /></Link></Button> : null}
-                  {!item.is_read ? <Button variant="secondary" className={actionClass} disabled={pending} aria-label={`Mark as read: ${item.title}`} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
-                    {markRead.isPending && markRead.variables === item.id ? 'Marking as read...' : 'Mark as read'}
+                  {link ? <Button asChild variant="outline" className={actionClass}><Link to={link} aria-label={t('Open notification: {title}', { title: item.title })}>{t('Open notification')}<ArrowRight className="size-4" aria-hidden /></Link></Button> : null}
+                  {!item.is_read ? <Button variant="secondary" className={actionClass} disabled={pending} aria-label={t('Mark as read: {title}', { title: item.title })} onClick={() => { resetErrors(); markRead.mutate(item.id) }}>
+                    {t(markRead.isPending && markRead.variables === item.id ? 'Marking as read...' : 'Mark as read')}
                   </Button> : null}
-                  {item.archived_at === null ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Archive notification: ${item.title}`} onClick={() => { resetErrors(); archive.mutate(item.id, { onSuccess: focusInbox }) }}>
+                  {item.archived_at === null ? <Button variant="outline" className={actionClass} disabled={pending} aria-label={t('Archive notification: {title}', { title: item.title })} onClick={() => { resetErrors(); archive.mutate(item.id, { onSuccess: focusInbox }) }}>
                     <Archive className="size-4" aria-hidden />
-                    {archive.isPending && archive.variables === item.id ? 'Archiving...' : 'Archive'}
-                  </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={`Restore notification: ${item.title}`} onClick={() => { resetErrors(); restore.mutate(item.id, { onSuccess: focusInbox }) }}>
+                    {t(archive.isPending && archive.variables === item.id ? 'Archiving...' : 'Archive')}
+                  </Button> : <Button variant="outline" className={actionClass} disabled={pending} aria-label={t('Restore notification: {title}', { title: item.title })} onClick={() => { resetErrors(); restore.mutate(item.id, { onSuccess: focusInbox }) }}>
                     <ArchiveRestore className="size-4" aria-hidden />
-                    {restore.isPending && restore.variables === item.id ? 'Restoring...' : 'Restore'}
+                    {t(restore.isPending && restore.variables === item.id ? 'Restoring...' : 'Restore')}
                   </Button>}
                 </div>
               </CardContent>
@@ -188,10 +189,10 @@ export function NotificationsPage() {
         })}
       </ul> : null}
 
-      {cursors.length > 1 || items.length > 0 ? <nav aria-label="Inbox pages" className="flex flex-wrap items-center justify-between gap-3">
-        <Button variant="outline" className={actionClass} disabled={cursors.length === 1 || notifications.isFetching} onClick={() => changePage(cursors.slice(0, -1))}>Previous</Button>
-        <p role="status" className="text-xs text-muted-foreground">Page {cursors.length}</p>
-        <Button variant="outline" className={actionClass} disabled={!notifications.data?.next_cursor || notifications.isFetching || notifications.isError} onClick={() => { if (notifications.data?.next_cursor) changePage([...cursors, notifications.data.next_cursor]) }}>Next</Button>
+      {cursors.length > 1 || items.length > 0 ? <nav aria-label={t('Inbox pages')} className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" className={actionClass} disabled={cursors.length === 1 || notifications.isFetching} onClick={() => changePage(cursors.slice(0, -1))}>{t('Previous')}</Button>
+        <p role="status" className="text-xs text-muted-foreground">{t('Page {page}', { page: number(cursors.length) })}</p>
+        <Button variant="outline" className={actionClass} disabled={!notifications.data?.next_cursor || notifications.isFetching || notifications.isError} onClick={() => { if (notifications.data?.next_cursor) changePage([...cursors, notifications.data.next_cursor]) }}>{t('Next')}</Button>
       </nav> : null}
     </div>
   )

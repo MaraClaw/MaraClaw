@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -25,6 +26,7 @@ function todayIso() {
 }
 
 export function OkrPage() {
+  const { t: translate, owned } = useTranslation()
   const scope = useWorkspaceSession()
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -41,13 +43,13 @@ export function OkrPage() {
 
   function fail(error: unknown, fallback: string) {
     if (!scope.isCurrent()) return
-    toast.error(userFacingRequestError(error, fallback))
+    toast.error(userFacingRequestError(error, owned(fallback)))
   }
 
   const saveSettings = useMutation({
     mutationFn: (enabled: boolean) => updateOkrSettings({ enabled }),
     onSuccess() {
-      toast.success('OKR settings saved')
+      toast.success(translate("OKR settings saved"))
       void queryClient.invalidateQueries({ queryKey: ['okr'] })
     },
     onError(error) {
@@ -61,33 +63,32 @@ export function OkrPage() {
         <div>
           <h1 className="font-display text-2xl font-semibold">OKR</h1>
           <p className="text-sm text-muted-foreground">
-            Track company and personal objectives. Members update progress through the OKR agent; org admins can edit here.
-          </p>
+            {translate("Track company and personal objectives. Members update progress through the OKR agent; org admins can edit here.")}</p>
         </div>
         {settings.data?.okr_agent_id ? (
           <Button asChild variant="outline" size="sm">
-            <Link to={`/app/agents/${settings.data.okr_agent_id}/chat`}>Open OKR agent</Link>
+            <Link to={`/app/agents/${settings.data.okr_agent_id}/chat`}>{translate("Open OKR agent")}</Link>
           </Button>
         ) : null}
       </div>
 
       <section className="rounded-2xl border border-border p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="soft">{settings.data?.enabled ? 'Enabled' : 'Disabled'}</Badge>
+          <Badge variant="soft">{settings.data?.enabled ? translate("Enabled") : translate("Disabled")}</Badge>
           <span className="text-sm text-muted-foreground">
-            {settings.data?.period_frequency ?? 'quarterly'}
-            {settings.data?.daily_report_enabled ? ` · daily report ${settings.data.daily_report_time}` : ''}
+            {owned(settings.data?.period_frequency ?? 'quarterly')}
+            {settings.data?.daily_report_enabled ? translate(" · daily report {time}", { time: settings.data.daily_report_time }) : ''}
           </span>
           {isAdmin ? (
             <Button size="sm" variant="outline" onClick={() => saveSettings.mutate(!settings.data?.enabled)}>
-              {settings.data?.enabled ? 'Disable' : 'Enable'}
+              {settings.data?.enabled ? translate("Disable") : translate("Enable")}
             </Button>
           ) : null}
         </div>
       </section>
 
       <label htmlFor="okr-period" className="block text-sm">
-        <span className="text-muted-foreground">Period</span>
+        <span className="text-muted-foreground">{translate("Period")}</span>
         <Select
           id="okr-period"
           fit
@@ -98,7 +99,7 @@ export function OkrPage() {
           {(periods.data ?? []).map((period) => (
             <option key={period.start} value={period.start}>
               {period.label}
-              {period.is_current ? ' (current)' : ''}
+              {period.is_current ? translate(" (current)") : ''}
             </option>
           ))}
         </Select>
@@ -107,8 +108,8 @@ export function OkrPage() {
       {selected ? <OkrObjectives key={`${selected.start}:${selected.end}`} period={selected} isAdmin={isAdmin} /> : null}
 
       <section className="space-y-3">
-        <h2 className="font-display text-lg font-semibold">Today’s reports</h2>
-        <Textarea value={report} onChange={scope.effect((event) => setReport(event.target.value))} placeholder="What did you finish today?" />
+        <h2 className="font-display text-lg font-semibold">{translate("Today’s reports")}</h2>
+        <Textarea value={report} onChange={scope.effect((event) => setReport(event.target.value))} placeholder={translate("What did you finish today?")} />
         <Button
           size="sm"
           disabled={!report.trim()}
@@ -117,19 +118,18 @@ export function OkrPage() {
               .then(() => {
                 if (!scope.isCurrent()) return
                 setReport('')
-                toast.success('Report submitted')
+                toast.success(translate("Report submitted"))
                 void queryClient.invalidateQueries({ queryKey: ['okr', 'daily'] })
               })
               .catch((error) => fail(error, 'Could not submit report'))
           }
         >
-          Submit my report
-        </Button>
+          {translate("Submit my report")}</Button>
         <ul className="space-y-2">
           {(reports.data ?? []).map((item) => (
             <li key={item.id} className="rounded-xl border border-border px-3 py-2 text-sm">
               <span className="font-medium">{item.display_name}</span>{' '}
-              <span className="text-muted-foreground">{item.status}</span>
+              <span className="text-muted-foreground">{owned(item.status)}</span>
               {item.content ? <p className="mt-1 whitespace-pre-wrap">{item.content}</p> : null}
             </li>
           ))}

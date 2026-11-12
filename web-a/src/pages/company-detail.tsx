@@ -20,8 +20,10 @@ import {
 } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { CompanyDeletion } from '@/pages/company-deletion'
+import { useTranslation } from '@/hooks/use-translation'
 
 export function CompanyDetailPage() {
+  const { t } = useTranslation()
   const { companyId } = useParams<{ companyId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
@@ -54,17 +56,17 @@ export function CompanyDetailPage() {
       setDomain('')
       invalidate()
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not add domain'),
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : t('Could not add domain')),
   })
   const makeDefault = useMutation({
     mutationFn: (domainId: string) => setDefaultEmailDomain(companyId!, domainId),
     onSuccess: invalidate,
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not update default'),
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : t('Could not update default')),
   })
   const remove = useMutation({
     mutationFn: (domainId: string) => deleteEmailDomain(companyId!, domainId),
     onSuccess: invalidate,
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not delete domain'),
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : t('Could not delete domain')),
   })
 
   if (!companyId) return null
@@ -76,39 +78,39 @@ export function CompanyDetailPage() {
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <Button type="button" variant="outline" size="sm" className="w-fit" onClick={goBack}>
         <ArrowLeft className="size-3.5" aria-hidden />
-        Back
+        {t('Back')}
       </Button>
 
       {companies.error ? (
-        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : 'Failed to load company'} />
+        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : t('Failed to load company')} />
       ) : null}
-      {companyMissing ? <p className="text-sm text-muted-foreground">That company was not found.</p> : null}
+      {companyMissing ? <p className="text-sm text-muted-foreground">{t('That company was not found.')}</p> : null}
 
       <div>
         <h1 className="flex items-center gap-2.5 font-display text-2xl font-semibold tracking-tight">
           {company ? <CompanyStatusIcon active={company.is_active} /> : null}
-          {company?.name ?? 'Company'}
+          {company?.name ?? t('Company')}
         </h1>
         <p className="mt-2 text-muted-foreground">
-          Claimed email domains route new registrations to this organization.
+          {t('Claimed email domains route new registrations to this organization.')}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          {company?.is_system ? <Badge variant="secondary">System</Badge> : null}
-          {company?.is_default_end_user_org ? <Badge>Default for end users</Badge> : null}
+          {company?.is_system ? <Badge variant="secondary">{t('System')}</Badge> : null}
+          {company?.is_default_end_user_org ? <Badge>{t('Default for end users')}</Badge> : null}
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
-        <CompanyStat label="Total users" value={company?.user_count} />
-        <CompanyStat label="Active users" value={company?.active_user_count} />
-        <CompanyStat label="Inactive users" value={company?.inactive_user_count} />
-        <CompanyStat label="Agents" value={company?.agent_count} />
+        <CompanyStat label={t('Total users')} value={company?.user_count} />
+        <CompanyStat label={t('Active users')} value={company?.active_user_count} />
+        <CompanyStat label={t('Inactive users')} value={company?.inactive_user_count} />
+        <CompanyStat label={t('Agents')} value={company?.agent_count} />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Email domains</CardTitle>
-          <CardDescription>One domain can belong to only one company. Mark one as default for invites.</CardDescription>
+          <CardTitle>{t('Email domains')}</CardTitle>
+          <CardDescription>{t('One domain can belong to only one company. Mark one as default for invites.')}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <form
@@ -125,28 +127,28 @@ export function CompanyDetailPage() {
               className="max-w-xs"
             />
             <Button type="submit" disabled={!canEditDomains || add.isPending || !domain.trim()}>
-              Add domain
+              {t('Add domain')}
             </Button>
           </form>
 
           {domains.error ? (
-            <ErrorToast error={domains.error} message={domains.error instanceof ApiError ? domains.error.message : 'Failed to load domains'} />
+            <ErrorToast error={domains.error} message={domains.error instanceof ApiError ? domains.error.message : t('Failed to load domains')} />
           ) : null}
 
           {(domains.data ?? []).map((item) => (
             <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 last:border-0">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm">{item.domain}</span>
-                {item.is_default ? <Badge variant="outline">Default</Badge> : null}
+                {item.is_default ? <Badge variant="outline">{t('Default')}</Badge> : null}
               </div>
               <div className="flex gap-2">
                 {!item.is_default ? (
                   <Button variant="outline" size="sm" onClick={() => makeDefault.mutate(item.id)}>
-                    Make default
+                    {t('Make default')}
                   </Button>
                 ) : null}
                 <Button variant="ghost" size="sm" onClick={() => remove.mutate(item.id)}>
-                  Remove
+                  {t('Remove')}
                 </Button>
               </div>
             </div>
@@ -161,11 +163,12 @@ export function CompanyDetailPage() {
 }
 
 function CompanyStat({ label, value }: { label: string; value: number | undefined }) {
+  const { number } = useTranslation()
   return (
     <div className="rounded-xl border border-border bg-card px-3.5 py-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 font-display text-xl font-semibold tabular-nums">
-        {value == null ? '—' : value.toLocaleString()}
+        {value == null ? '—' : number(value)}
       </p>
     </div>
   )

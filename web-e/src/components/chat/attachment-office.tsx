@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { loadOfficeViewer, officeFormat, officePreviewError } from '@/lib/office-preview'
@@ -10,6 +11,7 @@ type OfficeState =
   | { readonly status: 'failed'; readonly message: string }
 
 export function AttachmentOffice({ bytes, name }: { readonly bytes: Uint8Array; readonly name: string }) {
+  const { t: translate, owned, formatNumber } = useTranslation()
   const hostRef = useRef<HTMLElement>(null)
   const viewerRef = useRef<NavigableOfficeViewer | null>(null)
   const lifetimeRef = useRef<AbortController | null>(null)
@@ -67,14 +69,14 @@ export function AttachmentOffice({ bytes, name }: { readonly bytes: Uint8Array; 
   }
 
   return <div className="space-y-4">
-    {state.status === 'loading' && <p role="status" className="text-sm text-muted-foreground">Loading Office preview…</p>}
-    {state.status === 'failed' && <p role="alert" className="text-sm text-destructive">{state.message}</p>}
-    <section ref={hostRef} aria-label={`${name} document preview`} hidden={state.status === 'failed'}
+    {state.status === 'loading' && <p role="status" className="text-sm text-muted-foreground">{translate("Loading Office preview…")}</p>}
+    {state.status === 'failed' && <p role="alert" className="text-sm text-destructive">{owned(state.message)}</p>}
+    <section ref={hostRef} aria-label={translate('{name} document preview', { name })} hidden={state.status === 'failed'}
       className={`office-preview min-w-0 overflow-hidden rounded-xl bg-white text-black ${officeFormat(name) === 'xlsx' ? 'h-[60dvh] min-h-64' : ''}`} />
-    {state.status === 'ready' && <nav aria-label="Document pages" className="flex flex-wrap items-center justify-center gap-3">
-      <Button type="button" variant="outline" className="min-h-11" disabled={busy || state.index <= 0} onClick={() => void navigate(state.index - 1)}>Previous</Button>
-      <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{state.label} {state.index + 1} of {state.count}</p>
-      <Button type="button" variant="outline" className="min-h-11" disabled={busy || state.index + 1 >= state.count} onClick={() => void navigate(state.index + 1)}>Next</Button>
+    {state.status === 'ready' && <nav aria-label={translate("Document pages")} className="flex flex-wrap items-center justify-center gap-3">
+      <Button type="button" variant="outline" className="min-h-11" disabled={busy || state.index <= 0} onClick={() => void navigate(state.index - 1)}>{translate("Previous")}</Button>
+      <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{owned(state.label)} {formatNumber(state.index + 1)} {translate("of")}{' '}{formatNumber(state.count)}</p>
+      <Button type="button" variant="outline" className="min-h-11" disabled={busy || state.index + 1 >= state.count} onClick={() => void navigate(state.index + 1)}>{translate("Next")}</Button>
     </nav>}
   </div>
 }

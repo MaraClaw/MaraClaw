@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
@@ -24,6 +25,7 @@ import { getAgentMetrics, startAgent, stopAgent, updateAgent, type AgentOut } fr
 import { canRequestAgentDeletion } from '@/lib/agent-lifecycle-policy'
 
 export function AgentSettingsPage() {
+  const { t: translate, owned, formatNumber } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { user } = useAuth()
@@ -57,7 +59,7 @@ export function AgentSettingsPage() {
       void queryClient.invalidateQueries({ queryKey: agentLifecycleKey(agent.id), exact: true })
     },
     onError() {
-      toast.error('Unable to start this agent')
+      toast.error(translate("Unable to start this agent"))
     },
   })
   const stop = useMutation({
@@ -67,7 +69,7 @@ export function AgentSettingsPage() {
       void queryClient.invalidateQueries({ queryKey: agentLifecycleKey(agent.id), exact: true })
     },
     onError() {
-      toast.error('Unable to stop this agent')
+      toast.error(translate("Unable to stop this agent"))
     },
   })
   const save = useMutation({
@@ -84,11 +86,11 @@ export function AgentSettingsPage() {
     onSuccess(updated) {
       const extra = (updated as AgentOut & { _clamped_fields?: typeof clamped })._clamped_fields
       setClamped(extra ?? [])
-      toast.success(extra?.length ? 'Saved with company limits applied' : 'Agent updated')
+      toast.success(extra?.length ? translate("Saved with company limits applied") : translate("Agent updated"))
       void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
     },
     onError() {
-      toast.error('Only the creator or an admin can update this agent')
+      toast.error(translate("Only the creator or an admin can update this agent"))
     },
   })
 
@@ -97,17 +99,17 @@ export function AgentSettingsPage() {
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-display text-xl font-semibold">{agent.name}</h1>
-          <Badge variant="soft" aria-label="Recorded runtime status">{agent.status}</Badge>
-          {expired ? <Badge>Expired</Badge> : null}
-          {agent.access_level ? <Badge variant="soft">{agent.access_level}</Badge> : null}
+          <Badge variant="soft" aria-label={translate("Recorded runtime status")}>{owned(agent.status)}</Badge>
+          {expired ? <Badge>{translate("Expired")}</Badge> : null}
+          {agent.access_level ? <Badge variant="soft">{owned(agent.access_level)}</Badge> : null}
         </div>
         {metrics.data ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            Tokens today {metrics.data.tokens?.used_today ?? 0}
-            {metrics.data.tokens?.limit_day ? ` / ${metrics.data.tokens.limit_day}` : ''}
+            {translate("Tokens today")}{' '}{formatNumber(metrics.data.tokens?.used_today ?? 0)}
+            {metrics.data.tokens?.limit_day ? ` / ${formatNumber(metrics.data.tokens.limit_day)}` : ''}
             {' · '}
-            Tasks {metrics.data.tasks?.done ?? 0}/{metrics.data.tasks?.total ?? 0}
-            {metrics.data.approvals?.pending ? ` · ${metrics.data.approvals.pending} approvals` : ''}
+            {translate("Tasks")}{' '}{formatNumber(metrics.data.tasks?.done ?? 0)}/{formatNumber(metrics.data.tasks?.total ?? 0)}
+            {metrics.data.approvals?.pending ? translate(' · {count} approvals', { count: formatNumber(metrics.data.approvals.pending) }) : ''}
           </p>
         ) : null}
         {agent.role_description ? (
@@ -122,12 +124,10 @@ export function AgentSettingsPage() {
           <>
             {agent.status !== 'running' ? (
               <Button size="sm" variant="outline" disabled={start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start} onClick={() => start.mutate()}>
-                Start
-              </Button>
+                {translate("Start")}</Button>
             ) : null}
             <Button size="sm" variant="outline" disabled={stop.isPending || upgrading} onClick={() => stop.mutate()}>
-              Stop
-            </Button>
+              {translate("Stop")}</Button>
           </>
         ) : null}
         {canRequestAgentDeletion(agent, user) ? (
@@ -136,15 +136,15 @@ export function AgentSettingsPage() {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-name">Name</Label>
+        <Label htmlFor="agent-name">{translate("Name")}</Label>
           <Input id="agent-name" value={name} onChange={scope.effect((event) => setName(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="agent-bio">Bio</Label>
+        <Label htmlFor="agent-bio">{translate("Bio")}</Label>
           <Textarea id="agent-bio" value={bio} onChange={scope.effect((event) => setBio(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="agent-welcome">Welcome message</Label>
+        <Label htmlFor="agent-welcome">{translate("Welcome message")}</Label>
           <Textarea id="agent-welcome" value={welcome} onChange={scope.effect((event) => setWelcome(event.target.value))} disabled={!isCreator} />
       </div>
       <div className="space-y-2">
@@ -155,37 +155,35 @@ export function AgentSettingsPage() {
             onChange={scope.effect((event) => setHeartbeatEnabled(event.target.checked))}
             disabled={!isCreator}
           />
-          Heartbeat enabled
-        </Label>
-        <Label htmlFor="hb-min">Heartbeat interval (minutes)</Label>
+          {translate("Heartbeat enabled")}</Label>
+        <Label htmlFor="hb-min">{translate("Heartbeat interval (minutes)")}</Label>
         <Input
           id="hb-min"
           value={heartbeatMinutes}
             onChange={scope.effect((event) => setHeartbeatMinutes(event.target.value))}
           disabled={!isCreator}
         />
-        <Label htmlFor="hb-hours">Active hours</Label>
+        <Label htmlFor="hb-hours">{translate("Active hours")}</Label>
         <Input
           id="hb-hours"
           value={activeHours}
             onChange={scope.effect((event) => setActiveHours(event.target.value))}
           disabled={!isCreator}
         />
-        <Label htmlFor="tz">Timezone</Label>
+        <Label htmlFor="tz">{translate("Timezone")}</Label>
           <Input id="tz" value={timezone} onChange={scope.effect((event) => setTimezone(event.target.value))} disabled={!isCreator} />
       </div>
       {clamped.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          Company limits applied:{' '}
-          {clamped.map((item) => `${item.field} ${item.requested} → ${item.applied}`).join(', ')}
+          {translate("Company limits applied:")}{' '}
+          {clamped.map((item) => `${owned(item.field)} ${item.requested === undefined ? '' : formatNumber(item.requested)} → ${item.applied === undefined ? '' : formatNumber(item.applied)}`).join(', ')}
         </p>
       ) : null}
       {isCreator || isOrgAdmin ? (
         <Button onClick={() => save.mutate()} disabled={save.isPending || upgrading}>
-          Save
-        </Button>
+          {translate("Save")}</Button>
       ) : (
-        <p className="text-sm text-muted-foreground">You can chat with this agent but not change its settings.</p>
+        <p className="text-sm text-muted-foreground">{translate("You can chat with this agent but not change its settings.")}</p>
       )}
     </div>
   )

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { motion, useReducedMotion } from 'framer-motion'
 import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -5,6 +6,8 @@ import { Link } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { LanguageSelector } from '@/components/language-selector'
+import { useAuth } from '@/hooks/use-auth'
 import { Badge } from '@/components/ui/badge'
 
 const easeOut = [0.23, 1, 0.32, 1] as const
@@ -28,6 +31,8 @@ export function AuthShell({
   highlights,
   children,
 }: AuthShellProps) {
+  const { t: translate, owned } = useTranslation()
+  const { status } = useAuth()
   const reduceMotion = useReducedMotion()
   const motionProps = reduceMotion
     ? { initial: false as const, animate: { opacity: 1 } }
@@ -58,10 +63,10 @@ export function AuthShell({
             <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
-              <p className="text-xs text-muted-foreground">Members</p>
+              <p className="text-xs text-muted-foreground">{translate("Members")}</p>
             </div>
           </Link>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">{status !== 'authenticated' ? <LanguageSelector /> : null}<ThemeToggle /></div>
         </header>
 
         <main className="flex flex-1 items-center justify-center px-4 py-8 md:px-8 md:py-12">
@@ -69,7 +74,7 @@ export function AuthShell({
             <motion.section
               {...motionProps}
               className="relative hidden overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/70 p-8 shadow-elevated backdrop-blur-xl lg:flex lg:flex-col lg:justify-between"
-              aria-label="Product introduction"
+              aria-label={translate("Product introduction")}
             >
               <div
                 className="pointer-events-none absolute inset-0 opacity-90"
@@ -90,8 +95,7 @@ export function AuthShell({
 
               <div className="relative z-10 flex flex-col gap-6">
                 <Badge variant="secondary" className="w-fit bg-background/70">
-                  For your team
-                </Badge>
+                  {translate("For your team")}</Badge>
                 <div className="space-y-3">
                   <h1 className="font-display text-3xl font-semibold tracking-tight text-balance md:text-4xl">
                     {brandTitle}
@@ -102,7 +106,7 @@ export function AuthShell({
                 </div>
               </div>
 
-              <ul className="relative z-10 mt-10 grid gap-3" aria-label="Member capabilities">
+              <ul className="relative z-10 mt-10 grid gap-3" aria-label={translate("Member capabilities")}>
                 {highlights.map((item, index) => (
                   <motion.li
                     key={item.title}
@@ -119,9 +123,9 @@ export function AuthShell({
                       <item.icon className="size-4" aria-hidden />
                     </span>
                     <span>
-                      <span className="block text-sm font-medium">{item.title}</span>
+                          <span className="block text-sm font-medium">{owned(item.title)}</span>
                       <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-                        {item.body}
+                            {owned(item.body)}
                       </span>
                     </span>
                   </motion.li>
@@ -144,7 +148,7 @@ export function AuthShell({
                 <div className="mb-6 space-y-2">
                   <div className="mb-4 flex items-center gap-2 lg:hidden">
                     <MaraClawLogo className="size-[3.75rem]" />
-                    <Badge variant="outline">Members</Badge>
+                    <Badge variant="outline">{translate("Members")}</Badge>
                   </div>
                   <h2
                     id={headingId}

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Loader2, MonitorPlay, Paperclip, Send, X } from 'lucide-react'
@@ -48,6 +49,7 @@ const LIVE_QUIET_MS = 15_000
 const LIVE_QUIET_CHECK_MS = 1_000
 
 function ThinkingStatus() {
+  const { t: translate } = useTranslation()
   return (
     <p
       className="flex items-center gap-2 text-sm text-muted-foreground duration-200 ease-out animate-in fade-in motion-reduce:animate-none"
@@ -59,13 +61,13 @@ function ThinkingStatus() {
         <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:160ms]" />
         <span className="thinking-dot size-1.5 rounded-full bg-muted-foreground [animation-delay:320ms]" />
       </span>
-      Thinking
-    </p>
+      {translate("Thinking")}</p>
   )
 }
 
 // allow: SIZE_OK — Existing route composition retains its view; scoped receipt state lives in lib/chat.
 export function AgentChatPage() {
+  const { t: translate, owned, locale } = useTranslation()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
   const { sessionId } = useParams()
   const queryClient = useQueryClient()
@@ -444,8 +446,8 @@ export function AgentChatPage() {
       },
       onClose(code) {
         if (!current()) return
-        if (code === 4001) toast.error('Session expired. Sign in again.')
-        if (code === 4003) toast.error('This agent is expired or you cannot use it.')
+        if (code === 4001) toast.error(translate("Session expired. Sign in again."))
+        if (code === 4003) toast.error(translate("This agent is expired or you cannot use it."))
         if (code === 4001 || code === 4003) {
           if (sendRef.current === conn.send) sendRef.current = null
           setSocketStopped(true)
@@ -465,7 +467,7 @@ export function AgentChatPage() {
       if (sendRef.current === conn.send) sendRef.current = null
       conn.close()
     }
-  }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions, liveStore])
+  }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions, liveStore, translate])
 
   const currentTurn = lines.findLast((line) => line.role === 'user' || line.role === 'assistant')
   const accepted = currentTurn?.role === 'user' && (currentTurn.delivery === 'accepted'
@@ -476,7 +478,7 @@ export function AgentChatPage() {
     const text = draft.trim()
     if (!text || busy) return
     if (!token) {
-      toast.error('Sign in again to send.')
+      toast.error(translate("Sign in again to send."))
       return
     }
     const content = buildSkillMentionContent(draft, installedSkillsQuery.data ?? [])
@@ -496,7 +498,7 @@ export function AgentChatPage() {
       return
     }
     if (!sendRef.current) {
-      toast.error('Chat is not connected yet. Try again in a moment.')
+      toast.error(translate("Chat is not connected yet. Try again in a moment."))
       return
     }
     setDraft('')
@@ -512,11 +514,11 @@ export function AgentChatPage() {
     if (busy) return
     const limit = chatUploadLimit(file.name, uploadPolicy.data)
     if (file.size > limit) {
-      toast.error(`File exceeds the ${formatUploadLimit(limit)} chat upload limit.`)
+      toast.error(translate("File exceeds the {limit} chat upload limit.", { limit: formatUploadLimit(limit, locale) }))
       return
     }
     if (!sendRef.current) {
-      toast.error('Chat is not connected yet. Try again in a moment.')
+      toast.error(translate("Chat is not connected yet. Try again in a moment."))
       return
     }
     setBusy(true)
@@ -539,7 +541,7 @@ export function AgentChatPage() {
     } catch (error) {
       if (!isCurrent() || !submissions.active || activeSessionRef.current !== uploadSession) return
       setBusy(false)
-        toast.error(userFacingRequestError(error, 'Upload failed'))
+        toast.error(userFacingRequestError(error, translate("Upload failed")))
     }
   }
 
@@ -558,19 +560,17 @@ export function AgentChatPage() {
   return (
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         {!writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          <p>Archived conversation. Read-only history.</p>
-          <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>Return to shared conversation</Link>
+          <p>{translate("Archived conversation. Read-only history.")}</p>
+          <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>{translate("Return to shared conversation")}</Link>
         </div> : null}
         {livePreview ? (
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
             <p className="text-xs text-muted-foreground">
-              Live {livePreview.env ?? 'browser'} session
-            </p>
+              {translate("Live {environment} session", { environment: owned(livePreview.env ?? "browser") })}</p>
             <Button size="sm" variant="outline" asChild>
               <Link to={`/app/agents/${agent.id}/control?session=${activeId ?? ''}&env=${livePreview.env ?? 'browser'}`}>
                 <MonitorPlay className="size-3.5" />
-                Take Control
-              </Link>
+                {translate("Take Control")}</Link>
             </Button>
           </div>
         ) : null}
@@ -591,7 +591,7 @@ export function AgentChatPage() {
             onLoadEarlier={() => { if (isCurrent()) threadScroll.loadEarlier() }} />
           {!sessionId && sharedSessionQuery.error ? <div className="space-y-2">
             <RequestErrorToast error={sharedSessionQuery.error} message="Could not open the shared conversation." />
-            <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>Retry shared conversation</Button>
+            <Button size="sm" variant="outline" onClick={() => { if (isCurrent()) void sharedSessionQuery.refetch() }}>{translate("Retry shared conversation")}</Button>
           </div> : null}
           <ChatTranscript lines={lines} viewport={threadScroll} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
           {thinking ? <p className="text-xs text-muted-foreground italic">{thinking}</p> : null}
@@ -599,9 +599,9 @@ export function AgentChatPage() {
           {busy && !live && !slow ? <ThinkingStatus /> : null}
           <p role="status" className="text-xs text-muted-foreground">
             {busy && !live && slow && accepted
-              ? 'Accepted. The reply is taking longer than usual. No need to send again.'
-              : busy && !live && accepted ? 'Accepted. Waiting for a reply.'
-                : busy && !live && slow && !submissions.pending().length ? 'The reply is taking longer than usual.' : ''}
+              ? translate("Accepted. The reply is taking longer than usual. No need to send again.")
+              : busy && !live && accepted ? translate("Accepted. Waiting for a reply.")
+                : busy && !live && slow && !submissions.pending().length ? translate("The reply is taking longer than usual.") : ''}
           </p>
           {info ? <p className="text-xs text-muted-foreground">{info}</p> : null}
         </div>
@@ -627,7 +627,7 @@ export function AgentChatPage() {
                   ref={fileInputRef}
                   type="file"
                   className="hidden"
-                  aria-label="Attach a file"
+                  aria-label={translate("Attach a file")}
                   aria-describedby="chat-upload-policy"
                   disabled={busy || socketStopped || !uploadPolicy.isSuccess}
                   onChange={(event) => {
@@ -637,50 +637,49 @@ export function AgentChatPage() {
                     event.target.value = ''
                   }}
                 />
-                <Button type="button" variant="ghost" size="icon" className="size-11" title="Attach a file"
+                <Button type="button" variant="ghost" size="icon" className="size-11" title={translate("Attach a file")}
                   disabled={busy || socketStopped || !uploadPolicy.isSuccess}
                   onClick={() => fileInputRef.current?.click()}>
                   <Paperclip className="size-5" aria-hidden />
-                  <span className="sr-only">Attach a file</span>
+                  <span className="sr-only">{translate("Attach a file")}</span>
                 </Button>
                 <Dialog.Root modal={false}>
                   <Dialog.Trigger asChild>
-                    <Button type="button" variant="ghost" size="icon" className="size-11" title="Attachment limits">
+                    <Button type="button" variant="ghost" size="icon" className="size-11" title={translate("Attachment limits")}>
                       <Info className="size-5" aria-hidden />
-                      <span className="sr-only">Attachment limits</span>
+                      <span className="sr-only">{translate("Attachment limits")}</span>
                     </Button>
                   </Dialog.Trigger>
                   <Dialog.Content className="absolute bottom-full left-0 z-30 mb-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-border bg-popover p-3 text-sm text-popover-foreground shadow-elevated outline-none">
                     <div className="flex items-center justify-between gap-2">
-                      <Dialog.Title className="font-medium">Attachment limits</Dialog.Title>
+                      <Dialog.Title className="font-medium">{translate("Attachment limits")}</Dialog.Title>
                       <Dialog.Close asChild>
-                        <Button type="button" variant="ghost" size="icon" className="size-11" aria-label="Close attachment limits">
+                        <Button type="button" variant="ghost" size="icon" className="size-11" aria-label={translate("Close attachment limits")}>
                           <X className="size-4" aria-hidden />
                         </Button>
                       </Dialog.Close>
                     </div>
                     <Dialog.Description className="mt-1 select-text leading-relaxed">
                       {uploadPolicy.isSuccess
-                        ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`
-                      : uploadPolicy.isError ? 'Upload limits must be confirmed before uploading.' : 'Loading upload limits…'}
+                        ? translate("Images (by filename): up to {images}; other files: up to {files}.", { images: formatUploadLimit(uploadPolicy.data.chat_image_max_bytes, locale), files: formatUploadLimit(uploadPolicy.data.chat_file_max_bytes, locale) })
+                      : uploadPolicy.isError ? translate("Upload limits must be confirmed before uploading.") : translate("Loading upload limits…")}
                     </Dialog.Description>
                   </Dialog.Content>
                 </Dialog.Root>
               </div>
               <Button type="submit" disabled={busy || socketStopped || !draft.trim()}>
                 {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" aria-hidden />}
-                Send
-              </Button>
+                {translate("Send")}</Button>
             </div>}
           />
           <div id="chat-upload-policy" className={uploadPolicy.isSuccess ? 'sr-only' : 'mt-2 text-xs text-muted-foreground'}>
             {uploadPolicy.isError ? <div className="space-y-2">
               <RequestErrorToast error={uploadPolicy.error} message="Could not load upload limits. Uploading is unavailable." />
               <Button type="button" size="sm" variant="outline" className="h-11" disabled={uploadPolicy.isFetching}
-                onClick={() => { if (isCurrent()) void uploadPolicy.refetch() }}>Retry upload limits</Button>
+                onClick={() => { if (isCurrent()) void uploadPolicy.refetch() }}>{translate("Retry upload limits")}</Button>
             </div> : <p role="status">{uploadPolicy.isSuccess
-              ? `Images (by filename): up to ${formatUploadLimit(uploadPolicy.data.chat_image_max_bytes)}; other files: up to ${formatUploadLimit(uploadPolicy.data.chat_file_max_bytes)}.`
-              : 'Loading upload limits…'}</p>}
+              ? translate("Images (by filename): up to {images}; other files: up to {files}.", { images: formatUploadLimit(uploadPolicy.data.chat_image_max_bytes, locale), files: formatUploadLimit(uploadPolicy.data.chat_file_max_bytes, locale) })
+              : translate("Loading upload limits…")}</p>}
           </div>
         </form> : null}
       </section>

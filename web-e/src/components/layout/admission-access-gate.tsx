@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
@@ -9,17 +10,18 @@ import { useWorkspaceSession } from '@/hooks/session-workspace'
 import { isAdmissionAccessPath } from '@/lib/admission-access'
 
 export function AdmissionAccessGate() {
+  const { t: translate } = useTranslation()
   const { pathname } = useLocation()
   const query = useAdmissionAccess()
   const scope = useWorkspaceSession()
   if (isAdmissionAccessPath(pathname)) return <Outlet />
   if (query.isPending) {
-    return <p role="status" className="p-6 text-sm text-muted-foreground">Checking organization access…</p>
+    return <p role="status" className="p-6 text-sm text-muted-foreground">{translate("Checking organization access…")}</p>
   }
   if (query.isError) {
     return <div className="space-y-3 p-6">
       <RequestErrorToast error={query.error} message="Unable to confirm organization access. Retry to continue to the workspace." />
-      <Button variant="outline" disabled={query.isFetching} onClick={scope.effect(() => { void query.refetch() })}>Retry access check</Button>
+      <Button variant="outline" disabled={query.isFetching} onClick={scope.effect(() => { void query.refetch() })}>{translate("Retry access check")}</Button>
     </div>
   }
   if (!query.workspaceAllowed) return <Navigate to="/app/notifications" replace />

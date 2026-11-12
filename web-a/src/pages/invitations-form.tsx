@@ -14,8 +14,10 @@ import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { INVITATION_TTL_DAYS, invitationDraftSchema, invitationRequest, type InvitationDraft, type InvitationDraftInput } from '@/lib/invitation-form-schema'
 import { invitationSendFailure } from '@/lib/invitations-api'
+import { useTranslation } from '@/hooks/use-translation'
 
 export function InvitationsForm({ tenant }: { readonly tenant: string | null }) {
+  const { t, owned, number } = useTranslation()
   const id = useId()
   const { user } = useAuth()
   const current = useSessionCurrent()
@@ -56,7 +58,7 @@ export function InvitationsForm({ tenant }: { readonly tenant: string | null }) 
 
   return (
     <Card>
-      <CardHeader><h2 className="font-display text-lg font-semibold">Send invitations</h2></CardHeader>
+      <CardHeader><h2 className="font-display text-lg font-semibold">{t('Send invitations')}</h2></CardHeader>
       <CardContent>
         <form noValidate className="flex flex-col gap-5" onSubmit={form.handleSubmit((draft) => {
           if (submitting.current || !current()) return
@@ -67,21 +69,21 @@ export function InvitationsForm({ tenant }: { readonly tenant: string | null }) 
         })}>
           <div className="grid min-w-0 gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,16rem)]">
             <div className="flex min-w-0 flex-col gap-2">
-              <Label htmlFor={`${id}-emails`}>Recipient emails</Label>
+              <Label htmlFor={`${id}-emails`}>{t('Recipient emails')}</Label>
               <Input id={`${id}-emails`} type="text" inputMode="email" autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder="alice@example.com; bob@example.com" required disabled={sending.isPending} aria-invalid={Boolean(errors.emails)} aria-describedby={`${id}-emails-help ${errors.emails ? `${id}-emails-error` : ''}`} {...form.register('emails')} />
-              <p id={`${id}-emails-help`} className="text-sm text-muted-foreground">Enter one email or separate emails with semicolons (;), with no empty entries. Duplicates are sent once. Each invitation is single use by its recipient only.</p>
-              {errors.emails ? <p id={`${id}-emails-error`} role="alert" className="text-sm text-destructive">{errors.emails.message}</p> : null}
+              <p id={`${id}-emails-help`} className="text-sm text-muted-foreground">{t('Enter one email or separate emails with semicolons (;), with no empty entries. Duplicates are sent once. Each invitation is single use by its recipient only.')}</p>
+              {errors.emails ? <p id={`${id}-emails-error`} role="alert" className="text-sm text-destructive">{owned(errors.emails.message)}</p> : null}
             </div>
             <div className="flex min-w-0 flex-col gap-2">
-              <Label htmlFor={`${id}-ttl`}>Valid for (days)</Label>
+              <Label htmlFor={`${id}-ttl`}>{t('Valid for (days)')}</Label>
               <Input id={`${id}-ttl`} type="number" inputMode="numeric" min={1} max={INVITATION_TTL_DAYS} step={1} required disabled={sending.isPending} aria-invalid={Boolean(errors.ttl_days)} aria-describedby={`${id}-ttl-help ${errors.ttl_days ? `${id}-ttl-error` : ''}`} {...form.register('ttl_days', { valueAsNumber: true })} />
-              <p id={`${id}-ttl-help`} className="text-sm text-muted-foreground">1–14 whole days. Default and maximum: 14 days.</p>
-              {errors.ttl_days ? <p id={`${id}-ttl-error`} role="alert" className="text-sm text-destructive">{errors.ttl_days.message}</p> : null}
+              <p id={`${id}-ttl-help`} className="text-sm text-muted-foreground">{t('1–14 whole days. Default and maximum: 14 days.')}</p>
+              {errors.ttl_days ? <p id={`${id}-ttl-error`} role="alert" className="text-sm text-destructive">{owned(errors.ttl_days.message)}</p> : null}
             </div>
           </div>
-          <Button type="submit" disabled={sending.isPending} className="min-h-11 self-start motion-reduce:transition-none">{sending.isPending ? 'Sending invitations…' : 'Send invitation emails'}</Button>
+          <Button type="submit" disabled={sending.isPending} className="min-h-11 self-start motion-reduce:transition-none">{t(sending.isPending ? 'Sending invitations…' : 'Send invitation emails')}</Button>
           <div ref={feedback} tabIndex={-1} role={failure ? 'alert' : 'status'} className="text-sm empty:hidden focus-visible:outline-2 focus-visible:outline-ring">
-      {failure ? <><ErrorToast error={sending.error} message={failure.message} />{failure.settings ? <Link to="/settings" className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring">Open Settings</Link> : null}</> : sent !== null ? sent > 0 ? `${sent} ${sent === 1 ? 'invitation' : 'invitations'} created. Email delivery queued.` : 'No invitations were created. Check history before trying again.' : sending.isPending ? 'Sending. Please wait.' : null}
+      {failure ? <><ErrorToast error={sending.error} message={owned(failure.message) ?? ''} />{failure.settings ? <Link to="/settings" className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring">{t('Open Settings')}</Link> : null}</> : sent !== null ? sent > 0 ? t(sent === 1 ? '{count} invitation created. Email delivery queued.' : '{count} invitations created. Email delivery queued.', { count: number(sent) }) : t('No invitations were created. Check history before trying again.') : sending.isPending ? t('Sending. Please wait.') : null}
           </div>
         </form>
       </CardContent>

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlarmClock,
@@ -145,6 +146,7 @@ const agents: Agent[] = [
 ]
 
 export function Agents() {
+  const { t: translate, owned } = useTranslation()
   return (
     <section
       id="agents"
@@ -153,16 +155,11 @@ export function Agents() {
       <div className="container-page">
         <Reveal className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-semibold tracking-wide text-primary uppercase">
-            Role catalog
-          </p>
+            {translate("Role catalog")}</p>
           <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Specialists for every kind of company
-          </h2>
+            {translate("Specialists for every kind of company")}</h2>
           <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-            From office ops and brand marketing to markets desks - hire digital
-            employees that match how non-tech and hybrid teams actually work.
-            Each template ships with a soul, capabilities, and sensible autonomy defaults.
-          </p>
+            {translate("From office ops and brand marketing to markets desks - hire digital employees that match how non-tech and hybrid teams actually work. Each template ships with a soul, capabilities, and sensible autonomy defaults.")}</p>
         </Reveal>
 
         <Stagger className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -174,23 +171,23 @@ export function Agents() {
                   <CardHeader>
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <Badge variant="outline" className="bg-background">
-                        {agent.category}
+                      {owned(agent.category)}
                       </Badge>
                       <span
                         className="flex size-10 items-center justify-center rounded-xl border border-border bg-surface text-primary"
-                        title={agent.iconLabel}
+                        title={owned(agent.iconLabel)}
                       >
                         <Icon
                           className="size-5"
                           aria-hidden
                           strokeWidth={1.75}
                         />
-                        <span className="sr-only">{agent.iconLabel}</span>
+                        <span className="sr-only">{owned(agent.iconLabel)}</span>
                       </span>
                     </div>
-                    <CardTitle className="text-lg">{agent.name}</CardTitle>
+                    <CardTitle className="text-lg">{owned(agent.name)}</CardTitle>
                     <CardDescription className="leading-relaxed">
-                      {agent.blurb}
+                      {owned(agent.blurb)}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -204,7 +201,7 @@ export function Agents() {
                             className="size-1.5 shrink-0 rounded-full bg-primary"
                             aria-hidden
                           />
-                          {bullet}
+                        {owned(bullet)}
                         </li>
                       ))}
                     </ul>

@@ -1,3 +1,5 @@
+import { useTranslation } from '@/hooks/use-translation'
+import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles } from 'lucide-react'
 import { useEffect, useId, useState } from 'react'
@@ -19,10 +21,10 @@ import { isNeedsVerificationDetail } from '@/lib/types/auth'
 import type { SuggestedOrg } from '@/lib/types/auth'
 
 const registerSchema = z.object({
-  email: z.string().trim().email('Enter a valid email').max(254),
-  password: z.string().min(6, 'Use at least 6 characters').max(128),
+  email: z.string().trim().email('Enter a valid email').max(254, 'Email is too long'),
+  password: z.string().min(6, 'Use at least 6 characters').max(128, 'Password is too long'),
   confirm_password: z.string().min(1, 'Confirm your password'),
-  invitation_code: z.string().trim().max(128).optional(),
+  invitation_code: z.string().trim().max(128, 'Invitation code is too long').optional(),
 }).refine((data) => data.password === data.confirm_password, {
   message: 'Passwords do not match',
   path: ['confirm_password'],
@@ -51,6 +53,7 @@ const highlights = [
 ]
 
 export function RegisterPage() {
+  const { t: translate } = useTranslation()
   const { status, owner, capture, isCurrent, applySession, needsOrgConfirm } = useAuth()
   const navigate = useNavigate()
   const formId = useId()
@@ -72,11 +75,11 @@ export function RegisterPage() {
       .catch((error: unknown) => {
         if (!cancelled && isCurrent(expectedOwner)) {
           setInviteRequired(false)
-          toast.error(userFacingRequestError(error, 'Unable to load registration settings. Try again.'))
+          toast.error(userFacingRequestError(error, translate("Unable to load registration settings. Try again.")))
         }
       })
     return () => { cancelled = true }
-  }, [owner, isCurrent])
+  }, [owner, isCurrent, translate])
 
   const {
     register,
@@ -111,24 +114,24 @@ export function RegisterPage() {
       if (!applySession(expectedOwner, result)) return
       const installedOwner = capture()
       if (!isCurrent(installedOwner)) return
-      toast.success('Account created')
+      toast.success(translate("Account created"))
     } catch (error) {
       if (!isCurrent(expectedOwner)) return
       if (error instanceof ApiError && isNeedsVerificationDetail(error.detail)) {
         navigate('/verify-email', { replace: true, state: { email: values.email } })
         return
       }
-      toast.error(userFacingRequestError(error, 'Unable to create an account. Try again.'))
+      toast.error(userFacingRequestError(error, translate("Unable to create an account. Try again.")))
     }
   }
 
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title="Create your account"
-      description="At signup, a matching email domain submits a company join request, pending organization admin approval. Without a match, you automatically join KABERs. An invitation code submits a company admission request for review."
-      brandTitle="Start working with digital employees"
-      brandBody="Sign up to request company membership with a matching email domain, subject to organization admin approval. Without a match, start in KABERs."
+      title={translate("Create your account")}
+      description={translate("At signup, a matching email domain submits a company join request, pending organization admin approval. Without a match, you automatically join KABERs. An invitation code submits a company admission request for review.")}
+      brandTitle={translate("Start working with digital employees")}
+      brandBody={translate("Sign up to request company membership with a matching email domain, subject to organization admin approval. Without a match, start in KABERs.")}
       highlights={highlights}
     >
       {formError ? (
@@ -142,7 +145,7 @@ export function RegisterPage() {
 
       <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
         <div className="space-y-2">
-          <Label htmlFor={`${formId}-email`}>Email</Label>
+          <Label htmlFor={`${formId}-email`}>{translate("Email")}</Label>
           <div className="relative">
             <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -168,17 +171,17 @@ export function RegisterPage() {
                       })
                     })
                     .catch((error: unknown) => {
-                      if (isCurrent(expectedOwner)) toast.error(userFacingRequestError(error, 'Unable to check this email. Try again.'))
+                      if (isCurrent(expectedOwner)) toast.error(userFacingRequestError(error, translate("Unable to check this email. Try again.")))
                     })
                 },
               })}
             />
           </div>
-          {errors.email ? <p className="text-xs text-destructive">{errors.email.message}</p> : null}
+          {errors.email ? <p className="text-xs text-destructive"><ValidationMessage message={errors.email.message} /></p> : null}
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor={`${formId}-password`}>Password</Label>
+          <Label htmlFor={`${formId}-password`}>{translate("Password")}</Label>
           <div className="relative">
             <Lock className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -192,16 +195,16 @@ export function RegisterPage() {
               type="button"
               className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
               onClick={() => setShowPassword((value) => !value)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-label={showPassword ? translate("Hide password") : translate("Show password")}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
-          {errors.password ? <p className="text-xs text-destructive">{errors.password.message}</p> : null}
+          {errors.password ? <p className="text-xs text-destructive"><ValidationMessage message={errors.password.message} /></p> : null}
         </div>
 
         <PasswordField
-          label="Confirm password"
+          label={translate("Confirm password")}
           autoComplete="new-password"
           disabled={isSubmitting}
           error={errors.confirm_password?.message}
@@ -209,17 +212,17 @@ export function RegisterPage() {
         />
 
         <div className="space-y-2">
-          <Label htmlFor={`${formId}-invite`}>Invitation code{inviteRequired ? '' : ' (optional)'}</Label>
+          <Label htmlFor={`${formId}-invite`}>{translate("Invitation code")}{inviteRequired ? '' : translate(" (optional)")}</Label>
           <Input
             id={`${formId}-invite`}
-            placeholder={inviteRequired ? 'Required' : 'Optional'}
+            placeholder={inviteRequired ? translate("Required") : translate("Optional")}
             autoComplete="off"
             {...register('invitation_code', {
               required: inviteRequired ? 'An invitation code is required' : false,
             })}
           />
           {errors.invitation_code ? (
-            <p className="text-xs text-destructive">{errors.invitation_code.message}</p>
+            <p className="text-xs text-destructive"><ValidationMessage message={errors.invitation_code.message} /></p>
           ) : null}
         </div>
 
@@ -227,10 +230,9 @@ export function RegisterPage() {
           {isSubmitting ? (
             <>
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              Creating…
-            </>
+              {translate("Creating…")}</>
           ) : (
-            'Create account'
+            translate("Create account")
           )}
         </Button>
         <div className="pt-2">
@@ -239,10 +241,9 @@ export function RegisterPage() {
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        Already have an account?{' '}
+        {translate("Already have an account?")}{' '}
         <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-          Sign in
-        </Link>
+          {translate("Sign in")}</Link>
       </p>
     </AuthShell>
   )

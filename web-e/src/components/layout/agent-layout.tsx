@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { Link, matchPath, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -33,6 +34,7 @@ const tabs = [
 ] as const satisfies readonly SectionRailItem[]
 
 function AgentsListButton() {
+  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const navigate = useNavigate()
 
@@ -48,12 +50,12 @@ function AgentsListButton() {
   return (
     <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={goBack}>
       <ArrowLeft className="size-4" aria-hidden />
-      Back
-    </Button>
+      {translate("Back")}</Button>
   )
 }
 
 export function AgentLayout() {
+  const { t: translate } = useTranslation()
   const { agentId = '' } = useParams()
   const { pathname } = useLocation()
   const chat = Boolean(matchPath('/app/agents/:agentId/chat/*', pathname))
@@ -84,7 +86,7 @@ export function AgentLayout() {
           </div>
           <SectionRail
             items={visibleTabs}
-            label="Agent sections"
+            label={translate("Agent sections")}
             className={railClass}
           />
         </div>
@@ -92,11 +94,11 @@ export function AgentLayout() {
     }
     return (
       <div className={chat ? layoutClass : 'space-y-3 p-6'}>
-        {chat ? <SectionRail items={visibleTabs} label="Agent sections" className={railClass} /> : null}
+        {chat ? <SectionRail items={visibleTabs} label={translate("Agent sections")} className={railClass} /> : null}
         <div className={chat ? 'min-w-0 space-y-3 p-6 md:col-start-2' : undefined}>
-          {chat ? <Button variant="outline" asChild><Link to="/app/agents">Agents</Link></Button> : <AgentsListButton />}
+          {chat ? <Button variant="outline" asChild><Link to="/app/agents">{translate("Agents")}</Link></Button> : <AgentsListButton />}
           <RequestErrorToast error={query.error} message={query.error instanceof ApiError && query.error.status !== 404
-              ? userFacingRequestError(query.error, 'Unable to load this agent. Try again.')
+              ? userFacingRequestError(query.error, translate("Unable to load this agent. Try again."))
               : 'This agent is not available.'} />
         </div>
       </div>
@@ -113,7 +115,7 @@ export function AgentLayout() {
       </div> : null}
       <SectionRail
         items={visibleTabs}
-        label="Agent sections"
+        label={translate("Agent sections")}
         className={railClass}
       />
       <div className="relative row-start-3 min-h-0 min-w-0 md:col-start-2 md:row-start-2">

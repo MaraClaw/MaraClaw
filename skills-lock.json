@@ -77,7 +77,7 @@
       "source": "MaraClaw/PyWhales",
       "sourceType": "github",
       "skillPath": "skills/pywhales-docker-container/SKILL.md",
-      "computedHash": "2eb4b12f6828af526d9f6a9b392af4c40796006edebd17daa8954f8be818afdc"
+      "computedHash": "7cf48298189940a54ab9e7f6f72a5884da76b3db6a0f60b4210e9e9387d674c2"
     },
     "state-machine": {
       "source": "jakubkrehel/skills",

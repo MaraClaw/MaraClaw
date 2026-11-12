@@ -225,6 +225,3 @@ __marimo__/
 engine/coverage.json
 docs/
 !/engine/docs/
-/engine/docs/*
-!/engine/docs/organization-pricing.md
-!/engine/docs/managed-storage-quota.md

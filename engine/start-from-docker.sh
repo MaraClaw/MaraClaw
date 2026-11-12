@@ -90,6 +90,16 @@ else
 fi
 echo "[docker-run] Using container engine: $ENGINE"
 
+# Docker Desktop's VM disk is a sparse file on the macOS host disk and its own
+# `df` over-reports. If the host fills up, the VM goes read-only and every
+# running container breaks, so warn early. Warn only: never block a start.
+if [ "$(uname -s)" = "Darwin" ]; then
+    HOST_FREE_GB="$(df -Pk "${HOME:-}" 2>/dev/null | awk 'NR==2 {print int($4 / 1048576)}')" || HOST_FREE_GB=""
+    if [ -n "$HOST_FREE_GB" ] && [ "$HOST_FREE_GB" -lt 10 ]; then
+        echo "[docker-run] WARNING: only ${HOST_FREE_GB} GB free on the host disk; below ~5 GB the container VM can go read-only." >&2
+    fi
+fi
+
 # Podman on macOS runs inside a Linux VM that does not share /Volumes/ paths
 # by default.  If DATA_DIR is under /Volumes/ and is still the script default,
 # redirect it to $HOME/.maraclaw-data which the VM always shares.  If the user

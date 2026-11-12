@@ -1,3 +1,5 @@
+import { createTranslator, translateOwned, type Locale } from './i18n/translation.ts'
+
 export type ScheduleRecurrence =
   | { readonly kind: 'daily' | 'weekdays'; readonly time: string }
   | { readonly kind: 'weekly'; readonly time: string; readonly weekday: number }
@@ -41,13 +43,14 @@ export function encodeScheduleRecurrence(recurrence: ScheduleRecurrence): string
   }
 }
 
-export function describeScheduleRecurrence(recurrence: ScheduleRecurrence): string {
+export function describeScheduleRecurrence(recurrence: ScheduleRecurrence, locale: Locale = 'en'): string {
+  const t = createTranslator(locale)
   switch (recurrence.kind) {
-    case 'daily': return `Daily at ${recurrence.time}`
-    case 'weekdays': return `Weekdays (Mon–Fri) at ${recurrence.time}`
-    case 'weekly': return `Every ${scheduleWeekdays[recurrence.weekday]} at ${recurrence.time}`
-    case 'monthly': return `Monthly on day ${recurrence.monthDay} at ${recurrence.time}`
-    case 'custom': return `Custom cron: ${recurrence.cron}`
+    case 'daily': return t('Daily at {time}', { time: recurrence.time })
+    case 'weekdays': return t('Weekdays (Mon–Fri) at {time}', { time: recurrence.time })
+    case 'weekly': return t('Every {day} at {time}', { day: translateOwned(locale, String(scheduleWeekdays[recurrence.weekday])), time: recurrence.time })
+    case 'monthly': return t('Monthly on day {day} at {time}', { day: recurrence.monthDay, time: recurrence.time })
+    case 'custom': return t('Custom cron: {cron}', { cron: recurrence.cron })
     default: return assertNever(recurrence)
   }
 }

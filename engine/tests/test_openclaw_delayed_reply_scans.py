@@ -1,14 +1,18 @@
 """Idle-tick cost and forced rereads of the delayed-reply sweep, over real transcript files and counting fakes."""
 
+import asyncio
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from sqlite3 import Connection
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.records.openclaw_reply_binding import OpenClawReplyBinding
 from app.services import openclaw_delayed_replies as recovery, openclaw_reply_authorization as authorization
@@ -19,6 +23,7 @@ from app.services.openclaw_transcript import (
     TranscriptSource,
     open_transcript,
 )
+from app.services.quota_guard import AgentExpired
 from app.services.response_identity import ResponseGuard
 from test_openclaw_delayed_replies import append, transcript
 
@@ -313,3 +318,56 @@ async def test_default_budget_finishes_the_whole_lap_in_one_scan(sweep: Sweep) -
     await recovery.DelayedReplyRecovery().scan_once()
 
     assert (sweep.counters.pages, sweep.counters.reads) == (2, [1] * 21)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("binding failed"),
+        ValidationError.from_exception_data("reply", [{"type": "missing", "loc": ("id",), "input": {}}]),
+        HTTPException(503, "unavailable"),
+        AgentExpired("Agent"),
+        asyncio.CancelledError(),
+    ],
+)
+async def test_binding_failure_does_not_starve_following_bindings_or_agents(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    first, sibling = sorted([sweep.add_binding(UUID(int=1)) for _ in range(2)], key=lambda binding: binding.id)
+    later, last = sweep.add_binding(UUID(int=2)), sweep.add_binding(UUID(int=3))
+    for binding in (first, sibling, later, last):
+        append(sweep.db, f"s-{binding.id}", 1, text="reply")
+    record_page = recovery._record_page
+    now = [0.0]
+
+    async def record(binding: OpenClawReplyBinding, rows: tuple[TranscriptRow, ...], root: Path):
+        if binding.id == first.id:
+            raise failure
+        result = await record_page(binding, rows, root)
+        if binding.id == later.id:
+            now[0] = 2.0
+        return result
+
+    warning = Mock()
+    monkeypatch.setattr(recovery, "_record_page", record)
+    monkeypatch.setattr(recovery.logger, "warning", warning)
+    scanner = recovery.DelayedReplyRecovery(budget=1.0, clock=lambda: now[0])
+
+    if isinstance(failure, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await scanner.scan_once()
+        assert sweep.counters.persisted == []
+        assert scanner._after is None
+        return
+
+    await scanner.scan_once()
+
+    assert sweep.counters.persisted == [f"event-s-{binding.id}-1" for binding in (sibling, later)]
+    assert sweep.replies.bindings[first.id].cursor == {}
+    assert sweep.replies.bindings[last.id].cursor == {}
+    assert scanner._after == later.agent_id
+    assert warning.call_count == (0 if isinstance(failure, AgentExpired) else 1)
+    await scanner.scan_once()
+    assert sweep.replies.bindings[last.id].cursor == {f"s-{last.id}": 1}
+    assert scanner._after is None

@@ -82,6 +82,62 @@ async def settled_ack(connection: MemoryConnection, channel: str) -> None:
     await connection.messages.put([b"message", channel.encode(), json.dumps({"agent_id": "barrier", "message": {}})])
 
 
+@pytest.mark.asyncio
+async def test_subscription_cleanup_failure_still_retries_and_delivers(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = ConnectionPool()
+    connection = MemoryConnection()
+    monkeypatch.setattr(pool, "make_connection", lambda: connection)
+    redis = Redis(connection_pool=pool)
+    instance = router.RealtimeRouter()
+    retrying, resume, delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    close = router.AcknowledgedPubSub.aclose
+    closed: list[router.AcknowledgedPubSub] = []
+
+    async def existing() -> Redis:
+        return redis
+
+    async def failing_close(pubsub: router.AcknowledgedPubSub) -> None:
+        await close(pubsub)
+        closed.append(pubsub)
+        if len(closed) == 1:
+            raise RedisConnectionError("close failed")
+
+    async def sleep(seconds: float) -> None:
+        assert seconds == 1.0
+        retrying.set()
+        await resume.wait()
+
+    async def deliver(**_kwargs: object) -> None:
+        delivered.set()
+
+    monkeypatch.setattr(router, "get_redis", existing)
+    monkeypatch.setattr(router.AcknowledgedPubSub, "aclose", failing_close)
+    monkeypatch.setattr(router.asyncio, "sleep", sleep)
+    try:
+        await instance.start(deliver)
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+        first_subscription = instance._subscription
+        delivered.clear()
+        await connection.messages.put(RuntimeError("subscription lost"))
+        await asyncio.wait_for(retrying.wait(), 1)
+        assert first_subscription is not None
+        assert not first_subscription.acknowledged
+        assert not instance.ready
+        resume.set()
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert instance.ready
+        assert instance._subscription is not first_subscription
+    finally:
+        await instance.stop()
+        await redis.aclose()
+        await pool.aclose()
+    assert len(closed) == 2
+
+
 async def test_ack_loss_transparent_retry_reack_and_repeated_start(monkeypatch: pytest.MonkeyPatch) -> None:
     pool = ConnectionPool()
     connection = MemoryConnection()

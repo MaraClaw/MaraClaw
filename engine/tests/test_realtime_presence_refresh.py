@@ -9,6 +9,7 @@ from typing import Self
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import anyio
 import pytest
 from fastapi import WebSocket
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -395,6 +396,42 @@ async def test_presence_refresh_redis_failure_is_logged_and_never_raised(monkeyp
 
     report.assert_called_once()
     warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_survives_unexpected_failure_on_normal_cadence(
+    monkeypatch: pytest.MonkeyPatch, handler_env: HandlerEnv
+) -> None:
+    binding = handler_env.binding
+    handler = websocket.WebSocketChatHandler(open_socket([]), binding.agent_id, "opaque", str(binding.session_id))
+    intervals: asyncio.Queue[float] = asyncio.Queue()
+    ticks: asyncio.Queue[None] = asyncio.Queue()
+    cancelled = asyncio.Event()
+    handler_env.refresh.side_effect = [RuntimeError("refresh failed"), None]
+
+    async def sleep(seconds: float) -> None:
+        await intervals.put(seconds)
+        await ticks.get()
+
+    async def refresh() -> None:
+        try:
+            await handler._refresh_presence()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(websocket, "_presence_sleep", sleep)
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(refresh)
+        with anyio.fail_after(5):
+            for _ in range(2):
+                assert await intervals.get() == PRESENCE_REFRESH_SECONDS
+                await ticks.put(None)
+            assert await intervals.get() == PRESENCE_REFRESH_SECONDS
+        assert handler_env.refresh.await_count == 2
+        tasks.cancel_scope.cancel()
+
+    assert cancelled.is_set()
 
 
 async def test_resubscribe_close_ends_the_handler_with_a_reconnectable_code_and_releases_presence(

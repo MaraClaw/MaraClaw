@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useInfiniteQuery } from '@/hooks/session-workspace'
 import { Loader2, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -10,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { agentPageOptions, distinctAgents } from '@/lib/agents-query'
 
 export function AgentsListPage() {
+  const { t: translate, owned, formatNumber } = useTranslation()
   const query = useInfiniteQuery(agentPageOptions())
   const agents = distinctAgents(query.data?.pages)
 
@@ -17,14 +19,13 @@ export function AgentsListPage() {
     <div className="space-y-5 p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-semibold">Agents</h1>
-          <p className="text-sm text-muted-foreground">Digital employees you can chat with in this company.</p>
+          <h1 className="font-display text-2xl font-semibold">{translate("Agents")}</h1>
+          <p className="text-sm text-muted-foreground">{translate("Digital employees you can chat with in this company.")}</p>
         </div>
         <Button asChild>
           <Link to="/app/agents/new">
             <Plus className="size-4" />
-            New agent
-          </Link>
+            {translate("New agent")}</Link>
         </Button>
       </div>
 
@@ -37,19 +38,17 @@ export function AgentsListPage() {
       {query.isError && !query.isFetchNextPageError ? (
         <div className="space-y-3">
           <RequestErrorToast error={query.error} message="Could not load agents. Try again." />
-          <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry loading agents</Button>
+          <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>{translate("Retry loading agents")}</Button>
         </div>
       ) : null}
 
       {query.isSuccess && agents.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-sm text-muted-foreground">
-            No agents yet.{' '}
+            {translate("No agents yet.")}{' '}
             <Link to="/app/onboarding" className="font-medium text-primary underline-offset-4 hover:underline">
-              Create a personal assistant
-            </Link>{' '}
-            or start from a template.
-          </CardContent>
+              {translate("Create a personal assistant")}</Link>{' '}
+            {translate("or start from a template.")}</CardContent>
         </Card>
       ) : null}
 
@@ -60,14 +59,14 @@ export function AgentsListPage() {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between gap-2 text-base">
                   <span className="truncate">{agent.name}</span>
-                  <Badge variant="soft">{agent.status}</Badge>
+                  <Badge variant="soft">{owned(agent.status)}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
-                <p className="line-clamp-2">{agent.role_description || 'No role description'}</p>
+                <p className="line-clamp-2">{agent.role_description || translate("No role description")}</p>
                 <AgentAccessExplanation reason={agent.access_reason} />
-                {agent.unread_count ? <p>{agent.unread_count} unread</p> : null}
-                {agent.is_expired ? <p className="text-destructive">Expired</p> : null}
+              {agent.unread_count ? <p>{formatNumber(agent.unread_count)} {translate("unread")}</p> : null}
+                {agent.is_expired ? <p className="text-destructive">{translate("Expired")}</p> : null}
               </CardContent>
             </Card>
           </Link>
@@ -77,7 +76,7 @@ export function AgentsListPage() {
         <div className="space-y-3">
           {query.isFetchNextPageError ? <RequestErrorToast error={query.error} message="Could not load more agents. Your loaded agents are still available." /> : null}
           <Button variant="outline" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
-            {query.isFetchingNextPage ? 'Loading more agents...' : query.isFetchNextPageError ? 'Retry loading more' : 'Load more'}
+            {query.isFetchingNextPage ? translate("Loading more agents...") : query.isFetchNextPageError ? translate("Retry loading more") : translate("Load more")}
           </Button>
         </div>
       ) : null}

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
@@ -19,6 +20,7 @@ export function TransferDetailPage() {
 }
 
 function TransferDetail({ id }: { readonly id: string }) {
+  const { t: translate, owned, locale, formatDate } = useTranslation()
   const scope = useWorkspaceSession()
   const { isCurrent } = useAuth()
   const enter = useJoinedWorkspace()
@@ -49,40 +51,40 @@ function TransferDetail({ id }: { readonly id: string }) {
     if (joined?.status !== 'approved' || attempted.current || !isCurrent(scope.owner)) return
     attempted.current = true
     void enter({ status: 'approved', request: { ...joined, status: 'approved' } }).catch((cause: unknown) => {
-      if (isCurrent(scope.owner)) setEntryError(userFacingRequestError(cause, 'Unable to open the joined workspace. Open the admission below to retry.'))
+      if (isCurrent(scope.owner)) setEntryError(userFacingRequestError(cause, translate("Unable to open the joined workspace. Open the admission below to retry.")))
     })
-  }, [joined, enter, isCurrent, scope.owner])
+  }, [joined, enter, isCurrent, scope.owner, translate])
   return <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-    <Button asChild variant="outline"><Link to="/app/notifications?category=admissions">All admission requests</Link></Button>
+    <Button asChild variant="outline"><Link to="/app/notifications?category=admissions">{translate("All admission requests")}</Link></Button>
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="font-display text-2xl font-semibold">Transfer request</h1>
-      <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })}>Refresh status</Button>
+      <h1 className="font-display text-2xl font-semibold">{translate("Transfer request")}</h1>
+      <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })}>{translate("Refresh status")}</Button>
     </div>
-    {query.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading transfer request…</p> : null}
-    {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, 'Unable to load this transfer. Refresh to try again.')} /> : null}
-    {withdraw.isError ? <RequestErrorToast error={withdraw.error} message={userFacingRequestError(withdraw.error, 'Unable to withdraw. Refresh the status before trying again.')} /> : null}
+    {query.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading transfer request…")}</p> : null}
+    {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, translate("Unable to load this transfer. Refresh to try again."))} /> : null}
+    {withdraw.isError ? <RequestErrorToast error={withdraw.error} message={userFacingRequestError(withdraw.error, translate("Unable to withdraw. Refresh the status before trying again."))} /> : null}
     {entryError ? <RequestErrorToast message={entryError} /> : null}
     {request ? <>
-      <section aria-label="Transfer status" className="space-y-3 rounded-xl border border-border p-4">
-        <Badge variant="outline">{transferStatuses[request.status].label}</Badge>
-        <p className="text-sm text-muted-foreground">{transferStatuses[request.status].description}</p>
-        {request.choice === 'paid' && request.status === 'admission_created' ? <p className="text-sm text-muted-foreground">Payment approved. New invitation transfers join the destination automatically without a separate company approval.</p> : null}
-        {request.review_reason ? <div className="space-y-1"><h2 className="text-sm font-medium">Review reason</h2><p className="whitespace-pre-wrap text-sm">{request.review_reason}</p></div> : null}
-        {request.status === 'payment_review' ? <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={withdraw.isPending || query.isFetching || query.isError} onClick={() => withdraw.mutate()}>{withdraw.isPending ? 'Withdrawing…' : 'Withdraw transfer request'}</Button> : null}
-        {request.admission_request_id ? <Button asChild variant="outline" className="h-auto min-h-11 whitespace-normal"><Link to={`/app/admissions/${encodeURIComponent(request.admission_request_id)}`}>View destination admission</Link></Button> : null}
+      <section aria-label={translate("Transfer status")} className="space-y-3 rounded-xl border border-border p-4">
+        <Badge variant="outline">{owned(transferStatuses[request.status].label)}</Badge>
+        <p className="text-sm text-muted-foreground">{owned(transferStatuses[request.status].description)}</p>
+        {request.choice === 'paid' && request.status === 'admission_created' ? <p className="text-sm text-muted-foreground">{translate("Payment approved. New invitation transfers join the destination automatically without a separate company approval.")}</p> : null}
+        {request.review_reason ? <div className="space-y-1"><h2 className="text-sm font-medium">{translate("Review reason")}</h2><p className="whitespace-pre-wrap text-sm">{request.review_reason}</p></div> : null}
+        {request.status === 'payment_review' ? <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={withdraw.isPending || query.isFetching || query.isError} onClick={() => withdraw.mutate()}>{withdraw.isPending ? translate("Withdrawing…") : translate("Withdraw transfer request")}</Button> : null}
+        {request.admission_request_id ? <Button asChild variant="outline" className="h-auto min-h-11 whitespace-normal"><Link to={`/app/admissions/${encodeURIComponent(request.admission_request_id)}`}>{translate("View destination admission")}</Link></Button> : null}
       </section>
-      <section aria-label="Saved transfer policy" className="space-y-3 rounded-xl border border-border p-4 text-sm">
-        <h2 className="font-medium">Saved fee and payment instructions</h2>
-        <p>{formatMoney(request.fee_amount_minor, request.currency)} ({request.currency})</p>
-        <p className="whitespace-pre-wrap">{request.instructions || 'No payment instructions were provided. Contact support before paying.'}</p>
-        <p className="text-muted-foreground">This is the policy saved when you submitted, not the current quote. This page does not collect payment or confirm receipt.</p>
+      <section aria-label={translate("Saved transfer policy")} className="space-y-3 rounded-xl border border-border p-4 text-sm">
+        <h2 className="font-medium">{translate("Saved fee and payment instructions")}</h2>
+        <p>{formatMoney(request.fee_amount_minor, request.currency, locale)} ({request.currency})</p>
+        <p className="whitespace-pre-wrap">{request.instructions || translate("No payment instructions were provided. Contact support before paying.")}</p>
+        <p className="text-muted-foreground">{translate("This is the policy saved when you submitted, not the current quote. This page does not collect payment or confirm receipt.")}</p>
       </section>
       <dl className="grid gap-4 rounded-xl border border-border p-4 text-sm sm:grid-cols-2">
-        <div><dt className="text-muted-foreground">Choice</dt><dd>{request.choice === 'paid' ? 'Paid · Keep agents and integrations' : 'Free · Delete agents and integrations on transfer'}</dd></div>
-        <div><dt className="text-muted-foreground">Destination organization ID</dt><dd>{request.target_tenant_id}</dd></div>
-        <div><dt className="text-muted-foreground">Source organization ID</dt><dd>{request.source_tenant_id}</dd></div>
-        <div><dt className="text-muted-foreground">Submitted</dt><dd><time dateTime={request.created_at}>{new Date(request.created_at).toLocaleString()}</time></dd></div>
-        {request.payment_confirmed_at ? <div><dt className="text-muted-foreground">Payment confirmed</dt><dd><time dateTime={request.payment_confirmed_at}>{new Date(request.payment_confirmed_at).toLocaleString()}</time></dd></div> : null}
+        <div><dt className="text-muted-foreground">{translate("Choice")}</dt><dd>{request.choice === 'paid' ? translate("Paid · Keep agents and integrations") : translate("Free · Delete agents and integrations on transfer")}</dd></div>
+        <div><dt className="text-muted-foreground">{translate("Destination organization ID")}</dt><dd>{request.target_tenant_id}</dd></div>
+        <div><dt className="text-muted-foreground">{translate("Source organization ID")}</dt><dd>{request.source_tenant_id}</dd></div>
+        <div><dt className="text-muted-foreground">{translate("Submitted")}</dt><dd><time dateTime={request.created_at}>{formatDate(request.created_at, { dateStyle: 'medium', timeStyle: 'short' })}</time></dd></div>
+        {request.payment_confirmed_at ? <div><dt className="text-muted-foreground">{translate("Payment confirmed")}</dt><dd><time dateTime={request.payment_confirmed_at}>{formatDate(request.payment_confirmed_at, { dateStyle: 'medium', timeStyle: 'short' })}</time></dd></div> : null}
       </dl>
     </> : null}
   </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { CheckCheck } from 'lucide-react'
 import { Fragment, memo, useCallback } from 'react'
 import type { ChatTranscriptViewport } from '@/hooks/use-chat-scroll'
@@ -6,7 +7,6 @@ import type { ChatLine } from '@/lib/chat/transcript'
 import { cn } from '@/lib/utils'
 import { ChatMessageContent } from './message-content'
 
-const messageTime = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 
 type RowProps = {
   readonly agentId: string
@@ -18,6 +18,7 @@ type RowProps = {
 }
 
 const TranscriptRow = memo(function TranscriptRow({ agentId, line, entry, slow, socketStopped, onRetry }: RowProps) {
+  const { t: translate, formatDate } = useTranslation()
   const date = line.created_at ? new Date(line.created_at) : null
   const hasTime = date !== null && Number.isFinite(date.getTime())
   const accepted = line.role === 'user' && !line.pending && (line.delivery === 'accepted'
@@ -31,14 +32,13 @@ const TranscriptRow = memo(function TranscriptRow({ agentId, line, entry, slow, 
   )}>
     <div data-chat-content><ChatMessageContent agentId={agentId} message={line} /></div>
     {line.delivery === 'rejected' || (line.delivery === 'unknown' && slow) ? <div className="mt-2 space-y-2">
-      <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : 'Acceptance not confirmed.'}</p>
+      <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : translate('Acceptance not confirmed.')}</p>
       {line.retryable !== false ? <Button type="button" size="sm" variant="outline" disabled={socketStopped} onClick={() => onRetry(line)}>
-        Retry this message
-      </Button> : null}
+        {translate('Retry this message')}</Button> : null}
     </div> : null}
     {(line.role === 'user' || line.role === 'assistant') && (hasTime || accepted) ? <div data-chat-metadata className="chat-message-metadata">
-      {hasTime ? <time dateTime={line.created_at ?? undefined}>{messageTime.format(date)}</time> : null}
-      {accepted ? <CheckCheck role="img" aria-label="Accepted" className="size-3.5 shrink-0" /> : null}
+      {hasTime ? <time dateTime={line.created_at ?? undefined}>{formatDate(date, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}</time> : null}
+      {accepted ? <CheckCheck role="img" aria-label={translate('Accepted')} className="size-3.5 shrink-0" /> : null}
     </div> : null}
   </article>
 })

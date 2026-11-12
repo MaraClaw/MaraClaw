@@ -4,6 +4,7 @@ import { useId, useState, type ComponentProps } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
+import { useTranslation } from '@/hooks/use-translation'
 
 type PasswordFieldProps = Omit<ComponentProps<'input'>, 'type' | 'id'> & {
   id?: string
@@ -21,6 +22,7 @@ export function PasswordField({
   disabled,
   ...props
 }: PasswordFieldProps) {
+  const { t, owned } = useTranslation()
   const autoId = useId()
   const fieldId = id ?? autoId
   const errorId = `${fieldId}-error`
@@ -49,7 +51,7 @@ export function PasswordField({
           type="button"
           className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           onClick={() => setShow((v) => !v)}
-          aria-label={show ? 'Hide password' : 'Show password'}
+          aria-label={t(show ? 'Hide password' : 'Show password')}
           disabled={disabled}
         >
           {show ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
@@ -57,7 +59,7 @@ export function PasswordField({
       </div>
       {error ? (
         <p id={errorId} className="text-xs text-destructive" role="alert">
-          {error}
+          {owned(error)}
         </p>
       ) : null}
     </div>

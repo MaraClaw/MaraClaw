@@ -1,3 +1,4 @@
+import { useTranslation } from '@/hooks/use-translation'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useId, useMemo } from 'react'
@@ -16,7 +17,7 @@ import { authSession } from '@/lib/auth-session'
 
 const schema = z
   .object({
-    new_password: z.string().min(6, 'Use at least 6 characters').max(128),
+    new_password: z.string().min(6, 'Use at least 6 characters').max(128, 'Password is too long'),
     confirm_password: z.string().min(1, 'Confirm your new password'),
   })
   .refine((data) => data.new_password === data.confirm_password, {
@@ -27,6 +28,7 @@ const schema = z
 type FormValues = z.infer<typeof schema>
 
 export function ResetPasswordPage() {
+  const { t: translate } = useTranslation()
   const formId = useId()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -48,46 +50,45 @@ export function ResetPasswordPage() {
     try {
       await resetPasswordRequest({ token, new_password: values.new_password })
       if (!authSession.isCurrent(owner)) return
-      toast.success('Password updated. Sign in with your new password.')
+      toast.success(translate("Password updated. Sign in with your new password."))
       navigate('/login', { replace: true })
     } catch (error) {
-      if (authSession.isCurrent(owner)) toast.error(userFacingRequestError(error, 'Unable to update password. Try again.'))
+      if (authSession.isCurrent(owner)) toast.error(userFacingRequestError(error, translate("Unable to update password. Try again.")))
     }
   }
 
   return (
     <AuthShell
       headingId={`${formId}-heading`}
-      title={tokenMissing ? 'Invalid reset link' : 'Choose a new password'}
+      title={tokenMissing ? translate("Invalid reset link") : translate("Choose a new password")}
       description={
         tokenMissing
-          ? 'This password reset link is missing or incomplete.'
-          : 'Enter a new password for your member account. You will sign in again afterward.'
+          ? translate("This password reset link is missing or incomplete.")
+          : translate("Enter a new password for your member account. You will sign in again afterward.")
       }
-      brandTitle="New password, same workspace"
-      brandBody="After you reset, sign in here — operators use the admin console."
+      brandTitle={translate("New password, same workspace")}
+      brandBody={translate("After you reset, sign in here — operators use the admin console.")}
       highlights={memberAuthHighlights}
     >
       {tokenMissing ? (
         <div className="space-y-4">
           <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive">
-            Open the full link from your email, or request a new password reset.
-          </div>
+            {translate("Open the full link from your email, or request a new password reset.")}</div>
           <Button asChild className="h-11 w-full">
-            <Link to="/forgot-password">Request a new link</Link>
+            <Link to="/forgot-password">{translate("Request a new link")}</Link>
           </Button>
         </div>
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
           <PasswordField
-            label="New password"
+            label={translate("New password")}
             autoComplete="new-password"
             disabled={isSubmitting}
             error={errors.new_password?.message}
             {...register('new_password')}
           />
           <PasswordField
-            label="Confirm new password"
+            label={translate("Confirm new password")}
             autoComplete="new-password"
             disabled={isSubmitting}
             error={errors.confirm_password?.message}
@@ -97,10 +98,9 @@ export function ResetPasswordPage() {
             {isSubmitting ? (
               <>
                 <Loader2 className="size-4 animate-spin" aria-hidden />
-                Updating password…
-              </>
+                {translate("Updating password…")}</>
             ) : (
-              'Update password'
+              translate("Update password")
             )}
           </Button>
         </form>
@@ -108,8 +108,7 @@ export function ResetPasswordPage() {
       <p className="mt-6 text-center text-sm text-muted-foreground">
         <Link to="/login" className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline">
           <ArrowLeft className="size-3.5" aria-hidden />
-          Back to sign in
-        </Link>
+          {translate("Back to sign in")}</Link>
       </p>
     </AuthShell>
   )

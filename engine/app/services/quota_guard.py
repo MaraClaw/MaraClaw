@@ -59,8 +59,12 @@ async def charge_conversation_quota(user: UserRecord) -> None:
 # ── Agent expiry ────────────────────────────────────────────────────
 
 
-async def check_agent_expired(agent_id: uuid.UUID) -> None:
-    """Check if agent has expired. If so, mark it and raise AgentExpired."""
+async def check_agent_expired(agent_id: uuid.UUID, *, mark: bool = True) -> None:
+    """Check if agent has expired. If so, mark it and raise AgentExpired.
+
+    ``mark=False`` only raises. Use it inside a transaction that the raise rolls back anyway: marking takes exclusive
+    tenant and agent locks, which would come after the row locks that transaction already holds.
+    """
     agent = await agent_dao.get(agent_id)
     if not agent:
         return
@@ -70,7 +74,8 @@ async def check_agent_expired(agent_id: uuid.UUID) -> None:
 
     now = datetime.now(UTC)
     if agent.expires_at and now >= agent.expires_at:
-        _ = await agent_dao.mark_expired_stopped(agent)
+        if mark:
+            _ = await agent_dao.mark_expired_stopped(agent)
         raise AgentExpired(agent.name)
 
 

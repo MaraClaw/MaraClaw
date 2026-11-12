@@ -17,6 +17,7 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
+import { useTranslation } from '@/hooks/use-translation'
 import { createTavilyKey, deleteTavilyKey, listTavilyKeys, type TavilyKey } from '@/lib/tavily-keys-api'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import { tavilyKeyPresentation } from '@/lib/tavily-key-presentation'
@@ -36,19 +37,13 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-function formatWhen(value: string | null): string {
-  if (!value) return 'Never'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
-}
-
 function shortFingerprint(value: string): string {
   if (value.length <= 16) return value
   return `${value.slice(0, 8)}…${value.slice(-6)}`
 }
 
 export function SearchEnginePage() {
+  const { t, owned } = useTranslation()
   const queryClient = useQueryClient()
   const isCurrent = useSessionCurrent()
   const formId = useId()
@@ -88,10 +83,10 @@ export function SearchEnginePage() {
     onSuccess: (removed) => {
       setPendingRemoveId(null)
       void queryClient.invalidateQueries({ queryKey: ['admin-tavily-keys'] })
-      toast.success(`Removed ${removed.label || 'Tavily key'}`)
+      toast.success(t('Removed {name}', { name: removed.label || t('Tavily key') }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not remove key')
+      toast.error(error instanceof ApiError ? error.message : t('Could not remove key'))
     },
   })
 
@@ -105,7 +100,7 @@ export function SearchEnginePage() {
       if (!isCurrent()) return
       reset()
       void queryClient.invalidateQueries({ queryKey: ['admin-tavily-keys'] })
-      toast.success(`Added ${created.label || 'Tavily key'}`)
+      toast.success(t('Added {name}', { name: created.label || t('Tavily key') }))
     } catch (error) {
       if (!isCurrent()) return
       if (error instanceof ApiError) {
@@ -153,18 +148,18 @@ export function SearchEnginePage() {
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden md:grid-cols-[6rem_1fr] md:grid-rows-[auto_1fr]">
       <div className="min-w-0 bg-background px-6 py-4 md:col-start-2 md:row-start-1">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Search engine</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Search engine')}</h1>
         <p className="mt-2 text-muted-foreground">
           {tab === 'analytics'
-            ? 'System-wide and per-company search activity from Tavily calls.'
-            : 'Tavily keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.'}
+            ? t('System-wide and per-company search activity from Tavily calls.')
+            : t('Tavily keys used by digital employees. When a key hits quota, the engine tries the next one and wraps back to the first.')}
         </p>
       </div>
       <SectionRail
-        items={sections}
+        items={sections.map((item) => ({ ...item, label: t(item.label) }))}
         active={tab}
         onSelect={selectTab}
-        label="Search engine sections"
+        label={t('Search engine sections')}
         role="tablist"
         onKeyDown={onRailKeyDown}
         className="md:col-start-1 md:row-start-1 md:row-span-2"
@@ -197,60 +192,59 @@ export function SearchEnginePage() {
       >
       <Card>
         <CardHeader>
-          <CardTitle>Add Tavily key</CardTitle>
+          <CardTitle>{t('Add Tavily key')}</CardTitle>
           <CardDescription>
-            The secret is stored encrypted. The list shows a fingerprint only - you cannot read the
-            key back after saving.
+            {t('The secret is stored encrypted. The list shows a fingerprint only - you cannot read the key back after saving.')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit(onSubmit)} noValidate>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-label`}>Label</Label>
+              <Label htmlFor={`${formId}-label`}>{t('Label')}</Label>
               <Input
                 id={`${formId}-label`}
                 autoComplete="off"
-                placeholder="Production account"
+                placeholder={t('Production account')}
                 aria-invalid={errors.label ? true : undefined}
                 {...register('label')}
               />
               {errors.label ? (
                 <p className="text-xs text-destructive" role="alert">
-                  {errors.label.message}
+                  {owned(errors.label.message)}
                 </p>
               ) : null}
             </div>
             <div className="sm:col-span-2">
               <PasswordField
                 id={`${formId}-key`}
-                label="API key"
+                label={t('API key')}
                 placeholder="tvly-..."
                 autoComplete="off"
                 hideLeadingIcon
-                error={errors.api_key?.message}
+                error={owned(errors.api_key?.message)}
                 {...register('api_key')}
               />
             </div>
             {formError ? (
-              <ErrorToast message={formError} />
+              <ErrorToast message={owned(formError)} />
             ) : null}
             <div className="sm:col-span-2">
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                Add key
+                {t('Add key')}
               </Button>
             </div>
           </form>
         </CardContent>
       </Card>
 
-      {keys.isLoading ? <p className="text-sm text-muted-foreground">Loading keys…</p> : null}
+      {keys.isLoading ? <p className="text-sm text-muted-foreground">{t('Loading keys…')}</p> : null}
       {keys.error ? (
-        <ErrorToast error={keys.error} message={keys.error instanceof ApiError ? keys.error.message : 'Failed to load keys'} />
+        <ErrorToast error={keys.error} message={keys.error instanceof ApiError ? keys.error.message : t('Failed to load keys')} />
       ) : null}
 
       {!keys.isLoading && (keys.data ?? []).length === 0 ? (
-        <p className="text-sm text-muted-foreground">No Tavily keys yet. Add one to enable search.</p>
+        <p className="text-sm text-muted-foreground">{t('No Tavily keys yet. Add one to enable search.')}</p>
       ) : null}
 
       <div className="grid gap-4">
@@ -292,6 +286,8 @@ function KeyCard({
   onCancelRemove: () => void
   onConfirmRemove: () => void
 }) {
+  const { t, owned, date, number } = useTranslation()
+  const formatWhen = (value: string | null) => value ? date(value) : t('Never')
   const [, refreshClock] = useState(0)
   const presentation = tavilyKeyPresentation(item, Date.now())
   useEffect(() => {
@@ -315,43 +311,43 @@ function KeyCard({
         <div>
           <CardTitle className="flex items-center gap-2">
             <Search className="size-4" aria-hidden />
-            {item.label || 'Untitled key'}
+            {item.label || t('Untitled key')}
           </CardTitle>
           <CardDescription title={item.fingerprint}>
-            Position {item.position + 1} · {shortFingerprint(item.fingerprint)}
+            {t('Position {position}', { position: number(item.position + 1) })} · {shortFingerprint(item.fingerprint)}
           </CardDescription>
         </div>
-        <Badge variant={presentation.variant}>{presentation.label}</Badge>
+        <Badge variant={presentation.variant}>{owned(presentation.label)}</Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-          <span>Last used {formatWhen(item.last_used_at)}</span>
-          <span>Added {formatWhen(item.created_at)}</span>
+          <span>{t('Last used {date}', { date: formatWhen(item.last_used_at) })}</span>
+          <span>{t('Added {date}', { date: formatWhen(item.created_at) })}</span>
           {presentation.cooldownUntil ? (
-            <span>Cooldown until {formatWhen(presentation.cooldownUntil)}</span>
+            <span>{t('Cooldown until {date}', { date: formatWhen(presentation.cooldownUntil) })}</span>
           ) : null}
         </div>
         {pendingRemove ? (
           <div className="flex flex-col gap-2">
             <p className="text-sm text-muted-foreground" role="status">
               {lastKey
-                ? 'This is the last key. Search will stop until you add another. In-flight requests on this key will fail.'
-                : 'Agents will fail over to the next key. In-flight requests on this key will fail.'}
+                ? t('This is the last key. Search will stop until you add another. In-flight requests on this key will fail.')
+                : t('Agents will fail over to the next key. In-flight requests on this key will fail.')}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="destructive" size="sm" disabled={removing} onClick={onConfirmRemove}>
                 {removing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                Confirm remove
+                {t('Confirm remove')}
               </Button>
               <Button type="button" variant="ghost" size="sm" disabled={removing} onClick={onCancelRemove}>
-                Cancel
+                {t('Cancel')}
               </Button>
             </div>
           </div>
         ) : (
           <div>
             <Button type="button" variant="ghost" size="sm" onClick={onAskRemove}>
-              Remove
+              {t('Remove')}
             </Button>
           </div>
         )}
