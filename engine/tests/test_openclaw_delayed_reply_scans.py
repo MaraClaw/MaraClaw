@@ -7,13 +7,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from sqlite3 import Connection
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.db.errors import DbError
+from app.records.chat import ChatMessageRecord
 from app.records.openclaw_reply_binding import OpenClawReplyBinding
 from app.services import openclaw_delayed_replies as recovery, openclaw_reply_authorization as authorization
 from app.services.openclaw_transcript import (
@@ -26,6 +28,9 @@ from app.services.openclaw_transcript import (
 from app.services.quota_guard import AgentExpired
 from app.services.response_identity import ResponseGuard
 from test_openclaw_delayed_replies import append, transcript
+from worker_progress_fixtures import WorkerHTTP, worker_http
+
+__all__ = ["worker_http"]
 
 OWNER, USER, TENANT = uuid4(), uuid4(), uuid4()
 
@@ -371,3 +376,81 @@ async def test_binding_failure_does_not_starve_following_bindings_or_agents(
     await scanner.scan_once()
     assert sweep.replies.bindings[last.id].cursor == {f"s-{last.id}": 1}
     assert scanner._after is None
+
+
+async def start_budgeted_loop(monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP) -> asyncio.Task[object]:
+    monkeypatch.setattr(recovery.anyio, "sleep", worker_http.pacing.wait)
+    task = worker_http.start_loop(
+        "openclaw_delayed_replies",
+        recovery.openclaw_delayed_reply_loop(),
+        budget_seconds=recovery.PROGRESS_BUDGET_SECONDS,
+    )
+    await worker_http.pacing.paused()
+    return task
+
+
+@pytest.mark.usefixtures("sweep")
+async def test_idle_scan_passes_beat_so_readiness_outlives_the_budget(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given the delayed-reply loop as a budgeted worker loop with no bindings.
+    task = await start_budgeted_loop(monkeypatch, worker_http)
+    # When four idle passes carry the clock past the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then each finished pass has beaten.
+        await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+@pytest.mark.parametrize("failing", ["page", "binding"])
+async def test_database_failures_do_not_beat_so_readiness_goes_stale_then_recovers(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, failing: str
+) -> None:
+    # Given a binding with an unread reply, and a database failing either the page read (raised to the loop)
+    # or the binding's receipt write (caught while scanning the binding).
+    binding = sweep.add_binding()
+    append(sweep.db, f"s-{binding.id}", 1, text="reply")
+    sweep.db.commit()
+    broken = AsyncMock(return_value=(), side_effect=DbError("database unavailable"))
+    if failing == "page":
+        monkeypatch.setattr(sweep.replies, "page", broken)
+    else:
+        monkeypatch.setattr(recovery, "_record_page", broken)
+    task = await start_budgeted_loop(monkeypatch, worker_http)
+    # When failing passes alone carry the clock past the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then readiness fails while health holds and the loop keeps running.
+    await worker_http.ready(expected=False)
+    assert not task.done()
+    # And the next pass that reads and writes successfully beats.
+    broken.side_effect = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+
+
+@pytest.mark.parametrize("failing", ["transcript", "publish"])
+async def test_guest_and_delivery_failures_still_beat(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, failing: str
+) -> None:
+    # Given a binding whose guest transcript cannot be opened, or whose live publication cannot be delivered.
+    binding = sweep.add_binding()
+    sweep.db.commit()
+    if failing == "transcript":
+        broken = Mock(side_effect=OSError("transcript unreadable"))
+        monkeypatch.setattr(recovery, "open_transcript", broken)
+    else:
+        reply = ChatMessageRecord(uuid4(), sweep.agent, USER, "assistant", "reply")
+        pending = AsyncMock(return_value={binding.id: (reply,)})
+        monkeypatch.setattr(sweep.replies, "pending_publications_many", pending)
+        broken = AsyncMock(side_effect=RuntimeError("client socket closed"))
+        monkeypatch.setattr(recovery, "_publish", broken)
+    task = await start_budgeted_loop(monkeypatch, worker_http)
+    # When the failing passes carry the clock past the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then every finished pass still beats.
+        await worker_http.ready(expected=True)
+    assert broken.call_count == 5
+    assert not task.done()

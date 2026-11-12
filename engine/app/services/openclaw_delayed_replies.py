@@ -6,17 +6,20 @@ from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from sqlite3 import Error as SQLiteError
-from typing import final
+from typing import Final, final
 from uuid import UUID
 
 import anyio
 from fastapi import HTTPException
+from psycopg import Error as PsycopgError
 
 from app.core.logging import logger, new_trace_id
 from app.dao.openclaw_reply_dao import AGENT_PAGE, openclaw_reply_dao
+from app.db.errors import DbError
 from app.db.session import connection_ctx
 from app.records.chat import ChatMessageRecord
 from app.records.openclaw_reply_binding import OpenClawReplyBinding
+from app.runtime.tasks import loop_progress
 from app.schemas.chat_wire import ChatEventType
 from app.services.openclaw_reply_authorization import authorize_reply_binding as _authorized
 from app.services.openclaw_transcript import (
@@ -33,6 +36,7 @@ from app.services.shared_chat import shared_session_id
 
 SWEEP_BUDGET = 2.0
 BACKSTOP = 60.0
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
 async def _record_page(
@@ -135,9 +139,15 @@ class DelayedReplyRecovery:
         self._clock = clock
         self._idle: dict[UUID, _Idle] = {}
         self._lap: set[UUID] = set()
+        self.database_failed: bool = False
 
     async def scan_once(self) -> int:
-        """Walk 20 agents at a time, whole groups only, until the lap wraps or the budget is spent between groups."""
+        """Walk 20 agents at a time, whole groups only, until the lap wraps or the budget is spent between groups.
+
+        A database error caught while scanning one binding does not stop the scan; it sets ``database_failed`` for
+        this call, which the loop reads to withhold its progress beat.
+        """
+        self.database_failed = False
         deadline = self._clock() + self._budget
         count = 0
         while True:
@@ -207,6 +217,8 @@ class DelayedReplyRecovery:
             except Exception as error:
                 if isinstance(error, HTTPException) and error.status_code in (403, 404, 409):
                     continue
+                if isinstance(error, DbError | PsycopgError):
+                    self.database_failed = True
                 logger.warning(
                     "[OpenClaw] delayed reply binding failed agent={} error={}", binding.agent_id, type(error).__name__
                 )
@@ -214,11 +226,14 @@ class DelayedReplyRecovery:
 
 
 async def openclaw_delayed_reply_loop() -> None:
+    progress = loop_progress()
     recovery = DelayedReplyRecovery()
     while True:
         new_trace_id()
         try:
             await recovery.scan_once()
+            if not recovery.database_failed:
+                progress.beat()
         except Exception:
             logger.exception("[OpenClaw] delayed reply scan failed")
         await anyio.sleep(2)
