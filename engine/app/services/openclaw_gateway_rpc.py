@@ -28,6 +28,7 @@ from pywhales import ClientNotFoundError, observation
 from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, ObservationCancelled, ObservationLimitError, ObservationTimeout
 
+from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
@@ -178,10 +179,26 @@ async def execute_gateway_turn(
     client = agent_manager.docker_client
     if client is None:
         return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
-    stream_reply = await streams_to_web(message)
-    guard = await response_guard(agent, message.guest_model_ref) if stream_reply else None
+    try:
+        stream_reply = await streams_to_web(message)
+        guard = await response_guard(agent, message.guest_model_ref) if stream_reply else None
+    except Exception as exc:
+        logger.warning(
+            "[OpenClaw] native turn preparation failed agent={} code=prepare_failed error={}",
+            agent.id,
+            type(exc).__name__,
+        )
+        return NotAdmittedOutcome(message_id, "not_submitted", "prepare_failed", None)
     async with guest_write_section(agent.id):
-        fresh = await agent_dao.get(agent.id)
+        try:
+            fresh = await agent_dao.get(agent.id)
+        except Exception as exc:
+            logger.warning(
+                "[OpenClaw] native turn preparation failed agent={} code=prepare_failed error={}",
+                agent.id,
+                type(exc).__name__,
+            )
+            return NotAdmittedOutcome(message_id, "not_submitted", "prepare_failed", None)
         if fresh is None or fresh.creator_id != agent.creator_id or fresh.tenant_id != agent.tenant_id:
             return NotAdmittedOutcome(message_id, "not_submitted", "agent_changed")
         guest = guest_resolutions.get(fresh)
@@ -219,10 +236,18 @@ async def execute_gateway_turn(
         if not running:
             guest_resolutions.drop(agent.id)
             return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
-        identity_context = await build_identity_context(fresh, message.sender_user_id)
+        try:
+            identity_context = await build_identity_context(fresh, message.sender_user_id)
+        except Exception as exc:
+            logger.warning(
+                "[OpenClaw] native turn preparation failed agent={} code=prepare_failed error={}",
+                agent.id,
+                type(exc).__name__,
+            )
+            return NotAdmittedOutcome(message_id, "not_submitted", "prepare_failed", None)
         try:
             agent_dir = agent_manager._agent_dir(agent.id)
-            prepare_native_gateway_files(agent_dir)
+            await drain_on_cancel(anyio.to_thread.run_sync(prepare_native_gateway_files, agent_dir))
             payload_name = f".maraclaw-rpc-{uuid4()}.json"
             payload_path = Path(agent_dir) / payload_name
             payload = {
@@ -271,6 +296,15 @@ async def execute_gateway_turn(
                     if not task.cancelled():
                         _ = task.exception()
                 raise
+            except ObservationTimeout:
+                guest_resolutions.drop(agent.id)
+                return UncertainOutcome(message_id, "unknown", None, "exec_timeout")
+            except ObservationLimitError:
+                guest_resolutions.drop(agent.id)
+                return UncertainOutcome(message_id, "unknown", None, "output_limit")
+            except ObservationCancelled:
+                guest_resolutions.drop(agent.id)
+                return UncertainOutcome(message_id, "unknown", None, "exec_cancelled")
             except DockerException as exc:
                 guest_resolutions.drop(agent.id)
                 if exc.return_code == BOOTSTRAP_PENDING_EXIT and (exc.stderr or "").startswith(

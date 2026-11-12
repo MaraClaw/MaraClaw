@@ -158,8 +158,8 @@ async def test_origin_read_failure_prevents_dispatch(monkeypatch, tmp_path, read
     monkeypatch.setattr(streaming.chat_session_dao, "get", failed)
     monkeypatch.setattr(streaming.personal_burst_dispatch_dao, "get", absent if read == "intent" else failed)
     monkeypatch.setattr(streaming.gateway_report_delivery_dao, "has_im_origin", failed)
-    with pytest.raises(RuntimeError, match="classification read failed"):
-        await turn.run()
+    outcome = await turn.run()
+    assert outcome == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "prepare_failed", None)
     assert turn.executed == 0
     assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
 
