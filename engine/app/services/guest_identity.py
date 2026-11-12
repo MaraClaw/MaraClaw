@@ -10,6 +10,7 @@ from pywhales.exceptions import NoSuchContainer
 from app.records.agent import AgentRecord
 
 AGENT_LABEL = "maraclaw.agent_id"
+_RESOLUTION_SWEEP_ABOVE = 1024
 
 
 @dataclass(eq=False, slots=True)
@@ -106,7 +107,12 @@ class GuestResolutionCache:
         return guest
 
     def put(self, agent: AgentRecord, guest: GuestIdentity) -> None:
-        self._entries[agent.id] = (agent.container_id, guest, self._clock() + self._ttl)
+        now = self._clock()
+        if len(self._entries) >= _RESOLUTION_SWEEP_ABOVE:
+            for agent_id, (_recorded, _guest, expires) in list(self._entries.items()):
+                if now >= expires:
+                    del self._entries[agent_id]
+        self._entries[agent.id] = (agent.container_id, guest, now + self._ttl)
 
     def drop(self, agent_id: UUID) -> None:
         _ = self._entries.pop(agent_id, None)

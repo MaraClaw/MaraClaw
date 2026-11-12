@@ -36,6 +36,18 @@ def test_api_key_lookup_does_not_store_plaintext() -> None:
     assert all("oc-secret" not in key for key in openclaw_hot_cache._store)
 
 
+def test_writes_above_the_sweep_size_evict_only_expired_entries(monkeypatch) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(openclaw_hot_cache, "_now", lambda: clock[0])
+    monkeypatch.setattr(openclaw_hot_cache, "_SWEEP_ABOVE", 3)
+    openclaw_hot_cache.cache_set("expired-a", True, ttl=1.0)
+    openclaw_hot_cache.cache_set("expired-b", True, ttl=1.0)
+    openclaw_hot_cache.cache_set("live", True, ttl=60.0)
+    clock[0] = 102.0
+    openclaw_hot_cache.cache_set("new", True, ttl=60.0)
+    assert set(openclaw_hot_cache._store) == {"live", "new"}
+
+
 def test_drop_model_caches_and_agent_key() -> None:
     agent = AgentRecord(id=uuid4(), creator_id=uuid4(), name="N", primary_model_id=uuid4())
     openclaw_hot_cache.mark_ensured(agent)
