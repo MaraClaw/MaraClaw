@@ -4,22 +4,43 @@ import { readFileSync } from "node:fs";
 const requiredScopes = ["operator.read", "operator.write", "operator.admin"];
 const request = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-if ((request.version !== 1 && request.version !== 2) || (request.version === 2 && typeof request.stream !== "boolean") || !uuid.test(request.messageId) || typeof request.sessionKey !== "string" ||
+// Without a correlatable messageId the caller cannot attribute any outcome, so only this case still throws.
+if (request === null || typeof request !== "object" || typeof request.messageId !== "string" || !uuid.test(request.messageId)) {
+  throw new Error("invalid request");
+}
+
+// Failures before any socket is opened are conclusive: nothing was submitted, so the caller may retry.
+function notAdmitted(code) {
+  return { version: 1, messageId: request.messageId, kind: "not_admitted", admission: "not_submitted", code };
+}
+
+let early = null;
+let token = "";
+if ((request.version !== 1 && request.version !== 2) || (request.version === 2 && typeof request.stream !== "boolean") || typeof request.sessionKey !== "string" ||
     !request.sessionKey || typeof request.message !== "string" || !request.message ||
     !Number.isInteger(request.timeoutSeconds) || request.timeoutSeconds <= 0 ||
     !(request.modelRef === null || (typeof request.modelRef === "string" && /^[^/]+\/.+/.test(request.modelRef))) ||
     (request.extraSystemPrompt !== undefined && (typeof request.extraSystemPrompt !== "string" || !request.extraSystemPrompt))) {
-  throw new Error("invalid request");
+  process.stderr.write("invalid request\n");
+  early = notAdmitted("invalid_request");
+} else {
+  try {
+    token = readFileSync(new URL(".openclaw-gateway-token", import.meta.url), "utf8").trim();
+  } catch {
+    // An unreadable token file is reported the same way as an empty one.
+  }
+  if (!token) {
+    process.stderr.write("missing gateway token\n");
+    early = notAdmitted("missing_gateway_token");
+  }
 }
-const token = readFileSync(new URL(".openclaw-gateway-token", import.meta.url), "utf8").trim();
-if (!token) throw new Error("missing gateway token");
 
 // Version 2 with `stream: true` writes live assistant text as NDJSON `delta` lines before the outcome line.
 const streaming = request.version === 2 && request.stream === true;
 const deltaIntervalMs = 50;
 const deltaByteCap = 1024 * 1024;
 
-const result = await new Promise((resolve) => {
+const result = early ?? await new Promise((resolve) => {
   const socket = new WebSocket("ws://127.0.0.1:18789");
   const connectId = randomUUID();
   const agentId = randomUUID();
@@ -121,7 +142,11 @@ const result = await new Promise((resolve) => {
     clearTimeout(timer);
     clearTimeout(totalTimer);
     flushDelta(true);
-    socket.close();
+    try {
+      socket.close();
+    } catch {
+      // The outcome is already decided; a failing close must not keep it from being reported.
+    }
     resolve({ version: 1, messageId: request.messageId, ...outcome, timing });
   }
 
@@ -142,6 +167,14 @@ const result = await new Promise((resolve) => {
   socket.addEventListener("error", () => fail("socket_error"));
   socket.addEventListener("close", () => fail("socket_closed"));
   socket.addEventListener("message", (event) => {
+    try {
+      handleMessage(event);
+    } catch {
+      fail("adapter_error");
+    }
+  });
+  // An error escaping this handler becomes a phase-aware outcome instead of an uncaught exception.
+  function handleMessage(event) {
     let frame;
     try {
       frame = JSON.parse(event.data);
@@ -162,8 +195,7 @@ const result = await new Promise((resolve) => {
           client: { id: "gateway-client", version: "1.0.0", platform: process.platform, mode: "backend" },
           role: "operator", scopes: requiredScopes, caps: [], auth: { token },
         } }));
-      } catch (error) {
-        if (!(error instanceof DOMException) || error.name !== "InvalidStateError") throw error;
+      } catch {
         fail("send_failed");
       }
       return;
@@ -194,8 +226,7 @@ const result = await new Promise((resolve) => {
       }
       try {
         socket.send(JSON.stringify({ type: "req", id: agentId, method: "agent", params }));
-      } catch (error) {
-        if (!(error instanceof DOMException) || error.name !== "InvalidStateError") throw error;
+      } catch {
         fail("send_failed");
         return;
       }
@@ -247,6 +278,8 @@ const result = await new Promise((resolve) => {
       .map((item) => item.text).join("\n");
     stamp("terminal");
     finish({ kind: "terminal", admission: "accepted", runId, status: payload.status, text, code: null });
-  });
+  }
 });
-process.stdout.write(`${JSON.stringify(result)}\n`);
+// Exit once the outcome (and every delta line queued before it) is flushed, even if the close handshake
+// never completes or another handle stays open.
+process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
