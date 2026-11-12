@@ -28,7 +28,7 @@ import { createAttachmentSubmission } from '@/lib/chat/attachment-submission'
 import { createLiveStreamStore } from '@/lib/chat/live-stream'
 import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
-import { connectAgentChat, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
+import { connectAgentChat, type ChatConnectionState, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
 import { createChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
@@ -91,10 +91,12 @@ export function AgentChatPage() {
   const [retryStartedAt, setRetryStartedAt] = useState<number | null>(null)
   const [socketReady, setSocketReady] = useState(0)
   const [socketStopped, setSocketStopped] = useState(false)
+  const [connection, setConnection] = useState<ChatConnectionState>('connecting')
   const [archivedId, setArchivedId] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
+  const retryRef = useRef<(() => void) | null>(null)
   const queuedSendRef = useRef<{ readonly line: Line; readonly sessionId?: string } | null>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
@@ -302,6 +304,9 @@ export function AgentChatPage() {
         if (!current()) return
         void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
       },
+      onConnectionState(state) {
+        if (current()) setConnection(state)
+      },
       onEvent(event: ChatInbound) {
         if (!current()) return
         const archived = archivedSessionId(event)
@@ -437,6 +442,7 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.TRIGGER_NOTIFICATION:
+        case ChatEventType.HEARTBEAT:
           return
         default: {
           const unreachable: never = event
@@ -457,6 +463,7 @@ export function AgentChatPage() {
       },
     })
     sendRef.current = conn.send
+    retryRef.current = conn.retry
     queueMicrotask(() => {
       if (!isCurrent() || sendRef.current !== conn.send) return
       setSocketStopped(false)
@@ -465,6 +472,8 @@ export function AgentChatPage() {
     return () => {
       active = false
       if (sendRef.current === conn.send) sendRef.current = null
+      if (retryRef.current === conn.retry) retryRef.current = null
+      setConnection('connecting')
       conn.close()
     }
   }, [agent.id, agent.onboarded_for_me, activeId, writable, token, owner, queryClient, historyQuery.isLoading, historyQuery.isError, isCurrent, updateLines, submissions, liveStore, translate])
@@ -557,6 +566,9 @@ export function AgentChatPage() {
     sendRef.current(line.submission)
   }, [isCurrent, writable, submissions, updateLines])
 
+  const offline = !socketStopped && connection === 'offline'
+  const suspended = !socketStopped && connection === 'suspended'
+
   return (
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         {!writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
@@ -574,6 +586,13 @@ export function AgentChatPage() {
             </Button>
           </div>
         ) : null}
+        <div className={offline || suspended ? 'flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border px-4 py-2' : undefined}>
+          <p role="status" className="text-xs text-muted-foreground">
+            {suspended ? translate("Connection to the agent was lost.")
+              : offline ? translate("You’re offline. Chat will reconnect when your connection is back.") : ''}</p>
+          {suspended ? <Button type="button" size="sm" variant="outline" className="h-11"
+            onClick={() => { if (isCurrent()) retryRef.current?.() }}>{translate("Retry connection")}</Button> : null}
+        </div>
         <div
           ref={threadRef}
           onScroll={threadScroll.onScroll}
@@ -596,7 +615,7 @@ export function AgentChatPage() {
           <ChatTranscript lines={lines} viewport={threadScroll} agentId={agent.id} slow={slow} socketStopped={socketStopped} onRetry={retry} />
           {thinking ? <p className="text-xs text-muted-foreground italic">{thinking}</p> : null}
           <LiveReply store={liveStore} onRender={threadScroll.updateScroll} />
-          {busy && !live && !slow ? <ThinkingStatus /> : null}
+          {busy && !live && !slow && !((offline || suspended) && !accepted) ? <ThinkingStatus /> : null}
           <p role="status" className="text-xs text-muted-foreground">
             {busy && !live && slow && accepted
               ? translate("Accepted. The reply is taking longer than usual. No need to send again.")

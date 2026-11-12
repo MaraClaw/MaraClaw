@@ -26,7 +26,7 @@ npm test
 - No shared conftest-style helper, auto-loaded setup module or `helpers.ts` in this directory.
 - Shared helpers are named `*-fixture.ts`, one per domain; read the matching fixture before writing a new case. Notable ones:
   - `attachment-fixture.ts`: isolated auth/query/cache/preview wiring; exposes `dispose()`.
-  - `socket-fixture.ts`: `ControlledSocket`, synthetic frames, sent messages and close records.
+  - `socket-fixture.ts`: `ControlledSocket`, synthetic frames, sent messages and close records, plus an injected clock (`manualClock`, `elapse`), `signal` online/visibility sources, connection-state records, a ticket counter, and `outage`/`stall` ticket issuers.
   - `chat-history-fixture.ts`, `trigger-executions-fixture.ts`: page data with opaque cursors containing reserved characters.
   - `openclaw-update-fixture.ts`, `agent-lifecycle-fixture.ts`, `agent-deletion-fixture.ts`, `auth-account-fixture.ts`: domain records and session harnesses.
 - `auth-integration.test.ts` has file-local `wire(...)`, not a global setup hook.
