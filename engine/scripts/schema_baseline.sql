@@ -1365,6 +1365,11 @@ CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (co
 
 CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id);
 
+-- Serves agent-scoped conversation reads (list_recent, list_for_agent_conversation) in created_at order.
+-- Add no dependency statistics on (agent_id, conversation_id): the planner costs a BitmapAnd of the single-column
+-- indexes as if they were independent, so an accurate estimate makes it sort the whole conversation instead.
+CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_conv_created ON chat_messages (agent_id, conversation_id, created_at DESC);
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
 ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
 WHERE client_submission_id IS NOT NULL;

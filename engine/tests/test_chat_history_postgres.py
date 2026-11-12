@@ -375,3 +375,33 @@ async def test_commit_between_revision_and_rows_is_still_discoverable_next_poll(
         )
     assert next_poll["kind"] == "delta"
     assert [entry["content"] for entry in next_poll["items"]] == ["late edit", "first edit"]
+
+
+async def test_agent_conversation_index_serves_recent_history_in_order(receipt_db: ReceiptDatabase):
+    # Given 20 agents with 10 conversations of 25 messages each, analyzed.
+    db = receipt_db
+    async with transaction(db.first):
+        await db.first.execute(
+            "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
+            "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+            "SELECT gen_random_uuid(), 'Peer ' || n, %(user)s, '', 20, 5, 5, 'private', 'use', 240 "
+            "FROM generate_series(1, 19) AS n",
+            {"user": db.user.id},
+        )
+        await db.first.execute(
+            "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id) "
+            "SELECT gen_random_uuid(), a.id, %(user)s, 'user', 'message', a.id::text || '-' || c "
+            "FROM agents AS a, generate_series(1, 10) AS c, generate_series(1, 25) AS m",
+            {"user": db.user.id},
+        )
+        await db.first.execute("ANALYZE chat_messages")
+        await db.first.execute("SET LOCAL enable_seqscan = off")
+        rows = await db.first.fetchall(
+            "EXPLAIN SELECT id FROM chat_messages WHERE agent_id = %(agent)s "
+            "AND conversation_id = %(conversation)s ORDER BY created_at DESC LIMIT 50",
+            {"agent": db.agent.id, "conversation": f"{db.agent.id}-1"},
+        )
+    plan = "\n".join(str(next(iter(row.values()))) for row in rows)
+    # Then the recent-history read walks one index in order instead of sorting a bitmap of the whole conversation.
+    assert "ix_chat_messages_agent_conv_created" in plan, plan
+    assert "Sort" not in plan, plan

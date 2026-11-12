@@ -42,3 +42,15 @@ configuration: `uv run python -m app.scripts.bootstrap_db` from `engine/`. This
 removes the incompatible trigger and restores message inserts, updates and deletes
 without adding a column or recreating the database. Such schemas continue to serve
 history uncached after the rerun.
+
+`ix_chat_messages_agent_conv_created` on `(agent_id, conversation_id,
+created_at DESC)` serves agent-scoped conversation reads
+(`chat_message_dao.list_recent`, `list_for_agent_conversation`) in order, so a
+recent-history read stops after its page instead of sorting the whole
+conversation. A bootstrap rerun builds it on an existing database with a plain
+`CREATE INDEX`, which blocks writes to `chat_messages` while it runs; on a large
+table, build it first with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and the
+baseline definition. Add no dependency statistics on `agent_id` and
+`conversation_id`: the planner costs a `BitmapAnd` of the single-column indexes
+as if both were independent, and an accurate estimate makes that plan, with its
+full-conversation sort, look cheaper.
