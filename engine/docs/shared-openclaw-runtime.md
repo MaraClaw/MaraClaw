@@ -92,7 +92,17 @@ Only a proven pre-submission refusal or request rejection releases the exact cla
 using its `delivered_at` compare-and-set. An accepted or uncertain request, a lost
 connection after submission, cancellation or an unknown transport failure retains
 `delivered` in every lane. There is no delivered-age retry, upgrade replay or
-automatic reconnect/replay. An uncertain head can block its lane until a conclusive
+automatic reconnect/replay. A failed engine-side preparation read (stream origin,
+response guard, fresh agent, identity context) happens before any payload is staged,
+so it is `not_submitted`/`prepare_failed` and releases the claim. A Docker
+observation timeout, output-limit breach or cancellation during execution is
+`uncertain` (`exec_timeout`, `output_limit`, `exec_cancelled`) and retains it.
+A released lane is paced by the process-local `openclaw_release_backoff`: each
+consecutive release doubles its wait from 1 to at most 30 seconds, during which
+scans and wakes skip that lane (other lanes are unaffected and the scan interval is
+unchanged). Any terminal or uncertain outcome clears it; a restart or another
+instance simply starts again at one second.
+An uncertain head can block its lane until a conclusive
 completion arrives. Any operator recovery must first establish that no old guest
 execution remains; a detached Gateway run is not proven cancelled by stopping the
 local Docker CLI. This is not an exactly-once execution guarantee.
@@ -127,6 +137,15 @@ envelope; a cached terminal can arrive without `accepted`. Bare `ok: true` and
 newlines. The engine settles success text or safe empty/error/timeout notices;
 raw adapter errors are not published. Deadlines are 10 seconds for connection,
 20 for admission, 900 for the turn, 930 total and 940 for Docker execution.
+
+Once the payload carries a valid message UUID, the adapter never exits without an
+outcome line: an invalid request or a missing, unreadable or empty token is
+reported before any socket as `not_admitted`/`not_submitted` (`invalid_request`,
+`missing_gateway_token`); an unreadable payload or missing message ID still exits
+nonzero. A failed socket send is `send_failed` and any other error while handling
+a frame is `adapter_error`, both mapped by phase like other failures. The adapter
+exits 0 as soon as the outcome line, after every queued delta, is flushed, so an
+unfinished WebSocket close handshake cannot hold the Docker execution open.
 
 Web-origin turns use adapter version 2 with `stream: true`. The adapter emits
 NDJSON deltas for the matching run at most once per 50 ms, capped at 1 MiB of
