@@ -3,6 +3,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from time import monotonic
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import anyio
@@ -23,8 +24,9 @@ from app.records.whatsapp_personal import PersonalConnection
 from app.services.channels import whatsapp_personal_supervisor as supervisor
 from app.services.channels.whatsapp_personal_child import PersonalChild
 from app.services.channels.whatsapp_personal_control import start
+from worker_progress_fixtures import WorkerHTTP, worker_http
 
-__all__ = ["channel_db", "receipt_db"]
+__all__ = ["channel_db", "receipt_db", "worker_http"]
 
 
 def use_pool(f, monkeypatch):
@@ -249,3 +251,91 @@ async def test_supervisor_backs_off_when_candidates_fails(monkeypatch):
     assert calls[1] - calls[0] >= 0.05
     assert calls[2] - calls[1] >= 0.1
     await stop_supervisor(task)
+
+
+def run_supervisor(monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP) -> asyncio.Task[object]:
+    monkeypatch.setattr(supervisor.anyio, "sleep", worker_http.pacing.wait)
+    return worker_http.start_loop(
+        "whatsapp_personal",
+        supervisor.personal_supervisor(worker_http.pacing.clock),
+        budget_seconds=supervisor.PROGRESS_BUDGET_SECONDS,
+    )
+
+
+async def test_supervisor_beats_after_every_completed_pass_including_an_idle_one(monkeypatch, worker_http):
+    # Given a candidates read that always succeeds and finds nothing to supervise.
+    monkeypatch.setattr(supervisor, "candidates", AsyncMock(return_value=[]))
+    task = run_supervisor(monkeypatch, worker_http)
+    await worker_http.pacing.paused()
+    # When passes keep finishing for longer than the budget in total.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then every finished pass keeps the loop ready.
+        await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+async def test_supervisor_failed_candidates_read_goes_stale_even_with_a_live_bridge_child(monkeypatch, worker_http):
+    # Given a running bridge child and a candidates read that starts failing.
+    connection = pending_connection()
+    candidates = AsyncMock(return_value=[connection])
+    spawned, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def run_child(_connection, _command):
+        spawned.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(supervisor, "candidates", candidates)
+    monkeypatch.setattr(supervisor, "claim", AsyncMock(return_value=connection))
+    monkeypatch.setattr(supervisor, "run_child", run_child)
+    task = run_supervisor(monkeypatch, worker_http)
+    await asyncio.wait_for(spawned.wait(), 2)
+    await worker_http.pacing.paused()
+    candidates.side_effect = OSError("database unavailable")
+    # When failing passes outlast the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then readiness fails while health holds, and the loop and its child are neither cancelled nor restarted.
+    await worker_http.ready(expected=False)
+    assert not task.done()
+    assert not cancelled.is_set()
+    # And the first pass that completes restores readiness.
+    candidates.side_effect = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+
+
+@pytest.mark.parametrize("failing_stage", ["claim", "run_child"])
+async def test_supervisor_bridge_child_failures_never_make_the_loop_stale(monkeypatch, worker_http, failing_stage):
+    # Given a connection whose child task fails every time it is respawned.
+    connection = pending_connection()
+    claims: list[object] = []
+    respawned = asyncio.Event()
+
+    async def claim(config_id):
+        claims.append(config_id)
+        if len(claims) == 2:
+            respawned.set()
+        if failing_stage == "claim":
+            raise RuntimeError("claim exploded")
+        return connection
+
+    async def run_child(_connection, _command):
+        raise RuntimeError("child exploded")
+
+    monkeypatch.setattr(supervisor, "candidates", AsyncMock(return_value=[connection]))
+    monkeypatch.setattr(supervisor, "claim", claim)
+    monkeypatch.setattr(supervisor, "run_child", run_child)
+    task = run_supervisor(monkeypatch, worker_http)
+    await worker_http.pacing.paused()
+    # When passes keep finishing for longer than the budget in total.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then the failing child never makes the loop stale.
+        await worker_http.ready(expected=True)
+    await asyncio.wait_for(respawned.wait(), 2)
+    assert not task.done()
