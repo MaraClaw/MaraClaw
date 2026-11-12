@@ -17,6 +17,10 @@ import { toast } from 'sonner'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { LanguageToggle } from '@/components/language-toggle'
+import { useTranslation } from '@/hooks/use-translation'
+import { useLocalizedMessage } from '@/hooks/use-localized-message'
+import { message, type LocalMessage } from '@/lib/i18n'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
@@ -37,12 +41,12 @@ import { cn } from '@/lib/utils'
 const easeOut = [0.23, 1, 0.32, 1] as const
 
 function parseLoginError(error: unknown): {
-  formMessage: string
+  formMessage: string | LocalMessage
   field?: keyof LoginFormValues
   needsVerification?: NeedsVerificationDetail
 } {
   if (!(error instanceof ApiError)) {
-    return { formMessage: 'Unable to sign in. Check your connection and try again.' }
+    return { formMessage: message('Unable to sign in. Check your connection and try again.') }
   }
 
   const detail = error.detail
@@ -50,26 +54,25 @@ function parseLoginError(error: unknown): {
   if (detail && typeof detail === 'object' && 'needs_verification' in detail) {
     const v = detail as NeedsVerificationDetail
     return {
-      formMessage: formatApiDetail(v.message) ?? 'Please verify your email to continue.',
+      formMessage: formatApiDetail(v.message) ?? message('Please verify your email to continue.'),
       needsVerification: v,
     }
   }
 
   if (error.status === 401) {
     return {
-      formMessage: 'Email or password is incorrect.',
+      formMessage: message('Email or password is incorrect.'),
       field: 'password',
     }
   }
 
   if (error.status === 403) {
-    const message = formatApiDetail(detail) ?? 'Access denied for this account.'
-    return { formMessage: message }
+    return { formMessage: formatApiDetail(detail) ?? message('Access denied for this account.') }
   }
 
   if (error.status === 404) {
     return {
-      formMessage: formatApiDetail(detail) ?? 'No organization is linked to this account.',
+      formMessage: formatApiDetail(detail) ?? message('No organization is linked to this account.'),
     }
   }
 
@@ -79,6 +82,7 @@ function parseLoginError(error: unknown): {
 }
 
 export function LoginPage() {
+  const { t, owned } = useTranslation()
   const { status, login, isLoginCurrent, isAdmin, mustChangePassword } = useAuth()
   const isCurrent = useSessionCurrent()
   const navigate = useNavigate()
@@ -91,7 +95,7 @@ export function LoginPage() {
   const passwordErrorId = `${formId}-password-error`
 
   const [showPassword, setShowPassword] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formError, setFormError] = useLocalizedMessage()
   const [tenantChoices, setTenantChoices] = useState<TenantChoice[] | null>(null)
   const [pendingPassword, setPendingPassword] = useState<string | null>(null)
   const [pendingIdentifier, setPendingIdentifier] = useState<string | null>(null)
@@ -146,7 +150,7 @@ export function LoginPage() {
       <div className="flex min-h-svh items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <Loader2 className="size-4 animate-spin" aria-hidden />
-          Checking session…
+          {t('Checking session…')}
         </div>
       </div>
     )
@@ -174,7 +178,7 @@ export function LoginPage() {
           result.must_change_password === true ||
           result.user.must_change_password === true ||
           result.identity?.must_change_password === true
-        toast.success(forceChange ? 'Signed in - change your password to continue' : 'Signed in')
+        toast.success(t(forceChange ? 'Signed in - change your password to continue' : 'Signed in'))
         navigate(forceChange ? '/settings' : from, { replace: true })
         return
       }
@@ -202,7 +206,7 @@ export function LoginPage() {
   async function chooseTenant(tenant: TenantChoice) {
     if (!pendingIdentifier || !pendingPassword) return
     if (!tenant.tenant_id) {
-      setFormError('This account needs a company. Create or join one first, then sign in again.')
+      setFormError(message('This account needs a company. Create or join one first, then sign in again.'))
       return
     }
 
@@ -224,14 +228,14 @@ export function LoginPage() {
           result.identity?.must_change_password === true
         toast.success(
           forceChange
-            ? `Signed in to ${tenant.tenant_name} - change your password to continue`
-            : `Signed in to ${tenant.tenant_name}`,
+            ? t('Signed in to {name} - change your password to continue', { name: tenant.tenant_name })
+            : t('Signed in to {name}', { name: tenant.tenant_name }),
         )
         navigate(forceChange ? '/settings' : from, { replace: true })
         return
       }
 
-      setFormError('Unable to complete organization selection. Try again.')
+      setFormError(message('Unable to complete organization selection. Try again.'))
     } catch (error) {
       if (error instanceof StaleSessionError || !isCurrent()) return
       const parsed = parseLoginError(error)
@@ -273,10 +277,10 @@ export function LoginPage() {
             <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
-              <p className="text-xs text-muted-foreground">Admin Console</p>
+              <p className="text-xs text-muted-foreground">{t('Admin Console')}</p>
             </div>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-2"><LanguageToggle /><ThemeToggle /></div>
         </header>
 
         <main className="flex flex-1 items-center justify-center px-4 py-8 md:px-8 md:py-12">
@@ -285,7 +289,7 @@ export function LoginPage() {
             <motion.section
               {...motionProps}
               className="relative hidden overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/70 p-8 shadow-elevated backdrop-blur-xl lg:flex lg:flex-col lg:justify-between"
-              aria-label="Product introduction"
+              aria-label={t('Product introduction')}
             >
               <div
                 className="pointer-events-none absolute inset-0 opacity-90"
@@ -306,20 +310,19 @@ export function LoginPage() {
 
               <div className="relative z-10 flex flex-col gap-6">
                 <Badge variant="secondary" className="w-fit bg-background/70">
-                  Operators only
+                  {t('Operators only')}
                 </Badge>
                 <div className="space-y-3">
                   <h1 className="font-display text-3xl font-semibold tracking-tight text-balance md:text-4xl">
-                    Run your digital workforce with confidence
+                    {t('Run your digital workforce with confidence')}
                   </h1>
                   <p className="max-w-md text-sm leading-relaxed text-muted-foreground md:text-base">
-                    Manage companies, users, tools, and platform policy from one console. Built for
-                    platform admins and organization admins.
+                    {t('Manage companies, users, tools, and platform policy from one console.')} {t('Built for platform admins and organization admins.')}
                   </p>
                 </div>
               </div>
 
-              <ul className="relative z-10 mt-10 grid gap-3" aria-label="Admin capabilities">
+              <ul className="relative z-10 mt-10 grid gap-3" aria-label={t('Admin capabilities')}>
                 {[
                   {
                     icon: ShieldCheck,
@@ -352,9 +355,9 @@ export function LoginPage() {
                       <item.icon className="size-4" aria-hidden />
                     </span>
                     <span>
-                      <span className="block text-sm font-medium">{item.title}</span>
+                      <span className="block text-sm font-medium">{owned(item.title)}</span>
                       <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-                        {item.body}
+                        {owned(item.body)}
                       </span>
                     </span>
                   </motion.li>
@@ -378,18 +381,18 @@ export function LoginPage() {
                 <div className="mb-6 space-y-2">
                   <div className="mb-4 flex items-center gap-2 lg:hidden">
                     <MaraClawLogo className="size-[3.75rem]" />
-                    <Badge variant="outline">Admin</Badge>
+                    <Badge variant="outline">{t('Admin')}</Badge>
                   </div>
                   <h2
                     id={`${formId}-heading`}
                     className="font-display text-2xl font-semibold tracking-tight"
                   >
-                    {tenantChoices ? 'Choose organization' : 'Sign in'}
+                    {t(tenantChoices ? 'Choose organization' : 'Sign in')}
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     {tenantChoices
-                      ? 'This account belongs to more than one company. Select where to continue.'
-                      : 'Use your MaraClaw admin credentials to open the operator console.'}
+                      ? t('This account belongs to more than one company. Select where to continue.')
+                      : t('Use your MaraClaw admin credentials to open the operator console.')}
                   </p>
                 </div>
 
@@ -408,10 +411,10 @@ export function LoginPage() {
                       disabled={isBusy}
                     >
                       <ArrowLeft className="size-4" aria-hidden />
-                      Back to credentials
+                      {t('Back to credentials')}
                     </Button>
 
-                    <ul className="space-y-2" aria-label="Organizations">
+                    <ul className="space-y-2" aria-label={t('Organizations')}>
                       {tenantChoices.map((tenant) => {
                         const key = tenant.tenant_id ?? tenant.tenant_slug ?? tenant.tenant_name
                         const busy = selectingTenantId === tenant.tenant_id
@@ -465,7 +468,7 @@ export function LoginPage() {
                     noValidate
                   >
                     <div className="space-y-2">
-                      <Label htmlFor={identifierId}>Email</Label>
+                      <Label htmlFor={identifierId}>{t('Email')}</Label>
                       <div className="relative">
                         <Mail
                           className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -493,19 +496,19 @@ export function LoginPage() {
                       </div>
                       {errors.login_identifier ? (
                         <p id={identifierErrorId} className="text-xs text-destructive" role="alert">
-                          {errors.login_identifier.message}
+                          {owned(errors.login_identifier.message)}
                         </p>
                       ) : null}
                     </div>
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <Label htmlFor={passwordId}>Password</Label>
+                        <Label htmlFor={passwordId}>{t('Password')}</Label>
                         <Link
                           to="/forgot-password"
                           className="text-xs font-medium text-primary underline-offset-4 hover:underline"
                         >
-                          Forgot password?
+                          {t('Forgot password?')}
                         </Link>
                       </div>
                       <div className="relative">
@@ -532,7 +535,7 @@ export function LoginPage() {
                           type="button"
                           className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => setShowPassword((v) => !v)}
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          aria-label={t(showPassword ? 'Hide password' : 'Show password')}
                           disabled={isBusy}
                         >
                           {showPassword ? (
@@ -544,7 +547,7 @@ export function LoginPage() {
                       </div>
                       {errors.password ? (
                         <p id={passwordErrorId} className="text-xs text-destructive" role="alert">
-                          {errors.password.message}
+                          {owned(errors.password.message)}
                         </p>
                       ) : null}
                     </div>
@@ -553,17 +556,17 @@ export function LoginPage() {
                       {isSubmitting ? (
                         <>
                           <Loader2 className="size-4 animate-spin" aria-hidden />
-                          Signing in…
+                          {t('Signing in…')}
                         </>
                       ) : (
-                        'Sign in'
+                        t('Sign in')
                       )}
                     </Button>
                   </form>
                 )}
 
                 <p className="mt-6 text-center text-xs leading-relaxed text-muted-foreground">
-                  Platform admins and organization admins only.
+                  {t('Platform admins and organization admins only.')}
                 </p>
               </div>
             </motion.section>

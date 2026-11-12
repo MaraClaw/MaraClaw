@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
+import { useTranslation } from '@/hooks/use-translation'
 import {
   acceptBroadcast, attemptAfterFailure, broadcastDraftSchema, broadcastFailureMessage, reviewBroadcast,
   type BroadcastAcceptance, type BroadcastDraft, type BroadcastResult, type BroadcastSubmission,
@@ -21,9 +22,10 @@ import { BroadcastJobProgress } from './broadcast-job-progress'
 
 const emptyDraft = { title: '', body: '', send_email: false }
 const buttonMotion = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
-const audience = 'Active users in your current organization, except you, plus all organization agents.'
+const audience = 'Active users in your current organization, except you, plus all organization agents.' as const
 
 export function BroadcastPage() {
+  const { t, owned, number } = useTranslation()
   const id = useId()
   const client = useQueryClient()
   const { user, owner } = useAuth()
@@ -60,7 +62,7 @@ export function BroadcastPage() {
       setSendError(null)
       setJob(data)
       form.reset(emptyDraft)
-      toast.success('Broadcast accepted')
+      toast.success(t('Broadcast accepted'))
     },
     onError: (error, submission) => {
       if (!active.current || !isSessionCurrent()) return
@@ -96,29 +98,29 @@ export function BroadcastPage() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <header className="flex flex-col gap-2">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Organization broadcast</h1>
-        <p className="text-muted-foreground">Send an announcement to your current organization. Review the exact message before sending.</p>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Organization broadcast')}</h1>
+        <p className="text-muted-foreground">{t('Send an announcement to your current organization. Review the exact message before sending.')}</p>
       </header>
       <div ref={feedback} tabIndex={-1} role={sendError ? 'alert' : 'status'} className="empty:hidden focus-visible:outline-2 focus-visible:outline-ring">
         {sendError ? (
           <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-card p-4 text-sm">
-          <ErrorToast error={sendError} message={broadcastFailureMessage(sendError)} />
-            <p>Your draft is kept below. Review it again before another attempt. A failed request does not guarantee that nothing was sent.</p>
+          <ErrorToast error={sendError} message={owned(broadcastFailureMessage(sendError))} />
+            <p>{t('Your draft is kept below. Review it again before another attempt. A failed request does not guarantee that nothing was sent.')}</p>
           </div>
         ) : result ? (
           <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
-            <h2 className="font-display text-lg font-semibold">Broadcast sent</h2>
-            <p className="text-sm">Notification processing completed.</p>
+            <h2 className="font-display text-lg font-semibold">{t('Broadcast sent')}</h2>
+            <p className="text-sm">{t('Notification processing completed.')}</p>
             <dl className="grid gap-4 sm:grid-cols-3">
-              {[
+              {([
                 ['Users notified', result.users_notified],
                 ['Agents notified', result.agents_notified],
                 ['Queued email targets', result.emails_sent],
-              ].map(([label, count]) => (
-                <div key={label}><dt className="text-sm text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{count.toLocaleString()}</dd></div>
+              ] as const).map(([label, count]) => (
+                <div key={label}><dt className="text-sm text-muted-foreground">{t(label)}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{number(count)}</dd></div>
               ))}
             </dl>
-            <p className="text-sm text-muted-foreground">Email targets are queued for processing, not confirmed deliveries.</p>
+            <p className="text-sm text-muted-foreground">{t('Email targets are queued for processing, not confirmed deliveries.')}</p>
           </div>
         ) : null}
       </div>
@@ -135,38 +137,38 @@ export function BroadcastPage() {
           if (event.key === 'Escape') { event.preventDefault(); closeReview() }
         }}>
           <CardHeader>
-            <h2 ref={reviewHeading} id={`${id}-review`} tabIndex={-1} className="font-display text-lg font-semibold focus-visible:outline-2 focus-visible:outline-ring">Review broadcast</h2>
-            <CardDescription>This message cannot be recalled after sending.</CardDescription>
+            <h2 ref={reviewHeading} id={`${id}-review`} tabIndex={-1} className="font-display text-lg font-semibold focus-visible:outline-2 focus-visible:outline-ring">{t('Review broadcast')}</h2>
+            <CardDescription>{t('This message cannot be recalled after sending.')}</CardDescription>
           </CardHeader>
           <CardContent className="flex min-w-0 flex-col gap-5">
             <div className="rounded-xl border border-border bg-background p-4">
-              <h3 className="text-sm font-medium">Audience</h3>
-              <p className="mt-1 text-sm text-muted-foreground">{audience}</p>
+              <h3 className="text-sm font-medium">{t('Audience')}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">{t(audience)}</p>
             </div>
             <dl className="flex min-w-0 flex-col gap-4">
-              <div><dt className="text-sm text-muted-foreground">Title</dt><dd className="mt-1 whitespace-pre-wrap font-medium">{snapshot.draft.title}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Body</dt><dd className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{snapshot.draft.body || 'No body'}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Email</dt><dd className="mt-1 text-sm">{snapshot.draft.send_email ? 'Also queue email for eligible user addresses' : 'In-app notifications only; email is off'}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">{t('Title')}</dt><dd className="mt-1 whitespace-pre-wrap font-medium">{snapshot.draft.title}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">{t('Body')}</dt><dd className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{snapshot.draft.body || t('No body')}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">{t('Email')}</dt><dd className="mt-1 text-sm">{t(snapshot.draft.send_email ? 'Also queue email for eligible user addresses' : 'In-app notifications only; email is off')}</dd></div>
             </dl>
-            <p className="text-sm text-muted-foreground">Sending is not retried automatically. Email queue counts do not confirm delivery.</p>
+            <p className="text-sm text-muted-foreground">{t('Sending is not retried automatically. Email queue counts do not confirm delivery.')}</p>
             <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="outline" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>Back to edit</Button>
-              <Button type="button" variant="ghost" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>Cancel</Button>
+              <Button type="button" variant="outline" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>{t('Back to edit')}</Button>
+              <Button type="button" variant="ghost" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>{t('Cancel')}</Button>
               <Button type="button" className={`${buttonMotion} sm:ml-auto`} disabled={sending.isPending} onClick={() => {
                 if (submitting.current || !active.current || !isSessionCurrent()) return
                 submitting.current = true
                 attempt.current = snapshot
                 sending.mutate(snapshot)
-              }}>{sending.isPending ? 'Sending broadcast...' : 'Send broadcast'}</Button>
+              }}>{t(sending.isPending ? 'Sending broadcast...' : 'Send broadcast')}</Button>
             </div>
-            <p role="status" className="text-sm text-muted-foreground">{sending.isPending ? 'Sending your reviewed message. Please wait.' : null}</p>
+            <p role="status" className="text-sm text-muted-foreground">{sending.isPending ? t('Sending your reviewed message. Please wait.') : null}</p>
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardHeader>
-            <h2 className="font-display text-lg font-semibold">Compose message</h2>
-            <CardDescription>{audience}</CardDescription>
+            <h2 className="font-display text-lg font-semibold">{t('Compose message')}</h2>
+            <CardDescription>{t(audience)}</CardDescription>
           </CardHeader>
           <CardContent>
             <form noValidate className="flex flex-col gap-5" onSubmit={form.handleSubmit((values) => {
@@ -178,23 +180,23 @@ export function BroadcastPage() {
               setSnapshot(reviewBroadcast(Object.freeze({ ...values }), attempt.current))
             })}>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`${id}-title`}>Title</Label>
+                <Label htmlFor={`${id}-title`}>{t('Title')}</Label>
                 <Input id={`${id}-title`} autoComplete="off" aria-required="true" aria-invalid={Boolean(errors.title)} aria-describedby={`${id}-title-help ${errors.title ? `${id}-title-error` : ''}`} {...form.register('title')} />
-                <p id={`${id}-title-help`} className="text-xs text-muted-foreground">Required. {title.length}/200 characters.</p>
-                {errors.title ? <p id={`${id}-title-error`} role="alert" className="text-sm text-destructive">{errors.title.message}</p> : null}
+                <p id={`${id}-title-help`} className="text-xs text-muted-foreground">{t('Required. {count}/200 characters.', { count: number(title.length) })}</p>
+                {errors.title ? <p id={`${id}-title-error`} role="alert" className="text-sm text-destructive">{owned(errors.title.message)}</p> : null}
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`${id}-body`}>Body (optional)</Label>
+                <Label htmlFor={`${id}-body`}>{t('Body (optional)')}</Label>
                 <textarea id={`${id}-body`} rows={7} aria-invalid={Boolean(errors.body)} aria-describedby={`${id}-body-help ${errors.body ? `${id}-body-error` : ''}`} className="min-h-36 w-full min-w-0 resize-y rounded-xl border border-input bg-card px-3.5 py-2 text-base shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 aria-invalid:border-destructive sm:text-sm" {...form.register('body')} />
-                <p id={`${id}-body-help`} className="text-xs text-muted-foreground">{body.length}/1,000 characters.</p>
-                {errors.body ? <p id={`${id}-body-error`} role="alert" className="text-sm text-destructive">{errors.body.message}</p> : null}
+                <p id={`${id}-body-help`} className="text-xs text-muted-foreground">{t('{count}/1,000 characters.', { count: number(body.length) })}</p>
+                {errors.body ? <p id={`${id}-body-error`} role="alert" className="text-sm text-destructive">{owned(errors.body.message)}</p> : null}
               </div>
               <label htmlFor={`${id}-email`} className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium">
                 <input id={`${id}-email`} type="checkbox" className="size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" aria-describedby={`${id}-email-help`} {...form.register('send_email')} />
-                Also send email
+                {t('Also send email')}
               </label>
-              <p id={`${id}-email-help`} className="-mt-3 text-sm text-muted-foreground">Optional. Queue email for eligible user addresses as well as in-app notifications.</p>
-              <Button type="submit" className={`self-start ${buttonMotion}`}>Review broadcast</Button>
+              <p id={`${id}-email-help`} className="-mt-3 text-sm text-muted-foreground">{t('Optional. Queue email for eligible user addresses as well as in-app notifications.')}</p>
+              <Button type="submit" className={`self-start ${buttonMotion}`}>{t('Review broadcast')}</Button>
             </form>
           </CardContent>
         </Card>

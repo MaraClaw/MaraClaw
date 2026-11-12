@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
+import { useTranslation } from '@/hooks/use-translation'
 import {
   ChatGPTSubscriptionError, completeChatGPTSubscription, getChatGPTSubscriptionStatus,
   startChatGPTSubscription, type ChatGPTSubscriptionComplete, type ChatGPTSubscriptionStart,
@@ -28,6 +29,7 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
   readonly tenantId: string
   readonly platformAdmin: boolean
 }) {
+  const { t, owned, number } = useTranslation()
   const id = useId()
   const queryClient = useQueryClient()
   const isCurrent = useSessionCurrent()
@@ -136,14 +138,13 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
   return (
     <Card aria-labelledby={`${id}-title`}>
       <CardHeader>
-        <CardTitle id={`${id}-title`}>Connect ChatGPT subscription</CardTitle>
+        <CardTitle id={`${id}-title`}>{t('Connect ChatGPT subscription')}</CardTitle>
         <CardDescription>
-          Sign in with ChatGPT Plus, Pro, or Team in your browser. Access tokens stay on the server
-          and are stored encrypted for this company.
+          {t('Sign in with ChatGPT Plus, Pro, or Team in your browser. Access tokens stay on the server and are stored encrypted for this company.')}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {success ? <p className="text-sm text-muted-foreground" role="status">ChatGPT subscription connected. It is in the company pool.</p> : null}
+        {success ? <p className="text-sm text-muted-foreground" role="status">{t('ChatGPT subscription connected. It is in the company pool.')}</p> : null}
         {attempt && !restart ? (
           <form noValidate autoComplete="off" className="grid gap-3" aria-busy={complete.isPending}
             onSubmit={handleSubmit((values) => {
@@ -156,34 +157,32 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
             })}>
             <p className="text-sm">
               <a className="font-medium text-primary underline underline-offset-4" href={attempt.authorization_url}
-                target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in (new tab)</a>
+                target="_blank" rel="noopener noreferrer">{t('Open ChatGPT sign-in (new tab)')}</a>
             </p>
             <p id={`${id}-help`} className="text-sm text-muted-foreground">
-              After sign-in, the expected localhost page may fail to load. That is normal: copy the FULL
-              address from that tab’s address bar and paste it below. No CLI or local listener is needed.
-              The link expires in about {Math.ceil(attempt.expires_in / 60)} minutes.
+              {t('After sign-in, the expected localhost page may fail to load. That is normal: copy the FULL address from that tab’s address bar and paste it below. No CLI or local listener is needed. The link expires in about {minutes} minutes.', { minutes: number(Math.ceil(attempt.expires_in / 60)) })}
             </p>
             <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-callback`}>Full callback URL</Label>
+              <Label htmlFor={`${id}-callback`}>{t('Full callback URL')}</Label>
               <Input id={`${id}-callback`} type="text" autoComplete="off" spellCheck={false}
                 disabled={complete.isPending} aria-invalid={Boolean(errors.callback_url)}
                 aria-describedby={`${id}-help${errors.callback_url ? ` ${id}-invalid` : ''}`}
                 {...register('callback_url')} />
-              {errors.callback_url ? <p id={`${id}-invalid`} className="text-sm text-destructive" role="alert">{errors.callback_url.message}</p> : null}
+              {errors.callback_url ? <p id={`${id}-invalid`} className="text-sm text-destructive" role="alert">{owned(errors.callback_url.message)}</p> : null}
             </div>
             <div><Button type="submit" disabled={busy}>
               {complete.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-              {complete.isPending ? 'Confirming ChatGPT sign-in…' : 'Complete ChatGPT sign-in'}
+              {complete.isPending ? t('Confirming ChatGPT sign-in…') : t('Complete ChatGPT sign-in')}
             </Button></div>
           </form>
         ) : null}
-        {statusMessage ? <p className="text-sm text-muted-foreground" role="status">{statusMessage}</p> : null}
-        {error ? <ErrorToast message={error} /> : null}
+        {statusMessage ? <p className="text-sm text-muted-foreground" role="status">{owned(statusMessage)}</p> : null}
+        {error ? <ErrorToast message={owned(error)} /> : null}
         <div>
           <Button ref={trigger} type="button" variant={attempt ? 'outline' : 'default'}
             disabled={busy || !tenantId} onClick={begin}>
             {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-            {start.isPending ? 'Starting ChatGPT sign-in…' : attempt ? 'Restart ChatGPT sign-in' : 'Connect ChatGPT subscription'}
+            {start.isPending ? t('Starting ChatGPT sign-in…') : attempt ? t('Restart ChatGPT sign-in') : t('Connect ChatGPT subscription')}
           </Button>
         </div>
       </CardContent>

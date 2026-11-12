@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { LanguageToggle } from '@/components/language-toggle'
+import { useTranslation } from '@/hooks/use-translation'
 import { cn } from '@/lib/utils'
 
 const easeOut = [0.23, 1, 0.32, 1] as const
@@ -17,6 +19,7 @@ type AuthShellProps = {
 
 /** Shared ambient chrome for public auth screens (login, forgot, reset). */
 export function AuthShell({ title, description, children, footer, className }: AuthShellProps) {
+  const { t } = useTranslation()
   const reduceMotion = useReducedMotion()
 
   return (
@@ -40,10 +43,10 @@ export function AuthShell({ title, description, children, footer, className }: A
             <MaraClawLogo className="size-[3.375rem]" />
             <div className="min-w-0">
               <p className="font-display text-sm font-semibold leading-tight">MaraClaw</p>
-              <p className="text-xs text-muted-foreground">Admin Console</p>
+              <p className="text-xs text-muted-foreground">{t('Admin Console')}</p>
             </div>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-2"><LanguageToggle /><ThemeToggle /></div>
         </header>
 
         <main className="flex flex-1 items-center justify-center px-4 py-8 md:px-8 md:py-12">

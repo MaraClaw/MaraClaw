@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { SearchAnalyticsSnapshot } from '@/pages/search-engine-analytics'
+import { useTranslation } from '@/hooks/use-translation'
 
 const placeholders = [
   {
@@ -34,6 +35,7 @@ const placeholders = [
 ] as const
 
 export function OverviewPage() {
+  const { t } = useTranslation()
   const { user } = useAuth()
   const cards = placeholders.filter(
     (item) => !('platformAdminOnly' in item && item.platformAdminOnly) || isPlatformAdminUser(user),
@@ -48,12 +50,12 @@ export function OverviewPage() {
         className="flex flex-col gap-3"
       >
         <h1 className="font-display text-2xl font-semibold tracking-tight">
-          Overview
+          {t('Overview')}
         </h1>
         <p className="max-w-2xl text-muted-foreground">
           {isPlatformAdminUser(user)
-            ? 'System search activity is below. Open Search engine for the full dashboard or a single company.'
-            : 'You are signed in to the operator console.'}
+            ? t('System search activity is below. Open Search engine for the full dashboard or a single company.')
+            : t('You are signed in to the operator console.')}
         </p>
       </motion.div>
 
@@ -72,16 +74,16 @@ export function OverviewPage() {
                 <div className="mb-1 flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
                   <item.icon className="size-4" aria-hidden />
                 </div>
-                <CardTitle>{item.title}</CardTitle>
-                <CardDescription>{item.description}</CardDescription>
+                <CardTitle>{t(item.title)}</CardTitle>
+                <CardDescription>{t(item.description)}</CardDescription>
               </CardHeader>
               <CardContent>
                 {'href' in item && item.href ? (
                   <Link to={item.href} className="text-xs font-medium text-primary hover:underline">
-                    Open
+                    {t('Open')}
                   </Link>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Coming in following tasks</p>
+                  <p className="text-xs text-muted-foreground">{t('Coming in following tasks')}</p>
                 )}
               </CardContent>
             </Card>

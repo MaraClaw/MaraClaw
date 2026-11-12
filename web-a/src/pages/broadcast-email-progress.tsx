@@ -5,12 +5,14 @@ import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { broadcastEmailStatusOptions } from '@/hooks/broadcast-options'
 import { useSessionCurrent } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { cancelBroadcastEmail, type BroadcastResult } from '@/lib/broadcast-api'
 
 const buttonMotion = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function BroadcastEmailProgress({ receipt }: { readonly receipt: BroadcastResult }) {
+  const { t, number } = useTranslation()
   const id = useId()
   const client = useQueryClient()
   const isSessionCurrent = useSessionCurrent()
@@ -70,47 +72,47 @@ export function BroadcastEmailProgress({ receipt }: { readonly receipt: Broadcas
   const canCancel = Boolean(data?.available && data.queued > 0 && !status.isError)
   return (
     <section aria-labelledby={`${id}-heading`} className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
-      <h2 ref={progressHeading} id={`${id}-heading`} tabIndex={-1} className="font-display text-lg font-semibold focus-visible:outline-2 focus-visible:outline-ring">Email progress</h2>
-      <p className="text-sm text-muted-foreground">SMTP acceptance does not confirm delivery to an inbox. Cancellation only stops unclaimed queued email; claimed work, including expired claims, may still reach SMTP. In-app notifications are unchanged.</p>
-      {receipt.emails_sent === 0 ? <p className="text-sm">Email progress is unavailable. No email targets were queued.</p> : (
+      <h2 ref={progressHeading} id={`${id}-heading`} tabIndex={-1} className="font-display text-lg font-semibold focus-visible:outline-2 focus-visible:outline-ring">{t('Email progress')}</h2>
+      <p className="text-sm text-muted-foreground">{t('SMTP acceptance does not confirm delivery to an inbox. Cancellation only stops unclaimed queued email; claimed work, including expired claims, may still reach SMTP. In-app notifications are unchanged.')}</p>
+      {receipt.emails_sent === 0 ? <p className="text-sm">{t('Email progress is unavailable. No email targets were queued.')}</p> : (
         <>
           {data?.available ? (
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {[
+              {([
                 ['Queued', data.queued], ['Claimed', data.claimed], ['SMTP accepted', data.smtp_accepted],
                 ['Failed', data.failed], ['Cancelled', data.cancelled],
-              ].map(([label, count]) => (
-                <div key={label}><dt className="text-sm text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{count.toLocaleString()}</dd></div>
+              ] as const).map(([label, count]) => (
+                <div key={label}><dt className="text-sm text-muted-foreground">{t(label)}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{number(count)}</dd></div>
               ))}
             </dl>
-          ) : data ? <p className="text-sm">Email progress is unavailable.</p> : status.isPending ? <p role="status" className="text-sm">Loading email progress...</p> : null}
+          ) : data ? <p className="text-sm">{t('Email progress is unavailable.')}</p> : status.isPending ? <p role="status" className="text-sm">{t('Loading email progress...')}</p> : null}
           <div ref={feedback} tabIndex={-1} role={cancellation.isError || status.isError ? 'alert' : 'status'} className="flex flex-col gap-2 text-sm focus-visible:outline-2 focus-visible:outline-ring">
-            {cancellation.isError ? <ErrorToast error={cancellation.error} message="Could not confirm cancellation. Refreshed counts may show that some targets were cancelled. Review the current status before trying again." /> : cancellation.data ? (
-              <p>{cancellation.data.available ? `Cancelled ${cancellation.data.cancelled_now.toLocaleString()} queued email targets in this request. Any remaining queued targets can be reviewed again; claimed work cannot be stopped.` : 'Email progress is unavailable.'}</p>
+            {cancellation.isError ? <ErrorToast error={cancellation.error} message={t('Could not confirm cancellation. Refreshed counts may show that some targets were cancelled. Review the current status before trying again.')} /> : cancellation.data ? (
+              <p>{cancellation.data.available ? t('Cancelled {count} queued email targets in this request. Any remaining queued targets can be reviewed again; claimed work cannot be stopped.', { count: number(cancellation.data.cancelled_now) }) : t('Email progress is unavailable.')}</p>
             ) : null}
-            {status.isError ? <ErrorToast error={status.error} message="Could not refresh email progress. Counts may be out of date. Refresh to try again." /> : null}
-            {busy ? <p>Cancelling unclaimed email and refreshing progress...</p> : null}
+            {status.isError ? <ErrorToast error={status.error} message={t('Could not refresh email progress. Counts may be out of date. Refresh to try again.')} /> : null}
+            {busy ? <p>{t('Cancelling unclaimed email and refreshing progress...')}</p> : null}
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button type="button" variant="outline" className={buttonMotion} disabled={busy} aria-disabled={busy || status.isFetching} onClick={() => { if (!busy && !status.isFetching) void status.refetch() }}>{status.isFetching && !busy ? 'Refreshing progress...' : 'Refresh email progress'}</Button>
-            <Button ref={cancelButton} type="button" variant="outline" className={buttonMotion} disabled={busy || !canCancel || confirming} onClick={() => { cancellation.reset(); setConfirming(true) }}>Cancel queued email</Button>
+            <Button type="button" variant="outline" className={buttonMotion} disabled={busy} aria-disabled={busy || status.isFetching} onClick={() => { if (!busy && !status.isFetching) void status.refetch() }}>{t(status.isFetching && !busy ? 'Refreshing progress...' : 'Refresh email progress')}</Button>
+            <Button ref={cancelButton} type="button" variant="outline" className={buttonMotion} disabled={busy || !canCancel || confirming} onClick={() => { cancellation.reset(); setConfirming(true) }}>{t('Cancel queued email')}</Button>
           </div>
           {confirming ? (
             <section aria-labelledby={`${id}-confirm`} className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4" onKeyDown={(event) => {
               if (event.key === 'Escape') { event.preventDefault(); closeConfirmation() }
             }}>
-              <h3 ref={confirmationHeading} id={`${id}-confirm`} tabIndex={-1} className="font-medium focus-visible:outline-2 focus-visible:outline-ring">Cancel queued email?</h3>
-              <p className="text-sm">Only targets still queued without a claim will be cancelled. Workers may claim more before this request completes, so fewer targets may be cancelled than currently shown. Claimed email and in-app notifications cannot be recalled.</p>
-              {!canCancel ? <p className="text-sm">No cancellable targets are currently confirmed. Refresh progress before another attempt.</p> : null}
+              <h3 ref={confirmationHeading} id={`${id}-confirm`} tabIndex={-1} className="font-medium focus-visible:outline-2 focus-visible:outline-ring">{t('Cancel queued email?')}</h3>
+              <p className="text-sm">{t('Only targets still queued without a claim will be cancelled. Workers may claim more before this request completes, so fewer targets may be cancelled than currently shown. Claimed email and in-app notifications cannot be recalled.')}</p>
+              {!canCancel ? <p className="text-sm">{t('No cancellable targets are currently confirmed. Refresh progress before another attempt.')}</p> : null}
               <div className="flex flex-wrap gap-3">
-                <Button type="button" variant="outline" className={buttonMotion} disabled={busy} onClick={closeConfirmation}>Keep queued email</Button>
+                <Button type="button" variant="outline" className={buttonMotion} disabled={busy} onClick={closeConfirmation}>{t('Keep queued email')}</Button>
                 <Button type="button" variant="destructive" className={buttonMotion} disabled={busy || !canCancel} onClick={() => {
                   if (submitting.current || !active.current || !isSessionCurrent()) return
                   submitting.current = true
                   setBusy(true)
                   feedback.current?.focus()
                   cancellation.mutate(receipt.broadcast_id)
-                }}>{busy ? 'Cancelling queued email...' : 'Confirm cancel queued email'}</Button>
+                }}>{t(busy ? 'Cancelling queued email...' : 'Confirm cancel queued email')}</Button>
               </div>
             </section>
           ) : null}

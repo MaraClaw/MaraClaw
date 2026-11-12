@@ -10,6 +10,7 @@ type ExportState = {
   readonly pending: boolean
   readonly message: string | null
   readonly error: string | null
+  readonly ownedError?: true
 }
 const idle: ExportState = { pending: false, message: null, error: null }
 
@@ -72,7 +73,9 @@ export function createRosterExporter(policy: SessionPolicy, owner: SessionOwner)
         publish({ pending: false, message: 'Company CSV download started. Check your browser downloads for completion.', error: null })
       } catch (error) {
         if (!current()) return
-        publish({ pending: false, message: null, error: error instanceof ApiError ? error.message : 'Could not export company users. Try again.' })
+        publish(error instanceof ApiError
+          ? { pending: false, message: null, error: error.message }
+          : { pending: false, message: null, error: 'Could not export company users. Try again.', ownedError: true })
       } finally {
         if (current()) controller = undefined
       }

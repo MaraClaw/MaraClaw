@@ -2,6 +2,7 @@ import { useId } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { useTranslation } from '@/hooks/use-translation'
 import type { Department } from '@/lib/departments-api'
 
 export function DepartmentMemberships({
@@ -25,6 +26,7 @@ export function DepartmentMemberships({
   readonly error: Error | null
   readonly onChange: (departmentIds: readonly string[]) => void
 }) {
+  const { t, number } = useTranslation()
   const id = useId()
   const description = `${id}-hint ${id}-status`
 
@@ -36,10 +38,10 @@ export function DepartmentMemberships({
       aria-describedby={description}
     >
       <legend className="mb-1.5 text-sm font-medium">
-        Departments<span className="sr-only"> for {name}</span>
+        {t('Departments')}<span className="sr-only"> {t('for {name}', { name })}</span>
       </legend>
       <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-        Select any departments. Changes save automatically.
+        {t('Select any departments. Changes save automatically.')}
       </p>
       {departments.length ? (
         <div className="grid max-h-48 gap-1.5 overflow-y-auto p-1">
@@ -73,11 +75,11 @@ export function DepartmentMemberships({
         disabled={departmentIds.length === 0}
         onClick={() => onChange([])}
       >
-        Clear all<span className="sr-only"> departments for {name}</span>
+        {t('Clear all')}<span className="sr-only"> {t('departments for {name}', { name })}</span>
       </Button>
       <p id={`${id}-status`} role="status" className="text-xs text-muted-foreground">
-        {saving ? 'Saving departments…' : loading ? 'Loading departments…' : !available ? 'Departments unavailable'
-          : departmentIds.length ? `${departmentIds.length} selected` : 'Unassigned'}
+        {saving ? t('Saving departments…') : loading ? t('Loading departments…') : !available ? t('Departments unavailable')
+          : departmentIds.length ? t('{count} selected', { count: number(departmentIds.length) }) : t('Unassigned')}
       </p>
     </fieldset>
   )

@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useTranslation } from '@/hooks/use-translation'
 import { listTools } from '@/lib/tools-api'
 import { toolActions, toolOwnership } from './tools-catalog-state'
 import { ToolConfigEditor } from './tools-config-editor'
@@ -21,6 +22,7 @@ type Editor = { readonly kind: 'create' }
 export function ToolsCatalog({ tenantId, concreteCompany }: {
   readonly tenantId?: string; readonly concreteCompany: boolean
 }) {
+  const { t, number } = useTranslation()
   const id = useId()
   const catalog = useQuery({ queryKey: toolsQueryKey(tenantId), queryFn: ({ signal }) => listTools(tenantId, signal) })
   const [editor, setEditor] = useState<Editor | null>(null)
@@ -45,24 +47,24 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
   return <section aria-labelledby={`${id}-heading`} className="flex min-w-0 flex-col gap-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 ref={heading} tabIndex={-1} id={`${id}-heading`} className="font-display text-lg font-semibold tracking-tight outline-none">Tool catalog</h2>
-        {catalog.data ? <p className="text-sm text-muted-foreground">{catalog.data.length} {catalog.data.length === 1 ? 'tool' : 'tools'} available in this catalog context</p> : null}
+        <h2 ref={heading} tabIndex={-1} id={`${id}-heading`} className="font-display text-lg font-semibold tracking-tight outline-none">{t('Tool catalog')}</h2>
+        {catalog.data ? <p className="text-sm text-muted-foreground">{t(catalog.data.length === 1 ? '{count} tool available in this catalog context' : '{count} tools available in this catalog context', { count: number(catalog.data.length) })}</p> : null}
       </div>
       <div className="flex flex-wrap gap-3">
-        <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}><RefreshCw aria-hidden className="size-4" />Refresh catalog</Button>
-        <Button variant={editor ? 'outline' : 'default'} className={toolButtonClass} disabled={busy || !concreteCompany} aria-describedby={!concreteCompany ? 'tools-company-help' : undefined} onClick={(event) => open({ kind: 'create' }, event.currentTarget)}><Plus aria-hidden className="size-4" />Create MCP tool</Button>
+        <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}><RefreshCw aria-hidden className="size-4" />{t('Refresh catalog')}</Button>
+        <Button variant={editor ? 'outline' : 'default'} className={toolButtonClass} disabled={busy || !concreteCompany} aria-describedby={!concreteCompany ? 'tools-company-help' : undefined} onClick={(event) => open({ kind: 'create' }, event.currentTarget)}><Plus aria-hidden className="size-4" />{t('Create MCP tool')}</Button>
       </div>
     </div>
     {editor ? <div ref={panel} tabIndex={-1} className="min-w-0 outline-none" key={editor.kind === 'create' ? 'create' : `${editor.kind}-${editor.tool.id}`}><ToolsEditorPending.Provider value={setPendingActions}>{renderEditor()}</ToolsEditorPending.Provider></div> : null}
-    {catalog.isPending ? <p role="status" className="py-8 text-sm text-muted-foreground">Loading tools…</p> : null}
+    {catalog.isPending ? <p role="status" className="py-8 text-sm text-muted-foreground">{t('Loading tools…')}</p> : null}
     {catalog.isError ? <Card><CardContent className="space-y-4">
-      <ErrorToast error={catalog.error} message="Could not load the tool catalog. Check your company selection and permissions, then retry." />
-      <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}>Retry loading tools</Button>
+      <ErrorToast error={catalog.error} message={t('Could not load the tool catalog. Check your company selection and permissions, then retry.')} />
+      <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}>{t('Retry loading tools')}</Button>
     </CardContent></Card> : null}
     {catalog.isSuccess && catalog.data.length === 0 ? <Card><CardContent className="space-y-2 py-4 text-center">
       <Wrench className="mx-auto size-6 text-muted-foreground" aria-hidden />
-      <h3 className="font-display font-semibold">No tools in this catalog</h3>
-      <p className="text-sm text-muted-foreground">{concreteCompany ? 'Create an MCP tool to get started.' : 'Choose a company to create an MCP tool.'}</p>
+      <h3 className="font-display font-semibold">{t('No tools in this catalog')}</h3>
+      <p className="text-sm text-muted-foreground">{concreteCompany ? t('Create an MCP tool to get started.') : t('Choose a company to create an MCP tool.')}</p>
     </CardContent></Card> : null}
     <div className="grid min-w-0 gap-4 lg:grid-cols-2">
       {catalog.data?.map((tool) => {
@@ -73,31 +75,31 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
           <CardTitle className="break-words">{tool.display_name}</CardTitle>
           <p className="break-all font-mono text-xs text-muted-foreground">{tool.name}</p>
           <div className="flex flex-wrap gap-2 pt-2">
-            <Badge variant={tool.enabled ? 'success' : 'secondary'}>{tool.enabled ? 'Enabled' : 'Disabled'}</Badge>
-            <Badge variant="outline">{tool.is_default ? 'Default' : 'Not default'}</Badge>
+            <Badge variant={tool.enabled ? 'success' : 'secondary'}>{tool.enabled ? t('Enabled') : t('Disabled')}</Badge>
+            <Badge variant="outline">{tool.is_default ? t('Default') : t('Not default')}</Badge>
           </div>
         </CardHeader>
         <CardContent className="flex flex-1 flex-col gap-4">
           {tool.description ? <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{tool.description}</p> : null}
           <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Type</dt><dd className="break-all">{tool.type}</dd>
-            <dt className="text-muted-foreground">Category</dt><dd className="break-all">{tool.category}</dd>
-            <dt className="text-muted-foreground">Source</dt><dd className="break-all">{tool.source}</dd>
-            <dt className="text-muted-foreground">Ownership</dt><dd className="break-all">{toolOwnership(tool)}</dd>
-            {tool.tenant_id !== null ? <><dt className="text-muted-foreground">Company ID</dt><dd className="break-all font-mono text-xs">{tool.tenant_id}</dd></> : null}
-            {tool.mcp_server_name ? <><dt className="text-muted-foreground">Server</dt><dd className="break-all">{tool.mcp_server_name}</dd></> : null}
-            {tool.mcp_server_url ? <><dt className="text-muted-foreground">Server URL</dt><dd className="break-all">{tool.mcp_server_url}</dd></> : null}
-            {tool.mcp_tool_name ? <><dt className="text-muted-foreground">MCP tool</dt><dd className="break-all">{tool.mcp_tool_name}</dd></> : null}
+            <dt className="text-muted-foreground">{t('Type')}</dt><dd className="break-all">{tool.type}</dd>
+            <dt className="text-muted-foreground">{t('Category')}</dt><dd className="break-all">{tool.category}</dd>
+            <dt className="text-muted-foreground">{t('Source')}</dt><dd className="break-all">{tool.source}</dd>
+            <dt className="text-muted-foreground">{t('Ownership')}</dt><dd className="break-all">{t(toolOwnership(tool))}</dd>
+            {tool.tenant_id !== null ? <><dt className="text-muted-foreground">{t('Company ID')}</dt><dd className="break-all font-mono text-xs">{tool.tenant_id}</dd></> : null}
+            {tool.mcp_server_name ? <><dt className="text-muted-foreground">{t('Server')}</dt><dd className="break-all">{tool.mcp_server_name}</dd></> : null}
+            {tool.mcp_server_url ? <><dt className="text-muted-foreground">{t('Server URL')}</dt><dd className="break-all">{tool.mcp_server_url}</dd></> : null}
+            {tool.mcp_tool_name ? <><dt className="text-muted-foreground">{t('MCP tool')}</dt><dd className="break-all">{tool.mcp_tool_name}</dd></> : null}
           </dl>
           <div className="mt-auto flex flex-wrap gap-2 pt-2">
-            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.editDetails} aria-describedby={!actions.editDetails ? `${helpId}-edit-help` : undefined} aria-label={`Edit details for ${tool.display_name}`} onClick={(event) => open({ kind: 'edit', tool }, event.currentTarget)}>Edit details</Button>
-            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.configure} aria-describedby={!actions.configure ? `${helpId}-config-help` : undefined} aria-label={`Configure ${tool.display_name}`} onClick={(event) => open({ kind: 'config', tool }, event.currentTarget)}>Configure</Button>
-            {tool.type !== 'builtin' ? <Button variant="ghost" className={`${toolButtonClass} text-destructive`} disabled={busy || !actions.delete} aria-describedby={!actions.delete ? `${helpId}-delete-help` : undefined} aria-label={`Delete tool ${tool.display_name}`} onClick={(event) => open({ kind: 'delete', tool }, event.currentTarget)}>Delete tool</Button> : null}
+            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.editDetails} aria-describedby={!actions.editDetails ? `${helpId}-edit-help` : undefined} aria-label={t('Edit details for {name}', { name: tool.display_name })} onClick={(event) => open({ kind: 'edit', tool }, event.currentTarget)}>{t('Edit details')}</Button>
+            <Button variant="outline" className={toolButtonClass} disabled={busy || !actions.configure} aria-describedby={!actions.configure ? `${helpId}-config-help` : undefined} aria-label={t('Configure {name}', { name: tool.display_name })} onClick={(event) => open({ kind: 'config', tool }, event.currentTarget)}>{t('Configure')}</Button>
+            {tool.type !== 'builtin' ? <Button variant="ghost" className={`${toolButtonClass} text-destructive`} disabled={busy || !actions.delete} aria-describedby={!actions.delete ? `${helpId}-delete-help` : undefined} aria-label={t('Delete tool {name}', { name: tool.display_name })} onClick={(event) => open({ kind: 'delete', tool }, event.currentTarget)}>{t('Delete tool')}</Button> : null}
           </div>
           {!actions.editDetails || !actions.configure || tool.type !== 'builtin' && !actions.delete ? <div className="space-y-1 text-sm text-muted-foreground">
-            {!actions.editDetails ? <p id={`${helpId}-edit-help`}>Your permissions do not allow editing details for this record.</p> : null}
-            {!actions.configure ? <p id={`${helpId}-config-help`}>{tool.capabilities.can_configure ? 'Select a concrete company before configuring this record.' : 'Your permissions do not allow configuring this record in this company context.'}</p> : null}
-            {tool.type !== 'builtin' && !actions.delete ? <p id={`${helpId}-delete-help`}>Your permissions do not allow deleting this record.</p> : null}
+            {!actions.editDetails ? <p id={`${helpId}-edit-help`}>{t('Your permissions do not allow editing details for this record.')}</p> : null}
+            {!actions.configure ? <p id={`${helpId}-config-help`}>{tool.capabilities.can_configure ? t('Select a concrete company before configuring this record.') : t('Your permissions do not allow configuring this record in this company context.')}</p> : null}
+            {tool.type !== 'builtin' && !actions.delete ? <p id={`${helpId}-delete-help`}>{t('Your permissions do not allow deleting this record.')}</p> : null}
           </div> : null}
         </CardContent>
       </Card>})}

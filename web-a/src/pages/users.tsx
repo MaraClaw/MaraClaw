@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
 import { companyOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { ApiError } from '@/lib/http'
 import { isGenesisAdmin, isPlatformAdminUser } from '@/lib/types/auth'
@@ -28,6 +29,7 @@ import { resetUsersPagination, useUsersPagination } from '@/pages/users-paginati
 import { useUsersRosterExport } from '@/pages/users-roster-export'
 
 export function UsersPage() {
+  const { t, owned } = useTranslation()
   const { user, owner } = useAuth()
   const queryClient = useQueryClient()
   const platformAdmin = isPlatformAdminUser(user)
@@ -126,26 +128,26 @@ export function UsersPage() {
       if (row.tenant_id) void resetUsersPagination(queryClient, row.tenant_id)
       if (row.role === 'platform_admin') void queryClient.invalidateQueries({ queryKey: ['admin-platform-admins'] })
       void queryClient.invalidateQueries({ queryKey: ['admin-companies'] })
-      toast.success(updated.is_active ? `Activated ${updated.display_name || updated.email}` : `Deactivated ${updated.display_name || updated.email}`)
+      toast.success(t(updated.is_active ? 'Activated {name}' : 'Deactivated {name}', { name: updated.display_name || updated.email || t('user') }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not update user')
+      toast.error(error instanceof ApiError ? error.message : t('Could not update user'))
     },
   })
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Users</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Users')}</h1>
         <p className="mt-2 text-muted-foreground">
-          Activate or deactivate people and manage their departments. Platform admins are listed separately.
+          {t('Activate or deactivate people and manage their departments. Platform admins are listed separately.')}
         </p>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         {platformAdmin ? (
           <label htmlFor={`${filterId}-company`} className="grid w-auto gap-1.5 text-sm">
-            <span className="text-muted-foreground">Company</span>
+            <span className="text-muted-foreground">{t('Company')}</span>
             <Select
               id={`${filterId}-company`}
               fit
@@ -161,7 +163,7 @@ export function UsersPage() {
           </label>
         ) : null}
         <label htmlFor={`${filterId}-search`} className="grid min-w-0 flex-1 gap-1.5 text-sm">
-          <span className="text-muted-foreground">Search</span>
+          <span className="text-muted-foreground">{t('Search')}</span>
           <span className="relative">
             <Search
               className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -172,46 +174,46 @@ export function UsersPage() {
               type="search"
               value={search}
               onChange={(event) => updateListState({ q: event.target.value })}
-              placeholder="Name or email"
+              placeholder={t('Name or email')}
               className="pl-10"
             />
           </span>
         </label>
         <Button type="button" variant="outline" disabled={!tenantId || rosterExport.pending} aria-busy={rosterExport.pending} onClick={rosterExport.start}>
-          {rosterExport.pending ? 'Exporting company CSV…' : 'Export company CSV'}
+          {t(rosterExport.pending ? 'Exporting company CSV…' : 'Export company CSV')}
         </Button>
       </div>
 
-      {rosterExport.message ? <p role="status" className="text-sm text-muted-foreground">{rosterExport.message}</p> : null}
-      {rosterExport.error ? <ErrorToast message={rosterExport.error} /> : null}
+      {rosterExport.message ? <p role="status" className="text-sm text-muted-foreground">{owned(rosterExport.message)}</p> : null}
+                {rosterExport.error ? <ErrorToast message={rosterExport.ownedError ? owned(rosterExport.error) : rosterExport.error} /> : null}
 
       {companies.error ? (
-        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : 'Failed to load companies'} />
+        <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : t('Failed to load companies')} />
       ) : null}
 
       {platformAdmin && !companies.isLoading && !companies.error && (companies.data?.length ?? 0) === 0 ? (
-        <p className="text-sm text-muted-foreground">No companies yet.</p>
+        <p className="text-sm text-muted-foreground">{t('No companies yet.')}</p>
       ) : null}
 
       {platformAdmin ? (
         <div className="flex flex-col gap-4">
           <div>
-            <h2 className="font-display text-lg font-semibold tracking-tight">Platform admins</h2>
+            <h2 className="font-display text-lg font-semibold tracking-tight">{t('Platform admins')}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Not members of the selected company. Genesis can activate additional platform admins.
+              {t('Not members of the selected company. Genesis can activate additional platform admins.')}
             </p>
           </div>
           {platformAdmins.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading platform admins…</p>
+            <p className="text-sm text-muted-foreground">{t('Loading platform admins…')}</p>
           ) : null}
           {platformAdmins.error ? (
             <ErrorToast error={platformAdmins.error} message={platformAdmins.error instanceof ApiError
                 ? platformAdmins.error.message
-                : 'Failed to load platform admins'} />
+                : t('Failed to load platform admins')} />
           ) : null}
           {!platformAdmins.isLoading && !platformAdmins.error && visiblePlatform.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {search.trim() ? `No platform admins match “${search.trim()}”.` : 'No platform admins.'}
+              {search.trim() ? t('No platform admins match “{search}”.', { search: search.trim() }) : t('No platform admins.')}
             </p>
           ) : null}
           <div className="grid gap-4">
@@ -231,19 +233,19 @@ export function UsersPage() {
       <div className="flex flex-col gap-4">
         {platformAdmin ? (
           <div>
-            <h2 className="font-display text-lg font-semibold tracking-tight">Company users</h2>
-            <p className="mt-1 text-sm text-muted-foreground">People in the selected company.</p>
+            <h2 className="font-display text-lg font-semibold tracking-tight">{t('Company users')}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t('People in the selected company.')}</p>
           </div>
         ) : null}
-        {users.isFetching ? <p role="status" className="text-sm text-muted-foreground">Loading users…</p> : null}
+        {users.isFetching ? <p role="status" className="text-sm text-muted-foreground">{t('Loading users…')}</p> : null}
         {users.error ? (
-          <ErrorToast error={users.error} message={users.error instanceof ApiError ? users.error.message : 'Failed to load users'} />
+          <ErrorToast error={users.error} message={users.error instanceof ApiError ? users.error.message : t('Failed to load users')} />
         ) : null}
-        {users.error ? <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void (users.isFetchNextPageError ? users.fetchNextPage() : users.refetch())}>Retry users</Button> : null}
+        {users.error ? <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void (users.isFetchNextPageError ? users.fetchNextPage() : users.refetch())}>{t('Retry users')}</Button> : null}
 
         {!users.isLoading && !users.error && tenantId && visibleCompany.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            {search.trim() ? `No users match “${search.trim()}”.` : 'No users in this company.'}
+            {search.trim() ? t('No users match “{search}”.', { search: search.trim() }) : t('No users in this company.')}
           </p>
         ) : null}
 
@@ -258,9 +260,9 @@ export function UsersPage() {
           />
         ) : null}
         {users.hasNextPage ? (
-          <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void users.fetchNextPage({ cancelRefetch: false })}>Load more users</Button>
+          <Button variant="outline" className="self-start" disabled={users.isFetching} onClick={() => void users.fetchNextPage({ cancelRefetch: false })}>{t('Load more users')}</Button>
         ) : null}
-        {users.isSuccess && !users.hasNextPage && visibleCompany.length > 0 ? <p role="status" className="text-sm text-muted-foreground">All matching users loaded.</p> : null}
+        {users.isSuccess && !users.hasNextPage && visibleCompany.length > 0 ? <p role="status" className="text-sm text-muted-foreground">{t('All matching users loaded.')}</p> : null}
       </div>
     </div>
   )

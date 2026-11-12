@@ -19,6 +19,7 @@ import { Select } from '@/components/ui/select'
 import { companyOptions } from '@/hooks/company-options'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
+import { useTranslation } from '@/hooks/use-translation'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import {
   createLlmModel,
@@ -91,6 +92,7 @@ function parseOptionalNumber(value: string | undefined): number | null {
 }
 
 export function LlmModelsPage() {
+  const { t, owned } = useTranslation()
   const { user } = useAuth()
   const isCurrent = useSessionCurrent()
   const queryClient = useQueryClient()
@@ -217,7 +219,7 @@ export function LlmModelsPage() {
         supports_vision: false,
       })
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(`Added ${created.label}`)
+      toast.success(t('Added {name}', { name: created.label }))
     } catch (error) {
       if (!isCurrent()) return
       if (error instanceof ApiError) {
@@ -235,17 +237,15 @@ export function LlmModelsPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Models</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Models')}</h1>
         <p className="mt-2 text-muted-foreground">
-          Add providers and choose the company primary, secondary, and fallback models. New agents inherit all three.
-          Primary handles complex work. Secondary handles short, routine turns. Fallback is only used when the chosen
-          model fails. Members cannot change these assignments.
+          {t('Add providers and choose the company primary, secondary, and fallback models. New agents inherit all three. Primary handles complex work. Secondary handles short, routine turns. Fallback is only used when the chosen model fails. Members cannot change these assignments.')}
         </p>
       </div>
 
       {platformAdmin ? (
         <label htmlFor={`${formId}-company`} className="grid w-auto gap-1.5 text-sm">
-          <span className="text-muted-foreground">Company</span>
+          <span className="text-muted-foreground">{t('Company')}</span>
           <Select
             id={`${formId}-company`}
             fit
@@ -269,20 +269,20 @@ export function LlmModelsPage() {
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
       <ChatGPTSubscriptionCard key={tenantId} tenantId={tenantId} platformAdmin={platformAdmin} />
       <p className="text-sm text-muted-foreground">
-        A company can connect both subscriptions. Tokens stay on the server for each one.
+        {t('A company can connect both subscriptions. Tokens stay on the server for each one.')}
       </p>
 
       <Card>
         <CardHeader>
-          <CardTitle>Add model</CardTitle>
+          <CardTitle>{t('Add model')}</CardTitle>
           <CardDescription>
-            The API key is stored encrypted. After save, only the last four characters are shown.
+            {t('The API key is stored encrypted. After save, only the last four characters are shown.')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit(onSubmit)} noValidate>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-provider`}>Provider</Label>
+              <Label htmlFor={`${formId}-provider`}>{t('Provider')}</Label>
               <Select
                 id={`${formId}-provider`}
                 aria-invalid={errors.provider ? true : undefined}
@@ -296,12 +296,12 @@ export function LlmModelsPage() {
               </Select>
               {errors.provider ? (
                 <p className="text-xs text-destructive" role="alert">
-                  {errors.provider.message}
+                  {owned(errors.provider.message)}
                 </p>
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-model`}>Model ID</Label>
+              <Label htmlFor={`${formId}-model`}>{t('Model ID')}</Label>
               <Input
                 id={`${formId}-model`}
                 autoComplete="off"
@@ -311,27 +311,27 @@ export function LlmModelsPage() {
               />
               {errors.model ? (
                 <p className="text-xs text-destructive" role="alert">
-                  {errors.model.message}
+                  {owned(errors.model.message)}
                 </p>
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-label`}>Label</Label>
+              <Label htmlFor={`${formId}-label`}>{t('Label')}</Label>
               <Input
                 id={`${formId}-label`}
                 autoComplete="off"
-                placeholder={defaultLabelFor(providerMeta) || 'Display name'}
+                placeholder={defaultLabelFor(providerMeta) || t('Display name')}
                 aria-invalid={errors.label ? true : undefined}
                 {...register('label')}
               />
               {errors.label ? (
                 <p className="text-xs text-destructive" role="alert">
-                  {errors.label.message}
+                  {owned(errors.label.message)}
                 </p>
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-base`}>Base URL</Label>
+              <Label htmlFor={`${formId}-base`}>{t('Base URL')}</Label>
               <Input
                 id={`${formId}-base`}
                 autoComplete="off"
@@ -342,77 +342,77 @@ export function LlmModelsPage() {
             <div className="sm:col-span-2">
               <PasswordField
                 id={`${formId}-key`}
-                label="API key"
+                label={t('API key')}
                 autoComplete="off"
                 hideLeadingIcon
-                error={errors.api_key?.message}
+                error={owned(errors.api_key?.message)}
                 {...register('api_key')}
               />
             </div>
             {addEfforts.length > 0 ? <div className="space-y-2">
-              <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
+              <Label htmlFor={`${formId}-effort`}>{t('Reasoning effort')}</Label>
               <Select id={`${formId}-effort`} {...register('reasoning_effort')}>
                 {addEfforts.map((effort) => (
                   <option key={effort} value={effort}>
-                    {reasoningEffortLabel(effort)}
+                    {owned(reasoningEffortLabel(effort))}
                   </option>
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
+                {t('How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.')}
               </p>
             </div> : null}
             <div className="flex flex-col justify-end gap-2 pb-1">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4 rounded border-input" {...register('enabled')} />
-                Enabled
+                {t('Enabled')}
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4 rounded border-input" {...register('supports_vision')} />
-                Supports vision
+                {t('Supports vision')}
               </label>
             </div>
             <details className="min-w-0 border-t border-border pt-1 sm:col-span-2">
               <summary className="min-h-11 cursor-pointer content-center rounded-md py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                Advanced settings
+                {t('Advanced settings')}
               </summary>
               <div className="grid gap-4 pt-2 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor={`${formId}-temp`}>Temperature (optional)</Label>
+                  <Label htmlFor={`${formId}-temp`}>{t('Temperature (optional)')}</Label>
                   <Input
                     id={`${formId}-temp`}
                     inputMode="decimal"
-                    placeholder="Provider default"
+                    placeholder={t('Provider default')}
                     aria-describedby={`${formId}-temp-help`}
                     {...register('temperature')}
                   />
                   <p id={`${formId}-temp-help`} className="text-xs text-muted-foreground">
-                    Leave blank to use the provider default.
+                    {t('Leave blank to use the provider default.')}
                   </p>
                 </div>
               </div>
             </details>
             {formError ? (
-              <ErrorToast message={formError} />
+              <ErrorToast message={owned(formError)} />
             ) : null}
             <div className="sm:col-span-2">
               <Button type="submit" disabled={isSubmitting || !tenantId}>
                 {isSubmitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                Add model
+                {t('Add model')}
               </Button>
             </div>
           </form>
         </CardContent>
       </Card>
 
-      {companies.isError ? <ErrorToast error={companies.error} message="Could not load companies for models." /> : null}
-      {providers.isError ? <ErrorToast error={providers.error} message="Could not load model providers." /> : null}
-      {models.isLoading ? <p className="text-sm text-muted-foreground">Loading models…</p> : null}
+      {companies.isError ? <ErrorToast error={companies.error} message={t('Could not load companies for models.')} /> : null}
+      {providers.isError ? <ErrorToast error={providers.error} message={t('Could not load model providers.')} /> : null}
+      {models.isLoading ? <p className="text-sm text-muted-foreground">{t('Loading models…')}</p> : null}
       {models.error ? (
-        <ErrorToast error={models.error} message={models.error instanceof ApiError ? models.error.message : 'Failed to load models'} />
+        <ErrorToast error={models.error} message={models.error instanceof ApiError ? models.error.message : t('Failed to load models')} />
       ) : null}
       {!models.isLoading && tenantId && (models.data ?? []).length === 0 ? (
-        <p className="text-sm text-muted-foreground">No models yet. Add one so agents can reply.</p>
+        <p className="text-sm text-muted-foreground">{t('No models yet. Add one so agents can reply.')}</p>
       ) : null}
 
       <div className="grid gap-4">
@@ -438,6 +438,7 @@ function GrokSubscriptionCard({
   tenantId: string
   platformAdmin: boolean
 }) {
+  const { t, owned } = useTranslation()
   const queryClient = useQueryClient()
   const isCurrent = useSessionCurrent()
   const [session, setSession] = useState<GrokSubscriptionStart | null>(null)
@@ -478,9 +479,9 @@ function GrokSubscriptionCard({
   useEffect(() => {
     if (!isCurrent() || status.data?.status !== 'authorized') return
     void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-    toast.success('Grok subscription connected. It is in the company pool.')
+    toast.success(t('Grok subscription connected. It is in the company pool.'))
     setSession(null)
-  }, [status.data?.status, queryClient, isCurrent])
+  }, [status.data?.status, queryClient, isCurrent, t])
 
   const pending = session && (status.data?.status ?? 'pending') === 'pending'
   const failed = status.data && status.data.status !== 'pending' && status.data.status !== 'authorized'
@@ -488,17 +489,16 @@ function GrokSubscriptionCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connect Grok subscription</CardTitle>
+        <CardTitle>{t('Connect Grok subscription')}</CardTitle>
         <CardDescription>
-          Sign in with SuperGrok or X Premium. The verification code is shown here; access tokens stay on the
-          server and are stored encrypted for this company.
+          {t('Sign in with SuperGrok or X Premium. The verification code is shown here; access tokens stay on the server and are stored encrypted for this company.')}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {pending && session ? (
           <div className="grid gap-2 text-sm">
             <p>
-              Open{' '}
+              {t('Open')}{' '}
               <a
                 className="font-medium text-primary underline underline-offset-4"
                 href={session.verification_url}
@@ -509,25 +509,25 @@ function GrokSubscriptionCard({
               </a>
             </p>
             <p>
-              Enter code{' '}
+              {t('Enter code')}{' '}
               <span className="font-mono text-base tracking-wide">{session.user_code}</span>
             </p>
-            <p className="text-muted-foreground">Waiting for sign-in…</p>
+            <p className="text-muted-foreground">{t('Waiting for sign-in…')}</p>
           </div>
         ) : null}
         {failed ? (
           <p className="text-sm text-muted-foreground" role="status">
             {status.data?.status === 'expired'
-              ? 'This Grok sign-in has expired. Start again to get a new sign-in code.'
+              ? t('This Grok sign-in has expired. Start again to get a new sign-in code.')
               : status.data?.status === 'denied'
-                ? 'Grok sign-in was denied. Start again when you are ready to try again.'
-                : 'Grok sign-in could not be completed. Start again to try again.'}
+                ? t('Grok sign-in was denied. Start again when you are ready to try again.')
+                : t('Grok sign-in could not be completed. Start again to try again.')}
           </p>
         ) : null}
         {startError ? (
-          <ErrorToast error={start.error} message={startError} />
+          <ErrorToast error={start.error} message={owned(startError)} />
         ) : null}
-        {status.isError ? <ErrorToast error={status.error} message="Could not check Grok sign-in. Try again." /> : null}
+        {status.isError ? <ErrorToast error={status.error} message={t('Could not check Grok sign-in. Try again.')} /> : null}
         <div>
           <Button
             type="button"
@@ -535,7 +535,7 @@ function GrokSubscriptionCard({
             onClick={() => start.mutate()}
           >
             {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-            {pending ? 'Waiting for Grok' : 'Connect Grok subscription'}
+            {pending ? t('Waiting for Grok') : t('Connect Grok subscription')}
           </Button>
         </div>
       </CardContent>
@@ -544,6 +544,7 @@ function GrokSubscriptionCard({
 }
 
 function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string[] }) {
+  const { t, owned, number } = useTranslation()
   const queryClient = useQueryClient()
   const formId = useId()
   const [editing, setEditing] = useState(false)
@@ -582,10 +583,10 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
       setEditing(false)
       setApiKey('')
-      toast.success(`Updated ${updated.label}`)
+      toast.success(t('Updated {name}', { name: updated.label }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not update model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not update model'))
     },
   })
 
@@ -593,10 +594,10 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
     mutationFn: () => setDefaultLlmModel(item.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(`${item.label} is now the primary model`)
+      toast.success(t('{name} is now the primary model', { name: item.label }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not set primary model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not set primary model'))
     },
   })
 
@@ -604,10 +605,10 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
     mutationFn: () => setFallbackLlmModel(item.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(`${item.label} is now the fallback model`)
+      toast.success(t('{name} is now the fallback model', { name: item.label }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not set fallback model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not set fallback model'))
     },
   })
 
@@ -615,10 +616,10 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
     mutationFn: () => setSecondaryLlmModel(item.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(`${item.label} is now the secondary model`)
+      toast.success(t('{name} is now the secondary model', { name: item.label }))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not set secondary model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not set secondary model'))
     },
   })
 
@@ -633,13 +634,13 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
       }),
     onSuccess: (result) => {
       if (result.success) {
-        toast.success(`Connected in ${result.latency_ms} ms`)
+        toast.success(t('Connected in {milliseconds} ms', { milliseconds: number(result.latency_ms) }))
         return
       }
-      showErrorToast(result.error || 'The provider rejected this configuration')
+      showErrorToast(result.error || t('The provider rejected this configuration'))
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : 'Could not test this model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not test this model'))
     },
   })
 
@@ -647,17 +648,17 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
     mutationFn: () => deleteLlmModel(item.id, forceRemove),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(`Removed ${item.label}`)
+      toast.success(t('Removed {name}', { name: item.label }))
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
-        const detail = error.detail as { message?: string; agents?: string[] } | null
-        const names = Array.isArray(detail?.agents) ? detail.agents.join(', ') : ''
-        setRemoveHint(names ? `${detail?.message ?? error.message}. In use by: ${names}` : error.message)
+        const parsed = z.object({ message: z.string().optional(), agents: z.array(z.string()).optional() }).safeParse(error.detail)
+        const names = parsed.success ? parsed.data.agents?.join(', ') : undefined
+        setRemoveHint(names && parsed.success ? `${parsed.data.message ?? error.message}. ${t('In use by: {names}', { names })}` : error.message)
         setPendingRemove(true)
         return
       }
-      toast.error(error instanceof ApiError ? error.message : 'Could not remove model')
+      toast.error(error instanceof ApiError ? error.message : t('Could not remove model'))
     },
   })
 
@@ -667,24 +668,24 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
         <div>
           <CardTitle className="flex flex-wrap items-center gap-2">
             {item.label}
-            {item.is_default ? <Badge variant="soft">Primary</Badge> : null}
-            {item.is_secondary ? <Badge variant="outline">Secondary</Badge> : null}
-            {item.is_fallback ? <Badge variant="outline">Fallback</Badge> : null}
-            {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">Grok subscription</Badge> : null}
-            {item.auth_kind === 'chatgpt_subscription' ? <Badge variant="soft">ChatGPT subscription</Badge> : null}
-            <Badge variant="outline">{reasoningEffortLabel(item.reasoning_effort || 'none')}</Badge>
-            {item.enabled ? null : <Badge variant="secondary">Disabled</Badge>}
+            {item.is_default ? <Badge variant="soft">{t('Primary')}</Badge> : null}
+            {item.is_secondary ? <Badge variant="outline">{t('Secondary')}</Badge> : null}
+            {item.is_fallback ? <Badge variant="outline">{t('Fallback')}</Badge> : null}
+            {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">{t('Grok subscription')}</Badge> : null}
+            {item.auth_kind === 'chatgpt_subscription' ? <Badge variant="soft">{t('ChatGPT subscription')}</Badge> : null}
+            <Badge variant="outline">{owned(reasoningEffortLabel(item.reasoning_effort || 'none'))}</Badge>
+            {item.enabled ? null : <Badge variant="secondary">{t('Disabled')}</Badge>}
           </CardTitle>
           <CardDescription>
             {item.auth_kind === 'chatgpt_subscription'
-              ? `ChatGPT subscription · ${item.model}`
+              ? `${t('ChatGPT subscription')} · ${item.model}`
               : item.auth_kind === 'grok_subscription'
-                ? `Grok subscription · ${item.model}`
+                ? `${t('Grok subscription')} · ${item.model}`
                 : `${item.provider} / ${item.model}`}
             {item.auth_kind !== 'chatgpt_subscription' &&
             item.auth_kind !== 'grok_subscription' &&
             item.api_key_masked
-              ? ` · key ${item.api_key_masked}`
+              ? ` · ${t('key {key}', { key: item.api_key_masked })}`
               : ''}
           </CardDescription>
         </div>
@@ -693,11 +694,11 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
         {editing ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-label`}>Label</Label>
+              <Label htmlFor={`${formId}-label`}>{t('Label')}</Label>
               <Input id={`${formId}-label`} value={label} onChange={(event) => setLabel(event.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${formId}-model`}>Model ID</Label>
+              <Label htmlFor={`${formId}-model`}>{t('Model ID')}</Label>
               <Input
                 id={`${formId}-model`}
                 value={modelName}
@@ -706,12 +707,12 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
             </div>
             {subscription ? null : (
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor={`${formId}-base`}>Base URL</Label>
+                <Label htmlFor={`${formId}-base`}>{t('Base URL')}</Label>
                 <Input id={`${formId}-base`} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
               </div>
             )}
             {efforts.length > 0 ? <div className="space-y-2">
-              <Label htmlFor={`${formId}-effort`}>Reasoning effort</Label>
+              <Label htmlFor={`${formId}-effort`}>{t('Reasoning effort')}</Label>
               <Select
                 id={`${formId}-effort`}
                 value={availableReasoningEffort(effort, efforts) ?? ''}
@@ -719,24 +720,24 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
               >
                 {efforts.map((value) => (
                   <option key={value} value={value}>
-                    {reasoningEffortLabel(value)}
+                    {owned(reasoningEffortLabel(value))}
                   </option>
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.
+                {t('How much the model thinks before answering. None skips extra reasoning. Extra High is slower and more expensive.')}
               </p>
             </div> : null}
             {subscription ? null : (
               <div className="sm:col-span-2">
                 <PasswordField
                   id={`${formId}-key`}
-                  label="New API key (optional)"
+                  label={t('New API key (optional)')}
                   autoComplete="off"
                   hideLeadingIcon
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="Leave blank to keep the current key"
+                  placeholder={t('Leave blank to keep the current key')}
                 />
               </div>
             )}
@@ -747,7 +748,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 checked={enabled}
                 onChange={(event) => setEnabled(event.target.checked)}
               />
-              Enabled
+              {t('Enabled')}
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -756,25 +757,25 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 checked={supportsVision}
                 onChange={(event) => setSupportsVision(event.target.checked)}
               />
-              Supports vision
+              {t('Supports vision')}
             </label>
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Reasoning effort: {reasoningEffortLabel(item.reasoning_effort || 'none')}.
-            {item.supports_vision ? ' Vision enabled.' : ''}
+            {t('Reasoning effort: {effort}.', { effort: owned(reasoningEffortLabel(item.reasoning_effort || 'none')) })}
+            {item.supports_vision ? ` ${t('Vision enabled.')}` : ''}
             {subscription
               ? ''
               : item.base_url
-                ? ` Endpoint ${item.base_url}`
-                : ' Provider default endpoint'}
+                ? ` ${t('Endpoint {url}', { url: item.base_url })}`
+                : ` ${t('Provider default endpoint')}`}
           </p>
         )}
 
         {pendingRemove ? (
           <div className="flex flex-col gap-2">
             <p className="text-sm text-muted-foreground" role="status">
-              {removeHint ?? 'Agents using this model will fall back to the company default after removal.'}
+              {removeHint ?? t('Agents using this model will fall back to the company default after removal.')}
             </p>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -783,7 +784,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 checked={forceRemove}
                 onChange={(event) => setForceRemove(event.target.checked)}
               />
-              Remove even if agents still reference it
+              {t('Remove even if agents still reference it')}
             </label>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -794,7 +795,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 onClick={() => remove.mutate()}
               >
                 {remove.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                Confirm remove
+                {t('Confirm remove')}
               </Button>
               <Button
                 type="button"
@@ -807,7 +808,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                   setRemoveHint(null)
                 }}
               >
-                Cancel
+                {t('Cancel')}
               </Button>
             </div>
           </div>
@@ -817,15 +818,15 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
               <>
                 <Button type="button" size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
                   {save.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                  Save
+                  {t('Save')}
                 </Button>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(false)}>
-                  Cancel
+                  {t('Cancel')}
                 </Button>
               </>
             ) : (
               <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
-                Edit
+                {t('Edit')}
               </Button>
             )}
             <Button
@@ -836,7 +837,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
               onClick={() => probe.mutate()}
             >
               {probe.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-              Test
+              {t('Test')}
             </Button>
             {item.enabled && !item.is_default ? (
               <Button
@@ -846,7 +847,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 disabled={makeDefault.isPending}
                 onClick={() => makeDefault.mutate()}
               >
-                Set as primary
+                {t('Set as primary')}
               </Button>
             ) : null}
             {item.enabled && !item.is_secondary && !item.is_default && !item.is_fallback ? (
@@ -857,7 +858,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 disabled={makeSecondary.isPending}
                 onClick={() => makeSecondary.mutate()}
               >
-                Set as secondary
+                {t('Set as secondary')}
               </Button>
             ) : null}
             {item.enabled && !item.is_fallback && !item.is_default && !item.is_secondary ? (
@@ -868,7 +869,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 disabled={makeFallback.isPending}
                 onClick={() => makeFallback.mutate()}
               >
-                Set as fallback
+                {t('Set as fallback')}
               </Button>
             ) : null}
             <Button
@@ -878,7 +879,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
               className={cn(pendingRemove && 'hidden')}
               onClick={() => setPendingRemove(true)}
             >
-              Remove
+              {t('Remove')}
             </Button>
           </div>
         )}

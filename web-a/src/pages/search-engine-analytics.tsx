@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useReducedMotion } from 'framer-motion'
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Area,
@@ -29,6 +29,7 @@ import {
   type SearchAnalyticsSummary,
 } from '@/lib/search-analytics-api'
 import { cn } from '@/lib/utils'
+import { useTranslation } from '@/hooks/use-translation'
 
 type RangeKey = '7' | '30' | '90'
 
@@ -56,19 +57,13 @@ function pct(part: number, total: number): number {
   return Math.round((part / total) * 1000) / 10
 }
 
-function formatCount(value: number | undefined): string {
-  if (value == null) return '—'
-  return value.toLocaleString()
-}
-
-function shortDate(value: string): string {
-  const date = new Date(`${value}T00:00:00Z`)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
-
-function rateLabel(part: number, total: number): string {
-  return `${pct(part, total)}%`
+function useAnalyticsFormatting() {
+  const { number, date } = useTranslation()
+  return {
+    formatCount: (value: number | undefined) => value == null ? '—' : number(value),
+    shortDate: (value: string) => date(`${value}T00:00:00Z`, { month: 'short', day: 'numeric', timeZone: 'UTC' }),
+    rateLabel: (part: number, total: number) => number(pct(part, total) / 100, { style: 'percent', maximumFractionDigits: 1 }),
+  }
 }
 
 function padSeries(points: SearchAnalyticsPoint[], startIso: string, endIso: string): SearchAnalyticsPoint[] {
@@ -87,6 +82,9 @@ function padSeries(points: SearchAnalyticsPoint[], startIso: string, endIso: str
 }
 
 export function SearchEngineAnalytics() {
+  const { t, number } = useTranslation()
+  const filterId = useId()
+  const { formatCount, shortDate, rateLabel } = useAnalyticsFormatting()
   const [params, setParams] = useSearchParams()
   const range = asRange(params.get('range'))
   const tenantId = params.get('company') ?? ''
@@ -105,7 +103,7 @@ export function SearchEngineAnalytics() {
   })
 
   const error = dashboard.error
-    ? dashboard.error instanceof ApiError ? dashboard.error.message : 'Failed to load search analytics'
+    ? dashboard.error instanceof ApiError ? dashboard.error.message : t('Failed to load search analytics')
     : null
 
   const systemWide = !tenantId
@@ -120,9 +118,9 @@ export function SearchEngineAnalytics() {
         label: shortDate(point.date),
       }))
     : []
-  const insights = buildInsights({
+  const insights = useInsights({
     systemWide,
-    companyName: selectedCompany?.name ?? 'This company',
+    companyName: selectedCompany?.name ?? t('This company'),
     scoped: totals,
     platform,
     orgs: dashboard.data?.orgs ?? [],
@@ -145,41 +143,43 @@ export function SearchEngineAnalytics() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-xl font-semibold tracking-tight">
-              {systemWide ? 'Entire system' : selectedCompany?.name || 'Unknown company'}
+              {systemWide ? t('Entire system') : selectedCompany?.name || t('Unknown company')}
             </h2>
             <Badge variant={systemWide ? 'secondary' : 'outline'}>
-              {systemWide ? 'All companies' : 'Per organization'}
+              {t(systemWide ? 'All companies' : 'Per organization')}
             </Badge>
           </div>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            {systemWide
+            {t(systemWide
               ? 'Platform search volume, quota pressure, and queries that appear across companies.'
-              : 'This company’s share of platform search, errors, and what its agents look up.'}
+              : 'This company’s share of platform search, errors, and what its agents look up.')}
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="grid gap-1 text-sm">
-            <span className="text-muted-foreground">Range</span>
+          <label htmlFor={`${filterId}-range`} className="grid gap-1 text-sm">
+            <span className="text-muted-foreground">{t('Range')}</span>
             <Select
+              id={`${filterId}-range`}
               fit
               value={range}
-              onChange={(event) => update({ range: event.target.value as RangeKey })}
+              onChange={(event) => update({ range: asRange(event.target.value) })}
             >
-              <option value="7">Last 7 days</option>
-              <option value="30">Last 30 days</option>
-              <option value="90">Last 90 days</option>
+              <option value="7">{t('Last 7 days')}</option>
+              <option value="30">{t('Last 30 days')}</option>
+              <option value="90">{t('Last 90 days')}</option>
             </Select>
           </label>
-          <label className="grid gap-1 text-sm">
-            <span className="text-muted-foreground">Scope</span>
+          <label htmlFor={`${filterId}-scope`} className="grid gap-1 text-sm">
+            <span className="text-muted-foreground">{t('Scope')}</span>
             <Select
+              id={`${filterId}-scope`}
               fit
               value={tenantId}
               onChange={(event) => update({ company: event.target.value })}
-              aria-label="Analytics scope"
+              aria-label={t('Analytics scope')}
             >
-              <option value="">Entire system</option>
-              {unknownCompany ? <option value={tenantId}>Unknown company</option> : null}
+              <option value="">{t('Entire system')}</option>
+              {unknownCompany ? <option value={tenantId}>{t('Unknown company')}</option> : null}
               {(companies.data ?? []).map((company) => (
                 <option key={company.id} value={company.id}>
                   {company.name}
@@ -191,47 +191,47 @@ export function SearchEngineAnalytics() {
       </div>
 
       {error ? <ErrorToast error={dashboard.error} message={error} /> : null}
-      {companies.isError ? <ErrorToast error={companies.error} message="Could not load companies for search analytics." /> : null}
-      {exportStatus.isError ? <ErrorToast error={exportStatus.error} message="Could not load search export status." /> : null}
+      {companies.isError ? <ErrorToast error={companies.error} message={t('Could not load companies for search analytics.')} /> : null}
+      {exportStatus.isError ? <ErrorToast error={exportStatus.error} message={t('Could not load search export status.')} /> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          label="Searches"
+          label={t('Searches')}
           value={formatCount(totals?.event_count)}
           hint={
             !systemWide && platform?.event_count
-              ? `${rateLabel(totals?.event_count ?? 0, platform.event_count)} of the platform`
-              : `${formatCount(totals?.unique_agents)} agents`
+              ? t('{share} of the platform', { share: rateLabel(totals?.event_count ?? 0, platform.event_count) })
+              : t('{count} agents', { count: formatCount(totals?.unique_agents) })
           }
           loading={dashboard.isLoading}
         />
         <KpiCard
-          label="Error rate"
+          label={t('Error rate')}
           value={totals ? `${rateLabel(totals.error_count, totals.event_count)}` : '—'}
-          hint={`${formatCount(totals?.error_count)} failed calls`}
+          hint={t('{count} failed calls', { count: formatCount(totals?.error_count) })}
           tone={(totals?.event_count ?? 0) > 0 && pct(totals?.error_count ?? 0, totals?.event_count ?? 0) >= 10 ? 'warn' : 'default'}
           loading={dashboard.isLoading}
         />
         <KpiCard
-          label="Quota pressure"
+          label={t('Quota pressure')}
           value={totals ? `${rateLabel(totals.quota_count, totals.event_count)}` : '—'}
-          hint={`${formatCount(totals?.quota_count)} quota responses`}
+          hint={t('{count} quota responses', { count: formatCount(totals?.quota_count) })}
           tone={(totals?.event_count ?? 0) > 0 && pct(totals?.quota_count ?? 0, totals?.event_count ?? 0) >= 5 ? 'warn' : 'default'}
           loading={dashboard.isLoading}
         />
         <KpiCard
-          label={systemWide ? 'Companies searching' : 'Avg latency'}
+          label={t(systemWide ? 'Companies searching' : 'Avg latency')}
           value={
             systemWide
               ? formatCount(totals?.unique_orgs)
               : totals?.avg_latency_ms == null
                 ? '—'
-                : `${Math.round(totals.avg_latency_ms)} ms`
+                : t('{count} ms', { count: number(Math.round(totals.avg_latency_ms)) })
           }
           hint={
             systemWide
-              ? `${formatCount(totals?.unattributed_count)} unattributed`
-              : `${formatCount(totals?.unique_agents)} agents in this org`
+              ? t('{count} unattributed', { count: formatCount(totals?.unattributed_count) })
+              : t('{count} agents in this org', { count: formatCount(totals?.unique_agents) })
           }
           loading={dashboard.isLoading}
         />
@@ -250,9 +250,9 @@ export function SearchEngineAnalytics() {
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-3">
           <CardHeader>
-            <CardTitle>Daily volume</CardTitle>
+            <CardTitle>{t('Daily volume')}</CardTitle>
             <CardDescription>
-              {systemWide ? 'Tavily calls across every company.' : 'Tavily calls for this company.'}
+              {t(systemWide ? 'Tavily calls across every company.' : 'Tavily calls for this company.')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -262,8 +262,8 @@ export function SearchEngineAnalytics() {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Kind mix</CardTitle>
-            <CardDescription>Tavily search requests.</CardDescription>
+            <CardTitle>{t('Kind mix')}</CardTitle>
+            <CardDescription>{t('Tavily search requests.')}</CardDescription>
           </CardHeader>
           <CardContent>
             <KindMix items={kindMix} total={totals?.event_count ?? 0} loading={dashboard.isLoading} />
@@ -275,8 +275,8 @@ export function SearchEngineAnalytics() {
         {systemWide ? (
           <Card>
             <CardHeader>
-              <CardTitle>Companies</CardTitle>
-              <CardDescription>Open a row to see that organization’s dashboard.</CardDescription>
+              <CardTitle>{t('Companies')}</CardTitle>
+              <CardDescription>{t('Open a row to see that organization’s dashboard.')}</CardDescription>
             </CardHeader>
             <CardContent>
               <CompanyList
@@ -289,8 +289,8 @@ export function SearchEngineAnalytics() {
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>Share of platform</CardTitle>
-              <CardDescription>How this company compares to the entire system in the same range.</CardDescription>
+              <CardTitle>{t('Share of platform')}</CardTitle>
+              <CardDescription>{t('How this company compares to the entire system in the same range.')}</CardDescription>
             </CardHeader>
             <CardContent>
               <ShareOfPlatform scoped={totals} platform={platform} loading={dashboard.isLoading} />
@@ -300,9 +300,9 @@ export function SearchEngineAnalytics() {
 
         <Card>
           <CardHeader>
-            <CardTitle>{systemWide ? 'Queries across companies' : 'What this org searches'}</CardTitle>
+            <CardTitle>{t(systemWide ? 'Queries across companies' : 'What this org searches')}</CardTitle>
             <CardDescription>
-              Normalized wording only. Ranked {systemWide ? 'by how many companies share them' : 'by hits'}.
+              {t(systemWide ? 'Normalized wording only. Ranked by how many companies share them.' : 'Normalized wording only. Ranked by hits.')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -317,10 +317,8 @@ export function SearchEngineAnalytics() {
 
       {exportStatus.data ? (
         <p className="text-xs text-muted-foreground">
-          Capture {exportStatus.data.capture_enabled ? 'on' : 'off'}. Warehouse export{' '}
-          {exportStatus.data.export_enabled ? 'on' : 'off'}
-          {exportStatus.data.bucket ? ` → ${exportStatus.data.prefix}` : ''}.{' '}
-          {exportStatus.data.pending} pending.
+          {t('Capture {capture}. Warehouse export {export}. {count} pending.', { capture: t(exportStatus.data.capture_enabled ? 'on' : 'off'), export: t(exportStatus.data.export_enabled ? 'on' : 'off'), count: number(exportStatus.data.pending) })}
+          {exportStatus.data.bucket ? ` → ${exportStatus.data.prefix}` : ''}
         </p>
       ) : null}
     </div>
@@ -328,6 +326,8 @@ export function SearchEngineAnalytics() {
 }
 
 export function SearchAnalyticsSnapshot() {
+  const { t } = useTranslation()
+  const { formatCount, rateLabel } = useAnalyticsFormatting()
   const window = useMemo(() => rangeFor('7'), [])
   const summary = useQuery({
     queryKey: ['admin-search-analytics-summary', window, 'system'],
@@ -344,39 +344,39 @@ export function SearchAnalyticsSnapshot() {
     <Card>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div>
-          <CardTitle>Search analytics</CardTitle>
-          <CardDescription>Last 7 days across the entire system.</CardDescription>
+          <CardTitle>{t('Search analytics')}</CardTitle>
+          <CardDescription>{t('Last 7 days across the entire system.')}</CardDescription>
         </div>
         <Button variant="ghost" size="sm" asChild>
-          <Link to="/search-engine?tab=analytics">Open dashboard</Link>
+          <Link to="/search-engine?tab=analytics">{t('Open dashboard')}</Link>
         </Button>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {orgs.isError ? <ErrorToast error={orgs.error} message="Could not load organization search analytics." /> : null}
+        {orgs.isError ? <ErrorToast error={orgs.error} message={t('Could not load organization search analytics.')} /> : null}
         {summary.isLoading || orgs.isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading last 7 days…</p>
+          <p className="text-sm text-muted-foreground">{t('Loading last 7 days…')}</p>
         ) : summary.error ? (
-          <ErrorToast error={summary.error} message={summary.error instanceof ApiError ? summary.error.message : 'Failed to load search analytics'} />
+          <ErrorToast error={summary.error} message={summary.error instanceof ApiError ? summary.error.message : t('Failed to load search analytics')} />
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-4">
-              <MiniStat label="Searches" value={formatCount(data?.event_count)} />
-              <MiniStat label="Error rate" value={data ? rateLabel(data.error_count, data.event_count) : '—'} />
+              <MiniStat label={t('Searches')} value={formatCount(data?.event_count)} />
+              <MiniStat label={t('Error rate')} value={data ? rateLabel(data.error_count, data.event_count) : '—'} />
               <MiniStat
-                label="Quota pressure"
+                label={t('Quota pressure')}
                 value={data ? rateLabel(data.quota_count, data.event_count) : '—'}
               />
-              <MiniStat label="Companies" value={formatCount(data?.unique_orgs)} />
+              <MiniStat label={t('Companies')} value={formatCount(data?.unique_orgs)} />
             </div>
             {(data?.event_count ?? 0) === 0 ? (
-              <p className="text-sm text-muted-foreground">No search requests yet this week.</p>
+              <p className="text-sm text-muted-foreground">{t('No search requests yet this week.')}</p>
             ) : top.length > 0 ? (
               <p className="text-sm text-muted-foreground">
-                Busiest: {top.map((org) => org.name).join(', ')}.
+                {t('Busiest: {names}.', { names: top.map((org) => org.name).join(', ') })}
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {formatCount(data?.event_count)} searches, none attributed to a company.
+                {t('{count} searches, none attributed to a company.', { count: formatCount(data?.event_count) })}
               </p>
             )}
           </>
@@ -386,7 +386,7 @@ export function SearchAnalyticsSnapshot() {
   )
 }
 
-function buildInsights({
+function useInsights({
   systemWide,
   companyName,
   scoped,
@@ -401,6 +401,8 @@ function buildInsights({
   orgs: SearchAnalyticsOrg[]
   trendingTop?: { query_normalized: string; distinct_orgs: number; hits: number }
 }): string[] {
+  const { t, number } = useTranslation()
+  const { rateLabel } = useAnalyticsFormatting()
   if (!scoped || scoped.event_count === 0) return []
   const lines: string[] = []
   const quotaRate = pct(scoped.quota_count, scoped.event_count)
@@ -409,30 +411,29 @@ function buildInsights({
   if (quotaRate >= 5) {
     lines.push(
       systemWide
-        ? `Quota responses are ${quotaRate}% of volume. Companies at the top of the list are the upsell candidates.`
-        : `${companyName} is hitting quota on ${quotaRate}% of calls.`,
+        ? t('Quota responses are {rate} of volume. Companies at the top of the list are the upsell candidates.', { rate: rateLabel(scoped.quota_count, scoped.event_count) })
+        : t('{company} is hitting quota on {rate} of calls.', { company: companyName, rate: rateLabel(scoped.quota_count, scoped.event_count) }),
     )
   }
   if (errorRate >= 10) {
-    lines.push(`Error rate is ${errorRate}%. Check upstream failures and exhausted keys.`)
+    lines.push(t('Error rate is {rate}. Check upstream failures and exhausted keys.', { rate: rateLabel(scoped.error_count, scoped.event_count) }))
   }
   if (topKind && pct(topKind.event_count, scoped.event_count) >= 50) {
-    lines.push(`Most calls are ${topKind.kind} (${pct(topKind.event_count, scoped.event_count)}%).`)
+    lines.push(t('Most calls are {kind} ({rate}).', { kind: topKind.kind, rate: rateLabel(topKind.event_count, scoped.event_count) }))
   }
   if (systemWide && orgs[0]) {
     lines.push(
-      `${orgs[0].name} leads volume with ${orgs[0].event_count.toLocaleString()} searches` +
-        (orgs[0].quota_count ? ` and ${orgs[0].quota_count.toLocaleString()} quota hits.` : '.'),
+      t('{company} leads volume with {count} searches and {quota} quota hits.', { company: orgs[0].name, count: number(orgs[0].event_count), quota: number(orgs[0].quota_count) }),
     )
   }
   if (!systemWide && platform?.event_count) {
-    lines.push(`${companyName} accounts for ${rateLabel(scoped.event_count, platform.event_count)} of platform searches.`)
+    lines.push(t('{company} accounts for {rate} of platform searches.', { company: companyName, rate: rateLabel(scoped.event_count, platform.event_count) }))
   }
   if (trendingTop?.query_normalized) {
     lines.push(
       systemWide && trendingTop.distinct_orgs > 1
-        ? `“${trendingTop.query_normalized}” shows up at ${trendingTop.distinct_orgs} companies.`
-        : `Top query: “${trendingTop.query_normalized}” (${trendingTop.hits.toLocaleString()} hits).`,
+        ? t('“{query}” shows up at {count} companies.', { query: trendingTop.query_normalized, count: number(trendingTop.distinct_orgs) })
+        : t('Top query: “{query}” ({count} hits).', { query: trendingTop.query_normalized, count: number(trendingTop.hits) }),
     )
   }
   return lines.slice(0, 3)
@@ -451,6 +452,7 @@ function KpiCard({
   tone?: 'default' | 'warn'
   loading?: boolean
 }) {
+  const { t } = useTranslation()
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -459,7 +461,7 @@ function KpiCard({
           {loading ? '…' : value}
         </CardTitle>
       </CardHeader>
-      <CardContent className="text-xs text-muted-foreground">{loading ? 'Loading' : hint}</CardContent>
+      <CardContent className="text-xs text-muted-foreground">{loading ? t('Loading') : hint}</CardContent>
     </Card>
   )
 }
@@ -482,15 +484,16 @@ function VolumeChart({
   loading: boolean
   reduceMotion: boolean
 }) {
-  if (loading) return <p className="text-sm text-muted-foreground">Loading chart…</p>
-  if (data.length === 0) return <p className="text-sm text-muted-foreground">No search events in this range.</p>
+  const { t, number } = useTranslation()
+  if (loading) return <p className="text-sm text-muted-foreground">{t('Loading chart…')}</p>
+  if (data.length === 0) return <p className="text-sm text-muted-foreground">{t('No search events in this range.')}</p>
   return (
-    <div className="h-56 w-full" role="img" aria-label="Daily search volume">
+    <div className="h-56 w-full" role="img" aria-label={t('Daily search volume')}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} width={36} />
+          <YAxis allowDecimals={false} tickFormatter={(value: number) => number(value)} tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} width={36} />
           <Tooltip
             contentStyle={{
               background: 'var(--card)',
@@ -498,12 +501,12 @@ function VolumeChart({
               borderRadius: 12,
               fontSize: 12,
             }}
-            formatter={(value, name) => [Number(value).toLocaleString(), String(name)]}
+            formatter={(value, name) => [number(Number(value)), String(name)]}
           />
           <Area
             type="monotone"
             dataKey="event_count"
-            name="Searches"
+            name={t('Searches')}
             stroke="var(--chart-1)"
             fill="var(--chart-1)"
             fillOpacity={0.18}
@@ -513,7 +516,7 @@ function VolumeChart({
           <Area
             type="monotone"
             dataKey="quota_count"
-            name="Quota"
+            name={t('Quota')}
             stroke="var(--chart-5)"
             fill="var(--chart-5)"
             fillOpacity={0.12}
@@ -535,8 +538,9 @@ function KindMix({
   total: number
   loading: boolean
 }) {
-  if (loading) return <p className="text-sm text-muted-foreground">Loading mix…</p>
-  if (items.length === 0) return <p className="text-sm text-muted-foreground">No kind breakdown yet.</p>
+  const { t, number } = useTranslation()
+  if (loading) return <p className="text-sm text-muted-foreground">{t('Loading mix…')}</p>
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">{t('No kind breakdown yet.')}</p>
   return (
     <div className="grid gap-3">
       {items.map((item, index) => {
@@ -546,7 +550,7 @@ function KindMix({
             <div className="flex items-center justify-between text-sm">
               <span className="capitalize">{item.kind}</span>
               <span className="tabular-nums text-muted-foreground">
-                {item.event_count.toLocaleString()} · {share}%
+                {number(item.event_count)} · {number(share / 100, { style: 'percent', maximumFractionDigits: 1 })}
               </span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -571,8 +575,9 @@ function CompanyList({
   loading: boolean
   onOpen: (id: string) => void
 }) {
-  if (loading) return <p className="text-sm text-muted-foreground">Loading companies…</p>
-  if (rows.length === 0) return <p className="text-sm text-muted-foreground">No per-company volume yet.</p>
+  const { t, number } = useTranslation()
+  if (loading) return <p className="text-sm text-muted-foreground">{t('Loading companies…')}</p>
+  if (rows.length === 0) return <p className="text-sm text-muted-foreground">{t('No per-company volume yet.')}</p>
   const max = Math.max(...rows.map((row) => row.event_count), 1)
   return (
     <ul className="grid gap-2">
@@ -587,8 +592,8 @@ function CompanyList({
             <div className="flex items-center justify-between text-sm">
               <span className="font-medium">{org.name}</span>
               <span className="tabular-nums text-muted-foreground">
-                {org.event_count.toLocaleString()}
-                {org.quota_count ? ` · ${org.quota_count} quota` : ''}
+                {number(org.event_count)}
+                {org.quota_count ? ` · ${t('{count} quota', { count: number(org.quota_count) })}` : ''}
               </span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -613,28 +618,30 @@ function ShareOfPlatform({
   platform?: SearchAnalyticsSummary
   loading: boolean
 }) {
-  if (loading) return <p className="text-sm text-muted-foreground">Loading comparison…</p>
+  const { t, number } = useTranslation()
+  const { rateLabel } = useAnalyticsFormatting()
+  if (loading) return <p className="text-sm text-muted-foreground">{t('Loading comparison…')}</p>
   if (!scoped || !platform || platform.event_count === 0) {
-    return <p className="text-sm text-muted-foreground">Not enough platform volume to compare.</p>
+    return <p className="text-sm text-muted-foreground">{t('Not enough platform volume to compare.')}</p>
   }
   const rows = [
     {
-      label: 'Share of searches',
+      label: t('Share of searches'),
       value: rateLabel(scoped.event_count, platform.event_count),
       width: pct(scoped.event_count, platform.event_count),
-      hint: `${scoped.event_count.toLocaleString()} of ${platform.event_count.toLocaleString()}`,
+      hint: t('{count} of {total}', { count: number(scoped.event_count), total: number(platform.event_count) }),
     },
     {
-      label: 'Quota pressure',
+      label: t('Quota pressure'),
       value: rateLabel(scoped.quota_count, scoped.event_count),
       width: pct(scoped.quota_count, scoped.event_count),
-      hint: `platform ${rateLabel(platform.quota_count, platform.event_count)}`,
+      hint: t('platform {rate}', { rate: rateLabel(platform.quota_count, platform.event_count) }),
     },
     {
-      label: 'Error rate',
+      label: t('Error rate'),
       value: rateLabel(scoped.error_count, scoped.event_count),
       width: pct(scoped.error_count, scoped.event_count),
-      hint: `platform ${rateLabel(platform.error_count, platform.event_count)}`,
+      hint: t('platform {rate}', { rate: rateLabel(platform.error_count, platform.event_count) }),
     },
   ]
   return (
@@ -668,8 +675,9 @@ function TrendList({
   loading: boolean
   showOrgs: boolean
 }) {
-  if (loading) return <p className="text-sm text-muted-foreground">Loading queries…</p>
-  if (rows.length === 0) return <p className="text-sm text-muted-foreground">No trending queries in this range.</p>
+  const { t, number } = useTranslation()
+  if (loading) return <p className="text-sm text-muted-foreground">{t('Loading queries…')}</p>
+  if (rows.length === 0) return <p className="text-sm text-muted-foreground">{t('No trending queries in this range.')}</p>
   const max = Math.max(...rows.map((row) => row.hits), 1)
   return (
     <ul className="grid gap-3">
@@ -678,8 +686,8 @@ function TrendList({
           <div className="flex items-start justify-between gap-3 text-sm">
             <span className="min-w-0">{row.query_normalized}</span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
-              {row.hits.toLocaleString()}
-              {showOrgs ? ` · ${row.distinct_orgs} orgs` : ''}
+              {number(row.hits)}
+              {showOrgs ? ` · ${t('{count} orgs', { count: number(row.distinct_orgs) })}` : ''}
             </span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-muted">

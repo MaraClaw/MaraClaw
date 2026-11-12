@@ -1,11 +1,12 @@
 import type { ToolCatalog } from '../lib/tools-api.ts'
+import type { PlainMessageKey } from '../lib/translations.ts'
 
 export function toolOwnership(tool: Pick<ToolCatalog, 'source' | 'tenant_id'>): 'Built-in' | 'Global' | 'Company' {
   if (tool.source === 'builtin') return 'Built-in'
   return tool.tenant_id === null ? 'Global' : 'Company'
 }
 
-export function toolRecordImpact(tool: Pick<ToolCatalog, 'source' | 'tenant_id'>): string {
+export function toolRecordImpact(tool: Pick<ToolCatalog, 'source' | 'tenant_id'>): PlainMessageKey {
   return toolOwnership(tool) === 'Company'
     ? 'Changes to this company-owned record affect its owning company and agents assigned to the tool, not other companies.'
     : 'Changes to this shared catalog record apply across companies and to agents assigned to the tool.'

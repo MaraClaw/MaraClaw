@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { adminAuditPageOptions } from '@/hooks/admin-audit-options'
 import { useAuth } from '@/hooks/use-auth'
+import { useTranslation } from '@/hooks/use-translation'
 import { ADMIN_AUDIT_DEFAULT_LIMIT, type AdminAuditPageScope } from '@/lib/admin-audit-api'
 import { adminAuditWindowSchema } from '@/lib/admin-audit-window'
 import { ApiError } from '@/lib/http'
@@ -20,11 +21,12 @@ const filterId = z.string().trim().pipe(z.union([z.literal(''), z.uuid('Enter a 
 const filterSchema = adminAuditWindowSchema.safeExtend({ action: z.string().trim(), target_type: z.string(), tenant_id: filterId, actor_id: filterId })
 type Filters = z.infer<typeof filterSchema>
 const emptyFilters = { action: '', target_type: '', tenant_id: '', actor_id: '', start_at: '', end_at: '' }
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+const timeFormat = { dateStyle: 'medium', timeStyle: 'short' } as const satisfies Intl.DateTimeFormatOptions
 const buttonClass = 'h-auto min-h-11 max-w-full whitespace-normal'
 const pageButtonClass = `${buttonClass} aria-disabled:pointer-events-none aria-disabled:opacity-50`
 
 export function AdminAuditPage() {
+  const { t, owned, number, date } = useTranslation()
   const id = useId()
   const { user } = useAuth()
   const platformAdmin = isPlatformAdminUser(user)
@@ -56,48 +58,48 @@ export function AdminAuditPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 [overflow-wrap:anywhere]">
       <header className="flex flex-col gap-2">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Recent activity</h1>
-        <p className="text-muted-foreground">{platformAdmin ? 'Recent administrator actions across the platform.' : 'Recent administrator actions in your organization.'}</p>
-        <p className="text-sm text-muted-foreground">Best-effort operational history, not a complete compliance record. Shows up to {ADMIN_AUDIT_DEFAULT_LIMIT} matching events per page, newest first. Browsing is not a snapshot: refresh to see new events or late commits.</p>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Recent activity')}</h1>
+        <p className="text-muted-foreground">{t(platformAdmin ? 'Recent administrator actions across the platform.' : 'Recent administrator actions in your organization.')}</p>
+        <p className="text-sm text-muted-foreground">{t('Best-effort operational history, not a complete compliance record. Shows up to {limit} matching events per page, newest first. Browsing is not a snapshot: refresh to see new events or late commits.', { limit: number(ADMIN_AUDIT_DEFAULT_LIMIT) })}</p>
       </header>
 
       <Card>
-        <CardHeader><CardTitle>Filter activity</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{t('Filter activity')}</CardTitle></CardHeader>
         <CardContent>
           <form noValidate onSubmit={form.handleSubmit(applyFilters)} className="flex flex-col gap-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex min-w-0 flex-col gap-2">
-                <Label htmlFor={`${id}-action`}>Action</Label>
-                <Input id={`${id}-action`} placeholder="Exact action, e.g. company.create" {...form.register('action')} />
+                <Label htmlFor={`${id}-action`}>{t('Action')}</Label>
+                <Input id={`${id}-action`} placeholder={t('Exact action, e.g. company.create')} {...form.register('action')} />
               </div>
               <div className="flex min-w-0 flex-col gap-2">
-                <Label htmlFor={`${id}-target-type`}>Target type</Label>
-                <Input id={`${id}-target-type`} placeholder="Exact target type, e.g. tenant" {...form.register('target_type')} />
+                <Label htmlFor={`${id}-target-type`}>{t('Target type')}</Label>
+                <Input id={`${id}-target-type`} placeholder={t('Exact target type, e.g. tenant')} {...form.register('target_type')} />
               </div>
               {platformAdmin ? (['tenant_id', 'actor_id'] as const).map((field) => (
                 <div key={field} className="flex min-w-0 flex-col gap-2">
-                  <Label htmlFor={`${id}-${field}`}>{field === 'tenant_id' ? 'Tenant ID' : 'Actor ID'}</Label>
-                  <Input id={`${id}-${field}`} placeholder="UUID (optional)" aria-invalid={Boolean(form.formState.errors[field])} aria-describedby={form.formState.errors[field] ? `${id}-${field}-error` : undefined} {...form.register(field)} />
-                  {form.formState.errors[field] ? <p id={`${id}-${field}-error`} role="alert" className="text-sm text-destructive">{form.formState.errors[field]?.message}</p> : null}
+                  <Label htmlFor={`${id}-${field}`}>{t(field === 'tenant_id' ? 'Tenant ID' : 'Actor ID')}</Label>
+                  <Input id={`${id}-${field}`} placeholder={t('UUID (optional)')} aria-invalid={Boolean(form.formState.errors[field])} aria-describedby={form.formState.errors[field] ? `${id}-${field}-error` : undefined} {...form.register(field)} />
+                  {form.formState.errors[field] ? <p id={`${id}-${field}-error`} role="alert" className="text-sm text-destructive">{owned(form.formState.errors[field]?.message)}</p> : null}
                 </div>
               )) : null}
             </div>
             <fieldset className="flex min-w-0 flex-col gap-3">
-              <legend className="mb-2 text-sm font-medium">Time window (optional)</legend>
-              <p id={`${id}-window-help`} className="text-sm text-muted-foreground">Use RFC 3339 with an offset, such as 2026-10-21T12:30:00Z or 2026-10-21T20:30:00+08:00. Start is inclusive; end is exclusive. Leave either blank for an open bound.</p>
+              <legend className="mb-2 text-sm font-medium">{t('Time window (optional)')}</legend>
+              <p id={`${id}-window-help`} className="text-sm text-muted-foreground">{t('Use RFC 3339 with an offset, such as 2026-10-21T12:30:00Z or 2026-10-21T20:30:00+08:00. Start is inclusive; end is exclusive. Leave either blank for an open bound.')}</p>
               <div className="grid gap-4 sm:grid-cols-2">
                 {(['start_at', 'end_at'] as const).map((field) => (
                   <div key={field} className="flex min-w-0 flex-col gap-2">
-                    <Label htmlFor={`${id}-${field}`}>{field === 'start_at' ? 'Start time' : 'End time'}</Label>
+                    <Label htmlFor={`${id}-${field}`}>{t(field === 'start_at' ? 'Start time' : 'End time')}</Label>
                     <Input id={`${id}-${field}`} type="text" autoComplete="off" spellCheck={false} placeholder="2026-10-21T12:30:00Z" aria-invalid={Boolean(form.formState.errors[field])} aria-describedby={`${id}-window-help${form.formState.errors[field] ? ` ${id}-${field}-error` : ''}`} {...form.register(field)} />
-                    {form.formState.errors[field] ? <p id={`${id}-${field}-error`} role="alert" className="text-sm text-destructive">{form.formState.errors[field]?.message}</p> : null}
+                    {form.formState.errors[field] ? <p id={`${id}-${field}-error`} role="alert" className="text-sm text-destructive">{owned(form.formState.errors[field]?.message)}</p> : null}
                   </div>
                 ))}
               </div>
             </fieldset>
             <div className="flex flex-wrap gap-3">
-              <Button type="submit" className={buttonClass}>Apply filters</Button>
-              <Button type="button" variant="outline" className={buttonClass} onClick={clearFilters}>Clear filters</Button>
+              <Button type="submit" className={buttonClass}>{t('Apply filters')}</Button>
+              <Button type="button" variant="outline" className={buttonClass} onClick={clearFilters}>{t('Clear filters')}</Button>
             </div>
           </form>
         </CardContent>
@@ -105,21 +107,21 @@ export function AdminAuditPage() {
 
       <section aria-labelledby={`${id}-results`} aria-busy={activity.isFetching} className="flex min-w-0 flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id={`${id}-results`} className="font-display text-lg font-semibold">{activity.isSuccess ? `${activity.data.items.length} recent ${activity.data.items.length === 1 ? 'event' : 'events'}` : 'Activity results'}</h2>
-          <Button type="button" variant="outline" className={buttonClass} onClick={refreshActivity}>Refresh activity</Button>
+          <h2 id={`${id}-results`} className="font-display text-lg font-semibold">{activity.isSuccess ? t(activity.data.items.length === 1 ? '{count} recent event' : '{count} recent events', { count: number(activity.data.items.length) }) : t('Activity results')}</h2>
+          <Button type="button" variant="outline" className={buttonClass} onClick={refreshActivity}>{t('Refresh activity')}</Button>
         </div>
-        <p role="status" className="text-sm text-muted-foreground">Page {cursors.length + 1}{activity.isSuccess && activity.data.next_cursor === null ? ' · End of available history' : ''}</p>
-        {filters.start_at || filters.end_at ? <p className="text-sm text-muted-foreground">Applied UTC window: {filters.start_at ?? 'Any start'} (inclusive) to {filters.end_at ?? 'Any end'} (exclusive).</p> : null}
-        {activity.isPending ? <Card><CardContent role="status">{activity.isPaused ? 'Waiting for a connection. Activity will load when you are back online.' : 'Loading recent activity...'}</CardContent></Card> : activity.isError ? (
+        <p role="status" className="text-sm text-muted-foreground">{t(activity.isSuccess && activity.data.next_cursor === null ? 'Page {page} · End of available history' : 'Page {page}', { page: number(cursors.length + 1) })}</p>
+        {filters.start_at || filters.end_at ? <p className="text-sm text-muted-foreground">{t('Applied UTC window: {start} (inclusive) to {end} (exclusive).', { start: filters.start_at ?? t('Any start'), end: filters.end_at ?? t('Any end') })}</p> : null}
+        {activity.isPending ? <Card><CardContent role="status">{t(activity.isPaused ? 'Waiting for a connection. Activity will load when you are back online.' : 'Loading recent activity...')}</CardContent></Card> : activity.isError ? (
           <Card><CardContent role="alert" className="flex flex-col gap-3">
-            <ErrorToast error={activity.error} message={activity.error instanceof ApiError ? activity.error.message : 'Could not load recent activity. Check your connection and try again. If this continues, contact your administrator.'} />
-            {cursors.length > 0 ? <p className="text-sm text-muted-foreground">If this cursor is no longer valid, refresh activity to restart from the newest events.</p> : null}
-            <Button type="button" variant="outline" className={`${buttonClass} self-start`} onClick={() => void activity.refetch()}>Try again</Button>
+            <ErrorToast error={activity.error} message={activity.error instanceof ApiError ? activity.error.message : t('Could not load recent activity. Check your connection and try again. If this continues, contact your administrator.')} />
+            {cursors.length > 0 ? <p className="text-sm text-muted-foreground">{t('If this cursor is no longer valid, refresh activity to restart from the newest events.')}</p> : null}
+            <Button type="button" variant="outline" className={`${buttonClass} self-start`} onClick={() => void activity.refetch()}>{t('Try again')}</Button>
           </CardContent></Card>
         ) : activity.data.items.length === 0 ? (
           <Card><CardContent className="flex flex-col gap-3">
-            <p role="status">{cursors.length > 0 ? 'No older activity is available on this page.' : `No recent activity${hasFilters ? ' matches these filters' : ' is available'}.`}</p>
-            <p className="text-sm text-muted-foreground">{cursors.length > 0 ? 'Go back to the previous page or refresh to restart from the newest events.' : hasFilters ? 'Clear the filters to see other recent events.' : 'Refresh after an administrator makes a change. Some actions may not be recorded.'}</p>
+            <p role="status">{t(cursors.length > 0 ? 'No older activity is available on this page.' : hasFilters ? 'No recent activity matches these filters.' : 'No recent activity is available.')}</p>
+            <p className="text-sm text-muted-foreground">{t(cursors.length > 0 ? 'Go back to the previous page or refresh to restart from the newest events.' : hasFilters ? 'Clear the filters to see other recent events.' : 'Refresh after an administrator makes a change. Some actions may not be recorded.')}</p>
           </CardContent></Card>
         ) : (
           <ol className="flex min-w-0 flex-col gap-3">
@@ -129,22 +131,22 @@ export function AdminAuditPage() {
                   <CardContent className="flex min-w-0 flex-col gap-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <h3 className="min-w-0 font-semibold">{event.action}</h3>
-                      <p className="text-sm text-muted-foreground">{event.created_at ? <time dateTime={event.created_at}>{timeFormat.format(new Date(event.created_at))}</time> : 'Time unavailable'}</p>
+                      <p className="text-sm text-muted-foreground">{event.created_at ? <time dateTime={event.created_at}>{date(event.created_at, timeFormat)}</time> : t('Time unavailable')}</p>
                     </div>
-                    <p className="text-sm text-muted-foreground">{event.actor_email ?? 'Actor unavailable'} <span>({event.actor_role})</span></p>
-                    <p className="text-sm">Target: {event.target_type}{event.target_id ? ` / ${event.target_id}` : ' / ID unavailable'}</p>
+                    <p className="text-sm text-muted-foreground">{event.actor_email ?? t('Actor unavailable')} <span>({event.actor_role})</span></p>
+                    <p className="text-sm">{t('Target: {target}', { target: `${event.target_type} / ${event.target_id ?? t('ID unavailable')}` })}</p>
                     <details className="min-w-0 border-t border-border pt-1">
-                      <summary className="min-h-11 cursor-pointer content-center rounded-md py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">View event details</summary>
+                      <summary className="min-h-11 cursor-pointer content-center rounded-md py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('View event details')}</summary>
                       <dl className="grid min-w-0 gap-3 py-3 text-sm sm:grid-cols-2">
-                        {[
-                          ['Event ID', event.id], ['Actor ID', event.actor_id ?? 'Unavailable'],
-                           ['Tenant ID', event.tenant_id ?? 'Unavailable'], ['IP address', event.ip_address ?? 'Unavailable'],
-                           ['Timestamp', event.created_at ?? 'Unavailable'],
-                        ].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}
+                        {([
+                          ['Event ID', event.id], ['Actor ID', event.actor_id ?? t('Unavailable')],
+                          ['Tenant ID', event.tenant_id ?? t('Unavailable')], ['IP address', event.ip_address ?? t('Unavailable')],
+                          ['Timestamp', event.created_at ?? t('Unavailable')],
+                        ] as const).map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{t(label)}</dt><dd>{value}</dd></div>)}
                       </dl>
                       {([['Changes', event.changes], ['Details', event.details]] as const).map(([label, value]) => (
                         <div key={label} className="flex min-w-0 flex-col gap-2 pb-3">
-                          <h4 className="text-sm font-medium">{label}</h4>
+                          <h4 className="text-sm font-medium">{t(label)}</h4>
                           <pre className="whitespace-pre-wrap rounded-lg bg-muted p-3 font-mono text-sm [overflow-wrap:anywhere]">{JSON.stringify(value, null, 2)}</pre>
                         </div>
                       ))}
@@ -155,15 +157,15 @@ export function AdminAuditPage() {
             ))}
           </ol>
         )}
-        <nav aria-label="Activity pages" className="flex flex-wrap gap-3">
+        <nav aria-label={t('Activity pages')} className="flex flex-wrap gap-3">
           {/* Keep inactive paging controls focusable so keyboard focus survives page changes. */}
           <Button type="button" variant="outline" className={pageButtonClass} aria-disabled={cursors.length === 0} onClick={() => {
             if (cursors.length > 0) setCursors((previous) => previous.slice(0, -1))
-          }}>Back</Button>
+          }}>{t('Back')}</Button>
           <Button type="button" variant="outline" className={pageButtonClass} aria-disabled={!activity.isSuccess || activity.isFetching || activity.data.next_cursor === null} onClick={() => {
             const next = activity.data?.next_cursor
             if (activity.isSuccess && !activity.isFetching && next !== undefined && next !== null) setCursors((previous) => [...previous, next])
-          }}>Older</Button>
+          }}>{t('Older')}</Button>
         </nav>
       </section>
     </div>

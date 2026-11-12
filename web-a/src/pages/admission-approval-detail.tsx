@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { formatDistanceToNowStrict } from 'date-fns'
+import { useTranslation } from '@/hooks/use-translation'
 import { ArrowLeft } from 'lucide-react'
 import { type ComponentProps, useId, useRef } from 'react'
 import { useForm } from 'react-hook-form'
@@ -30,6 +30,7 @@ const statusVariants = {
 } as const satisfies Record<AdmissionDetail['status'], ComponentProps<typeof Badge>['variant']>
 
 function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail; readonly ready: boolean }) {
+  const { t, distance, owned } = useTranslation()
   const reasonId = useId()
   const submitting = useRef(false)
   const decision = useAdmissionDecision(request.id)
@@ -37,14 +38,14 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
   const canDecide = ready && request.status === 'pending' && !decision.isPending
   const conflict = decision.error instanceof ApiError && decision.error.status === 409
   const fields = [
-    ['Applicant email', request.applicant.email ?? 'Not provided'],
+    ['Applicant email', request.applicant.email ?? t('Not provided')],
     ['Applicant ID', request.applicant.id],
-    ['Source organization', request.source_tenant?.name ?? 'No source organization'],
+    ['Source organization', request.source_tenant?.name ?? t('No source organization')],
     ['Target organization', request.target_tenant.name],
-    ['Admission method', admissionMethodLabels[request.method]],
-    ['Requested', formatDistanceToNowStrict(new Date(request.created_at), { addSuffix: true })],
-    ['Decided', request.decided_at ? formatDistanceToNowStrict(new Date(request.decided_at), { addSuffix: true }) : 'Not decided'],
-    ['Decided by user ID', request.decided_by_user_id ?? 'Not decided'],
+    ['Admission method', t(admissionMethodLabels[request.method])],
+    ['Requested', distance(request.created_at)],
+    ['Decided', request.decided_at ? distance(request.decided_at) : t('Not decided')],
+    ['Decided by user ID', request.decided_by_user_id ?? t('Not decided')],
   ] as const
 
   function submit(value: AdmissionDecision['decision'], reason: string) {
@@ -57,36 +58,36 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
     <>
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Request details</h2>
-          <Badge variant={statusVariants[request.status]}>{admissionStatusLabels[request.status]}</Badge>
+          <h2 className="font-display text-lg font-semibold">{t('Request details')}</h2>
+          <Badge variant={statusVariants[request.status]}>{t(admissionStatusLabels[request.status])}</Badge>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <dl className="grid gap-4 sm:grid-cols-2">
             {fields.map(([label, value]) => <div key={label} className="min-w-0">
-              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dt className="text-xs text-muted-foreground">{t(label)}</dt>
               <dd className="mt-1 text-sm leading-relaxed">{value}</dd>
             </div>)}
           </dl>
-          {request.decision_reason ? <div><h3 className="text-sm font-medium">Decision reason</h3><p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{request.decision_reason}</p></div> : null}
+          {request.decision_reason ? <div><h3 className="text-sm font-medium">{t('Decision reason')}</h3><p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{request.decision_reason}</p></div> : null}
         </CardContent>
       </Card>
-      <p role="status" className="sr-only">{decision.isSuccess ? `Request ${admissionStatusLabels[decision.data.status].toLowerCase()}.` : ''}</p>
-      {decision.isError ? <ErrorToast error={decision.error} message={conflict ? 'This request changed before your decision was saved. The latest details are being refreshed. Review the current status before trying again.' : decision.error instanceof ApiError ? decision.error.message : 'Unable to save your decision. Try again.'} /> : null}
+      <p role="status" className="sr-only">{decision.isSuccess ? t('Request {status}.', { status: t(admissionStatusLabels[decision.data.status]).toLowerCase() }) : ''}</p>
+      {decision.isError ? <ErrorToast error={decision.error} message={conflict ? t('This request changed before your decision was saved. The latest details are being refreshed. Review the current status before trying again.') : decision.error instanceof ApiError ? decision.error.message : t('Unable to save your decision. Try again.')} /> : null}
       {request.status === 'pending' ? <Card>
-        <CardHeader><h2 className="font-display text-lg font-semibold">Review decision</h2><p className="text-sm leading-relaxed text-muted-foreground">Approve to admit this applicant to {request.target_tenant.name}, or reject the request.</p></CardHeader>
+        <CardHeader><h2 className="font-display text-lg font-semibold">{t('Review decision')}</h2><p className="text-sm leading-relaxed text-muted-foreground">{t('Approve to admit this applicant to {name}, or reject the request.', { name: request.target_tenant.name })}</p></CardHeader>
         <CardContent>
           <form noValidate className="flex flex-col gap-4" onSubmit={form.handleSubmit(({ reason }) => submit('approved', reason))}>
             <div className="flex flex-col gap-2">
-              <Label htmlFor={reasonId}>Reason (optional)</Label>
+              <Label htmlFor={reasonId}>{t('Reason (optional)')}</Label>
               <textarea id={reasonId} rows={4} maxLength={ADMISSION_REASON_LIMIT} disabled={!canDecide}
                 className="w-full min-w-0 resize-y rounded-xl border border-muted-foreground bg-card px-3.5 py-3 text-base text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:opacity-50 sm:text-sm"
                 aria-invalid={Boolean(form.formState.errors.reason)} aria-describedby={`${reasonId}-hint${form.formState.errors.reason ? ` ${reasonId}-error` : ''}`} {...form.register('reason')} />
-              <p id={`${reasonId}-hint`} className="text-xs text-muted-foreground">Up to 2,000 characters. This reason is saved with the decision.</p>
-              {form.formState.errors.reason ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{form.formState.errors.reason.message}</p> : null}
+              <p id={`${reasonId}-hint`} className="text-xs text-muted-foreground">{t('Up to 2,000 characters. This reason is saved with the decision.')}</p>
+              {form.formState.errors.reason ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{owned(form.formState.errors.reason.message)}</p> : null}
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button type="submit" className={actionClass} disabled={!canDecide}>{decision.isPending && decision.variables?.decision === 'approved' ? 'Approving...' : 'Approve request'}</Button>
-              <Button type="button" variant="outline" className={actionClass} disabled={!canDecide} onClick={form.handleSubmit(({ reason }) => submit('rejected', reason))}>{decision.isPending && decision.variables?.decision === 'rejected' ? 'Rejecting...' : 'Reject request'}</Button>
+              <Button type="submit" className={actionClass} disabled={!canDecide}>{t(decision.isPending && decision.variables?.decision === 'approved' ? 'Approving...' : 'Approve request')}</Button>
+              <Button type="button" variant="outline" className={actionClass} disabled={!canDecide} onClick={form.handleSubmit(({ reason }) => submit('rejected', reason))}>{t(decision.isPending && decision.variables?.decision === 'rejected' ? 'Rejecting...' : 'Reject request')}</Button>
             </div>
           </form>
         </CardContent>
@@ -96,6 +97,7 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
 }
 
 export function AdmissionApprovalDetailPage() {
+  const { t } = useTranslation()
   const { id } = useParams()
   const parsedId = admissionIdSchema.safeParse(id)
   const detail = useAdmissionDetail(parsedId.success ? parsedId.data : null)
@@ -104,15 +106,15 @@ export function AdmissionApprovalDetailPage() {
     <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
       <header className="flex flex-col gap-3">
         <Button asChild variant="outline" className="self-start">
-          <Link to="/admission-approvals"><ArrowLeft aria-hidden="true" className="size-4" />Back to admission approvals</Link>
+          <Link to="/admission-approvals"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to admission approvals')}</Link>
         </Button>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Admission request</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Admission request')}</h1>
       </header>
-      {!parsedId.success ? <p role="alert" className="text-sm text-destructive">This admission request link is invalid.</p> : <>
-        {detail.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">Loading admission request...</CardContent></Card> : null}
+      {!parsedId.success ? <p role="alert" className="text-sm text-destructive">{t('This admission request link is invalid.')}</p> : <>
+        {detail.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading admission request...')}</CardContent></Card> : null}
         {detail.isError ? <Card><CardContent className="flex flex-col items-start gap-3">
-          <ErrorToast error={detail.error} message={detail.error instanceof ApiError ? detail.error.message : 'Unable to load this admission request.'} />
-          <Button variant="outline" className={actionClass} disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>Retry</Button>
+          <ErrorToast error={detail.error} message={detail.error instanceof ApiError ? detail.error.message : t('Unable to load this admission request.')} />
+          <Button variant="outline" className={actionClass} disabled={detail.isFetching} onClick={() => { void detail.refetch() }}>{t('Retry')}</Button>
         </CardContent></Card> : null}
         {detail.data ? <AdmissionReview key={detail.data.id} request={detail.data} ready={detail.isSuccess && !detail.isFetching} /> : null}
       </>}
