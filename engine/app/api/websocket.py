@@ -1,6 +1,7 @@
 """WebSocket chat endpoint for real-time agent conversations."""
 
 import asyncio
+import contextlib
 import time
 import uuid
 from collections.abc import Callable
@@ -66,6 +67,9 @@ type WebSocketConnection = tuple[WebSocket, str | None, str | None]
 type RealtimeMessage = dict[str, object]
 
 _presence_sleep = asyncio.sleep
+_heartbeat_sleep = asyncio.sleep
+# The web-e client reconnects after 25 s without a frame; keep this well under that deadline.
+HEARTBEAT_INTERVAL_SECONDS = 10.0
 # Not 4001/4003: the client treats every other close as transient, reconnects with a fresh ticket and refetches history.
 RESUBSCRIBE_CLOSE_CODE = 1012
 
@@ -274,9 +278,10 @@ async def websocket_chat(
     ticket: str = Query(""),
     session_id: str = Query(None),
     lang: str = Query("en"),
+    heartbeat: str = Query(""),
 ):
-    """WebSocket endpoint for real-time chat with an agent."""
-    handler = WebSocketChatHandler(websocket, agent_id, ticket, session_id, lang)
+    """WebSocket endpoint for real-time chat with an agent; ``heartbeat=1`` opts in to keepalive frames."""
+    handler = WebSocketChatHandler(websocket, agent_id, ticket, session_id, lang, heartbeat == "1")
     await handler.run()
 
 
@@ -295,6 +300,7 @@ class WebSocketChatHandler:
         ticket: str,
         session_id: str | None = None,
         lang: str = "en",
+        heartbeat: bool = False,
     ):
         self.websocket: WebSocket = websocket
         self.agent_id: uuid.UUID = agent_id
@@ -302,7 +308,9 @@ class WebSocketChatHandler:
         self.binding: chat_tickets.ChatTicketBinding
         self.session_id_param: str | None = session_id
         self.lang: str = lang
+        self.heartbeat: bool = heartbeat
         self._presence_task: asyncio.Task[None] | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
         # State fields initialized during setup
         self.agent_name: str = ""
@@ -352,6 +360,7 @@ class WebSocketChatHandler:
             pass
         finally:
             with anyio.CancelScope(shield=True):
+                await self._stop_heartbeat()
                 await self._stop_presence_refresh()
                 await manager.disconnect(str(self.agent_id), self.websocket)
 
@@ -377,6 +386,24 @@ class WebSocketChatHandler:
             report_exception(error, source="websocket", operation="presence-refresh")
             logger.warning("[WS] Presence refresh task failed for agent {}: {}", self.agent_id, error)
 
+    async def _send_heartbeats(self) -> None:
+        """Keep an opted-in client's liveness deadline fed without touching the database or Redis."""
+        try:
+            while True:
+                await _heartbeat_sleep(HEARTBEAT_INTERVAL_SECONDS)
+                async with asyncio.timeout(DEFAULT_SEND_TIMEOUT_SECONDS):
+                    await _send_chat_event(self.websocket, {"type": ChatEventType.HEARTBEAT})
+        except Exception as error:
+            logger.warning("[WS] Heartbeat stopped for agent {}: {}", self.agent_id, type(error).__name__)
+
+    async def _stop_heartbeat(self) -> None:
+        task, self._heartbeat_task = self._heartbeat_task, None
+        if task is None:
+            return
+        _ = task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     async def setup(self) -> bool:
         self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
         await chat_tickets.authorized_session(self.binding, self.user, self.agent)
@@ -391,6 +418,8 @@ class WebSocketChatHandler:
         await manager.connect(str(self.agent_id), self.websocket, self.conv_id, str(self.user.id))
         self._presence_task = asyncio.create_task(self._refresh_presence(), name="ws-presence-refresh")
         await _send_chat_event(self.websocket, {"type": ChatEventType.CONNECTED, "session_id": self.conv_id})
+        if self.heartbeat:
+            self._heartbeat_task = asyncio.create_task(self._send_heartbeats(), name="ws-heartbeat")
         self.conversation = self._build_conversation_context()
         return True
 

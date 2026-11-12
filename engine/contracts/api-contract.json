@@ -4510,7 +4510,8 @@
           "error",
           "done",
           "onboarded",
-          "trigger_notification"
+          "trigger_notification",
+          "heartbeat"
         ],
         "title": "ChatEventType",
         "type": "string",
@@ -4528,7 +4529,8 @@
           "ERROR",
           "DONE",
           "ONBOARDED",
-          "TRIGGER_NOTIFICATION"
+          "TRIGGER_NOTIFICATION",
+          "HEARTBEAT"
         ]
       },
       "ChatGPTSubscriptionCompleteIn": {
@@ -4914,6 +4916,9 @@
           },
           {
             "$ref": "#/components/schemas/TriggerNotificationEvent"
+          },
+          {
+            "$ref": "#/components/schemas/HeartbeatEvent"
           },
           {
             "$ref": "#/components/schemas/ChunkEvent"
@@ -8067,6 +8072,21 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HeartbeatEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "heartbeat",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "HeartbeatEvent",
         "type": "object"
       },
       "HumanRelationshipPageResponse": {
@@ -45341,6 +45361,7 @@
       "GoogleChatChannelPayload",
       "HTTPValidationError",
       "HandoverRequest",
+      "HeartbeatEvent",
       "HumanRelationshipPageResponse",
       "HumanRelationshipResponse",
       "IdentityBindRequest",

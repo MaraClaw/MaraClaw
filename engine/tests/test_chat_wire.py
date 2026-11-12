@@ -122,6 +122,7 @@ async def test_archived_submission_emits_structured_error_when_session_is_read_o
         {"type": "error", "content": {"reason": "unknown", "session_id": str(uuid4())}},
         {"type": "new_uncontracted_event"},
         {"type": "text_progress", "content": "internal discriminator is not a wire tag"},
+        {"type": "heartbeat", "content": "heartbeat carries no payload"},
     ],
 )
 def test_wire_rejects_payload_when_no_variant_matches(payload: JsonObject) -> None:
@@ -166,6 +167,7 @@ def test_wire_rejects_payload_when_no_variant_matches(payload: JsonObject) -> No
         },
         {"type": "onboarded", "agent_id": str(uuid4())},
         {"type": "trigger_notification", "content": "notice", "triggers": ["web_message"], "session_id": str(uuid4())},
+        {"type": "heartbeat"},
     ],
 )
 async def test_wire_preserves_payload_when_consumed_event_is_serialized(payload: JsonObject) -> None:
