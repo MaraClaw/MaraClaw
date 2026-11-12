@@ -22,7 +22,7 @@ from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
-from app.runtime.tasks import OwnedTasks
+from app.runtime.tasks import OwnedTasks, loop_progress
 from app.services.channels.outbound_http import shutdown_outbound_client
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
 from app.services.llm.client_cache import shutdown_llm_clients
@@ -108,7 +108,10 @@ class Runtime:
             report_exception(exc, source="runtime", operation="startup-audit")
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
-            from app.services.agent_setup import start_agent_setup_worker
+            from app.services.agent_setup import (
+                PROGRESS_BUDGET_SECONDS as AGENT_SETUP_BUDGET_SECONDS,
+                start_agent_setup_worker,
+            )
             from app.services.agent_start_reconciler import (
                 PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
                 agent_start_reconciler_loop,
@@ -133,9 +136,15 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
                 start_chat_history_retention_worker,
             )
-            from app.services.gateway_report_relay import start_gateway_report_relay
-            from app.services.heartbeat import start_heartbeat
-            from app.services.openclaw_delayed_replies import openclaw_delayed_reply_loop
+            from app.services.gateway_report_relay import (
+                PROGRESS_BUDGET_SECONDS as GATEWAY_REPORT_RELAY_BUDGET_SECONDS,
+                start_gateway_report_relay,
+            )
+            from app.services.heartbeat import PROGRESS_BUDGET_SECONDS as HEARTBEAT_BUDGET_SECONDS, start_heartbeat
+            from app.services.openclaw_delayed_replies import (
+                PROGRESS_BUDGET_SECONDS as OPENCLAW_DELAYED_REPLIES_BUDGET_SECONDS,
+                openclaw_delayed_reply_loop,
+            )
             from app.services.openclaw_dispatch_reconciler import (
                 PROGRESS_BUDGET_SECONDS as OPENCLAW_DISPATCH_BUDGET_SECONDS,
                 openclaw_dispatch_reconciler_loop,
@@ -149,8 +158,14 @@ class Runtime:
                 start_organization_admission_email_worker,
             )
             from app.services.scheduler import PROGRESS_BUDGET_SECONDS as SCHEDULER_BUDGET_SECONDS, start_scheduler
-            from app.services.task_lease import task_lease_recovery_loop
-            from app.services.tavily.export import start_web_search_export_daemon
+            from app.services.task_lease import (
+                PROGRESS_BUDGET_SECONDS as TASK_LEASE_RECOVERY_BUDGET_SECONDS,
+                task_lease_recovery_loop,
+            )
+            from app.services.tavily.export import (
+                PROGRESS_BUDGET_SECONDS as WEB_SEARCH_EXPORT_BUDGET_SECONDS,
+                start_web_search_export_daemon,
+            )
             from app.services.trigger_daemon import (
                 PROGRESS_BUDGET_SECONDS as TRIGGER_DAEMON_BUDGET_SECONDS,
                 start_trigger_daemon,
@@ -162,8 +177,18 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=TRIGGER_DAEMON_BUDGET_SECONDS,
             )
-            self.tasks.start("heartbeat", start_heartbeat(), requirement="loop")
-            self.tasks.start("agent_setup", start_agent_setup_worker(), requirement="loop")
+            self.tasks.start(
+                "heartbeat",
+                start_heartbeat(),
+                requirement="loop",
+                progress_budget_seconds=HEARTBEAT_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "agent_setup",
+                start_agent_setup_worker(),
+                requirement="loop",
+                progress_budget_seconds=AGENT_SETUP_BUDGET_SECONDS,
+            )
             self.tasks.start(
                 "agent_start_reconciler",
                 agent_start_reconciler_loop(),
@@ -206,14 +231,24 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=ADMISSION_EMAIL_BUDGET_SECONDS,
             )
-            self.tasks.start("web_search_export", start_web_search_export_daemon(), requirement="loop")
+            self.tasks.start(
+                "web_search_export",
+                start_web_search_export_daemon(),
+                requirement="loop",
+                progress_budget_seconds=WEB_SEARCH_EXPORT_BUDGET_SECONDS,
+            )
             self.tasks.start(
                 "agent_scheduler",
                 start_scheduler(),
                 requirement="loop",
                 progress_budget_seconds=SCHEDULER_BUDGET_SECONDS,
             )
-            self.tasks.start("gateway_report_relay", start_gateway_report_relay(), requirement="loop")
+            self.tasks.start(
+                "gateway_report_relay",
+                start_gateway_report_relay(),
+                requirement="loop",
+                progress_budget_seconds=GATEWAY_REPORT_RELAY_BUDGET_SECONDS,
+            )
             self.tasks.start(
                 "openclaw_update",
                 start_openclaw_update_worker(),
@@ -226,26 +261,53 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=OPENCLAW_DISPATCH_BUDGET_SECONDS,
             )
-            self.tasks.start("openclaw_delayed_replies", openclaw_delayed_reply_loop(), requirement="loop")
-            self.tasks.start("task_lease_recovery", task_lease_recovery_loop(), requirement="loop")
+            self.tasks.start(
+                "openclaw_delayed_replies",
+                openclaw_delayed_reply_loop(),
+                requirement="loop",
+                progress_budget_seconds=OPENCLAW_DELAYED_REPLIES_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "task_lease_recovery",
+                task_lease_recovery_loop(),
+                requirement="loop",
+                progress_budget_seconds=TASK_LEASE_RECOVERY_BUDGET_SECONDS,
+            )
         if role_enabled(roles, "connector"):
             from app.runtime.connectors import WeChatRuntime
-            from app.services.channels.whatsapp_personal_supervisor import personal_supervisor
-            from app.services.company_transfer_cleanup import start_transfer_cleanup_reconciler
+            from app.services.channels.whatsapp_personal_supervisor import (
+                PROGRESS_BUDGET_SECONDS as WHATSAPP_PERSONAL_BUDGET_SECONDS,
+                personal_supervisor,
+            )
+            from app.services.company_transfer_cleanup import (
+                PROGRESS_BUDGET_SECONDS as TRANSFER_CLEANUP_BUDGET_SECONDS,
+                start_transfer_cleanup_reconciler,
+            )
             from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
-            self.tasks.start("whatsapp_personal", personal_supervisor(), requirement="loop")
+            self.tasks.start(
+                "whatsapp_personal",
+                personal_supervisor(),
+                requirement="loop",
+                progress_budget_seconds=WHATSAPP_PERSONAL_BUDGET_SECONDS,
+            )
             self.tasks.start("ss-local-proxy", self.proxy.start(), requirement="setup")
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
                 self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")
 
             async def reconcile_transfers() -> None:
-                await asyncio.gather(*(task for task, finite in self.tasks.required.values() if finite))
+                with loop_progress().exempt(restart_on_error=False):
+                    await asyncio.gather(*(task for task, finite in self.tasks.required.values() if finite))
                 await start_transfer_cleanup_reconciler()
 
-            self.tasks.start("transfer_cleanup", reconcile_transfers(), requirement="loop")
+            self.tasks.start(
+                "transfer_cleanup",
+                reconcile_transfers(),
+                requirement="loop",
+                progress_budget_seconds=TRANSFER_CLEANUP_BUDGET_SECONDS,
+            )
         self.readiness.initialized = True
 
     @staticmethod
