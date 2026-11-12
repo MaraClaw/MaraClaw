@@ -5,7 +5,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Literal, assert_never
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException, WebSocket
@@ -16,8 +16,10 @@ from starlette.types import Message
 
 from app.api import websocket
 from app.records.agent import AgentRecord
+from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
+from app.services.chat_submissions import AcceptedSubmission
 from app.services.realtime_runtime import router as realtime
 
 type Lifecycle = tuple[chat_tickets.ChatTicketBinding, websocket.ConnectionManager, AsyncMock]
@@ -50,9 +52,10 @@ async def lifecycle(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Lifecycle]
         yield binding, manager, execute
 
 
-def peer_socket(sent: list[Message], *, broken_send: bool = False) -> WebSocket:
+def peer_socket(sent: list[Message], *, broken_send: bool = False, frames: tuple[Message, ...] = ()) -> WebSocket:
     incoming: list[Message] = [
         {"type": "websocket.connect"},
+        *frames,
         {"type": "websocket.disconnect", "code": 1000},
     ]
     messages = iter(incoming)
@@ -104,6 +107,67 @@ async def test_peer_disconnect_during_error_reporting_is_contained(
     assert sent[-1]["type"] == expected_frame
     assert sent[-1].get("code") == expected_code
     assert manager.active_connections.get(str(binding.agent_id), []) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history_failed", [False, True])
+async def test_welcome_requires_successfully_loaded_empty_history(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, history_failed: bool
+) -> None:
+    binding, _manager, _execute = lifecycle
+    user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id)
+    agent = AgentRecord(id=binding.agent_id, creator_id=user.id, name="Agent", welcome_message="Welcome")
+    monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
+    history = AsyncMock(return_value=[], side_effect=RuntimeError("history unavailable") if history_failed else None)
+    monkeypatch.setattr(websocket.chat_message_dao, "list_recent", history)
+    report = Mock()
+    monkeypatch.setattr(websocket, "report_exception", report)
+    sent: list[Message] = []
+    handler = websocket.WebSocketChatHandler(peer_socket(sent), binding.agent_id, "opaque", str(binding.session_id))
+
+    await handler.run()
+
+    events = [json.loads(frame["text"]) for frame in sent if frame["type"] == "websocket.send"]
+    assert [event["type"] for event in events] == (["connected"] if history_failed else ["connected", "done"])
+    assert not any(frame["type"] == "websocket.close" for frame in sent)
+    assert report.call_count == int(history_failed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["not json", "[]", "null", '"text"', "42", b"binary"])
+async def test_malformed_frame_reports_error_and_next_submission_is_processed(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, payload: str | bytes
+) -> None:
+    binding, _manager, _execute = lifecycle
+    submission_id = str(uuid.uuid4())
+    message = ChatMessageRecord(
+        id=uuid.uuid4(), agent_id=binding.agent_id, user_id=binding.user_id, role="user", content="hello"
+    )
+    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True))
+    monkeypatch.setattr(websocket, "accept_submission", accept)
+    report = Mock()
+    monkeypatch.setattr(websocket, "report_exception", report)
+    malformed: Message = {"type": "websocket.receive"}
+    malformed["bytes" if isinstance(payload, bytes) else "text"] = payload
+    valid: Message = {
+        "type": "websocket.receive",
+        "text": json.dumps({"content": "hello", "client_submission_id": submission_id}),
+    }
+    sent: list[Message] = []
+    handler = websocket.WebSocketChatHandler(
+        peer_socket(sent, frames=(malformed, valid)), binding.agent_id, "opaque", str(binding.session_id)
+    )
+
+    await handler.run()
+
+    events = [json.loads(frame["text"]) for frame in sent if frame["type"] == "websocket.send"]
+    assert [event["type"] for event in events] == ["connected", "error", "turn_accepted"]
+    assert isinstance(events[1]["content"], str)
+    assert events[2]["client_submission_id"] == submission_id
+    accept.assert_awaited_once()
+    assert accept.call_args.args[0].content == "hello"
+    assert not any(frame["type"] == "websocket.close" for frame in sent)
+    report.assert_not_called()
 
 
 async def test_redis_unregister_failure_is_contained_after_peer_disconnect(lifecycle: Lifecycle) -> None:

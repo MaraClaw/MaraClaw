@@ -72,7 +72,7 @@ RESUBSCRIBE_CLOSE_CODE = 1012
 
 def _json_object_payload(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
-        return {}
+        raise TypeError("JSON object required")
     return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
@@ -311,6 +311,7 @@ class WebSocketChatHandler:
         self.ctx_size: int = 100
         self.user_display_name: str = ""
         self.history_messages: list[ChatMessageRecord] = []
+        self._history_unavailable: bool = False
         self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
 
@@ -358,7 +359,10 @@ class WebSocketChatHandler:
         """Keep Redis presence alive; the TTL would otherwise end cross-instance delivery."""
         while True:
             await _presence_sleep(PRESENCE_REFRESH_SECONDS)
-            await manager.refresh_presence(str(self.agent_id), self.websocket)
+            try:
+                await manager.refresh_presence(str(self.agent_id), self.websocket)
+            except Exception as error:
+                logger.warning("[WS] Presence refresh failed: {}", type(error).__name__)
 
     async def _stop_presence_refresh(self) -> None:
         task, self._presence_task = self._presence_task, None
@@ -402,6 +406,7 @@ class WebSocketChatHandler:
             )
             logger.info(f"[WS] Loaded {len(self.history_messages)} history messages for session {self.conv_id}")
         except Exception as e:
+            self._history_unavailable = True
             report_exception(e, source="websocket", operation="load-history")
             logger.warning(f"[WS] History load failed (non-fatal): {e}")
 
@@ -412,13 +417,20 @@ class WebSocketChatHandler:
     async def message_loop(self):
         """Core message processing loop."""
         # Send welcome message on new session (no history)
-        if self.welcome_message and not self.history_messages:
+        if self.welcome_message and not self.history_messages and not self._history_unavailable:
             await _send_chat_event(
                 self.websocket, {"type": ChatEventType.DONE, "role": "assistant", "content": self.welcome_message}
             )
 
         while True:
-            data = _json_object_payload(json_loads_value(await self.websocket.receive_text()))
+            try:
+                data = _json_object_payload(json_loads_value(await self.websocket.receive_text()))
+            except KeyError, TypeError, ValueError:
+                await _send_chat_event(
+                    self.websocket,
+                    {"type": ChatEventType.ERROR, "content": "Invalid chat message. Expected a JSON object."},
+                )
+                continue
 
             # Set a unique trace ID for this specific message processing.
             trace_id = str(uuid.uuid4())[:12]
