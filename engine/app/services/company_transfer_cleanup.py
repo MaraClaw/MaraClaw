@@ -1,5 +1,5 @@
 import sqlite3
-from typing import assert_never
+from typing import Final, assert_never
 
 from anyio import sleep, to_thread
 from fastapi import HTTPException
@@ -15,11 +15,14 @@ from app.db.errors import DbError
 from app.db.session import connection_ctx
 from app.records.company_transfer import TransferChoice
 from app.records.company_transfer_cleanup import TransferCleanupRecord
+from app.runtime.tasks import loop_progress
 from app.services.agent_manager import _guest_config_fingerprints, agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.company_transfer_connectors import stop_free_transfer_connectors
 from app.services.company_transfer_credentials import scrub_credentials
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_no_active_run
+
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
 async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
@@ -78,12 +81,13 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
     return None
 
 
-async def reconcile_transfer_cleanup() -> None:
+async def reconcile_transfer_cleanup() -> bool:
+    """Run one pass; ``False`` only when the pending queue could not be read."""
     try:
         pending = await cleanup.pending()
     except (DbError, RuntimeError, OSError) as exc:
         logger.opt(exception=exc).warning("Transfer runtime cleanup queue unavailable")
-        return
+        return False
     for item in pending:
         try:
             error = await complete_cleanup(item)
@@ -108,9 +112,12 @@ async def reconcile_transfer_cleanup() -> None:
                 logger.opt(exception=exc).warning(
                     "Transfer runtime cleanup attempt recording failed agent_id={} error={}", item.agent_id, error
                 )
+    return True
 
 
 async def start_transfer_cleanup_reconciler() -> None:
+    progress = loop_progress()
     while True:
-        await reconcile_transfer_cleanup()
+        if await reconcile_transfer_cleanup():
+            progress.beat()
         await sleep(1)
