@@ -104,9 +104,31 @@ Ordinary starts and [upgrades](openclaw-updates.md) share a
 [read-only probe runner](../app/services/guest_probe.py). It runs the image helper's
 `check-ready` through a local Docker CLI subprocess, preserving the installed
 client's Docker executable/global arguments and inherited environment; only exit 0
-is ready. Each host subprocess receives the remaining readiness deadline; sleeps
+is ready. Each probe subprocess receives the remaining readiness deadline; sleeps
 are capped to that remainder, and even a second successful probe at or after the
 deadline is rejected.
+
+Readiness is decided only by the guest's own check: two consecutive successful
+probes inside the 120-second deadline. Docker state can only end the wait early; it
+never grants readiness. After each failed probe that leaves time before the
+deadline, the engine reads the container's Docker state
+([readiness loop](../app/services/guest_readiness.py)). That normally
+costs one `docker container inspect`. The SDK's handle caches its inspection for 10
+ms, so a slow read can inspect again, inside the same bound. The observation deadline
+is absolute. It is fixed before the work is handed to a worker thread, at most 5
+seconds ahead and never past the readiness deadline, so a late worker thread cannot
+extend it. If no worker thread is free before the readiness deadline, the inspect is
+skipped. The engine also stops waiting for an inspect that is still running at the
+readiness deadline.
+
+The wait ends at once, as a readiness failure, when the container is gone, when it is
+`exited` or `dead` and not restarting, or when its restart count is more than 2 above
+the count seen by the first inspect that succeeds (a crash loop under the
+`unless-stopped` restart policy). That first inspect comes after the first failed
+probe, so earlier restarts are not counted. If the inspect fails or times out,
+readiness keeps polling. What the caller does on a readiness failure is unchanged: a
+newly created guest is stopped, and an existing resumed guest is left as is. The
+upgrade executor has its own readiness loop and does not use this early exit.
 
 A host timeout terminates and reaps the local CLI process. It does **not** prove
 that the Docker daemon cancelled or rolled back an exec it already accepted.
