@@ -85,6 +85,14 @@ async def accept_submission(
         submission_fingerprint=submission.fingerprint(),
         attachments=submission.attachments,
     )
+    # Storage probes may be remote (S3): resolve them before taking the session row lock, report them after replay.
+    attachments_available = True
+    if submission.attachments:
+        storage = get_storage_backend()
+        for ref in submission.attachments:
+            if not await is_agent_file(storage, agent.id, ref.path):
+                attachments_available = False
+                break
     async with connection_ctx():
         session = await chat_session_dao.lock_for_agent(session_id, agent.id)
         if session is None:
@@ -97,11 +105,8 @@ async def accept_submission(
             return _replay(existing, candidate)
 
         require_writable_session(session)
-        if submission.attachments:
-            storage = get_storage_backend()
-            for ref in submission.attachments:
-                if not await is_agent_file(storage, agent.id, ref.path):
-                    raise InvalidChatAttachmentsError
+        if not attachments_available:
+            raise InvalidChatAttachmentsError
         await check_agent_expired(agent.id)
         current_history = history
         if shared:
