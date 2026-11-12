@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS: int = Field(default=60000, ge=0, le=2147483647)
     # The durable pool is sized on its own; it no longer inherits DATABASE_POOL_MAX_SIZE.
     DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
+    # Days to keep chat_history_changes journal rows; 0 keeps them forever.
+    CHAT_HISTORY_RETENTION_DAYS: int = Field(default=30, ge=0)
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

@@ -129,6 +129,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as CACHE_INVALIDATION_BUDGET_SECONDS,
                 start_cache_invalidation_worker,
             )
+            from app.services.chat_history_retention_worker import (
+                PROGRESS_BUDGET_SECONDS as CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
+                start_chat_history_retention_worker,
+            )
             from app.services.gateway_report_relay import start_gateway_report_relay
             from app.services.heartbeat import start_heartbeat
             from app.services.openclaw_delayed_replies import openclaw_delayed_reply_loop
@@ -189,6 +193,12 @@ class Runtime:
                 start_broadcast_email_worker(),
                 requirement="loop",
                 progress_budget_seconds=BROADCAST_EMAIL_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "chat_history_retention",
+                start_chat_history_retention_worker(),
+                requirement="loop",
+                progress_budget_seconds=CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
             )
             self.tasks.start(
                 "organization_admission_email",

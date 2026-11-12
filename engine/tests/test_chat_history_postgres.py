@@ -2,12 +2,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
+from psycopg.errors import QueryCanceled
 from tests.test_chat_submission_postgres import ReceiptDatabase
 from tests.test_redis_cache import FakeRedis
 
+from app.config import get_settings
 from app.core import redis_cache
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.db.errors import DbError
+from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.chat import ChatSessionRecord
 from app.services import chat_history
@@ -405,3 +410,162 @@ async def test_agent_conversation_index_serves_recent_history_in_order(receipt_d
     # Then the recent-history read walks one index in order instead of sorting a bitmap of the whole conversation.
     assert "ix_chat_messages_agent_conv_created" in plan, plan
     assert "Sort" not in plan, plan
+
+
+_JOURNAL_REVISIONS = "SELECT revision FROM chat_history_changes WHERE session_id = %(session)s ORDER BY recorded_at"
+
+
+async def _backdate_journal(h: HistoryDatabase, recorded_at: datetime, revisions: list[object] | None = None) -> None:
+    async with transaction(h.db.first):
+        await h.db.first.execute(
+            "UPDATE chat_history_changes SET recorded_at = %(at)s "
+            "WHERE session_id = %(session)s AND (%(all)s OR revision = ANY(%(revisions)s))",
+            {"at": recorded_at, "session": h.session.id, "all": revisions is None, "revisions": revisions or []},
+        )
+
+
+async def test_purge_deletes_at_most_limit_rows_older_than_the_cutoff(history_db: HistoryDatabase):
+    # Given five journal rows: three older than the cutoff, one exactly at it and one current.
+    h = history_db
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    async with transaction(h.db.first):
+        revisions = [
+            row["revision"] for row in await h.db.first.fetchall(_JOURNAL_REVISIONS, {"session": h.session.id})
+        ]
+    await _backdate_journal(h, cutoff - timedelta(days=1), revisions[:3])
+    await _backdate_journal(h, cutoff, revisions[3:4])
+    # When batches of two are purged until one comes back short.
+    async with transaction(h.db.first):
+        first = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=2)
+    async with transaction(h.db.first):
+        second = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=2)
+        third = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=2)
+        kept = await h.db.first.fetchall(_JOURNAL_REVISIONS, {"session": h.session.id})
+    # Then each statement deleted at most the limit, and only rows strictly older than the cutoff.
+    assert (first, second, third) == (2, 1, 0)
+    assert {row["revision"] for row in kept} == set(revisions[3:])
+
+
+async def test_purge_takes_no_session_lock_and_skips_rows_another_purge_holds(history_db: HistoryDatabase):
+    # Given every journal row expired, and a writer holding the session row while its own purge holds one row.
+    h = history_db
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    await _backdate_journal(h, cutoff - timedelta(days=1))
+    lock_session = "SELECT id FROM chat_sessions WHERE id = %(id)s FOR UPDATE"
+    purged: list[int] = []
+    finished, release = anyio.Event(), anyio.Event()
+
+    async def purge_and_stay_open() -> None:
+        async with transaction(h.db.first):
+            purged.append(await chat_message_dao.purge_history_changes(older_than=cutoff, limit=10))
+            finished.set()
+            await release.wait()
+
+    async with anyio.create_task_group() as group:
+        async with transaction(h.db.second):
+            await h.db.second.execute(lock_session, {"id": h.session.id})
+            held = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=1)
+            assert held == 1
+            # When another purge runs meanwhile.
+            group.start_soon(purge_and_stay_open)
+            with anyio.fail_after(5):
+                await finished.wait()
+        # Then it completed without waiting, and while it is still open the session row locks without waiting.
+        async with transaction(h.db.second):
+            locked = await h.db.second.fetchall(f"{lock_session} NOWAIT", {"id": h.session.id})
+        assert locked == [{"id": h.session.id}]
+        release.set()
+    async with transaction(h.db.first):
+        left = await h.db.first.fetchall(_JOURNAL_REVISIONS, {"session": h.session.id})
+    assert purged == [4]
+    assert left == []
+
+
+async def test_purge_runs_on_the_pool_under_its_statement_timeout(
+    history_db: HistoryDatabase, monkeypatch: pytest.MonkeyPatch
+):
+    # Given the engine pool on this schema with a 200 ms statement limit and every journal row expired.
+    h = history_db
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    await _backdate_journal(h, cutoff - timedelta(days=1))
+    with monkeypatch.context() as scoped:
+        scoped.setenv("DATABASE_STATEMENT_TIMEOUT_MS", "200")
+        get_settings.cache_clear()
+        _ = await init_pool(conninfo=h.db.conninfo, min_size=1, max_size=1)
+    get_settings.cache_clear()
+    try:
+        # When another session holds the journal exclusively, so the purge can end only by its own limit.
+        await h.db.second.execute("LOCK TABLE chat_history_changes IN ACCESS EXCLUSIVE MODE")
+        with anyio.fail_after(5), pytest.raises(DbError) as raised:
+            await chat_message_dao.purge_history_changes(older_than=cutoff, limit=10)
+        await h.db.second.raw.rollback()
+        deleted = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=10)
+    finally:
+        await close_pool()
+    # Then the pooled statement was cancelled by the server, and the same pool purges once the lock is gone.
+    assert isinstance(raised.value.orig, QueryCanceled)
+    assert deleted == 5
+
+
+async def test_pruned_journal_keeps_unchanged_and_window_deltas_and_resets_pruned_revisions(
+    history_db: HistoryDatabase,
+):
+    # Given a client holding the head after the fixture (window), one holding the revision after message 3
+    # (pruned), and the fixture's journal rows older than the window.
+    h = history_db
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    async with transaction(h.db.first):
+        page = await get_history_page(h.session, 50, None, agent_id=h.db.agent.id)
+        third = await h.db.first.fetchval(
+            "SELECT revision FROM chat_history_changes WHERE session_id = %(session)s AND message_id = %(id)s",
+            {"session": h.session.id, "id": UUID(int=3)},
+        )
+    window = HeldHistory(revision=str(page["revision"]), created_at=h.timestamp, message_id=UUID(int=5))
+    pruned = HeldHistory(revision=str(third), created_at=h.timestamp, message_id=UUID(int=3))
+    await _backdate_journal(h, cutoff - timedelta(days=10))
+    # And inside the window an insert, an edit of the oldest message and another insert are committed.
+    insert = (
+        "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id, created_at) "
+        "VALUES (%(id)s, %(agent)s, %(user)s, 'assistant', %(content)s, %(session)s, %(time)s)"
+    )
+    for write, params in (
+        (insert, {"id": UUID(int=6), "content": "six"}),
+        ("UPDATE chat_messages SET content = %(content)s WHERE id = %(id)s", {"id": UUID(int=1), "content": "edit"}),
+        (insert, {"id": UUID(int=7), "content": "seven"}),
+    ):
+        async with transaction(h.db.second):
+            await h.db.second.execute(
+                write,
+                {
+                    **params,
+                    "agent": h.db.agent.id,
+                    "user": h.db.user.id,
+                    "session": str(h.session.id),
+                    "time": h.timestamp,
+                },
+            )
+    async with transaction(h.db.first):
+        before = await get_history_refresh(h.session, 50, pruned, agent_id=h.db.agent.id)
+        head = await chat_message_dao.history_revision(h.session.id)
+    assert before["kind"] == "delta"
+    # When the journal is pruned below the cutoff.
+    async with transaction(h.db.first):
+        deleted = await chat_message_dao.purge_history_changes(older_than=cutoff, limit=100)
+    async with transaction(h.db.first):
+        fresh = await get_history_page(h.session, 50, None, agent_id=h.db.agent.id)
+        at_head = await get_history_refresh(
+            h.session, 50, window.model_copy(update={"revision": str(head)}), agent_id=h.db.agent.id
+        )
+        in_window = await get_history_refresh(h.session, 50, window, agent_id=h.db.agent.id)
+        reset = await get_history_refresh(h.session, 50, pruned, agent_id=h.db.agent.id)
+    # Then the head is unchanged, the window delta equals the fresh read, and the pruned revision resets.
+    changed = {str(UUID(int=index)) for index in (1, 5, 6, 7)}
+    assert deleted == 5
+    assert at_head == {"kind": "unchanged", "revision": head}
+    assert in_window["kind"] == "delta"
+    assert in_window["revision"] == fresh["revision"] == head
+    assert in_window["items"] == [item for item in fresh["items"] if item["message_id"] in changed]
+    assert [item["message_id"] for item in in_window["items"]] == [str(UUID(int=index)) for index in (1, 5, 6, 7)]
+    assert reset["kind"] == "reset"
+    assert reset["page"] == fresh
+    assert [item["message_id"] for item in fresh["items"]] == [str(UUID(int=index)) for index in range(1, 8)]

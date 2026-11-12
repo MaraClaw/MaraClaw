@@ -1434,8 +1434,23 @@ CREATE TABLE IF NOT EXISTS chat_history_changes (
     revision UUID NOT NULL,
     previous_revision UUID NOT NULL,
     message_id UUID,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, revision)
 );
+
+-- Explicit legacy upgrade: journals created before retention lack the write time. now() is stable, so PostgreSQL
+-- stores it as the missing value without rewriting the table: legacy rows read the upgrade time, reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'chat_history_changes' AND column_name = 'recorded_at'
+	) THEN
+		ALTER TABLE chat_history_changes ADD COLUMN recorded_at TIMESTAMPTZ NOT NULL DEFAULT now();
+	END IF;
+END $$;
+
+-- Retention purge order. On a large journal, build it first with CREATE INDEX CONCURRENTLY IF NOT EXISTS.
+CREATE INDEX IF NOT EXISTS ix_chat_history_changes_recorded_at ON chat_history_changes (recorded_at);
 
 CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
 DECLARE
@@ -1453,12 +1468,12 @@ BEGIN
              THEN new_conversation::uuid END
     ) ORDER BY id FOR UPDATE LOOP
         next_revision := gen_random_uuid();
-        INSERT INTO chat_history_changes (session_id, revision, previous_revision, message_id)
+        INSERT INTO chat_history_changes (session_id, revision, previous_revision, message_id, recorded_at)
         VALUES (changed_session.id, next_revision, changed_session.history_revision,
             CASE WHEN TG_OP = 'DELETE' OR
                 (TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.conversation_id, OLD.created_at) IS DISTINCT FROM
                                      ROW(NEW.id, NEW.conversation_id, NEW.created_at))
-                THEN NULL ELSE NEW.id END);
+                THEN NULL ELSE NEW.id END, clock_timestamp());
         UPDATE chat_sessions SET history_revision = next_revision WHERE id = changed_session.id;
     END LOOP;
     RETURN NULL;

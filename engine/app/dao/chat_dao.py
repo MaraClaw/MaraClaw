@@ -728,6 +728,24 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
                 return None  # A deletion/reassignment raced the revision read.
             return [ChatMessageRecord.from_row(row) for row in rows]
 
+    async def purge_history_changes(self, *, older_than: datetime, limit: int) -> int:
+        """Delete up to ``limit`` journal rows written before ``older_than``; a pruned chain refreshes as a reset.
+
+        Rows are picked in ``recorded_at`` index order and deleted by ``ctid`` (a TID scan), so a batch never
+        scans the table; the picked rows are locked by this statement, so their ``ctid`` cannot move.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """WITH expired AS (
+                       SELECT ctid FROM chat_history_changes
+                       WHERE recorded_at < %(cutoff)s
+                       ORDER BY recorded_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                   ) DELETE FROM chat_history_changes WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                     RETURNING revision""",
+                {"cutoff": older_than, "limit": limit},
+            )
+            return len(rows)
+
     async def list_for_session(
         self,
         *,

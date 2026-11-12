@@ -515,6 +515,133 @@ async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_pla
     assert (created.content, created.reply_binding_id) == ("New", None)
 
 
+_JOURNAL_RECORDED_AT = (
+    "SELECT ordinal_position, data_type, is_nullable, column_default FROM information_schema.columns "
+    "WHERE table_schema = current_schema() AND table_name = 'chat_history_changes' AND column_name = 'recorded_at'"
+)
+_JOURNAL_INDEX = (
+    "SELECT indexrelid::regclass::text AS name, indexrelid::bigint AS oid, pg_get_indexdef(indexrelid) AS definition "
+    "FROM pg_index WHERE indrelid = 'chat_history_changes'::regclass AND NOT indisprimary"
+)
+_JOURNAL_FUNCTION = "SELECT pg_get_functiondef('refresh_chat_history_revision'::regproc) AS definition"
+_JOURNAL_FILENODE = "SELECT pg_relation_filenode('chat_history_changes')::bigint AS node"
+_JOURNAL_ROWS = "SELECT session_id, revision, previous_revision, message_id FROM chat_history_changes ORDER BY revision"
+_JOURNAL_STAMPS = "SELECT revision, recorded_at FROM chat_history_changes ORDER BY revision"
+_LEGACY_JOURNAL = (
+    "CREATE TABLE chat_history_changes ("
+    "session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, revision UUID NOT NULL, "
+    "previous_revision UUID NOT NULL, message_id UUID, PRIMARY KEY (session_id, revision))"
+)
+_PREBUILD_JOURNAL = (
+    "ALTER TABLE chat_history_changes ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+    "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_chat_history_changes_recorded_at ON chat_history_changes (recorded_at)",
+)
+
+
+@pytest.mark.parametrize("prebuilt", [False, True], ids=["bootstrap", "operator-prebuilt"])
+async def test_legacy_chat_history_journal_gains_write_time_without_rewrite(
+    schema_db: DbConnection, prebuilt: bool
+) -> None:
+    # Given a fresh schema recorded as the contract.
+    await bootstrap_db.main()
+    fresh_column = await schema_db.fetchall(_JOURNAL_RECORDED_AT)
+    fresh_index = await schema_db.fetchall(_JOURNAL_INDEX)
+    fresh_function = await schema_db.fetchall(_JOURNAL_FUNCTION)
+    assert fresh_column == [
+        {"ordinal_position": 5, "data_type": "timestamp with time zone", "is_nullable": "NO", "column_default": "now()"}
+    ]
+    assert [(row["name"], str(row["definition"]).split(" USING ")[1]) for row in fresh_index] == [
+        ("ix_chat_history_changes_recorded_at", "btree (recorded_at)")
+    ]
+    # And a legacy journal (no write time, no index, old trigger function) populated by real message writes.
+    [current_function] = [
+        statement
+        for statement in bootstrap_db._statement_bodies(bootstrap_db.SCHEMA_BASELINE.read_text())
+        if statement.startswith("CREATE OR REPLACE FUNCTION refresh_chat_history_revision()")
+    ]
+    legacy_function = current_function.replace(", recorded_at)", ")").replace(" END, clock_timestamp());", " END);")
+    assert "recorded_at" not in legacy_function
+    tenant_id, user_id, agent_id, session_id = uuid4(), uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Legacy', 'Legacy', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO chat_sessions (id, agent_id, user_id, title) VALUES (%(session)s, %(agent)s, %(user)s, 'Legacy')",
+        {"session": session_id, "agent": agent_id, "user": user_id},
+    )
+    await schema_db.execute("DROP TABLE chat_history_changes")
+    await schema_db.execute(_LEGACY_JOURNAL)
+    await schema_db.execute(legacy_function)
+    message = {"agent": agent_id, "user": user_id, "session": str(session_id)}
+    await schema_db.execute(
+        "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id) "
+        "SELECT gen_random_uuid(), %(agent)s, %(user)s, 'user', 'legacy ' || n, %(session)s "
+        "FROM generate_series(1, 200) AS n",
+        message,
+    )
+    legacy_rows = await schema_db.fetchall(_JOURNAL_ROWS)
+    assert len(legacy_rows) == 200
+    prebuilt_state = None
+    if prebuilt:
+        # The operator sequence: a metadata-only column add, then an index built without blocking writes.
+        for statement in _PREBUILD_JOURNAL:
+            await schema_db.execute(statement)
+        prebuilt_state = (await schema_db.fetchall(_JOURNAL_STAMPS), await schema_db.fetchall(_JOURNAL_INDEX))
+    node = await schema_db.fetchval(_JOURNAL_FILENODE)
+    # When bootstrap upgrades it.
+    await bootstrap_db.main()
+    # Then no row is lost, the heap was not rewritten, and every legacy row reads one upgrade-time stamp.
+    assert await schema_db.fetchall(_JOURNAL_ROWS) == legacy_rows
+    assert await schema_db.fetchval(_JOURNAL_FILENODE) == node
+    stamps = await schema_db.fetchall(_JOURNAL_STAMPS)
+    assert len({row["recorded_at"] for row in stamps}) == 1
+    # And the column, index and trigger function match the fresh schema.
+    assert await schema_db.fetchall(_JOURNAL_RECORDED_AT) == fresh_column
+    index = await schema_db.fetchall(_JOURNAL_INDEX)
+    assert [(row["name"], row["definition"]) for row in index] == [
+        (row["name"], row["definition"]) for row in fresh_index
+    ]
+    assert await schema_db.fetchall(_JOURNAL_FUNCTION) == fresh_function
+    if prebuilt_state is not None:
+        # And over a prebuilt journal bootstrap kept the operator's column values and index untouched.
+        assert (stamps, index) == prebuilt_state
+    # When bootstrap reruns, Then it changes nothing.
+    await bootstrap_db.main()
+    assert await schema_db.fetchall(_JOURNAL_ROWS) == legacy_rows
+    assert await schema_db.fetchval(_JOURNAL_FILENODE) == node
+    assert await schema_db.fetchall(_JOURNAL_STAMPS) == stamps
+    assert await schema_db.fetchall(_JOURNAL_INDEX) == index
+    # And the trigger stamps each new change with its own write time, not its transaction's start.
+    async with schema_db.raw.transaction():
+        started = await schema_db.fetchval("SELECT now()")
+        for content in ("first", "second"):
+            await schema_db.execute(
+                "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id) "
+                "VALUES (gen_random_uuid(), %(agent)s, %(user)s, 'user', %(content)s, %(session)s)",
+                {**message, "content": content},
+            )
+    written = await schema_db.fetchall(
+        "SELECT c.recorded_at FROM chat_history_changes c JOIN chat_messages m ON m.id = c.message_id "
+        "WHERE m.content IN ('first', 'second') ORDER BY m.content"
+    )
+    legacy, first, second = stamps[0]["recorded_at"], written[0]["recorded_at"], written[1]["recorded_at"]
+    assert isinstance(legacy, datetime)
+    assert isinstance(started, datetime)
+    assert isinstance(first, datetime)
+    assert isinstance(second, datetime)
+    assert legacy < started < first < second
+
+
 _LIMIT_ENV = {
     "DATABASE_STATEMENT_TIMEOUT_MS": "200",
     "DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "5000",
