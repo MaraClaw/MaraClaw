@@ -5,7 +5,7 @@ from uuid import uuid4, uuid5
 import httpx
 
 from app.core.json_types import json_as_str_or, json_object_from
-from app.records.outbound_plan import OutboundChunk
+from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services.channels.outbound_errors import response_body
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.outbound_transport import require_ack
@@ -15,7 +15,7 @@ async def send_enterprise_chunk(client: httpx.AsyncClient, outbound: ConfiguredO
     target, config = outbound.target, outbound.config
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     match target.provider:
-        case "microsoft_teams":
+        case OutboundProvider.MICROSOFT_TEAMS:
             from app.api.teams import _get_teams_access_token
 
             token = await _get_teams_access_token(
@@ -30,7 +30,7 @@ async def send_enterprise_chunk(client: httpx.AsyncClient, outbound: ConfiguredO
             )
             body = response_body(response, target.provider)
             require_ack(response, target.provider, bool(body.get("id")), "missing_ack")
-        case "wecom":
+        case OutboundProvider.WECOM:
             from app.services.wecom_service import get_wecom_access_token
 
             if not app_id or not app_secret:
@@ -54,7 +54,7 @@ async def send_enterprise_chunk(client: httpx.AsyncClient, outbound: ConfiguredO
                 body.get(key) for key in ("invaliduser", "invalidparty", "invalidtag", "unlicenseduser")
             )
             require_ack(response, target.provider, accepted, str(body.get("errcode", "missing_ack")))
-        case "dingtalk":
+        case OutboundProvider.DINGTALK:
             from app.services.dingtalk_service import get_dingtalk_access_token
 
             if not app_id or not app_secret:
@@ -78,7 +78,7 @@ async def send_enterprise_chunk(client: httpx.AsyncClient, outbound: ConfiguredO
                 body.get(key) for key in ("code", "errcode", "invalidStaffIdList", "flowControlledStaffIdList")
             )
             require_ack(response, target.provider, accepted, "missing_ack")
-        case "wechat":
+        case OutboundProvider.WECHAT:
             from app.services.wechat_channel import (
                 WECHAT_CHANNEL_VERSION,
                 build_wechat_headers,

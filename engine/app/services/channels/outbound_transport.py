@@ -71,7 +71,7 @@ async def send_chunk(
     provider_message_id: str | None = None
     client = outbound_client()
     match target.provider:
-        case "slack":
+        case OutboundProvider.SLACK:
             response = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {app_secret}"},
@@ -79,7 +79,7 @@ async def send_chunk(
             )
             body = response_body(response, target.provider)
             require_ack(response, target.provider, body.get("ok") is True, str(body.get("error", "missing_ack")))
-        case "discord":
+        case OutboundProvider.DISCORD:
             response = await client.post(
                 f"https://discord.com/api/v10/channels/{target.destination}/messages",
                 headers={"Authorization": f"Bot {app_secret}"},
@@ -87,7 +87,7 @@ async def send_chunk(
             )
             body = response_body(response, target.provider)
             require_ack(response, target.provider, bool(body.get("id")), "missing_ack")
-        case "whatsapp":
+        case OutboundProvider.WHATSAPP:
             if not app_id or not app_secret:
                 raise ValueError("WhatsApp credentials are unavailable")
             await require_reply_window(outbound, clock)
@@ -113,7 +113,7 @@ async def send_chunk(
             require_ack(response, target.provider, accepted, "missing_ack")
             if isinstance(messages, list):
                 provider_message_id = json_as_str_or(json_object_from(messages[0]).get("id"))
-        case "google_chat":
+        case OutboundProvider.GOOGLE_CHAT:
             from app.services.channels.google_chat import (
                 CHAT_API_BASE,
                 CHAT_BOT_SCOPE,
@@ -138,7 +138,7 @@ async def send_chunk(
             )
             body = response_body(response, target.provider)
             require_ack(response, target.provider, bool(body.get("name")), "missing_ack")
-        case "feishu":
+        case OutboundProvider.FEISHU:
             if not app_id or not app_secret:
                 raise ValueError("Feishu credentials are unavailable")
             feishu_payload: JsonObject = {
@@ -159,7 +159,12 @@ async def send_chunk(
             body = response_body(response, target.provider)
             accepted = body.get("code") == 0 and bool(json_object_from(body.get("data")).get("message_id"))
             require_ack(response, target.provider, accepted, str(body.get("code", "missing_ack")))
-        case "microsoft_teams" | "wecom" | "dingtalk" | "wechat":
+        case (
+            OutboundProvider.MICROSOFT_TEAMS
+            | OutboundProvider.WECOM
+            | OutboundProvider.DINGTALK
+            | OutboundProvider.WECHAT
+        ):
             from app.services.channels.outbound_enterprise import send_enterprise_chunk
 
             await send_enterprise_chunk(client, outbound, chunk)

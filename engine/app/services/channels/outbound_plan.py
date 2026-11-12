@@ -19,15 +19,15 @@ from app.services.wechat_channel import WECHAT_ILINK_BASE_URL
 
 _provider = TypeAdapter(OutboundProvider)
 _LIMITS: dict[OutboundProvider, int] = {
-    "feishu": 20000,
-    "slack": 4000,
-    "microsoft_teams": 28000,
-    "google_chat": 3500,
-    "wecom": 2048,
-    "dingtalk": 2000,
-    "whatsapp": 4096,
-    "wechat": 2000,
-    "discord": 2000,
+    OutboundProvider.FEISHU: 20000,
+    OutboundProvider.SLACK: 4000,
+    OutboundProvider.MICROSOFT_TEAMS: 28000,
+    OutboundProvider.GOOGLE_CHAT: 3500,
+    OutboundProvider.WECOM: 2048,
+    OutboundProvider.DINGTALK: 2000,
+    OutboundProvider.WHATSAPP: 4096,
+    OutboundProvider.WECHAT: 2000,
+    OutboundProvider.DISCORD: 2000,
 }
 
 
@@ -42,17 +42,17 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     provider = _provider.validate_python(normalize_channel_type(session.source_channel))
     channel_type = ChannelType(provider)
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=channel_type)
-    if config is None and provider == "feishu" and agent.tenant_id is not None:
+    if config is None and provider == OutboundProvider.FEISHU and agent.tenant_id is not None:
         config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=channel_type)
     external = (session.external_conv_id or "").strip()
     if config is None:
-        if provider == "whatsapp" and external.startswith("whatsapp_personal:"):
+        if provider == OutboundProvider.WHATSAPP and external.startswith("whatsapp_personal:"):
             from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
 
             raise PersonalSendTerminalError("personal_route_revoked")
         raise ValueError("IM configuration is unavailable")
     extra = json_object_from(config.extra_config)
-    if provider == "whatsapp":
+    if provider == OutboundProvider.WHATSAPP:
         from app.dao.whatsapp_personal_dao import get_personal
         from app.records.whatsapp_personal import PersonalRoute
         from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError, route_matches
@@ -67,7 +67,7 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
                 raise PersonalSendTerminalError("personal_route_revoked")
             return ConfiguredOutbound(
                 OutboundTarget(
-                    provider="whatsapp",
+                    provider=OutboundProvider.WHATSAPP,
                     mode="personal_qr",
                     config_id=config.id,
                     account=(route.account_id, str(route.auth_epoch), str(route.generation)),
@@ -81,21 +81,21 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     destination, thread, recipient_type, endpoint, enterprise_agent_id = external, None, "", "", ""
     account: tuple[str, ...] = (config.app_id or "",)
     match provider:
-        case "slack" | "discord":
+        case OutboundProvider.SLACK | OutboundProvider.DISCORD:
             token = (config.app_secret or "").strip()
             if not token:
                 raise ValueError("IM bot token is unavailable")
-            if provider == "slack":
+            if provider == OutboundProvider.SLACK:
                 destination = external.removeprefix("slack_").removeprefix("dm_")
             else:
                 destination = external.removeprefix("discord_dm_").removeprefix("discord_").split("_", 1)[0]
-        case "feishu":
+        case OutboundProvider.FEISHU:
             if external.startswith("feishu_group_"):
                 destination, recipient_type = external.removeprefix("feishu_group_"), "chat_id"
             else:
                 destination = external.removeprefix("feishu_p2p_")
                 recipient_type = "open_id" if destination.startswith("ou_") else "user_id"
-        case "microsoft_teams":
+        case OutboundProvider.MICROSOFT_TEAMS:
             from app.services.channels.teams_auth import is_bot_framework_service_url
 
             endpoint = json_as_str_or(extra.get("service_url")).rstrip("/")
@@ -105,21 +105,23 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
                 json_as_str_or(extra.get("tenant_id")) or environ.get("TEAMS_TENANT_ID") or "common",
                 str(bool(extra.get("use_managed_identity"))),
             )
-        case "google_chat":
+        case OutboundProvider.GOOGLE_CHAT:
             destination, thread = parse_external_conv_id(external)
             info = _service_account_info(config)
             if info is None or not info:
                 raise ValueError("Google Chat service account is unavailable")
             account = (json_as_str_or(info.get("client_email")),)
-        case "wecom" | "dingtalk":
+        case OutboundProvider.WECOM | OutboundProvider.DINGTALK:
             if external.startswith(f"{provider}_group_"):
                 raise ValueError("IM group destination is unsupported")
             destination = external.removeprefix(f"{provider}_p2p_")
-            enterprise_agent_id = json_as_str_or(extra.get("wecom_agent_id" if provider == "wecom" else "agent_id"))
-        case "whatsapp":
+            enterprise_agent_id = json_as_str_or(
+                extra.get("wecom_agent_id" if provider == OutboundProvider.WECOM else "agent_id")
+            )
+        case OutboundProvider.WHATSAPP:
             destination = external.removeprefix("whatsapp_")
             endpoint = json_as_str_or(extra.get("api_version"), "v23.0")
-        case "wechat":
+        case OutboundProvider.WECHAT:
             destination = external.removeprefix("wechat_")
             if not (config.app_id or "").strip() or not (config.app_secret or "").strip():
                 raise ValueError("WeChat bot identity or token is unavailable")
@@ -151,7 +153,7 @@ def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:
     chunks: list[str] = []
     start, size = 0, 0
     for index, character in enumerate(content):
-        width = len(character.encode()) if provider in {"wecom", "microsoft_teams"} else 1
+        width = len(character.encode()) if provider in {OutboundProvider.WECOM, OutboundProvider.MICROSOFT_TEAMS} else 1
         if size + width > limit:
             chunks.append(content[start:index])
             start, size = index, 0

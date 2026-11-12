@@ -74,7 +74,7 @@ async def test_enterprise_transport_sends_one_exact_chunk_and_requires_ack(
 
 
 async def test_teams_token_cache_is_bound_to_current_credentials(monkeypatch):
-    outbound = configured("microsoft_teams")
+    outbound = configured(OutboundProvider.MICROSOFT_TEAMS)
     outbound = replace(
         outbound, target=outbound.target.model_copy(update={"endpoint": "https://smba.trafficmanager.net/amer"})
     )

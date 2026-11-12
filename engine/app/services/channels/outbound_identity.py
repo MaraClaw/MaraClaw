@@ -5,7 +5,7 @@ from typing import assert_never
 import httpx
 
 from app.core.json_types import json_as_str_or, json_object_from_response
-from app.records.outbound_plan import OutboundTarget
+from app.records.outbound_plan import OutboundProvider, OutboundTarget
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.outbound_transport import require_ack
 
@@ -21,7 +21,7 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
     target, config = snapshot.target, snapshot.config
     account = target.account
     match target.provider:
-        case "slack":
+        case OutboundProvider.SLACK:
             async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
                 response = await client.post(
                     "https://slack.com/api/auth.test", headers={"Authorization": f"Bearer {config.app_secret or ''}"}
@@ -34,7 +34,7 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
                 response, target.provider, body.get("ok") is True and bool(team_id and bot_id), "identity_unavailable"
             )
             account += (team_id, bot_id)
-        case "discord":
+        case OutboundProvider.DISCORD:
             async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
                 response = await client.get(
                     "https://discord.com/api/v10/users/@me", headers={"Authorization": f"Bot {config.app_secret or ''}"}
@@ -44,7 +44,15 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
             bot_id = json_as_str_or(body.get("id")).strip()
             require_ack(response, target.provider, body.get("bot") is True and bool(bot_id), "identity_unavailable")
             account += (bot_id,)
-        case "feishu" | "microsoft_teams" | "google_chat" | "wecom" | "dingtalk" | "whatsapp" | "wechat":
+        case (
+            OutboundProvider.FEISHU
+            | OutboundProvider.MICROSOFT_TEAMS
+            | OutboundProvider.GOOGLE_CHAT
+            | OutboundProvider.WECOM
+            | OutboundProvider.DINGTALK
+            | OutboundProvider.WHATSAPP
+            | OutboundProvider.WECHAT
+        ):
             pass
         case unreachable:
             assert_never(unreachable)

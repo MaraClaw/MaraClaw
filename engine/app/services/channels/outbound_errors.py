@@ -58,13 +58,13 @@ def provider_deadline(response: httpx.Response, now: datetime) -> datetime | Non
 
 def response_body(response: httpx.Response, provider: OutboundProvider) -> JsonObject:
     if response.status_code >= 400:
-        if provider == "discord" and response.status_code == 400:
+        if provider == OutboundProvider.DISCORD and response.status_code == 400:
             body = json_object_from_response(response)
             if body.get("code") == 50035 and bool(json_object_from(body.get("errors")).get("content")):
                 raise ProviderPayloadRejectedError(provider, "invalid_content")
         response.raise_for_status()
     body = json_object_from_response(response)
-    if provider == "slack" and body.get("error") in {"msg_too_long", "no_text"}:
+    if provider == OutboundProvider.SLACK and body.get("error") in {"msg_too_long", "no_text"}:
         raise ProviderPayloadRejectedError(provider, str(body["error"]))
     return body
 
