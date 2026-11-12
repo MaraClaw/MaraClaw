@@ -307,7 +307,10 @@ class RealtimeRouter:
                 logger.warning("[Realtime] Subscription lost: {}", type(exc).__name__)
             finally:
                 pubsub.acknowledged = False
-                await pubsub.aclose()
+                try:
+                    await pubsub.aclose()
+                except Exception as exc:
+                    logger.warning("[Realtime] Subscription close failed: {}", type(exc).__name__)
             await asyncio.sleep(1.0)
 
     async def _acknowledged(self, on_resubscribe: ResubscribeHook | None) -> None:
