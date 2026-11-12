@@ -6,6 +6,7 @@ from typing import Literal, override
 
 from anyio import to_thread
 from pywhales import ClientNotFoundError, DockerClient
+from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException
 
 from app.config import get_settings
@@ -50,6 +51,7 @@ def _check_capacity(client: DockerClient, agent: AgentRecord, memory_limit: int 
             ("status", "running"),
             ("status", "restarting"),
         ],
+        hydrate=True,
     )
     used = 0
     for guest in guests:
@@ -77,7 +79,7 @@ async def guest_admission(
         try:
             await stack.enter_async_context(setup_workspace_lock(agents_root / "_guest_admission"))
             await to_thread.run_sync(_check_capacity, client, agent, memory_limit)
-        except DockerException as exc:
+        except (DockerException, ParsingError) as exc:
             raise GuestStartPreflightError("Could not establish guest memory capacity", code="runtime_failed") from exc
         except (OSError, ClientNotFoundError) as exc:
             raise GuestStartPreflightError("Could not establish guest memory capacity") from exc

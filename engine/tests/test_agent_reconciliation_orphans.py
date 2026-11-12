@@ -1,4 +1,5 @@
 import builtins
+import json
 import sys
 from collections.abc import AsyncGenerator, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -135,6 +136,61 @@ async def test_sweep_emits_label_and_network_filters_through_the_real_wrapper(
     filters = [value for flag, value in pairwise(command) if flag == "--filter"]
     assert sorted(filters) == ["label=maraclaw.agent_id", f"network={NETWORK}"]
     assert "--all" in command
+
+
+@pytest.mark.parametrize("vanished", [False, True])
+async def test_sweep_reads_the_inventory_from_one_batch_inspect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vanished: bool
+) -> None:
+    # Given three old guests of unknown agents, one of which may vanish right after the listing.
+    client = DockerClient(client_call=[sys.executable])
+    guests = [f"{index:064x}" for index in range(1, 4)]
+    gone = guests[0] if vanished else None
+    commands: list[list[str]] = []
+
+    def run(command: Sequence[str | Path]) -> str:
+        arguments = [str(argument) for argument in command]
+        commands.append(arguments)
+        if "list" in arguments:
+            return "\n".join(guests)
+        if "inspect" not in arguments:
+            return ""
+        requested = arguments[arguments.index("inspect") + 1 :]
+        if gone in requested:
+            raise NoSuchContainer(arguments, 1)
+        return json.dumps(
+            [
+                {
+                    "Id": reference,
+                    "Created": (NOW - timedelta(minutes=10)).isoformat(),
+                    "Config": {"Labels": {"maraclaw.agent_id": str(uuid4())}},
+                    "NetworkSettings": {"Networks": {NETWORK: {}}},
+                }
+                for reference in requested
+            ]
+        )
+
+    async def get_many(_ids: list[UUID]) -> list[AgentRecord]:
+        return []
+
+    monkeypatch.setattr(container_cli, "run", run)
+    monkeypatch.setattr(
+        agent_orphans,
+        "agent_manager",
+        SimpleNamespace(docker_client=client, _agent_dir=lambda agent_id: tmp_path / str(agent_id)),
+    )
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK=NETWORK))
+    monkeypatch.setattr(agent_orphans.agent_dao, "get_many", get_many)
+    # When the sweep inventories and removes them.
+    await agent_orphans.sweep_orphan_containers(NOW)
+    # Then one batch inspect serves the listing, and a vanished guest does not stop the others' cleanup.
+    assert {command[-1] for command in commands if command[1:3] == ["container", "rm"]} == set(guests) - {gone}
+    if not vanished:
+        assert [command[1:3] for command in commands[:3]] == [
+            ["container", "list"],
+            ["container", "inspect"],
+            ["container", "stop"],
+        ]
 
 
 async def test_older_owned_duplicate_is_removed_when_the_current_guest_is_known(sweep: Sweep) -> None:

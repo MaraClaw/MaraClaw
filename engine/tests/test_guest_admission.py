@@ -1,3 +1,4 @@
+import json
 import multiprocessing
 import sys
 from collections.abc import Sequence
@@ -12,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 from pywhales import DockerClient
 from pywhales.components.container import cli_wrapper as container_cli
-from pywhales.exceptions import DockerException
+from pywhales.exceptions import DockerException, NoSuchContainer
 from tests.test_guest_start_safety import Docker, env
 
 __all__ = ["env"]
@@ -47,6 +48,42 @@ def test_admission_emits_separate_status_filters_with_real_sdk(monkeypatch: pyte
         [f"label={AGENT_LABEL}", "network=admission-deployment", "status=running", "status=restarting"]
     )
     assert "--all" in command
+
+
+@pytest.mark.parametrize("vanished", [False, True])
+def test_admission_inventory_costs_one_listing_and_one_batch_inspect(
+    monkeypatch: pytest.MonkeyPatch, vanished: bool
+) -> None:
+    # Given three running guests with 20-byte limits, one of which may vanish right after the listing.
+    agent = AgentRecord(id=uuid4(), name="guest", creator_id=uuid4())
+    client = DockerClient(client_call=[sys.executable])
+    guests = [f"{index:064x}" for index in range(1, 4)]
+    gone = guests[0] if vanished else None
+    commands: list[list[str]] = []
+
+    def run(command: Sequence[str | Path]) -> str:
+        arguments = [str(argument) for argument in command]
+        commands.append(arguments)
+        if "list" in arguments:
+            return "\n".join(guests)
+        requested = arguments[arguments.index("inspect") + 1 :]
+        if gone in requested:
+            raise NoSuchContainer(arguments, 1)
+        return json.dumps(
+            [
+                {"Id": reference, "Config": {"Labels": {AGENT_LABEL: str(uuid4())}}, "HostConfig": {"Memory": 20}}
+                for reference in requested
+            ]
+        )
+
+    monkeypatch.setattr(container_cli, "run", run)
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 20)
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 60 if vanished else 80)
+    # When admission inventories them at exactly the aggregate limit of the guests that still exist.
+    module._check_capacity(client, agent)
+    # Then every guest is read from one batch inspect, and a vanished guest is neither charged nor fatal.
+    if not vanished:
+        assert [command[1:3] for command in commands] == [["container", "list"], ["container", "inspect"]]
 
 
 @pytest.mark.parametrize(("memory", "status"), [(21, "running"), (21, "restarting"), (0, "running")])

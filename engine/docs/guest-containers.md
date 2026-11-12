@@ -175,6 +175,11 @@ hard-limit accounting, not RSS or free-memory measurement.
 - `0` disables this guest inventory check and its global lock. A nonzero value
   smaller than the per-guest limit is rejected by settings validation. Lowering
   the budget does not evict or resize existing guests.
+- Inventory is read in one batch: one `docker container list` plus one batch
+  `docker container inspect` per 100 containers, not one or more inspects per guest.
+  A guest that disappears between the listing and the inspect is left out and is not
+  charged against capacity. A malformed or mismatched batch answer is a failed
+  inventory, and admission refuses the start with `runtime_failed`.
 - Lock order is the per-agent flock first, then the shared agents-root
   `_setup_locks/_guest_admission.lock`. The global lock spans inventory,
   replacement and Docker creation, or the existing-container start on resume.
@@ -520,6 +525,14 @@ re-inspects ownership/network/age and verifies that the recorded owned guest is
 a distinct container before removing the duplicate by inspected ID. A blank or
 matching recorded reference is not enough to justify duplicate removal. Do not
 replace these checks with broad name-prefix pruning.
+
+The sweep reads its listing with one `docker container list` plus one batch
+`docker container inspect` per 100 containers. A guest that disappears between the
+two is left out and is not a candidate. A malformed or mismatched batch answer makes
+the sweep log a warning and skip that pass. A candidate whose agent still exists is
+re-inspected under its per-agent lock, together with the recorded container, before
+anything is removed. A candidate whose agent no longer exists is stopped and removed
+by its listed container ID, with no second inspect.
 
 `GET /api/agents/{agent_id}/metrics`, subject to normal agent access checks, adds
 safe [container observations](../app/services/guest_container_status.py):
