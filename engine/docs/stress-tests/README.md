@@ -5,6 +5,7 @@ This directory records the 2026-11-12 stress test of the database work behind a 
 | Path | Purpose |
 |---|---|
 | [`results-2026-11-12.md`](results-2026-11-12.md) | The recorded result: findings, fixes, before and after numbers, costs and open follow-ups |
+| [`summary-2026-11-12.md`](summary-2026-11-12.md) | One-page summary of that result, with the test hardware |
 | `run-stress.sh` | Reproduces the measurement, checks the fixed plans and exits non-zero when a check fails |
 | `run-regression-tests.sh` | Runs the PostgreSQL tests that pin each fix |
 | `lib.sh` | Disk guard and disposable-container helpers shared by both scripts |
