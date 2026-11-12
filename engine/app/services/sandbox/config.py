@@ -1,11 +1,12 @@
 """Sandbox configuration models."""
 
+import re
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import ClassVar, Self, TypedDict
+from typing import ClassVar, Final, Self, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from app.core.json_types import json_as_str_or
 from app.core.logging import logger
@@ -45,6 +46,30 @@ class SandboxType(StrEnum):
     CODEDANDBOX = "codesandbox"
     SELF_HOSTED = "self_hosted"
     AIO_SANDBOX = "aio_sandbox"
+
+
+_MEMORY_LIMIT_PATTERN: Final = re.compile(r"([0-9]+)([kmg]?)", re.IGNORECASE)
+_MEMORY_UNITS: Final = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+# Docker's daemon rejects --memory below 6 MiB; int64 is its (and rlim_t's signed) ceiling.
+_MEMORY_LIMIT_RANGE: Final = range(6 * 1024**2, 2**63)
+# Backends that read memory_limit as a byte size; remote providers forward it in their own units.
+_BYTE_SIZED_MEMORY_TYPES: Final = frozenset({SandboxType.SUBPROCESS, SandboxType.DOCKER})
+
+
+def parse_memory_limit(value: str) -> int:
+    """Parse a memory limit into bytes.
+
+    Grammar: ASCII digits with an optional case-insensitive ``k``, ``m`` or ``g`` suffix (binary multiples:
+    ``256m`` is 256 MiB, ``1g`` is 1 GiB, no suffix is bytes), between 6 MiB and 2**63 - 1 bytes. Every accepted
+    value is also accepted unchanged by Docker's ``--memory``. Raises ``ValueError`` for anything else.
+    """
+    match = _MEMORY_LIMIT_PATTERN.fullmatch(value)
+    size = int(match[1]) * _MEMORY_UNITS[match[2].lower()] if match is not None else 0
+    if size not in _MEMORY_LIMIT_RANGE:
+        raise ValueError(
+            f"Unsupported memory_limit {value!r}: use whole bytes or a k, m or g suffix, from 6m (e.g. 256m, 1g)"
+        )
+    return size
 
 
 def _same_origin(left: str, right: str) -> bool:
@@ -108,6 +133,7 @@ class SandboxConfig(BaseModel):
 
     # Local sandbox options
     cpu_limit: str = "0.5"
+    # Subprocess and Docker backends: validated against ``parse_memory_limit`` at construction.
     memory_limit: str = "256m"
     allow_network: bool = True
     allow_unsafe_fallback_when_bwrap_missing: bool = False
@@ -141,6 +167,18 @@ class SandboxConfig(BaseModel):
     # Server-established authority to reach a private endpoint. A private attribute cannot be set from JSON,
     # validation input or ``model_validate``; it never appears in dumps.
     _operator_url: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _validate_memory_limit(self) -> Self:
+        """Reject an unsupported local memory ceiling here so no backend can run without it."""
+        if self.type in _BYTE_SIZED_MEMORY_TYPES:
+            _ = parse_memory_limit(self.memory_limit)
+        return self
+
+    @property
+    def memory_limit_bytes(self) -> int:
+        """Memory ceiling in bytes for byte-sized backends (``parse_memory_limit`` grammar)."""
+        return parse_memory_limit(self.memory_limit)
 
     @property
     def operator_url(self) -> str | None:
