@@ -1,8 +1,11 @@
 """Code execution through the configured sandbox backend."""
 
 import asyncio
+import threading
 import uuid
+from collections import deque
 from pathlib import Path
+from typing import Final
 
 from app.core.json_types import JsonObject, json_as_str
 from app.core.logging import logger
@@ -12,6 +15,72 @@ from app.services.sandbox.config import SandboxConfigOverrides
 from app.services.tool_runtime.provenance import config_provenance
 
 from .registry import ToolArguments, ToolOutputCallback
+
+SANDBOX_BUSY_MESSAGE: Final = (
+    "❌ Sandbox busy: every code execution slot is in use and none freed up in time. Please retry later."
+)
+
+
+class _ExecutionSlots:
+    """Process-wide execution slots, shared by every event loop and thread.
+
+    A freed slot passes straight to the oldest waiter, so queued callers keep FIFO order and new arrivals never
+    overtake them. Each waiter is a future on its own loop, so no asyncio primitive is tied to one loop.
+    """
+
+    def __init__(self) -> None:
+        self._lock: threading.Lock = threading.Lock()
+        self._in_use: int = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+
+    async def acquire(self, limit: int, wait_seconds: float) -> bool:
+        """Take a slot, waiting at most ``wait_seconds`` for one. A cancelled or expired wait holds nothing."""
+        with self._lock:
+            if self._in_use < limit and not self._waiters:
+                self._in_use += 1
+                return True
+            if wait_seconds <= 0:
+                return False
+            waiter = asyncio.get_running_loop().create_future()
+            self._waiters.append(waiter)
+        try:
+            async with asyncio.timeout(wait_seconds):
+                await waiter
+        except TimeoutError:
+            self._abandon(waiter)
+            return False
+        except asyncio.CancelledError:
+            self._abandon(waiter)
+            raise
+        return True
+
+    def release(self) -> None:
+        with self._lock:
+            if not self._waiters:
+                self._in_use -= 1
+                return
+            waiter = self._waiters.popleft()
+        waiter.get_loop().call_soon_threadsafe(self._hand_over, waiter)
+
+    def _hand_over(self, waiter: asyncio.Future[None]) -> None:
+        # The waiter gave up after it left the queue: the slot moves on instead of being dropped.
+        if waiter.cancelled():
+            self.release()
+        else:
+            waiter.set_result(None)
+
+    def _abandon(self, waiter: asyncio.Future[None]) -> None:
+        with self._lock:
+            queued = waiter in self._waiters
+            if queued:
+                self._waiters.remove(waiter)
+        # A slot handed over just before the wait ended belongs to this caller, which no longer runs: pass it on.
+        # A hand-over still in flight finds the waiter cancelled and passes the slot on itself.
+        if not queued and not waiter.cancelled():
+            self.release()
+
+
+_EXECUTION_SLOTS = _ExecutionSlots()
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str) -> str:
@@ -99,7 +168,7 @@ async def _execute_code(
     is_e2b_tool = tool_name == "execute_code_e2b"
 
     # Import here to avoid circular imports.
-    from app.config import get_sandbox_config
+    from app.config import get_sandbox_config, get_settings
     from app.services.sandbox.config import SandboxConfig
     from app.services.sandbox.registry import get_sandbox_backend
 
@@ -121,6 +190,18 @@ async def _execute_code(
         work_dir = _prepare_work_dir(ws)
         timeout = min(requested_timeout, sandbox_config.max_timeout)
         backend = get_sandbox_backend(sandbox_config)
+        # Admission follows configuration, so a configuration error never waits for or holds a slot, and precedes the
+        # deadline, so time spent queued is not taken from the code's own timeout.
+        settings = get_settings()
+        slots = _EXECUTION_SLOTS
+        if not await slots.acquire(
+            settings.SANDBOX_MAX_CONCURRENT_EXECUTIONS, settings.SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS
+        ):
+            logger.warning(
+                f"[Sandbox] Execution refused: all {settings.SANDBOX_MAX_CONCURRENT_EXECUTIONS} slots stayed busy for "
+                f"{settings.SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS}s (agent={agent_id}, tool={tool_name})"
+            )
+            return SANDBOX_BUSY_MESSAGE
         logger.info(
             f"[Sandbox] Executing code with backend: {backend.__class__.__name__} (tool={tool_name}, timeout={timeout}s)"
         )
@@ -137,8 +218,14 @@ async def _execute_code(
                     agent_id=agent_id,
                 )
             )
+        except BaseException:
+            slots.release()
+            raise
         finally:
             active_execution_deadline.reset(token)
+        # The slot now belongs to the backend task and frees only when that task really ends, even after this call
+        # abandons it past the hard deadline.
+        execution.add_done_callback(lambda _: slots.release())
         try:
             done, _ = await asyncio.wait((execution,), timeout=deadline.settle_remaining())
             if done:

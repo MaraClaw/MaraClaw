@@ -275,6 +275,10 @@ class Settings(BaseSettings):
     SANDBOX_HTTP_PROXY: str = ""
     SANDBOX_HTTPS_PROXY: str = ""
     SANDBOX_NO_PROXY: str = ""
+    # Maximum execute_code runs at once across all agents.
+    SANDBOX_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1)
+    # Seconds an execute_code call may wait for a free slot before it is refused.
+    SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS: float = Field(default=10.0, ge=0)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=[".env", "../.env"],
