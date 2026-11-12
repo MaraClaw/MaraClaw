@@ -21,7 +21,7 @@ AWARE_TOOLS: list[BuiltinToolDefinition] = [
                 },
                 "config": {
                     "type": "object",
-                    "description": 'Type-specific config. cron: {"expr": "0 9 * * *"}. once: {"at": "2026-03-10T09:00:00+08:00"}. interval: {"minutes": 30}. poll: {"url": "...", "json_path": "$.status"}. on_message: {"from_agent_name": "Morty"} or {"from_user_name": "张三"}',
+                    "description": 'Type-specific config. cron: {"expr": "0 9 * * *"}. once: {"at": "2026-03-10T09:00:00+08:00"}. interval: {"minutes": 30}. poll: {"url": "...", "json_path": "$.status"}. on_message: {"from_agent_name": "Researcher"} or {"from_user_name": "张三"}',
                 },
                 "reason": {"type": "string", "description": "What to do when this trigger fires"},
                 "focus_ref": {

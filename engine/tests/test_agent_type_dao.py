@@ -61,13 +61,13 @@ def assert_agent_type_bound(db: RecordingDb) -> None:
 async def test_list_by_names_binds_enum_wire_value(db: RecordingDb) -> None:
     # Given an optional runtime type filter.
     # When listing tenant agents by name.
-    _ = await agent_dao.list_by_names_for_tenant(uuid4(), ["Morty"], agent_type=AgentType.OPENCLAW)
+    _ = await agent_dao.list_by_names_for_tenant(uuid4(), ["Researcher"], agent_type=AgentType.OPENCLAW)
     # Then the SQL receives the text value.
     assert_agent_type_bound(db)
 
 
 async def test_list_by_names_without_type_adds_no_predicate(db: RecordingDb) -> None:
-    _ = await agent_dao.list_by_names_for_tenant(uuid4(), ["Morty"])
+    _ = await agent_dao.list_by_names_for_tenant(uuid4(), ["Researcher"])
     assert all(not AGENT_TYPE_PREDICATE.search(query) for query, _params in db.calls)
 
 
