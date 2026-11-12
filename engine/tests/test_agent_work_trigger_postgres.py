@@ -5,6 +5,7 @@ import pytest
 from tests.channel_submission_fixtures import ChannelDatabase, channel_db, receipt_db
 
 from app.dao.chat_dao import chat_message_dao
+from app.dao.llm_dao import llm_model_dao
 from app.db.session import transaction
 from app.records.trigger import AgentTriggerRecord
 from app.services import llm
@@ -18,10 +19,15 @@ async def test_trigger_rechecks_owner_before_each_new_work_boundary(channel_db: 
     fixture = channel_db
     model_id = uuid4()
     async with transaction(fixture.db.first):
-        await fixture.db.first.execute(
-            "INSERT INTO llm_models(id,tenant_id,provider,model,api_key_encrypted,label) "
-            "VALUES (%(id)s,%(tenant)s,'anthropic','qa','test-key','QA')",
-            {"id": model_id, "tenant": fixture.tenant_id},
+        await llm_model_dao.create(
+            obj_in={
+                "id": model_id,
+                "tenant_id": fixture.tenant_id,
+                "provider": "anthropic",
+                "model": "qa",
+                "api_key_encrypted": "test-key",
+                "label": "QA",
+            }
         )
         await fixture.db.first.execute("UPDATE agents SET primary_model_id=%(id)s", {"id": model_id})
     trigger = AgentTriggerRecord(id=uuid4(), agent_id=fixture.db.agent.id, name="once", self_disabled=True)

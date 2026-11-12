@@ -1,11 +1,14 @@
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 
 import httpx
 import pytest
 from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
+from app.dao.channel_config_dao import channel_config_dao
+from app.dao.channel_credentials import channel_credentials
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao as dao
 from app.db.session import get_connection, transaction
 from app.services import gateway_report_relay as relay
@@ -24,13 +27,20 @@ async def credential_db(relay_db, request):
     limit = 4000 if provider == "slack" else 2000
     extra = {"bot_token": "stale-duplicate-token", WECHAT_CONTEXT_CACHE_KEY: {"peer": {"context_token": "context"}}}
     async with transaction(db.first):
+        config = await channel_config_dao.get_first_for_agent(db.agent.id)
+        assert config is not None
+        sealed = channel_credentials({**asdict(config), "channel_type": provider, "extra_config": extra}, "seal")
         await db.first.execute(
-            "UPDATE channel_configs SET channel_type = %(provider)s, app_id = %(app)s, extra_config = %(extra)s "
+            "UPDATE channel_configs SET channel_type = %(provider)s, app_id = %(app)s, app_secret = %(secret)s, "
+            "encrypt_key = %(encrypt)s, verification_token = %(verification)s, extra_config = %(extra)s "
             "WHERE agent_id = %(agent)s",
             {
                 "provider": provider,
                 "app": "slack" if provider == "slack" else "declared-bot",
-                "extra": Jsonb(extra),
+                "secret": sealed["app_secret"],
+                "encrypt": sealed["encrypt_key"],
+                "verification": sealed["verification_token"],
+                "extra": Jsonb(sealed["extra_config"]),
                 "agent": db.agent.id,
             },
         )
@@ -83,9 +93,11 @@ class CredentialProvider:
 
 async def change_credentials(db, row, token, *, app_id=None):
     async with transaction(db.second):
-        await db.second.execute(
-            "UPDATE channel_configs SET app_secret = %(token)s, app_id = COALESCE(%(app)s, app_id) WHERE agent_id = %(agent)s",
-            {"token": token, "app": app_id, "agent": db.agent.id},
+        config = await channel_config_dao.get_first_for_agent(db.agent.id)
+        assert config is not None
+        await channel_config_dao.update(
+            db_obj=config,
+            obj_in={"app_secret": token, "app_id": app_id if app_id is not None else config.app_id},
         )
         await db.second.execute(
             "UPDATE gateway_report_deliveries SET available_at = clock_timestamp() WHERE id = %(id)s", {"id": row.id}
@@ -176,9 +188,21 @@ async def test_missing_canonical_credentials_remain_repairable_after_ten_thousan
 async def test_configuration_change_during_preflight_cannot_send_unproved_credential(relay_db, monkeypatch, provider):
     db, row = relay_db
     async with transaction(db.second):
+        config = await channel_config_dao.get_first_for_agent(db.agent.id)
+        assert config is not None
+        sealed = channel_credentials({**asdict(config), "channel_type": provider}, "seal")
         await db.second.execute(
-            "UPDATE channel_configs SET channel_type = %(provider)s WHERE agent_id = %(id)s",
-            {"provider": provider, "id": db.agent.id},
+            "UPDATE channel_configs SET channel_type = %(provider)s, app_secret = %(secret)s, "
+            "encrypt_key = %(encrypt)s, verification_token = %(verification)s, extra_config = %(extra)s "
+            "WHERE agent_id = %(id)s",
+            {
+                "provider": provider,
+                "secret": sealed["app_secret"],
+                "encrypt": sealed["encrypt_key"],
+                "verification": sealed["verification_token"],
+                "extra": Jsonb(sealed["extra_config"]),
+                "id": db.agent.id,
+            },
         )
         await db.second.execute(
             "UPDATE chat_sessions SET source_channel = %(provider)s, external_conv_id = %(external)s WHERE id = %(id)s",

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 from app.api import background_tasks, slack
 from app.dao import agent_dao
+from app.dao.channel_credentials import channel_credentials
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.scripts import bootstrap_db
@@ -70,8 +71,10 @@ async def live_channel(schema_db, monkeypatch):
         )
     await schema_db.execute(
         "INSERT INTO channel_configs (id, agent_id, channel_type, encrypt_key, is_configured, is_connected) "
-        "VALUES (%(id)s, %(agent)s, 'slack', 'qa-secret', true, true)",
-        {"id": uuid4(), "agent": agent_id},
+        "VALUES (%(id)s, %(agent_id)s, %(channel_type)s, %(encrypt_key)s, true, true)",
+        channel_credentials(
+            {"id": uuid4(), "agent_id": agent_id, "channel_type": "slack", "encrypt_key": "qa-secret"}, "seal"
+        ),
     )
     agent = await agent_dao.get(agent_id)
     assert agent is not None
