@@ -38,6 +38,8 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 ## Docker Safety
 
 - Preserve cleanup paths for stopped/removed containers, even on timeout or error.
+- Every `pywhales` call (client construction, `info`, `image.exists`, `image.pull`, `run`, `container.wait`, log collection, `container.remove`) runs in a worker thread through AnyIO `to_thread`, never on the event loop. One `ExecutionDeadline` (the caller's, else `exec_timeout`) covers client load, image check, pull, creation, wait and logs; expiry returns exit code 124 with `TerminationReason.SANDBOX_TIMEOUT`. The `run` kwargs are unchanged.
+- A container whose `run` returns after a timeout or cancellation is removed by the worker thread that created it (`_ContainerSlot` hand-off); otherwise the event loop removes it in a detached task that no caller cancellation can stop, awaited for at most the deadline's settle budget. Known limit: if `run` raises after Docker created the container (for example a failed start), the backend holds no handle and cannot remove it; that container carries no label.
 - Do not require a live Docker daemon at import time; tests use fakes around the client API.
 - Keep output truncation and configured timeout behavior consistent with the base sandbox contract.
 - Keep no-network behavior explicit; tests cover `networks=["none"]` when `allow_network` is false.

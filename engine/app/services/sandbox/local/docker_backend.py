@@ -1,15 +1,24 @@
 """Local docker-based sandbox backend."""
 
-import time
-from collections.abc import Iterable, Iterator
+import asyncio
+import threading
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing
+from functools import partial
 from typing import Protocol, TypeIs, override
 
 from anyio import fail_after
 from anyio.to_thread import run_sync
 
 from app.core.logging import logger
-from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
+from app.services.sandbox.base import (
+    BaseSandboxBackend,
+    ExecutionDeadline,
+    ExecutionResult,
+    SandboxCapabilities,
+    TerminationReason,
+    active_execution_deadline,
+)
 from app.services.sandbox.config import SandboxConfig
 
 
@@ -95,6 +104,44 @@ _DOCKER_COMMANDS = {
     "node": ["node", "-e"],
 }
 
+# Removals outlive the caller that started them, so the loop must not collect them mid-flight.
+_removals: set[asyncio.Task[None]] = set()
+
+
+class _ContainerSlot:
+    """Hand-off of a container created in a worker thread: exactly one side ends up removing it."""
+
+    def __init__(self) -> None:
+        self._lock: threading.Lock = threading.Lock()
+        self._abandoned: bool = False
+        self._container: object | None = None
+
+    def publish(self, container: object) -> bool:
+        """Worker thread: give the new container to the loop. False when the loop already gave up on it."""
+        with self._lock:
+            if self._abandoned:
+                return False
+            self._container = container
+            return True
+
+    def abandon(self) -> object | None:
+        """Event loop: stop accepting a container. Returns the one already published, if any."""
+        with self._lock:
+            self._abandoned = True
+            return self._container
+
+
+def _timeout_result(timeout: int, deadline: ExecutionDeadline) -> ExecutionResult:
+    return ExecutionResult(
+        success=False,
+        stdout="",
+        stderr="",
+        exit_code=124,
+        duration_ms=deadline.elapsed_ms(),
+        error=f"Code execution timed out after {timeout}s",
+        termination=TerminationReason.SANDBOX_TIMEOUT,
+    )
+
 
 class DockerBackend(BaseSandboxBackend):
     """Docker-based sandbox backend.
@@ -134,7 +181,7 @@ class DockerBackend(BaseSandboxBackend):
     async def health_check(self) -> bool:
         """Check if docker is available and running."""
         try:
-            _ = self.client.info()
+            _ = await run_sync(lambda: self.client.info(), abandon_on_cancel=True)
             return True
         except Exception:
             return False
@@ -152,7 +199,12 @@ class DockerBackend(BaseSandboxBackend):
         if "timeout" in kwargs:
             raise TypeError("execute() no longer accepts 'timeout'; use 'exec_timeout'")
         timeout = exec_timeout
-        start_time = time.time()
+        supplied = kwargs.get("deadline")
+        deadline = (
+            supplied
+            if isinstance(supplied, ExecutionDeadline)
+            else active_execution_deadline.get() or ExecutionDeadline(exec_timeout)
+        )
 
         # Validate language
         if language not in _DOCKER_IMAGES:
@@ -161,7 +213,7 @@ class DockerBackend(BaseSandboxBackend):
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=deadline.elapsed_ms(),
                 error=f"Unsupported language: {language}. Use: {', '.join(_DOCKER_IMAGES.keys())}",
             )
 
@@ -183,45 +235,38 @@ class DockerBackend(BaseSandboxBackend):
 
         # Network config
         networks = ["bridge"] if self.config.allow_network else ["none"]
-        container = None
+        slot = _ContainerSlot()
 
         try:
-            # Pull image if needed
-            if not self.client.image.exists(image):
-                _ = self.client.image.pull(image)
+            # One deadline covers client load, image check, pull, creation, wait and log collection
+            with fail_after(deadline.remaining()):
+                client = await run_sync(lambda: self.client, abandon_on_cancel=True)
 
-            # Run container
-            container = self.client.run(
-                image,
-                cmd,
-                detach=True,
-                memory=memory_limit,
-                cpu_period=100000,  # Docker default
-                cpu_quota=int(float(cpu_limit) * 100000),
-                networks=networks,
-                envs=env,
-            )
+                # Pull image if needed
+                if not await run_sync(client.image.exists, image, abandon_on_cancel=True):
+                    _ = await run_sync(client.image.pull, image, abandon_on_cancel=True)
 
-            # Wait for container with timeout
-            try:
-                with fail_after(timeout):
-                    result = await run_sync(
-                        self.client.container.wait,
-                        container,
-                        abandon_on_cancel=True,
-                    )
-                    stdout, stderr = await run_sync(self._collect_logs, container, abandon_on_cancel=True)
-            except TimeoutError:
-                return ExecutionResult(
-                    success=False,
-                    stdout="",
-                    stderr="",
-                    exit_code=124,
-                    duration_ms=int((time.time() - start_time) * 1000),
-                    error=f"Code execution timed out after {timeout}s",
+                # Run container
+                container = await run_sync(
+                    self._create,
+                    slot,
+                    partial(
+                        client.run,
+                        image,
+                        cmd,
+                        detach=True,
+                        memory=memory_limit,
+                        cpu_period=100000,  # Docker default
+                        cpu_quota=int(float(cpu_limit) * 100000),
+                        networks=networks,
+                        envs=env,
+                    ),
+                    abandon_on_cancel=True,
                 )
 
-            duration_ms = int((time.time() - start_time) * 1000)
+                result = await run_sync(client.container.wait, container, abandon_on_cancel=True)
+                stdout, stderr = await run_sync(self._collect_logs, container, abandon_on_cancel=True)
+
             exit_code = _normalize_exit_code(result)
 
             return ExecutionResult(
@@ -229,40 +274,53 @@ class DockerBackend(BaseSandboxBackend):
                 stdout=stdout,
                 stderr=stderr,
                 exit_code=exit_code,
-                duration_ms=duration_ms,
+                duration_ms=deadline.elapsed_ms(),
                 error=None if exit_code == 0 else f"Exit code: {exit_code}",
             )
 
+        except TimeoutError:
+            return _timeout_result(timeout, deadline)
+
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
             error_msg = str(e)
             logger.exception("[Docker] Execution error")
 
             # Handle timeout specifically
             if "timeout" in error_msg.lower():
-                return ExecutionResult(
-                    success=False,
-                    stdout="",
-                    stderr="",
-                    exit_code=124,
-                    duration_ms=duration_ms,
-                    error=f"Code execution timed out after {timeout}s",
-                )
+                return _timeout_result(timeout, deadline)
 
             return ExecutionResult(
                 success=False,
                 stdout="",
                 stderr="",
                 exit_code=1,
-                duration_ms=duration_ms,
+                duration_ms=deadline.elapsed_ms(),
                 error=f"Docker execution error: {error_msg[:200]}",
             )
         finally:
-            if container is not None:
-                try:
-                    self.client.container.remove(container, force=True)
-                except Exception as cleanup_error:
-                    logger.warning(f"[Docker] Failed to remove container after execution: {cleanup_error}")
+            await self._remove(slot, deadline)
+
+    def _create(self, slot: _ContainerSlot, create: Callable[[], object]) -> object:
+        container = create()
+        if not slot.publish(container):
+            self._remove_container(container)
+        return container
+
+    async def _remove(self, slot: _ContainerSlot, deadline: ExecutionDeadline) -> None:
+        container = slot.abandon()
+        if container is None:
+            return
+        # A task of its own: no cancellation of the caller, however it is delivered, can stop the removal from starting
+        removal = asyncio.create_task(run_sync(self._remove_container, container))
+        _removals.add(removal)
+        removal.add_done_callback(_removals.discard)
+        _ = await asyncio.wait((removal,), timeout=deadline.settle_remaining())
+
+    def _remove_container(self, container: object) -> None:
+        try:
+            self.client.container.remove(container, force=True)
+        except Exception as cleanup_error:
+            logger.warning(f"[Docker] Failed to remove container after execution: {cleanup_error}")
 
     def _collect_logs(self, container: object) -> tuple[str, str]:
         with closing(self.client.container.logs(container, stream=True)) as logs:
