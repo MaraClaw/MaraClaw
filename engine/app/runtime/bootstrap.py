@@ -56,12 +56,6 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.warning("[startup] Skills seed failed: {}", exc)
     try:
-        from app.services.agent_seeder import seed_default_agents
-
-        await seed_default_agents()
-    except Exception as exc:
-        logger.warning("[startup] Default agents seed failed: {}", exc)
-    try:
         from app.services.agent_seeder import seed_okr_agent
 
         await seed_okr_agent()
