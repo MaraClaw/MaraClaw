@@ -602,6 +602,7 @@ export const workspace = {
   "Unable to unlock this file.": "Không thể mở khóa tập tin này.",
   "Unlock": "Mở khóa",
   "Unable to delete this file.": "Không thể xóa tập tin này.",
+  "Contents of {path}": "Nội dung của {path}",
   "Revisions": "Sửa đổi",
   "Restored": "Đã khôi phục",
   "Unable to restore this revision.": "Không thể khôi phục bản sửa đổi này.",
