@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Awaitable
 from typing import Protocol
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -27,9 +28,10 @@ from app.services.trigger_runtime import enqueue_webhook_execution
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
-RATE_LIMIT = 5  # max hits per minute per token
+RATE_LIMIT = 5  # max hits per minute per trigger
 MAX_PAYLOAD_SIZE = 65536  # 64KB max payload
-_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
+# Minted tokens are token_urlsafe(16) (22 characters); triggers created earlier keep their token_urlsafe(8) (11).
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}|[A-Za-z0-9_-]{22}")
 
 
 class _RedisExecute(Protocol):
@@ -44,14 +46,15 @@ async def _count_from_pipeline(pipe: _RedisExecute) -> int:
     return int_from_row(list[object](executed)[2])
 
 
-async def _record_and_count_hits(token: str) -> int:
-    """Record the current hit in Redis and return the rolling 60-second count."""
-    if _TOKEN_PATTERN.fullmatch(token) is None:
-        return 0
+async def _record_and_count_hits(trigger_id: UUID) -> int:
+    """Record the current hit in Redis and return the rolling 60-second count.
+
+    The key comes from a matched trigger, never from caller-supplied text.
+    """
     redis = await get_redis()
     now = time.time()
-    key = f"webhook:rate:{token}"
-    member = f"{now}:{hashlib.sha256(f'{token}:{now}'.encode()).hexdigest()[:8]}"
+    key = f"webhook:rate:{trigger_id}"
+    member = f"{now}:{hashlib.sha256(f'{trigger_id}:{now}'.encode()).hexdigest()[:8]}"
     async with redis.pipeline(transaction=True) as pipe:
         _ = pipe.zremrangebyscore(key, 0, now - 60)
         _ = pipe.zadd(key, {member: now})
@@ -71,24 +74,22 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     - Rate limiting (5 requests/minute per token)
     - Payload size limit (64KB)
     """
-    body = await read_bounded_body(request, MAX_PAYLOAD_SIZE)
-    if body is None:
-        return JSONResponse({"ok": True}, status_code=413)
-
-    # Rate limiting - use per-agent limit if available
-    hit_count = await _record_and_count_hits(token)
-
-    # We'll check per-agent rate limit after finding the trigger below.
-    # For now, apply a generous global ceiling to prevent memory abuse.
-    if hit_count >= 60:  # hard ceiling: 60/min regardless of config
-        logger.warning("Webhook hard rate limit exceeded: hits={}", hit_count)
-        return JSONResponse({"ok": True}, status_code=429)
+    # Order is the contract: a malformed token is answered before any Redis, SQL or body read, an unknown token
+    # costs one indexed lookup, and the body is read only for a matched trigger that is within its rate limit.
+    if _TOKEN_PATTERN.fullmatch(token) is None:
+        return JSONResponse({"ok": True})
 
     # Look up trigger by token (enabled webhooks only)
     target = await agent_trigger_dao.find_webhook_by_token(token)
     if not target:
         # Return 200 OK to avoid leaking whether the token exists
         return JSONResponse({"ok": True})
+
+    hit_count = await _record_and_count_hits(target.id)
+
+    if hit_count >= 60:  # hard ceiling: 60/min regardless of config
+        logger.warning("Webhook hard rate limit exceeded: hits={}", hit_count)
+        return JSONResponse({"ok": True}, status_code=429)
 
     # Per-agent rate limit check
     agent_obj = await agent_dao.get(target.agent_id)
@@ -98,7 +99,6 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     target_agent_id = target.agent_id
     target_config = target.config or {}
 
-    # Re-check hits against agent-specific limit (hits already collected above)
     if hit_count > agent_rate_limit:  # > because current hit is already counted
         logger.warning(
             "Webhook per-agent rate limit exceeded: trigger={} agent={} limit={}/min hits={}",
@@ -120,6 +120,10 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
         except Exception:
             logger.warning("Failed to record webhook rate-limit audit")
         return JSONResponse({"ok": True}, status_code=429)
+
+    body = await read_bounded_body(request, MAX_PAYLOAD_SIZE)
+    if body is None:
+        return JSONResponse({"ok": True}, status_code=413)
 
     # HMAC signature verification (optional)
     secret = target_config.get("secret")
