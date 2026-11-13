@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -243,16 +244,72 @@ async def test_webhook_set_trigger_adds_token_and_returns_url(monkeypatch: pytes
 
     monkeypatch.setattr(triggers, "ensure_focus_item", _ensure_focus_item)
     monkeypatch.setattr(audit_logger, "write_audit_log", AsyncMock())
-    monkeypatch.setattr(secrets, "token_urlsafe", lambda _length: "token123")
+    requested_sizes: list[int] = []
+
+    def mint(nbytes: int) -> str:
+        requested_sizes.append(nbytes)
+        return "token123"
+
+    monkeypatch.setattr(secrets, "token_urlsafe", mint)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://agents.example/"))
 
     result = await agent_tools._handle_set_trigger(uuid.uuid4(), _set_args(name="hook", type_="webhook", config={}))
 
+    assert requested_sizes == [16]
     assert created_holder[0].config["token"] == "token123"
     assert result.startswith(
         "✅ Webhook trigger 'hook' created.\n\nWebhook URL: https://agents.example/api/webhooks/t/token123"
     )
     assert "Tell the user to configure this URL" in result
+
+
+@pytest.mark.asyncio
+async def test_webhook_set_trigger_mints_22_url_safe_characters_and_returns_that_token(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    created_holder = _install_dao_defaults(monkeypatch)
+    monkeypatch.setattr(triggers, "ensure_focus_item", _ensure_focus_item)
+    monkeypatch.setattr(audit_logger, "write_audit_log", AsyncMock())
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://agents.example"))
+
+    result = await agent_tools._handle_set_trigger(uuid.uuid4(), _set_args(name="hook", type_="webhook", config={}))
+
+    token = created_holder[0].config["token"]
+    assert re.fullmatch(r"[A-Za-z0-9_-]{22}", token)
+    assert f"Webhook URL: https://agents.example/api/webhooks/t/{token}\n" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_token", ["legacyTok_1", "Ab1_-" * 4 + "Ab"])
+async def test_webhook_set_trigger_reenable_keeps_the_stored_token(monkeypatch: pytest.MonkeyPatch, stored_token: str):
+    agent_id = uuid.uuid4()
+    existing = _trigger(agent_id, name="hook", type_="webhook", config={"token": stored_token}, is_enabled=False)
+    created_holder = _install_dao_defaults(monkeypatch, existing=existing)
+    monkeypatch.setattr(triggers, "ensure_focus_item", _ensure_focus_item)
+    monkeypatch.setattr(audit_logger, "write_audit_log", AsyncMock())
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://agents.example"))
+
+    result = await agent_tools._handle_set_trigger(agent_id, _set_args(name="hook", type_="webhook", config={}))
+
+    assert result.startswith("✅ Trigger 'hook' re-enabled")
+    assert existing.is_enabled is True
+    assert existing.config["token"] == stored_token
+    assert created_holder == []
+
+
+@pytest.mark.asyncio
+async def test_webhook_set_trigger_does_not_rewrite_the_token_of_an_active_trigger(monkeypatch: pytest.MonkeyPatch):
+    agent_id = uuid.uuid4()
+    existing = _trigger(agent_id, name="hook", type_="webhook", config={"token": "legacyTok_1"})
+    created_holder = _install_dao_defaults(monkeypatch, existing=existing)
+    monkeypatch.setattr(triggers, "ensure_focus_item", _ensure_focus_item)
+    monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://agents.example"))
+
+    result = await agent_tools._handle_set_trigger(agent_id, _set_args(name="hook", type_="webhook", config={}))
+
+    assert result.startswith("❌ Trigger 'hook' already exists and is active.")
+    assert existing.config == {"token": "legacyTok_1"}
+    assert created_holder == []
 
 
 @pytest.mark.asyncio
