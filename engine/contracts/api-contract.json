@@ -5323,6 +5323,48 @@
           }
         ]
       },
+      "CompanyAgentSections": {
+        "description": "Agent page sections: every canonical id, and the ones hidden from members of the company.",
+        "properties": {
+          "hidden_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Sections",
+            "type": "array"
+          },
+          "sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sections",
+          "hidden_sections"
+        ],
+        "title": "CompanyAgentSections",
+        "type": "object"
+      },
+      "CompanyAgentSectionsUpdate": {
+        "description": "Replacement hidden list; duplicates collapse and the stored order is canonical.",
+        "properties": {
+          "hidden_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hidden_sections"
+        ],
+        "title": "CompanyAgentSectionsUpdate",
+        "type": "object"
+      },
       "CompanyConfigOperations": {
         "additionalProperties": false,
         "properties": {
@@ -16402,6 +16444,14 @@
             ],
             "title": "Default Secondary Model Id"
           },
+          "hidden_agent_sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Agent Sections",
+            "type": "array"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -19514,6 +19564,112 @@
           }
         ],
         "summary": "List Companies Page",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/{company_id}/agent-sections": {
+      "get": {
+        "description": "Canonical agent page sections and the ones hidden from the company's members.",
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f6167656e742d73656374696f6e73",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAgentSections"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Company Agent Sections Route",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Replace the hidden agent sections (422 for unknown ids or when every section would be hidden).",
+        "operationId": "put_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f6167656e742d73656374696f6e73",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyAgentSectionsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAgentSections"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Company Agent Sections Route",
         "tags": [
           "admin"
         ]

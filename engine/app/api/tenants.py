@@ -91,6 +91,7 @@ class TenantOut(BaseModel):
     default_fallback_model_id: uuid.UUID | None = None
     default_secondary_model_id: uuid.UUID | None = None
     logo_url: str | None = None
+    hidden_agent_sections: list[str] = []
     created_at: datetime | None = None
     is_system: bool = False
     is_default_end_user_org: bool = False

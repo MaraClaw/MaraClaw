@@ -135,6 +135,8 @@ Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few pu
 | `GET` | `/api/admin/companies/{company_id}/stats` | - | One `CompanyStats`; **404** when the company does not exist. |
 | `POST` | `/api/admin/companies` | `{ name: string(1–200), admin_email: email, admin_password: string(6–128), admin_display_name?: string }` | **201** `{ company: CompanyStats, org_admin_email, must_change_password: true }` - creates tenant + genesis org admin (initial password must be changed on first login). Claims the admin email host as the company default email domain (`techadmin@marathon.vn` → `marathon.vn`). **409** if the email or that domain is already claimed. |
 | `PUT` | `/api/admin/companies/{company_id}/toggle` | - | `{ ok, is_active }` - **400** for MaraClaw/KABERs (`is_system` or `is_default_end_user_org`). Disable deactivates org members (not `platform_admin`), stops agents, and turns off triggers/schedules. Enable restores members; agents/automations stay stopped. |
+| `GET` | `/api/admin/companies/{company_id}/agent-sections` | - | `{ sections: string[], hidden_sections: string[] }`: `sections` is always the 16 canonical agent page section ids in order (`chat, files, skills, tools, mcp, tasks, schedules, activity, channels, people, access, control, vault, pages, browser, settings`); `hidden_sections` are the ones hidden from the company's members (canonical order). A company that has never saved a choice hides `files, channels, people, access, control, vault, pages, browser` (`DEFAULT_HIDDEN_AGENT_SECTIONS`), so `chat, skills, tools, mcp, tasks, schedules, activity, settings` are visible by default. **404** when the company does not exist. |
+| `PUT` | `/api/admin/companies/{company_id}/agent-sections` | `{ hidden_sections: string[] }` | Replaces the hidden list and returns the same `{ sections, hidden_sections }` shape; duplicates collapse and the result is canonical order, `[]` shows everything. **422** for an unknown id or when every section would be hidden (one must stay visible); **404** when the company does not exist. Stored in `tenants.im_config["hidden_agent_sections"]` (no schema change); members read it as `TenantOut.hidden_agent_sections`. Visibility only: the agent section APIs themselves are not gated by it. Writes an admin audit entry `company_agent_sections_update` (`changes.hidden_sections` before/after). |
 | `GET` | `/api/admin/metrics/timeseries` | Query: `start_date`, `end_date` (datetime) | Daily series: companies, users, tokens, cache, sessions, DAU/WAU/MAU, cache hit rate |
 | `GET` | `/api/admin/metrics/leaderboards` | - | `{ top_companies[], top_agents[] }` (top 20 by tokens + cache stats) |
 | `GET` | `/api/admin/metrics/enhanced` | - | avg tokens/session 30d, 7d retention, channel distribution, tool category top10, churn warnings |
@@ -209,9 +211,11 @@ Unless noted: both `org_admin` and `platform_admin` work. Platform may cross ten
 
 ```text
 id, name, slug, im_provider, timezone, country_region, is_active,
-sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, created_at,
+sso_enabled, sso_domain, a2a_async_enabled, default_model_id, logo_url, hidden_agent_sections, created_at,
 is_system, is_default_end_user_org, can_disable
 ```
+
+`hidden_agent_sections` is `string[]`: the agent page sections platform admins hide for the company, known ids only, canonical order. Until a choice is saved it is the default hidden set (`files, channels, people, access, control, vault, pages, browser`); a saved list, including `[]`, replaces it. It is set through `PUT /api/admin/companies/{company_id}/agent-sections`, not `PUT /api/tenants/{tenant_id}`.
 
 #### Related non-admin tenant routes (context only)
 
@@ -226,7 +230,7 @@ is_system, is_default_end_user_org, can_disable
 | `GET` | `/api/tenants/registration-config` | Public. Always `{ tenant_creation: "platform_admin_only" }`. |
 | `DELETE` | `/api/tenants/{tenant_id}` | Platform admin only. Cascade delete, then tombstone identities with no remaining membership. **400** if the tenant is a system org or the default end-user org. |
 | `GET` | `/api/tenants/resolve-by-domain` | Public SSO domain resolve |
-| `GET` | `/api/tenants/me` | Any member; company + default model |
+| `GET` | `/api/tenants/me` | Any member; company + default model + `hidden_agent_sections` |
 | `GET` | `/api/tenants/me/token-usage` | Any member; token/cache aggregates |
 | `GET` | `/api/tenants/{tenant_id}/logo` | Public asset by UUID |
 

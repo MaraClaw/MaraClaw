@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.agent_sections import DEFAULT_HIDDEN_AGENT_SECTIONS, canonical_agent_sections
 from app.core.json_types import (
     datetime_from_row,
     int_from_row,
@@ -87,3 +88,12 @@ class TenantRecord:
             value = self.im_config.get("logo_url")
             return value if isinstance(value, str) and value else None
         return None
+
+    @property
+    def hidden_agent_sections(self) -> list[str]:
+        """Agent page sections hidden for this company: known ids, canonical order, the defaults when unset or malformed."""
+        if isinstance(self.im_config, dict):
+            value = self.im_config.get("hidden_agent_sections")
+            if isinstance(value, list):
+                return canonical_agent_sections(value)
+        return list(DEFAULT_HIDDEN_AGENT_SECTIONS)

@@ -1,4 +1,4 @@
-"""Platform-admin company lists: batched stats, picker options and signed keyset pages.
+"""Platform-admin company lists (batched stats, picker options, signed keyset pages) and agent section visibility.
 
 Authorization belongs to the caller and must precede cursor decoding.
 """
@@ -7,6 +7,7 @@ import uuid
 from base64 import b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from hmac import compare_digest, digest
 from typing import ClassVar, Final
@@ -15,9 +16,10 @@ from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.config import get_settings
+from app.core.domain.agent_sections import AGENT_SECTION_IDS, canonical_agent_sections
 from app.dao.tenant_dao import TenantUsageStats, tenant_dao
 from app.records.tenant import TenantRecord
-from app.schemas.admin_companies import CompanyOption, CompanyPageOut, CompanyStats
+from app.schemas.admin_companies import CompanyAgentSections, CompanyOption, CompanyPageOut, CompanyStats
 
 MAX_CURSOR_LENGTH: Final = 1024
 MAX_SEARCH_LENGTH: Final = 200
@@ -136,3 +138,45 @@ async def get_company_stats(company_id: uuid.UUID) -> CompanyStats | None:
     if tenant is None:
         return None
     return (await _stats_rows([tenant]))[0]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSectionsUpdate:
+    """Outcome of replacing a company's hidden agent sections."""
+
+    previous: list[str]
+    current: CompanyAgentSections
+
+
+def _agent_sections(hidden: Sequence[str]) -> CompanyAgentSections:
+    return CompanyAgentSections(sections=list(AGENT_SECTION_IDS), hidden_sections=list(hidden))
+
+
+def _validated_hidden_sections(requested: Sequence[str]) -> list[str]:
+    unknown = sorted({section for section in requested if section not in AGENT_SECTION_IDS})
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown agent sections: {', '.join(unknown[:10])}")
+    hidden = canonical_agent_sections(requested)
+    if len(hidden) == len(AGENT_SECTION_IDS):
+        raise HTTPException(status_code=422, detail="At least one agent section must stay visible")
+    return hidden
+
+
+async def get_company_agent_sections(company_id: uuid.UUID) -> CompanyAgentSections | None:
+    tenant = await tenant_dao.get(company_id)
+    if tenant is None:
+        return None
+    return _agent_sections(tenant.hidden_agent_sections)
+
+
+async def set_company_agent_sections(company_id: uuid.UUID, requested: Sequence[str]) -> AgentSectionsUpdate | None:
+    """Replace the hidden list (stored in ``im_config``); ``None`` when the company does not exist."""
+    hidden = _validated_hidden_sections(requested)
+    tenant = await tenant_dao.get(company_id)
+    if tenant is None:
+        return None
+    previous = tenant.hidden_agent_sections
+    config = dict(tenant.im_config or {})
+    config["hidden_agent_sections"] = hidden
+    updated = await tenant_dao.update(db_obj=tenant, obj_in={"im_config": config})
+    return AgentSectionsUpdate(previous=previous, current=_agent_sections(updated.hidden_agent_sections))
