@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 from jose import jwt
 from pydantic import TypeAdapter, ValidationError
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.core import security
 from app.core.internal_contracts import AccessTokenClaims, AccessTokenPayload, Sink
@@ -58,12 +59,15 @@ async def test_access_token_encodes_datetime_as_numeric_date(monkeypatch: pytest
     monkeypatch.setattr(security, "datetime", Clock)
     identity_id = uuid4()
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch, None)
 
-    token = await security.create_access_token("user", "member", timedelta(seconds=90), identity_id=identity_id)
+    token = await security.create_access_token(
+        str(identity_id), "member", timedelta(seconds=90), identity_id=identity_id
+    )
 
     payload = security.decode_access_token(token)
     assert payload == {
-        "sub": "user",
+        "sub": str(identity_id),
         "role": "member",
         "exp": timegm((issued_at + timedelta(seconds=90)).utctimetuple()),
         "gen": 7,

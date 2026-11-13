@@ -138,7 +138,8 @@ async def create_access_token(
         if membership_generation is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
     else:
-        membership_generation = 0
+        # An identity-only subject (no users row yet) has no membership to revoke.
+        membership_generation = await user_dao.get_membership_generation(uuid.UUID(user_id)) or 0
     generation = await identity_dao.get_auth_generation(identity_id)
     if generation is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")

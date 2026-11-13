@@ -155,11 +155,14 @@ async def test_identity_only_mint_reads_persisted_generation_without_membership(
     monkeypatch.setattr(security.user_dao, "get", membership)
     generation = AsyncMock(return_value=9)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    no_membership_row = pin_membership_generation(monkeypatch, None)
 
     # When minting explicitly for that identity, then the persisted generation is retained.
     token = await security.create_access_token(str(identity_id), "user", identity_id=identity_id)
     assert security.decode_access_token(token)["gen"] == 9
+    assert security.decode_access_token(token)["mgen"] == 0
     generation.assert_awaited_once_with(identity_id)
+    no_membership_row.assert_awaited_once_with(identity_id)
 
 
 @dataclass
@@ -353,6 +356,18 @@ async def test_minted_bearer_carries_the_membership_generation_it_was_issued_und
 
     # When a bearer is minted, then the claim is the stored value, not a default.
     assert security.decode_access_token(await world.mint())["mgen"] == membership.generation
+
+
+async def test_bearer_minted_for_an_explicit_identity_works_after_reactivation(world: _World) -> None:
+    # Given a reactivated membership, as the password-change route sees it.
+    await world.deactivate()
+    await world.activate()
+    member = world.memberships[0].user
+
+    # When its replacement bearer is minted with the identity passed explicitly, then it is accepted.
+    clear_row_memo()
+    token = await security.create_access_token(str(member.id), member.role, identity_id=member.identity_id)
+    assert (await world.request(token)).id == member.id
 
 
 @pytest.mark.parametrize("claim", [None, True, False, -1, "0", 1.5, [], {}])
