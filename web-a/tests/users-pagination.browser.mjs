@@ -283,9 +283,9 @@ try {
     await expect(openUser(page, 'Last member')).toBeVisible()
     const card = page.locator('[data-slot="card"]').filter({ has: openUser(page, 'First member') })
     // When
-    await card.getByRole('button', { name: 'Activate', exact: true }).click()
+    await card.getByRole('button', { name: 'Activate First member', exact: true }).click()
     // Then
-    await expect(card.getByRole('button', { name: 'Deactivate', exact: true })).toBeVisible()
+    await expect(card.getByRole('button', { name: 'Deactivate First member', exact: true })).toBeVisible()
     await expect(openUser(page, 'Last member')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Load more users' })).toBeEnabled()
     assert.deepEqual(state.calls.at(-1), { tenant: 'alpha', search: '', cursor: null })

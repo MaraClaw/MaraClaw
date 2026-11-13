@@ -4,6 +4,7 @@ import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import { assistantOnboardingOptions } from '../src/hooks/onboarding-options.ts'
 import { createSessionQueryScope, fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { authSession } from '../src/lib/auth-session.ts'
+import type { AgentCreate } from '../src/lib/engine-contracts.generated.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { getOnboardingStatus, type OnboardingStatus } from '../src/lib/onboarding-api.ts'
 import { listAgents, type AgentOut } from '../src/lib/workspace-api.ts'
@@ -21,31 +22,11 @@ const assistant = {
   status: 'stopped', creator_id: session.user.id, autonomy_policy: {},
   tokens_used_today: 0, tokens_used_month: 0, created_at: '2026-10-25T08:00:00Z',
 }
-const startFailure = { status: 'failed', code: 'guest_start_failed', message: 'The guest could not start.' } as const
-
-test('a persisted assistant with a failed start stays on onboarding without completing or announcing ready', async (context) => {
-  // Given
-  const { owner } = ownAccountSession(context, session)
-  const client = new QueryClient()
-  context.after(() => client.clear())
-  const scope = createSessionQueryScope(authSession, owner, client)
-  const paths: string[] = []
-  const ready: string[] = []
-  const failures: unknown[] = []
-  context.mock.method(globalThis, 'fetch', async (path: string) => {
-    paths.push(path)
-    return Response.json(path.endsWith('/personal-assistant') ? { agent: assistant, onboarding, start: startFailure } : onboarding)
-  })
-  const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
-    ready: (agent) => { ready.push(agent.id) }, startFailed: (failure) => { failures.push(failure) }, error: () => {},
-  })))
-  // When
-  await mutation.mutate({ name: assistant.name })
-  // Then
-  assert.deepEqual(paths, ['/api/onboarding/start', '/api/onboarding/personal-assistant'])
-  assert.deepEqual(ready, [])
-  assert.deepEqual(failures, [startFailure])
-})
+const input: AgentCreate = {
+  name: assistant.name, role_description: '', permission_scope_type: 'user', permission_access_level: 'use',
+  gogcli_enabled: false, personality: 'Personality: warm. Work style: concise.', boundaries: 'No purchases.',
+}
+const phasePaths = { start: '/api/onboarding/start', agents: '/api/agents/', complete: '/api/onboarding/complete' } as const
 
 test('quota rejection remains an HTTP error without completing onboarding or announcing ready', async (context) => {
   // Given
@@ -54,70 +35,69 @@ test('quota rejection remains an HTTP error without completing onboarding or ann
   context.after(() => client.clear())
   const paths: string[] = []
   let ready = 0
-  let failures = 0
   const errors: Error[] = []
   context.mock.method(globalThis, 'fetch', async (path: string) => {
     paths.push(path)
-    return path.endsWith('/personal-assistant')
+    return path === '/api/agents/'
       ? Response.json({ detail: { code: 'agent_quota_exceeded', message: 'Agent quota reached.' } }, { status: 403 })
       : Response.json(onboarding)
   })
   const scope = createSessionQueryScope(authSession, owner, client)
   const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
-    ready: () => { ready++ }, startFailed: () => { failures++ }, error: (error) => { errors.push(error) },
+    ready: () => { ready++ }, error: (error) => { errors.push(error) },
   })))
   // When
-  await assert.rejects(mutation.mutate({ name: assistant.name }), (error) => error instanceof ApiError && error.status === 403)
+  await assert.rejects(mutation.mutate(input), (error) => error instanceof ApiError && error.status === 403)
   // Then
-  assert.deepEqual(paths, ['/api/onboarding/start', '/api/onboarding/personal-assistant'])
+  assert.deepEqual(paths, ['/api/onboarding/start', '/api/agents/'])
   assert.equal(ready, 0)
-  assert.equal(failures, 0)
   assert.equal(errors.length, 1)
 })
 
-test('a started assistant completes onboarding before the ready effect opens its chat', async (context) => {
+test('a created assistant completes onboarding before the ready effect opens its chat', async (context) => {
   // Given
   const { owner } = ownAccountSession(context, session)
   const client = new QueryClient()
   context.after(() => client.clear())
   const scope = createSessionQueryScope(authSession, owner, client)
   const events: string[] = []
-  context.mock.method(globalThis, 'fetch', async (path: string) => {
+  const created: { method: string | undefined; body: unknown }[] = []
+  context.mock.method(globalThis, 'fetch', async (path: string, options?: RequestInit) => {
     events.push(path)
-    return Response.json(path.endsWith('/personal-assistant')
-      ? { agent: assistant, onboarding, api_key: 'existing-optional-key', start: { status: 'started' } }
-      : path.endsWith('/complete') ? { ...onboarding, status: 'completed', current_step: 'completed' } : onboarding)
+    if (path === '/api/agents/') {
+      created.push({ method: options?.method, body: JSON.parse(String(options?.body)) })
+      return Response.json(assistant)
+    }
+    return Response.json(path.endsWith('/complete') ? { ...onboarding, status: 'completed', current_step: 'completed' } : onboarding)
   })
   const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
     ready: (agent) => { events.push(`chat:${agent.id}`) },
-    startFailed: () => assert.fail('A started assistant must not be reported as failed'),
-    error: () => assert.fail('A started assistant must not be reported as an HTTP error'),
+    error: () => assert.fail('A created assistant must not be reported as an HTTP error'),
   })))
   // When
-  const result = await mutation.mutate({ name: assistant.name, personality: 'warm' })
+  const result = await mutation.mutate(input)
   // Then
-  assert.deepEqual(events, ['/api/onboarding/start', '/api/onboarding/personal-assistant', '/api/onboarding/complete', `chat:${assistant.id}`])
-  assert.equal(result.api_key, 'existing-optional-key')
+  assert.deepEqual(events, ['/api/onboarding/start', '/api/agents/', '/api/onboarding/complete', `chat:${assistant.id}`])
+  assert.deepEqual(created, [{ method: 'POST', body: input }])
+  assert.equal(result.agent.id, assistant.id)
   assert.equal(result.onboarding.personal_assistant_agent_id, assistant.id)
   assert.equal(result.onboarding.status, 'completed')
 })
 
-test('retry refreshes fresh gate caches before opening the persisted assistant chat', async (context) => {
-  // Given a persisted assistant whose first start failed
+test('completion refreshes fresh gate caches before opening the created assistant chat', async (context) => {
+  // Given gate caches that still show no agent and an unfinished onboarding
   const { owner } = ownAccountSession(context, session)
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: false } } })
   context.after(() => client.clear())
   const scope = createSessionQueryScope(authSession, owner, client)
-  const bodies: unknown[] = []
   const ready: { agentId: string; gateAgents: string[]; onboardingStatus: string | undefined }[] = []
   let completions = 0
   context.mock.method(globalThis, 'fetch', async (path: string, options?: RequestInit) => {
-    if (path === '/api/agents/') return Response.json(completions ? [{ ...assistant, role_description: '', status: 'running', creator_id: session.user.id }] : [])
-    if (path.startsWith('/api/agents/page?')) return Response.json({ items: completions ? [assistant] : [], next_cursor: null, has_more: false })
-    if (path.endsWith('/personal-assistant')) {
-      bodies.push(JSON.parse(String(options?.body)))
-      return Response.json({ agent: assistant, onboarding, start: bodies.length === 1 ? startFailure : { status: 'started' } })
+    if (path === '/api/agents/') {
+      if (options?.method === 'POST') return Response.json(assistant)
+      return Response.json(completions ? [{ ...assistant, role_description: '', status: 'running', creator_id: session.user.id }] : [])
     }
+    if (path.startsWith('/api/agents/page?')) return Response.json({ items: completions ? [assistant] : [], next_cursor: null, has_more: false })
     if (path.endsWith('/complete')) completions++
     return Response.json(completions ? { ...onboarding, status: 'completed', current_step: 'completed' } : onboarding)
   })
@@ -133,25 +113,20 @@ test('retry refreshes fresh gate caches before opening the persisted assistant c
         onboardingStatus: client.getQueryData<OnboardingStatus>(['onboarding'])?.status,
       })
     },
-    startFailed: () => {}, error: () => {},
+    error: () => {},
   })))
-  const input = { name: assistant.name, personality: 'warm', work_style: 'concise', boundaries: '' }
-  await mutation.mutate(input)
-  assert.deepEqual(ready, [])
-  assert.equal(completions, 0)
   assert.deepEqual(client.getQueryData(['agents']), [])
   assert.equal(client.getQueryData<OnboardingStatus>(['onboarding'])?.status, 'in_progress')
   // When
   await mutation.mutate(input)
   // Then
-  assert.deepEqual(bodies, [input, input])
   assert.equal(completions, 1)
   assert.deepEqual(ready, [{ agentId: assistant.id, gateAgents: [assistant.id], onboardingStatus: 'completed' }])
   assert.deepEqual(client.getQueryData<Awaited<ReturnType<typeof listAgentsPage>>>(agentExistenceOptions().queryKey)?.items.map((entry) => entry.id), [assistant.id])
   assert.deepEqual(client.getQueryData<{ pages: Awaited<ReturnType<typeof listAgentsPage>>[] }>(agentPageOptions().queryKey)?.pages[0]?.items.map((entry) => entry.id), [assistant.id])
 })
 
-test('completion failure does not announce a started assistant as ready', async (context) => {
+test('completion failure does not announce a created assistant as ready', async (context) => {
   // Given
   const { owner } = ownAccountSession(context, session)
   const client = new QueryClient()
@@ -160,13 +135,13 @@ test('completion failure does not announce a started assistant as ready', async 
   let ready = 0
   context.mock.method(globalThis, 'fetch', async (path: string) => {
     if (path.endsWith('/complete')) return Response.json({ detail: 'Unavailable' }, { status: 503 })
-    return Response.json(path.endsWith('/personal-assistant') ? { agent: assistant, onboarding, start: { status: 'started' } } : onboarding)
+    return Response.json(path === '/api/agents/' ? assistant : onboarding)
   })
   const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
-    ready: () => { ready++ }, startFailed: () => {}, error: () => {},
+    ready: () => { ready++ }, error: () => {},
   })))
   // When
-  await assert.rejects(mutation.mutate({ name: assistant.name }), (error) => error instanceof ApiError && error.status === 503)
+  await assert.rejects(mutation.mutate(input), (error) => error instanceof ApiError && error.status === 503)
   // Then
   assert.equal(ready, 0)
 })
@@ -183,21 +158,21 @@ for (const transition of ['logout', 'replacement']) {
     const response = Promise.withResolvers<Response>()
     let agentReads = 0
     let ready = 0
-    context.mock.method(globalThis, 'fetch', async (path: string) => {
-      if (path === '/api/agents/') {
+    context.mock.method(globalThis, 'fetch', async (path: string, options?: RequestInit) => {
+      if (path === '/api/agents/' && options?.method !== 'POST') {
         if (agentReads++ === 0) return Response.json([])
         entered.resolve()
         return response.promise
       }
-      return Response.json(path.endsWith('/personal-assistant')
-        ? { agent: assistant, onboarding, start: { status: 'started' } }
+      return Response.json(path === '/api/agents/'
+        ? assistant
         : { ...onboarding, status: 'completed', current_step: 'completed' })
     })
     await client.fetchQuery({ queryKey: ['agents'], queryFn: listAgents })
     const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
-      ready: () => { ready++ }, startFailed: () => {}, error: () => {},
+      ready: () => { ready++ }, error: () => {},
     })))
-    const pending = mutation.mutate({ name: assistant.name })
+    const pending = mutation.mutate(input)
     await entered.promise
     // When
     if (transition === 'logout') authSession.logout(owner)
@@ -210,7 +185,7 @@ for (const transition of ['logout', 'replacement']) {
   })
 }
 
-for (const phase of ['start', 'personal-assistant', 'complete']) {
+for (const phase of ['start', 'agents', 'complete'] as const) {
   for (const transition of ['logout', 'replacement']) {
     test(`a late ${phase} response after ${transition} cannot advance onboarding or deliver page effects`, async (context) => {
       // Given
@@ -224,22 +199,22 @@ for (const phase of ['start', 'personal-assistant', 'complete']) {
       let effects = 0
       context.mock.method(globalThis, 'fetch', async (path: string) => {
         paths.push(path)
-        if (path === `/api/onboarding/${phase}`) { entered.resolve(); return response.promise }
-        return Response.json(path.endsWith('/personal-assistant') ? { agent: assistant, onboarding, start: { status: 'started' } } : onboarding)
+        if (path === phasePaths[phase]) { entered.resolve(); return response.promise }
+        return Response.json(path === '/api/agents/' ? assistant : onboarding)
       })
       const mutation = new MutationObserver(client, fenceMutationOptions(scope, assistantOnboardingOptions(scope, {
-        ready: () => { effects++ }, startFailed: () => { effects++ }, error: () => { effects++ },
+        ready: () => { effects++ }, error: () => { effects++ },
       })))
-      const pending = mutation.mutate({ name: assistant.name })
+      const pending = mutation.mutate(input)
       await entered.promise
       // When
       if (transition === 'logout') authSession.logout(owner)
       else authSession.applySession(owner, { ...session, access_token: 'other-workspace-token' })
       const retained = authSession.getSnapshot()
-      response.resolve(Response.json(phase === 'personal-assistant' ? { agent: assistant, onboarding, start: { status: 'started' } } : onboarding))
+      response.resolve(Response.json(phase === 'agents' ? assistant : onboarding))
       await assert.rejects(pending, StaleSessionError)
       // Then
-      assert.equal(paths.at(-1), `/api/onboarding/${phase}`)
+      assert.equal(paths.at(-1), phasePaths[phase])
       assert.equal(effects, 0)
       assert.equal(authSession.getSnapshot(), retained)
     })

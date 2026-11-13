@@ -12,6 +12,11 @@ from app.records.agent import AgentRecord
 from app.services import heartbeat
 from app.services.llm.types import LLMResponse, LLMToolCall, ToolPayload
 from test_finish_protocol import _finish_response, _model
+from worker_progress_fixtures import WorkerHTTP, worker_http
+
+__all__ = ["worker_http"]
+
+BUDGET = heartbeat.PROGRESS_BUDGET_SECONDS
 
 
 class _Client:
@@ -196,12 +201,27 @@ class _TickHarness:
         self.run_until: asyncio.Event = asyncio.Event()
         self.cancelled: list[uuid.UUID] = []
         self.claim_cancelled: bool = False
+        self.fail: str | None = None
+        self.block_candidates: bool = False
+        self.in_candidates: asyncio.Event = asyncio.Event()
+        self.finish_candidates: asyncio.Event = asyncio.Event()
+        self.reconcile_mode: str = "return"
+        self.reconciles: list[asyncio.Task[object] | None] = []
+        self.reconcile_cancelled: asyncio.Event = asyncio.Event()
+        self.finish_reconcile_cleanup: asyncio.Event = asyncio.Event()
 
         async def candidates() -> list[SimpleNamespace]:
+            if self.fail == "candidates":
+                raise OSError("candidate read failed")
+            if self.block_candidates:
+                self.in_candidates.set()
+                await self.finish_candidates.wait()
             return [self.agent]
 
         async def claim(_agent_id: uuid.UUID, **_kwargs: object) -> bool:
             self.claims += 1
+            if self.fail == "claim":
+                raise OSError("claim failed")
             if self.block_claim:
                 self.in_claim.set()
                 try:
@@ -225,7 +245,21 @@ class _TickHarness:
                 raise
 
         async def reconcile(_now: object) -> None:
-            return None
+            self.reconciles.append(asyncio.current_task())
+            match self.reconcile_mode:
+                case "hang":
+                    _ = await asyncio.Event().wait()
+                case "slow_cancel":
+                    try:
+                        _ = await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        self.reconcile_cancelled.set()
+                        _ = await self.finish_reconcile_cleanup.wait()
+                        raise
+                case "raise":
+                    raise RuntimeError("docker unavailable")
+                case _:
+                    return
 
         async def no_tenants(_ids: object) -> list[object]:
             return []
@@ -351,6 +385,7 @@ async def test_loop_survives_failed_tick_and_waits_between_ticks(monkeypatch: py
         release.clear()
 
     monkeypatch.setattr(heartbeat, "_heartbeat_tick", tick_once)
+    monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", AsyncMock())
     monkeypatch.setattr(heartbeat.asyncio, "sleep", cadence)
     loop = asyncio.create_task(heartbeat.start_heartbeat())
     try:
@@ -398,6 +433,7 @@ async def test_heartbeat_loop_recovers_from_tick_failure_once_per_cadence(monkey
         advance.clear()
 
     monkeypatch.setattr(heartbeat, "_heartbeat_tick", tick)
+    monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", AsyncMock())
     monkeypatch.setattr(heartbeat.asyncio, "sleep", cadence)
     loop = asyncio.create_task(heartbeat.start_heartbeat())
     try:
@@ -410,3 +446,114 @@ async def test_heartbeat_loop_recovers_from_tick_failure_once_per_cadence(monkey
     finally:
         loop.cancel()
         await asyncio.gather(loop, return_exceptions=True)
+
+
+def _start_loop(worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch) -> asyncio.Task[object]:
+    monkeypatch.setattr(heartbeat.asyncio, "sleep", worker_http.pacing.wait)
+    return worker_http.start_loop("heartbeat", heartbeat.start_heartbeat(), budget_seconds=BUDGET)
+
+
+@pytest.mark.parametrize("stage", ["candidates", "claim"])
+async def test_swallowed_selection_or_claim_failure_never_beats(
+    tick: _TickHarness, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    # Given a loop whose ticks claim and finish their heartbeats
+    tick.run_until.set()
+    loop = _start_loop(worker_http, monkeypatch)
+    await worker_http.pacing.paused()
+    # When the tick swallows a failing candidate read or claim for longer than the budget
+    tick.fail = stage
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then readiness fails while health stays up and the loop keeps running
+    await worker_http.ready(expected=False)
+    assert not loop.done()
+    # And the next tick whose selection and claims complete beats again
+    tick.fail = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+
+
+async def test_hung_candidate_read_goes_stale_without_cancelling_the_loop(
+    tick: _TickHarness, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a loop whose candidate read hangs
+    tick.run_until.set()
+    tick.block_candidates = True
+    loop = _start_loop(worker_http, monkeypatch)
+    await asyncio.wait_for(tick.in_candidates.wait(), 2)
+    # When the budget passes
+    worker_http.pacing.now += BUDGET + 1
+    # Then readiness fails and the loop is left running
+    await worker_http.ready(expected=False)
+    assert not loop.done()
+    # And the pass that finally completes beats
+    tick.finish_candidates.set()
+    await worker_http.pacing.paused()
+    await worker_http.ready(expected=True)
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+
+
+@pytest.mark.parametrize("mode", ["hang", "raise"])
+async def test_stopped_container_reconciliation_neither_blocks_nor_counts_as_progress(
+    tick: _TickHarness, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    # Given a stopped-container reconciliation that hangs forever or raises
+    tick.run_until.set()
+    tick.reconcile_mode = mode
+    loop = _start_loop(worker_http, monkeypatch)
+    # When the first tick runs after the budget has already passed
+    worker_http.pacing.now += BUDGET + 1
+    await worker_http.pacing.paused()
+    # Then that tick beat
+    await worker_http.ready(expected=True)
+    # And so did the next one, with no second reconciliation beside a parked one
+    await worker_http.pacing.step(BUDGET + 1)
+    await worker_http.ready(expected=True)
+    assert len(tick.reconciles) == (1 if mode == "hang" else 2)
+    # When selection then fails past the budget while reconciliation is parked or failing
+    tick.fail = "candidates"
+    await worker_http.pacing.step(BUDGET + 1)
+    # Then reconciliation never stood in for progress
+    await worker_http.ready(expected=False)
+    assert not loop.done()
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+
+
+async def test_shutdown_cancels_and_awaits_the_parked_reconciliation(
+    tick: _TickHarness, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a loop whose stopped-container reconciliation is parked and cleans up slowly once cancelled
+    tick.run_until.set()
+    tick.reconcile_mode = "slow_cancel"
+    loop = _start_loop(worker_http, monkeypatch)
+    await worker_http.pacing.paused()
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+    # When the runtime stops its owned loop
+    stopping = asyncio.create_task(worker_http.runtime.tasks.stop())
+    await asyncio.wait_for(tick.reconcile_cancelled.wait(), 2)
+    # Then the loop cancelled its reconciliation and is still awaiting it
+    assert not loop.done()
+    tick.finish_reconcile_cleanup.set()
+    await asyncio.wait_for(stopping, 2)
+    (reconciliation,) = tick.reconciles
+    assert reconciliation is not None
+    assert reconciliation.cancelled()
+
+
+async def test_heartbeat_executions_never_beat(
+    tick: _TickHarness, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a heartbeat execution still running from the last successful tick
+    loop = _start_loop(worker_http, monkeypatch)
+    await worker_http.pacing.paused()
+    # When later ticks fail past the budget and the execution then finishes
+    tick.fail = "candidates"
+    await worker_http.pacing.step(BUDGET + 1)
+    tick.run_until.set()
+    await heartbeat.drain_heartbeat_tasks(grace_seconds=1)
+    # Then the finished execution did not count as loop progress
+    assert tick.executed == [tick.agent_id]
+    await worker_http.ready(expected=False)
+    assert not loop.done()

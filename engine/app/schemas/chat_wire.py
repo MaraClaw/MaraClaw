@@ -28,6 +28,7 @@ class ChatEventType(StrEnum):
     DONE = "done"
     ONBOARDED = "onboarded"
     TRIGGER_NOTIFICATION = "trigger_notification"
+    HEARTBEAT = "heartbeat"
 
 
 class ChatRejectionReason(StrEnum):
@@ -135,6 +136,10 @@ class TriggerNotificationEvent(_ChatEvent[Literal[ChatEventType.TRIGGER_NOTIFICA
     session_id: UUID
 
 
+class HeartbeatEvent(_ChatEvent[Literal[ChatEventType.HEARTBEAT]]):
+    pass
+
+
 _JSON_OBJECT_ADAPTER = TypeAdapter[JsonObject](JsonObject)
 
 
@@ -212,6 +217,7 @@ type ChatServerEvent = Annotated[
     | Annotated[DoneEvent, Tag(ChatEventType.DONE)]
     | Annotated[OnboardedEvent, Tag(ChatEventType.ONBOARDED)]
     | Annotated[TriggerNotificationEvent, Tag(ChatEventType.TRIGGER_NOTIFICATION)]
+    | Annotated[HeartbeatEvent, Tag(ChatEventType.HEARTBEAT)]
     | Annotated[ChunkEvent, Tag(ChatEventType.CHUNK)]
     | Annotated[TextProgressEvent, Tag("text_progress")]
     | Annotated[ToolCallEvent, Tag(ChatEventType.TOOL_CALL)]

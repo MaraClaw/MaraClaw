@@ -67,7 +67,12 @@ def test_explicit_registry_when_exported_uses_concrete_enum_values_and_ws_defini
     # Then
     for enum_type in ENUM_TYPES:
         assert mapping(schemas[enum_type.__name__])["enum"] == [member.value for member in enum_type]
-    assert "ConnectedEvent" in mapping(mapping(schemas["ChatServerEvent"])["$defs"])
+    definitions = mapping(mapping(schemas["ChatServerEvent"])["$defs"])
+    assert "ConnectedEvent" in definitions
+    assert "HeartbeatEvent" in definitions
+    event_types = mapping(schemas["ChatEventType"])["enum"]
+    assert isinstance(event_types, list)
+    assert "heartbeat" in event_types
 
 
 class ContractItem(BaseModel):

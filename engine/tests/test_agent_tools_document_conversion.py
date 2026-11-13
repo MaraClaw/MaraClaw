@@ -200,13 +200,13 @@ async def test_html_adapter_when_called_then_delegates_to_legacy_html_public_fun
     source = tmp_path / "source.html"
     source.write_text("<h1>Test</h1>", encoding="utf-8")
     target = tmp_path / "output.pdf"
-    calls: list[tuple[Path, Path, str, ToolArguments]] = []
+    calls: list[tuple[Path, Path, str, Path, ToolArguments]] = []
 
     monkeypatch.setattr(agent_tools, "_resolve_tool_source_path", lambda *_args, **_kwargs: source)
     monkeypatch.setattr(agent_tools, "_resolve_tool_target_path", lambda *_args, **_kwargs: target)
 
-    async def convert_html(src_file: Path, tgt_file: Path, target_path: str, arguments: ToolArguments) -> str:
-        calls.append((src_file, tgt_file, target_path, arguments))
+    async def convert_html(src_file: Path, tgt_file: Path, target_path: str, ws: Path, arguments: ToolArguments) -> str:
+        calls.append((src_file, tgt_file, target_path, ws, arguments))
         return "html result"
 
     monkeypatch.setattr(document_conversion, "convert_html_to_pdf", convert_html)
@@ -216,7 +216,9 @@ async def test_html_adapter_when_called_then_delegates_to_legacy_html_public_fun
     )
 
     assert result == "html result"
-    assert calls == [(source, target, "output.pdf", {"source_path": "source.html", "target_path": "output.pdf"})]
+    assert calls == [
+        (source, target, "output.pdf", tmp_path, {"source_path": "source.html", "target_path": "output.pdf"})
+    ]
 
 
 async def test_markdown_adapter_when_core_fails_then_returns_legacy_failure(

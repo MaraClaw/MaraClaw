@@ -27,6 +27,8 @@ The enum member for `codesandbox` is misspelled as `CODEDANDBOX` while its value
 - Callers should use `get_sandbox_backend()` from `registry.py`; do not instantiate concrete backends from route or tool code.
 - `SandboxConfig` is the shared config object. Platform defaults come from `app.config.get_sandbox_config()`; per-agent overrides use `SandboxConfig.from_dict(...)`.
 - Keep env/default parsing in `app/config.py` / `SandboxConfig`, not inside individual backends.
+- `memory_limit` (platform `SANDBOX_MEMORY_LIMIT`, default `256m`) for the `subprocess` and `docker` types is validated when `SandboxConfig` is built: `parse_memory_limit` accepts ASCII digits with an optional case-insensitive `k`, `m` or `g` suffix (binary multiples; no suffix is bytes), from 6 MiB (Docker's floor) to 2**63 - 1 bytes, and `memory_limit_bytes` returns the size. Other types forward the raw value in their own units. An invalid platform or per-agent value is a `ValueError` that `execute_code` reports as `Sandbox configuration error`.
+- Concurrency is capped at the caller, not in a backend: `agent_tool_exec/code_exec.py` holds `SANDBOX_MAX_CONCURRENT_EXECUTIONS` process-wide slots (default 8, all agents and backends) and waits up to `SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS` for one (default 10, `0` refuses at once). `get_sandbox_backend` builds a new backend per call, so a backend cannot hold the count.
 - Every backend must return `ExecutionResult` and `SandboxCapabilities` shapes from `base.py`.
 - Backend selection and fallback policy belong in the registry/caller boundary, not inside API or remote backends.
 - Dangerous-pattern filters live in `local/subprocess_backend.py`. `agent_tools.py` re-exports the `_execute_code` entry point.

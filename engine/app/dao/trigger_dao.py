@@ -312,6 +312,30 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
             )
         return [TriggerExecutionHistoryRecord.from_row(row) for row in rows]
 
+    async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+        """Delete up to ``limit`` completed or failed executions finished before ``finished_before``.
+
+        Pending and processing rows (an expired lease included), terminal rows without ``finished_at`` and
+        recent rows stay. Rows another transaction holds, such as one a trigger delete is cascading into, are
+        skipped rather than waited on. The status predicate is written exactly like the partial index
+        ``ix_trigger_executions_finished_at`` so the planner can use it. The picked rows are deleted by ``ctid``
+        (a TID scan): ``id IN (SELECT ... LIMIT)`` plans as a scan of the whole table per batch. The statement's
+        own row locks keep each ``ctid`` in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM trigger_executions
+                    WHERE status IN ('completed', 'failed') AND finished_at IS NOT NULL AND finished_at < %(cutoff)s
+                    ORDER BY finished_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM trigger_executions WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": finished_before, "limit": limit},
+            )
+            return len(rows)
+
     async def renew_lease(self, execution_id: UUID, *, lease_token: str, lease_until: datetime) -> bool:
         async with self.session() as db:
             rows = await db.fetchall(

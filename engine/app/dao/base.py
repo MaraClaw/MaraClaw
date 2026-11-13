@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import MISSING, fields, is_dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import ClassVar
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ class BaseDAO[RecordT]:
     table: ClassVar[str]
     pk: ClassVar[str] = "id"
     columns: ClassVar[tuple[str, ...]] = ()
+    update_side_effects: ClassVar[Mapping[str, str]] = MappingProxyType[str, str]({})
     record_factory: Callable[[Mapping[str, object]], RecordT]
 
     def __init__(self) -> None:
@@ -149,6 +151,8 @@ class BaseDAO[RecordT]:
             else:
                 params[col] = value.value if isinstance(value, StrEnum) else value
             assignments.append(f"{col} = %({col})s")
+            if col in self.update_side_effects:
+                assignments.append(self.update_side_effects[col])
         if "updated_at" in self.columns and "updated_at" not in data:
             assignments.append("updated_at = NOW()")
         async with self.session() as db:

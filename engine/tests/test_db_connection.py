@@ -11,6 +11,7 @@ from psycopg.rows import DictRow
 from app.db.connection import DbConnection
 from app.db.errors import (
     DbError,
+    ForeignKeyViolationError,
     PoolCheckoutTimeoutError,
     QueryCanceledError,
     UniqueViolationError,
@@ -154,6 +155,18 @@ def test_map_psycopg_unique_violation() -> None:
     assert (
         _constraint_name(SimpleNamespace(diag=SimpleNamespace(constraint_name="users_email_key"))) == "users_email_key"
     )
+
+
+@pytest.mark.parametrize("violation", ["ForeignKeyViolation", "RestrictViolation"])
+def test_map_psycopg_foreign_key_violation(violation: str) -> None:
+    from psycopg import errors as psycopg_errors
+
+    original = getattr(psycopg_errors, violation)("still referenced")
+
+    mapped = map_psycopg_error(original)
+
+    assert isinstance(mapped, ForeignKeyViolationError)
+    assert mapped.orig is original
 
 
 @pytest.mark.asyncio

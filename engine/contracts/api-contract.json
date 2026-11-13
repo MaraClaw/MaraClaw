@@ -1230,6 +1230,13 @@
             "title": "Skill Ids",
             "type": "array"
           },
+          "soul": {
+            "default": "",
+            "description": "Full soul.md; empty uses the default scaffold soul",
+            "maxLength": 20000,
+            "title": "Soul",
+            "type": "string"
+          },
           "template_id": {
             "anyOf": [
               {
@@ -1494,6 +1501,39 @@
           "expected_revision"
         ],
         "title": "AgentCredentialUpdate",
+        "type": "object"
+      },
+      "AgentDailyMessagesOut": {
+        "properties": {
+          "limit": {
+            "description": "The organization tier's daily cap per agent.",
+            "title": "Limit",
+            "type": "integer"
+          },
+          "resets_at": {
+            "description": "Next local midnight in `timezone`.",
+            "format": "date-time",
+            "title": "Resets At",
+            "type": "string"
+          },
+          "timezone": {
+            "description": "IANA timezone whose calendar day is counted (UTC when the admin has none).",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "used": {
+            "description": "Human messages the agent accepted today; 0 when its stored day is not today.",
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "limit",
+          "timezone",
+          "resets_at"
+        ],
+        "title": "AgentDailyMessagesOut",
         "type": "object"
       },
       "AgentDirectoryOut": {
@@ -4510,7 +4550,8 @@
           "error",
           "done",
           "onboarded",
-          "trigger_notification"
+          "trigger_notification",
+          "heartbeat"
         ],
         "title": "ChatEventType",
         "type": "string",
@@ -4528,7 +4569,8 @@
           "ERROR",
           "DONE",
           "ONBOARDED",
-          "TRIGGER_NOTIFICATION"
+          "TRIGGER_NOTIFICATION",
+          "HEARTBEAT"
         ]
       },
       "ChatGPTSubscriptionCompleteIn": {
@@ -4914,6 +4956,9 @@
           },
           {
             "$ref": "#/components/schemas/TriggerNotificationEvent"
+          },
+          {
+            "$ref": "#/components/schemas/HeartbeatEvent"
           },
           {
             "$ref": "#/components/schemas/ChunkEvent"
@@ -5310,6 +5355,48 @@
             "type": "string"
           }
         ]
+      },
+      "CompanyAgentSections": {
+        "description": "Agent page sections: every canonical id, and the ones hidden from members of the company.",
+        "properties": {
+          "hidden_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Sections",
+            "type": "array"
+          },
+          "sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sections",
+          "hidden_sections"
+        ],
+        "title": "CompanyAgentSections",
+        "type": "object"
+      },
+      "CompanyAgentSectionsUpdate": {
+        "description": "Replacement hidden list; duplicates collapse and the stored order is canonical.",
+        "properties": {
+          "hidden_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hidden_sections"
+        ],
+        "title": "CompanyAgentSectionsUpdate",
+        "type": "object"
       },
       "CompanyConfigOperations": {
         "additionalProperties": false,
@@ -8067,6 +8154,21 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HeartbeatEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "heartbeat",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "HeartbeatEvent",
         "type": "object"
       },
       "HumanRelationshipPageResponse": {
@@ -12113,9 +12215,9 @@
       "OrganizationAdditionalAccountMonthlyUsd": {
         "description": "Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live.",
         "enum": [
-          12,
-          10,
-          8
+          6,
+          5,
+          4
         ],
         "title": "OrganizationAdditionalAccountMonthlyUsd",
         "type": "integer",
@@ -12346,6 +12448,21 @@
           "USD"
         ]
       },
+      "OrganizationDailyAgentMessageLimit": {
+        "description": "Human messages one agent accepts per local day (organization admin's timezone), per tier; the only place the numbers live.",
+        "enum": [
+          100,
+          200,
+          500
+        ],
+        "title": "OrganizationDailyAgentMessageLimit",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
       "OrganizationFileLimitBytes": {
         "description": "Largest single managed file in bytes, per tier; the only place the numbers live.",
         "enum": [
@@ -12386,6 +12503,9 @@
           "currency": {
             "$ref": "#/components/schemas/OrganizationCurrency"
           },
+          "daily_messages_per_agent": {
+            "$ref": "#/components/schemas/OrganizationDailyAgentMessageLimit"
+          },
           "id": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           },
@@ -12425,7 +12545,8 @@
           "max_accounts",
           "max_agents_per_account",
           "storage_limit_bytes",
-          "max_file_size_bytes"
+          "max_file_size_bytes",
+          "daily_messages_per_agent"
         ],
         "title": "OrganizationPlan",
         "type": "object"
@@ -12725,39 +12846,6 @@
           "display_name"
         ],
         "title": "PersonRef",
-        "type": "object"
-      },
-      "PersonalAssistantRequest": {
-        "properties": {
-          "boundaries": {
-            "default": "",
-            "maxLength": 1000,
-            "title": "Boundaries",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "personality": {
-            "default": "warm",
-            "maxLength": 64,
-            "title": "Personality",
-            "type": "string"
-          },
-          "work_style": {
-            "default": "concise",
-            "maxLength": 64,
-            "title": "Work Style",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "PersonalAssistantRequest",
         "type": "object"
       },
       "PersonalError": {
@@ -16408,6 +16496,14 @@
             ],
             "title": "Default Secondary Model Id"
           },
+          "hidden_agent_sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Agent Sections",
+            "type": "array"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -18215,6 +18311,17 @@
       },
       "UserAgentOut": {
         "properties": {
+          "daily_messages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentDailyMessagesOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Today's message usage; null for system agents and organizations without a tier."
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -19023,7 +19130,7 @@
   },
   "info": {
     "title": "MaraClaw",
-    "version": "1.1.0"
+    "version": "1.1.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -19520,6 +19627,112 @@
           }
         ],
         "summary": "List Companies Page",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/{company_id}/agent-sections": {
+      "get": {
+        "description": "Canonical agent page sections and the ones hidden from the company's members.",
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f6167656e742d73656374696f6e73",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAgentSections"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Company Agent Sections Route",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Replace the hidden agent sections (422 for unknown ids or when every section would be hidden).",
+        "operationId": "put_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f6167656e742d73656374696f6e73",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyAgentSectionsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAgentSections"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Company Agent Sections Route",
         "tags": [
           "admin"
         ]
@@ -21310,6 +21523,31 @@
           }
         ],
         "summary": "Create Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/default-soul": {
+      "get": {
+        "description": "Return the unrendered soul every new agent starts from, for editing before creation.",
+        "operationId": "get_2f6170692f6167656e74732f64656661756c742d736f756c",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Default Soul",
         "tags": [
           "agents"
         ]
@@ -39126,51 +39364,6 @@
         ]
       }
     },
-    "/api/onboarding/personal-assistant": {
-      "post": {
-        "description": "Create the user's private assistant and advance onboarding.",
-        "operationId": "post_2f6170692f6f6e626f617264696e672f706572736f6e616c2d617373697374616e74",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PersonalAssistantRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Personal Assistant",
-        "tags": [
-          "onboarding"
-        ]
-      }
-    },
     "/api/onboarding/start": {
       "post": {
         "description": "Start or resume onboarding for the current user/company.",
@@ -44496,6 +44689,65 @@
         ]
       }
     },
+    "/api/users/{user_id}/agents/{agent_id}/daily-messages/reset": {
+      "post": {
+        "description": "Zero today's message count of an agent the user created (same visibility as the user detail page).",
+        "operationId": "post_2f6170692f75736572732f7b757365725f69647d2f6167656e74732f7b6167656e745f69647d2f6461696c792d6d657373616765732f7265736574",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDailyMessagesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reset User Agent Daily Messages",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/users/{user_id}/department": {
       "put": {
         "operationId": "put_2f6170692f75736572732f7b757365725f69647d2f6465706172746d656e74",
@@ -44932,6 +45184,7 @@
       "AgentCredentialCreate",
       "AgentCredentialPayload",
       "AgentCredentialUpdate",
+      "AgentDailyMessagesOut",
       "AgentInstalledToolResponse",
       "AgentLifecycleOut",
       "AgentOut",
@@ -45088,6 +45341,7 @@
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
       "OrganizationCurrency",
+      "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
       "OrganizationMaxAccounts",
       "OrganizationPlanId",
@@ -45100,7 +45354,6 @@
       "PeriodOut",
       "PermissionAccessLevel",
       "PermissionGrantScope",
-      "PersonalAssistantRequest",
       "PersonalRelink",
       "PersonalStart",
       "PersonalStatus",
@@ -45210,6 +45463,7 @@
       "AgentCredentialCreate",
       "AgentCredentialPayload",
       "AgentCredentialUpdate",
+      "AgentDailyMessagesOut",
       "AgentDirectoryOut",
       "AgentInstalledToolResponse",
       "AgentLifecycleAvailabilityOut",
@@ -45341,6 +45595,7 @@
       "GoogleChatChannelPayload",
       "HTTPValidationError",
       "HandoverRequest",
+      "HeartbeatEvent",
       "HumanRelationshipPageResponse",
       "HumanRelationshipResponse",
       "IdentityBindRequest",
@@ -45424,6 +45679,7 @@
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
       "OrganizationCurrency",
+      "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
       "OrganizationMaxAccounts",
       "OrganizationPlan",
@@ -45439,7 +45695,6 @@
       "PermissionAccessLevel",
       "PermissionGrantScope",
       "PersonRef",
-      "PersonalAssistantRequest",
       "PersonalError",
       "PersonalQR",
       "PersonalRelink",

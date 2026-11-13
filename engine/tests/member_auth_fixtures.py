@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis
 from tests.transaction_pool_fakes import CountingPool
 
@@ -61,6 +62,7 @@ def member_auth_setup(monkeypatch: pytest.MonkeyPatch, *, count: int = 1) -> Mem
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(auth.user_dao, "get_by_identity_id", AsyncMock(return_value=users))
     monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=users[0]))
     monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=users[0]))

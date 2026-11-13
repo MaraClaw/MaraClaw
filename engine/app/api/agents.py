@@ -41,6 +41,7 @@ from app.schemas.collaboration_response_agents import (
     AgentApprovalResponse,
     AgentClampedField,
     AgentCreatedResponse,
+    AgentDefaultSoulResponse,
     AgentDetailResponse,
     AgentGatewayMessageResponse,
     AgentPermissionsResponse,
@@ -71,6 +72,7 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_provisioning import agent_provisioning, provision_agent
 from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
+from app.services.agent_workspace import read_default_soul
 from app.services.company_transfer_retention import assert_agent_deletion_allowed
 from app.services.enterprise_llm import (
     assert_distinct_model_slots,
@@ -216,6 +218,13 @@ async def list_templates(current_user: UserRecord = Depends(get_current_user)) -
         }
         for t in templates
     ]
+
+
+@router.get("/default-soul", response_model=None)
+async def get_default_soul(current_user: UserRecord = Depends(get_current_user)) -> AgentDefaultSoulResponse:
+    """Return the unrendered soul every new agent starts from, for editing before creation."""
+    _ = current_user
+    return {"soul": await read_default_soul(agent_manager._template_dir())}
 
 
 @router.get("/", response_model=list[AgentOut])

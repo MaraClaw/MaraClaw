@@ -4,6 +4,7 @@ from hashlib import sha256
 import httpx
 import pytest
 
+from app.records.outbound_plan import OutboundProvider
 from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_identity import preflight_outbound
 from app.services.channels.outbound_plan import build_plan
@@ -47,7 +48,7 @@ async def test_rotated_tokens_prove_same_public_principal_without_persisting_has
 
 @pytest.mark.parametrize("change", ["slack-team", "slack-bot", "discord-bot", "discord-declared-app"])
 async def test_public_principal_and_declared_anchor_changes_do_not_match(monkeypatch, change):
-    outbound = configured("slack" if change.startswith("slack") else "discord")
+    outbound = configured(OutboundProvider.SLACK if change.startswith("slack") else OutboundProvider.DISCORD)
     principal = {"ok": True, "team_id": "T1", "bot_id": "B1", "id": "bot-1", "bot": True}
     transport(monkeypatch, lambda _request: httpx.Response(200, json=principal))
     first = await preflight_outbound(outbound)

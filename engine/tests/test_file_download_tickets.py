@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials
 from redis.exceptions import RedisError
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import files as files_api
 from app.config import get_settings
@@ -80,6 +81,7 @@ async def mint(context, monkeypatch):
     access = AsyncMock(return_value=(SimpleNamespace(id=binding.agent_id), "use"))
     monkeypatch.setattr(files_api, "check_agent_access", access)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     jwt = await create_access_token(str(user.id), user.role, identity_id=user.identity.id)
 
     async def call(path="workspace/report.pdf", inline=False, current_user=user):

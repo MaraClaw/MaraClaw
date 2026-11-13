@@ -33,7 +33,13 @@ from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
-from app.schemas.admin_companies import CompanyOption, CompanyPageOut, CompanyStats
+from app.schemas.admin_companies import (
+    CompanyAgentSections,
+    CompanyAgentSectionsUpdate,
+    CompanyOption,
+    CompanyPageOut,
+    CompanyStats,
+)
 from app.schemas.admin_metrics import (
     AdminAgentLeaderboardEntry,
     AdminChannelDistributionEntry,
@@ -48,10 +54,12 @@ from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
 from app.services.admin_companies import (
     DEFAULT_PAGE_SIZE,
+    get_company_agent_sections,
     get_company_stats,
     list_company_options,
     list_company_page,
     list_company_stats,
+    set_company_agent_sections,
 )
 from app.services.admin_provisioning import (
     AdminActivationError,
@@ -412,6 +420,43 @@ async def toggle_company(
         ip_address=client_ip,
     )
     return {"ok": True, "is_active": new_state}
+
+
+@router.get("/companies/{company_id}/agent-sections", response_model=CompanyAgentSections)
+async def get_company_agent_sections_route(
+    company_id: uuid.UUID,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+) -> CompanyAgentSections:
+    """Canonical agent page sections and the ones hidden from the company's members."""
+    _ = current_user
+    sections = await get_company_agent_sections(company_id)
+    if sections is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return sections
+
+
+@router.put("/companies/{company_id}/agent-sections", response_model=CompanyAgentSections)
+async def update_company_agent_sections_route(
+    company_id: uuid.UUID,
+    data: CompanyAgentSectionsUpdate,
+    current_user: UserRecord = Depends(require_role("platform_admin")),
+    client_ip: str | None = Depends(get_client_ip),
+) -> CompanyAgentSections:
+    """Replace the hidden agent sections (422 for unknown ids or when every section would be hidden)."""
+    update = await set_company_agent_sections(company_id, data.hidden_sections)
+    if update is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    await write_admin_audit(
+        actor=current_user,
+        action="company_agent_sections_update",
+        target_type="tenant",
+        target_id=company_id,
+        tenant_id=company_id,
+        changes={"hidden_sections": field_change(update.previous, update.current.hidden_sections)},
+        ip_address=client_ip,
+    )
+    return update.current
 
 
 # ─── Platform Metrics Dashboard ─────────────────────────

@@ -30,7 +30,7 @@ from app.services import (
 )
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
-from app.services.quota_guard import AgentExpired
+from app.services.quota_guard import AgentExpired, QuotaExceeded
 from app.services.shared_chat import shared_session_id
 from app.services.storage import LocalStorageBackend
 from test_db_session import _FakePool, _FakeRawConnection
@@ -452,6 +452,25 @@ async def test_quota_rejection_rolls_back_and_keeps_socket_open(monkeypatch, tur
     assert not state.wake.is_set()
     assert raw.rollbacks == 1
     assert state.frames[0]["reason"] == "quota_exceeded"
+    assert len(state.frames) == 1
+    assert len(handler.conversation) == 1
+
+
+async def test_agent_daily_limit_rejection_rolls_back_the_user_charge_and_keeps_socket_open(monkeypatch, turn):
+    state, raw = turn
+    refusal = QuotaExceeded(
+        "This agent has reached its daily limit of 100 messages. It resets at midnight (UTC).",
+        quota_type="agent_daily_messages",
+    )
+    monkeypatch.setattr(chat_submissions, "charge_agent_daily_message", AsyncMock(side_effect=refusal))
+
+    handler = await drive_turn(monkeypatch, state)
+
+    assert not state.committed
+    assert not state.pending
+    assert raw.rollbacks == 1
+    assert state.frames[0]["reason"] == "quota_exceeded"
+    assert state.frames[0]["content"] == refusal.message
     assert len(state.frames) == 1
     assert len(handler.conversation) == 1
 

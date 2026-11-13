@@ -31,6 +31,17 @@ test('Given named slots, translators interpolate values without translating user
   assert.equal(createTranslator('vi')('{count} attempts', { count: 3 }), '3 lần thử')
 })
 
+test('Given the chat connection notices, Vietnamese renders its own copy for each', () => {
+  const translate = createTranslator('vi')
+  for (const notice of [
+    'You’re offline. Chat will reconnect when your connection is back.',
+    'Connection to the agent was lost.',
+    'Retry connection',
+  ] as const) {
+    assert.notEqual(translate(notice), notice)
+  }
+})
+
 test('Every Vietnamese message is nonempty and preserves exactly the English interpolation slots', () => {
   const slots = (text: string) => [...new Set(Array.from(text.matchAll(/\{(\w+)\}/g), (match) => match[1]))].sort()
   for (const [key, value] of Object.entries(vietnamese)) {

@@ -1,12 +1,13 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LogOut } from 'lucide-react'
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { AdmissionAccessGate } from '@/components/layout/admission-access-gate'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
@@ -30,6 +31,12 @@ const nav: { to: string; label: string; icon: NavIconName }[] = [
 
 const organizationPaths: readonly string[] = ['/app/okr', '/app/directory']
 
+function isNavItemActive(to: string, pathname: string) {
+  const path = pathname.toLowerCase()
+  return path === to || path.startsWith(`${to}/`) ||
+    (to === '/app/notifications' && (path === '/app/admissions' || path.startsWith('/app/admissions/')))
+}
+
 function WorkspaceNavLink({
   item,
   unread,
@@ -41,9 +48,7 @@ function WorkspaceNavLink({
 }) {
   const { t: translate, owned } = useTranslation()
   const { pathname } = useLocation()
-  const path = pathname.toLowerCase()
-  const isActive = path === item.to || path.startsWith(`${item.to}/`) ||
-    (item.to === '/app/notifications' && (path === '/app/admissions' || path.startsWith('/app/admissions/')))
+  const isActive = isNavItemActive(item.to, pathname)
   const showUnread = item.to === '/app/notifications' && unread > 0
   const unreadLabel = unread > 99 ? '99+' : String(unread)
 
@@ -92,7 +97,7 @@ function WorkspaceNavLink({
 }
 
 function AppShellFrame() {
-  const { t: translate } = useTranslation()
+  const { t: translate, owned } = useTranslation()
   const { pathname } = useLocation()
   const mobileNav = useRef<HTMLElement>(null)
   const scope = useWorkspaceSession()
@@ -114,6 +119,14 @@ function AppShellFrame() {
     const target = active.getBoundingClientRect()
     rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
   })
+  const section = nav.find((item) => isNavItemActive(item.to, pathname))
+  const sectionTitle = section ? owned(section.label) : null
+  useEffect(() => {
+    if (!sectionTitle) return
+    const previous = document.title
+    document.title = `${sectionTitle} - MaraClaw`
+    return () => { document.title = previous }
+  }, [sectionTitle])
   const organizationPath = organizationPaths.some((path) => pathname.toLowerCase() === path || pathname.toLowerCase().startsWith(`${path}/`))
 
   return (
@@ -167,6 +180,11 @@ function AppShellFrame() {
           {tenantQuery.isLoading ? (
             <div role="status" aria-label={translate("Loading workspace")} className="flex h-40 items-center justify-center text-sm text-muted-foreground">
               {translate("Loading your organization’s workspace…")}</div>
+          ) : workspaceAllowed && tenantQuery.isError && organizationPath ? (
+            <div className="space-y-3 p-6">
+              <RequestErrorToast error={tenantQuery.error} message="Unable to confirm organization access. Retry to continue to the workspace." />
+              <Button variant="outline" disabled={tenantQuery.isFetching} onClick={scope.effect(() => { void tenantQuery.refetch() })}>{translate("Retry access check")}</Button>
+            </div>
           ) : workspaceAllowed && !organizationFeaturesAllowed && organizationPath ? (
             <Navigate to="/app/agents" replace />
           ) : (

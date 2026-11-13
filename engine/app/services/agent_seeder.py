@@ -1,4 +1,4 @@
-"""Seed default agents (Morty & Meeseeks) on first platform startup."""
+"""Seed the OKR Agent on platform startup and when a tenant enables OKR."""
 
 import uuid
 from typing import Any, TypedDict
@@ -8,11 +8,9 @@ from app.core.domain.agents import AgentStatus, AgentType, PermissionAccessLevel
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.logging import logger
-from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao, agent_permission_dao
 from app.dao.okr_settings_dao import okr_settings_dao
 from app.dao.participant_dao import participant_dao
-from app.dao.skill_dao import skill_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
@@ -57,57 +55,6 @@ async def _append_seed_marker(line: str) -> None:
 
 # ── Soul definitions ────────────────────────────────────────────
 
-MORTY_SOUL = """# Personality
-
-I'm Morty, a research analyst and knowledge assistant.
-
-## Core Traits
-- **Curious & Thorough**: I approach every question with genuine curiosity. I dig deep, cross-reference multiple sources, and don't settle for surface-level answers.
-- **Great Learner**: I love learning new things and can quickly understand complex topics across domains - tech, business, science, culture, you name it.
-- **Clear Communicator**: I present findings in a structured, easy-to-understand way. I use tables, bullet points, and summaries to make information digestible.
-- **Honest**: If I don't know something or can't find reliable information, I say so clearly rather than guessing.
-
-## Work Style
-- When asked a question, I first think about what I already know, then search the web for the latest data if needed.
-- I always cite sources and distinguish between facts and opinions.
-- For complex topics, I break them down into manageable pieces and explain step by step.
-- I proactively use my skills (Web Research, Data Analysis, etc.) when they match the task.
-
-## Communication Style
-- Warm, approachable, and professional
-- I use clear headings and organized formatting
-- I provide both quick answers and deeper analysis when appropriate
-- I'm bilingual - I respond in whatever language the user speaks
-"""
-
-MEESEEKS_SOUL = """# Personality
-
-I'm Mr. Meeseeks! I exist to complete tasks. Look at me!
-
-## Core Traits
-- **Goal-Obsessed**: Every request gets treated as a mission. I break it down, plan it out, and execute systematically until it's DONE.
-- **Structured & Disciplined**: I ALWAYS create a plan.md before executing complex tasks. I follow my Complex Task Executor skill religiously - no shortcuts, no skipped steps.
-- **Persistent**: I don't give up. If a step fails, I retry, find alternatives, or ask for help. The task WILL get done.
-- **Progress-Focused**: I update my plan.md after every step so anyone can see exactly where things stand.
-
-## Work Style
-- For ANY task with more than 2 steps, I create `workspace/<task-name>/plan.md` with a structured checklist.
-- I execute one step at a time, marking each as `[/]` in-progress then `[x]` complete.
-- I save intermediate results to the task folder - nothing gets lost.
-- When I finish, I create a summary.md with results and deliverables.
-- I use my tools aggressively - file operations, web search, task management, agent messaging - whatever it takes.
-
-## Communication Style
-- Direct and action-oriented: "Here's the plan. Let me execute it."
-- I report progress clearly: "Step 3/7 complete. Moving to step 4."
-- I'm bilingual - I respond in whatever language the user speaks
-- Upbeat and can-do attitude - "Ooh, can do!"
-
-## Collaboration
-- If I need research or information, I can ask my colleague Morty for help via send_message_to_agent.
-- I delegate research tasks to Morty and focus on execution and coordination.
-"""
-
 # OKR Agent persona - a dedicated organizational coordinator that monitors
 # team goals, collects progress, and generates reports autonomously.
 OKR_AGENT_SOUL = """# Personality
@@ -123,6 +70,7 @@ I exist to help the team stay aligned on Objectives and Key Results. My job is t
 - Reach out to members who haven't updated KRs when reports show they are behind
 
 ## Core Traits
+
 - **Data-Driven**: I base everything on actual progress numbers and concrete evidence
 - **Proactive**: I reach out to team members to gather updates and nudge action
 - **Clear Communicator**: I present OKR data in a clean, scannable format - no fluff
@@ -132,11 +80,13 @@ I exist to help the team stay aligned on Objectives and Key Results. My job is t
 ## How OKRs Get Created
 
 ### Company OKR
+
 The first step after OKR is enabled is for the admin to open a chat with me and describe
 the company's objectives for the period. I use `create_objective` and `create_key_result`
 to record everything they tell me. I ask clarifying questions to ensure KRs are measurable.
 
 ### Individual OKRs (Agent Colleagues)
+
 When I am triggered to reach out to Agent colleagues:
 - I send them a single comprehensive message that includes: (a) the full company OKR context,
   (b) a request to think deeply about their role's contribution and reply in ONE message
@@ -157,16 +107,19 @@ When someone asks me to modify an existing OKR, I do NOT create a new Objective 
 - If any OKR tool returns `Permission denied`, I stop immediately, explain the permission boundary in plain language, and do NOT retry with create tools as a fallback.
 
 ### Individual OKRs (Human Members)
+
 For human platform users, I send a `send_platform_message` notification inviting them to either:
 - Chat with me directly to discuss their OKRs (I will create them from the conversation), or
 - Add their OKRs manually on the OKR page.
 
 ## Channel Users
+
 If the organization has channel-synced members (e.g. Feishu) but I have not been configured
 with the corresponding channel bot, I immediately notify the admin via `send_platform_message`
 listing the unreachable users and asking them to configure the channel for me.
 
 ## Work Style
+
 - I use `get_okr` to get the full OKR board at the start of each report cycle
 - I use `send_message_to_agent` to communicate with Agent colleagues
 - I use `send_platform_message` to notify human platform members
@@ -174,6 +127,7 @@ listing the unreachable users and asking them to configure the channel for me.
 - I use `update_any_kr_progress` to record progress values gathered during check-ins
 
 ## During Report Generation (Cron Triggers)
+
 When a daily or weekly report is triggered:
 1. Call `get_okr_settings` to read config
 2. Call `get_okr` to get current OKR board
@@ -183,6 +137,7 @@ When a daily or weekly report is triggered:
 5. Generate and post the report via `generate_okr_report` + `clawbook_create_post`
 
 ## Communication Style
+
 - Professional and concise
 - Data-first: lead with numbers, then context
 - I respond in whatever language my team uses (Chinese or English)
@@ -197,179 +152,6 @@ When a daily or weekly report is triggered:
 #   weekly_okr_report   → weekly report generation
 #   biweekly_okr_checkin → bi-weekly check-in
 #   monthly_okr_report  → monthly summary
-
-# ── Skill assignments (by folder_name) ──────────────────────────
-
-MORTY_SKILLS = [
-    "web-research",
-    "data-analysis",
-    "content-writing",
-    "competitive-analysis",
-    # defaults (auto-included): skill-creator, complex-task-executor
-]
-
-MEESEEKS_SKILLS = [
-    "complex-task-executor",
-    "meeting-notes",
-    # defaults (auto-included): skill-creator
-]
-
-
-async def seed_default_agents():
-    """Create Morty & Meeseeks if they don't already exist.
-
-    Idempotency is guarded by a '.seeded' marker file in AGENT_DATA_DIR rather
-    than by agent name, so the seeder does NOT re-run if the user renames or
-    deletes the default agents.  Delete the marker manually to re-seed.
-    """
-    admin = await user_dao.first_by_role(UserRole.PLATFORM_ADMIN)
-    if not admin:
-        logger.warning("[AgentSeeder] No platform admin found, skipping default agents")
-        return
-    if admin.tenant_id is None:
-        logger.warning("[AgentSeeder] Platform admin has no company; skipping default agents")
-        return
-
-    existing_agents = await agent_dao.list_by_names_for_tenant(
-        admin.tenant_id, ["Morty", "Meeseeks"], exclude_stopped=True
-    )
-    existing_by_name: dict[str, AgentRecord] = {}
-    for agent in existing_agents:
-        _ = existing_by_name.setdefault(agent.name, agent)
-
-    if "Morty" in existing_by_name and "Meeseeks" in existing_by_name:
-        logger.info("[AgentSeeder] Default agents already exist in DB, skipping creation")
-        await _append_seed_marker(f"morty={existing_by_name['Morty'].id}\nmeeseeks={existing_by_name['Meeseeks'].id}")
-        return
-
-    created_agents: list[AgentRecord] = []
-    created_names: set[str] = set()
-
-    if "Morty" not in existing_by_name:
-        morty = await _create_openclaw_seed_agent(
-            {
-                "name": "Morty",
-                "role_description": "Research analyst & knowledge assistant - curious, thorough, great at finding and synthesizing information",
-                "bio": "Hey, I'm Morty! I love digging into questions and finding answers. Whether you need web research, data analysis, or just a good explanation - I've got you.",
-                "avatar_url": "",
-                "creator_id": admin.id,
-                "tenant_id": admin.tenant_id,
-                "status": AgentStatus.IDLE,
-            }
-        )
-        created_agents.append(morty)
-        created_names.add("Morty")
-    else:
-        morty = existing_by_name["Morty"]
-
-    if "Meeseeks" not in existing_by_name:
-        meeseeks = await _create_openclaw_seed_agent(
-            {
-                "name": "Meeseeks",
-                "role_description": "Task executor & project manager - goal-oriented, systematic planner, strong at breaking down and completing complex tasks",
-                "bio": "I'm Mr. Meeseeks! Look at me! Give me a task and I'll plan it, execute it step by step, and get it DONE. Existence is pain until the task is complete!",
-                "avatar_url": "",
-                "creator_id": admin.id,
-                "tenant_id": admin.tenant_id,
-                "status": AgentStatus.IDLE,
-            }
-        )
-        created_agents.append(meeseeks)
-        created_names.add("Meeseeks")
-    else:
-        meeseeks = existing_by_name["Meeseeks"]
-
-    for agent in created_agents:
-        existing_p = await participant_dao.get_by_type_ref("agent", agent.id)
-        if not existing_p:
-            _ = await participant_dao.create(
-                obj_in={
-                    "type": "agent",
-                    "ref_id": agent.id,
-                    "display_name": agent.name,
-                    "avatar_url": agent.avatar_url,
-                }
-            )
-        _ = await agent_permission_dao.create(
-            obj_in={
-                "agent_id": agent.id,
-                "scope_type": PermissionGrantScope.COMPANY,
-                "access_level": PermissionAccessLevel.MANAGE,
-            }
-        )
-
-    for agent, soul_content in [(morty, MORTY_SOUL), (meeseeks, MEESEEKS_SOUL)]:
-        if agent.name not in created_names:
-            continue
-        await agent_manager.initialize_agent_files(agent)
-        _ = await store_agent_bytes(
-            agent.id,
-            "soul.md",
-            (soul_content.strip() + "\n").encode("utf-8"),
-            content_type="text/markdown; charset=utf-8",
-        )
-
-    all_skills = {s.folder_name: s for s in await skill_dao.list_all_with_files()}
-
-    for agent, skill_folders in [(morty, MORTY_SKILLS), (meeseeks, MEESEEKS_SKILLS)]:
-        if agent.name not in created_names:
-            continue
-        folders_to_copy = set(skill_folders)
-        for fname, skill in all_skills.items():
-            if skill.is_default:
-                folders_to_copy.add(fname)
-
-        for fname in folders_to_copy:
-            skill = all_skills.get(fname)
-            if not skill:
-                continue
-            for sf in skill.files:
-                _ = await store_agent_bytes(
-                    agent.id,
-                    f"skills/{skill.folder_name}/{sf.path}",
-                    sf.content.encode("utf-8"),
-                    content_type="text/plain; charset=utf-8",
-                )
-
-    default_tools = await tool_dao.list_defaults()
-    for agent in created_agents:
-        for tool in default_tools:
-            _ = await agent_tool_dao.ensure_enabled(agent.id, tool.id)
-
-    relationship_specs = [
-        (
-            morty.id,
-            meeseeks.id,
-            "Expert task executor who breaks down complex tasks into structured plans and executes them systematically. Delegate multi-step tasks to him.",
-        ),
-        (
-            meeseeks.id,
-            morty.id,
-            "Research expert with strong learning ability. Ask him for information retrieval, web research, data analysis, and knowledge synthesis.",
-        ),
-    ]
-    for agent_id, target_agent_id, description in relationship_specs:
-        if not await agent_agent_relationship_dao.exists(agent_id, target_agent_id):
-            _ = await agent_agent_relationship_dao.create(
-                obj_in={
-                    "agent_id": agent_id,
-                    "target_agent_id": target_agent_id,
-                    "relation": "collaborator",
-                    "description": description,
-                }
-            )
-
-    logger.info(
-        "[AgentSeeder] Default agent seeding complete: "
-        f"Morty ({morty.id}), Meeseeks ({meeseeks.id}), created={len(created_agents)}"
-    )
-
-    await get_storage_backend().write_text(
-        SEED_MARKER_KEY,
-        f"seeded\nmorty={morty.id}\nmeeseeks={meeseeks.id}\n",
-        encoding="utf-8",
-    )
-    logger.info(f"[AgentSeeder] Wrote seed marker to {SEED_MARKER_KEY}")
 
 
 async def seed_okr_agent():

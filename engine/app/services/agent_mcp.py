@@ -17,7 +17,9 @@ from app.schemas.agent_mcp import MCPServerCreate, MCPServerInventory, MCPServer
 from app.services import agent_mcp_config as native
 from app.services.agent_manager import agent_manager
 from app.services.agent_mcp_sync import desired_servers, encrypted_record, sync_mcp_config
+from app.services.company_transfer_runtime_gate import assert_transfer_ready
 from app.services.openclaw_update_exclusion import locked_fresh_agent
+from app.services.openclaw_update_gate import assert_no_active_run
 
 _JSON = TypeAdapter(JsonObject)
 
@@ -41,10 +43,15 @@ async def _managed_config(agent_id: UUID, user_id: UUID) -> AsyncGenerator[tuple
 
 
 async def list_servers(agent_id: UUID, user_id: UUID) -> MCPServerInventory:
-    async with _managed_config(agent_id, user_id) as (_, servers):
-        return MCPServerInventory(
-            servers=[native.server_summary(name, server) for name, server in sorted(servers.items())]
-        )
+    # Read-only: saved state is database-authoritative, so skip the workspace flock and agent row lock writers need.
+    async with connection_ctx():
+        _ = await _manager(user_id, agent_id)
+        await assert_no_active_run(agent_id)
+        await assert_transfer_ready(agent_id)
+        desired = await desired_servers(agent_id)
+    return MCPServerInventory(
+        servers=[native.server_summary(name, entry) for name, entry in sorted(desired.items()) if entry is not None]
+    )
 
 
 async def _publish(agent: AgentRecord, name: str, entry: JsonObject | None) -> bool:

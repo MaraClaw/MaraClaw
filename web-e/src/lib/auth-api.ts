@@ -273,6 +273,7 @@ export async function fetchMyTenant(): Promise<{
   name: string
   slug: string
   is_default_end_user_org: boolean
+  hidden_agent_sections?: string[]
 }> {
   return apiRequest('/api/tenants/me')
 }

@@ -34,6 +34,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.
 - Managed storage quota docs should track `app/services/storage_runtime/quota_*.py`, `facade.py`, `app/dao/agent_storage_dao.py`, `app/db/pool.py` (`durable_pool`), `app/services/company_transfer_disposition.py` and the `agent_storage_*` tables.
 - Search-analytics docs should track `app/services/tavily/`, `app/api/admin_search_analytics.py`, `app/api/tavily_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
+- Chat-history docs should track `app/services/chat_history.py`, `app/dao/chat_dao.py` (`purge_history_changes`), `app/services/chat_history_retention_worker.py`, the `chat_history_changes` journal in `scripts/schema_baseline.sql` and `CHAT_HISTORY_RETENTION_DAYS`.
 - gogcli credential docs should track `app/services/gogcli_runtime.py` and the guest image project's `Dockerfile.openclaw` and `docker/openclaw/` scripts.
 - Stress-test workloads and probes in `stress-tests/container/` copy SQL and lock order from `app/dao/chat_dao.py`, `gateway_message_dao.py`, `gateway_message_delivery_dao.py`, `user_dao.py`, `app/services/chat_submissions.py`, `openclaw_native_claims.py` and `openclaw_gateway_delivery.py`; update the `-after` workloads and probes when those change, and keep the `-before` workloads as the pre-fix record.
 - Refactoring packets should name concrete modules, test blockers, and verification status; retire stale blockers when CI/tests move.
@@ -44,7 +45,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - Update docs when runner behavior changes in `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
 - Prefer concise operational notes over broad design essays; `../AGENTS.md` carries engine commands and hierarchy.
 - Credential docs may describe paths and rotation, but must not include live tokens, OAuth refresh secrets, keyring passwords, or customer data.
-- Schema-affecting docs must say whether a change is fresh-baseline only; no existing-database upgrade is supplied.
+- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the six guarded baseline upgrades (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
 
 ## Avoid
 

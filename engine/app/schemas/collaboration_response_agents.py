@@ -33,6 +33,10 @@ class AgentTemplateResponse(TypedDict):
     has_bootstrap: bool
 
 
+class AgentDefaultSoulResponse(TypedDict):
+    soul: str
+
+
 class AgentModelDump(TypedDict):
     """Python-mode dictionary produced by the existing AgentOut model."""
 

@@ -136,7 +136,7 @@ for (const outcome of ['skip', 'complete'] as const) {
       return route.fulfill({ json: { items: completed ? [delayedAgent] : [], next_cursor: null, has_more: false } })
     })
     await page.route('**/api/onboarding/start', (route) => route.fulfill({ json: status() }))
-    await page.route('**/api/onboarding/personal-assistant', (route) => route.fulfill({ json: { agent: delayedAgent, onboarding: status(), start: { status: 'started' } } }))
+    await page.route('**/api/agents/', (route) => route.request().method() === 'POST' ? route.fulfill({ json: delayedAgent }) : route.fallback())
     await page.route(`**/api/agents/${delayedAgent.id}/files/**`, (route) => route.fulfill({ json: [] }))
     await page.route('**/api/onboarding/complete', (route) => {
       completed = true

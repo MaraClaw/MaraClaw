@@ -38,6 +38,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   const submitting = useRef(false)
   const retryingEmail = useRef(false)
   const resultHeading = useRef<HTMLHeadingElement>(null)
+  const [confirmed, setConfirmed] = useState(false)
   useEffect(() => { resultHeading.current?.focus() }, [])
   const decision = useOrganizationAdmissionDecision(request.id)
   const emailRetry = useOrganizationAdmissionEmailRetry(request.id)
@@ -54,6 +55,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
     ['Additional account / month', usd(detail.plan.additional_account_monthly_usd)],
     ['Maximum accounts', number(detail.plan.max_accounts)],
     ['Maximum agents per account', number(detail.plan.max_agents_per_account)],
+    ['Daily messages per agent', number(detail.plan.daily_messages_per_agent)],
     ['Managed S3 storage per agent', `${number(detail.plan.storage_limit_bytes / (1024 ** 3))} GiB`],
     ['Maximum managed S3 file size', `${number(detail.plan.max_file_size_bytes / (1024 ** 2))} MiB`],
     ['Requested', date(detail.created_at)],
@@ -62,11 +64,11 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   ] as const
 
   function submit(value: OrganizationAdmissionDecision['decision'], note: string) {
-    if (!canDecide || (value === 'approve' && !canApprove) || submitting.current) return
+    if (!canDecide || (value === 'approve' && (!canApprove || !confirmed)) || submitting.current) return
     submitting.current = true
     decision.mutate({ decision: value, ...(note ? { note } : {}) }, {
       onSuccess: () => { resultHeading.current?.focus() },
-      onSettled: () => { submitting.current = false },
+      onSettled: () => { submitting.current = false; setConfirmed(false) },
     })
   }
 
@@ -115,8 +117,12 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
             <p id={`${noteId}-hint`} className="text-xs text-muted-foreground">{t('Up to 1,000 characters, saved with the decision.')}</p>
             {form.formState.errors.note ? <p id={`${noteId}-error`} role="alert" className="text-sm text-destructive">{owned(form.formState.errors.note.message)}</p> : null}
           </div>
+          <label htmlFor={`${noteId}-confirm`} className="flex min-h-11 cursor-pointer items-start gap-3 py-2 text-sm leading-relaxed">
+            <input id={`${noteId}-confirm`} type="checkbox" checked={confirmed} disabled={!canDecide} onChange={(event) => setConfirmed(event.currentTarget.checked)} className="mt-1 size-5 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50" />
+            {t('I understand that approval creates the organization and its genesis administrator account and queues their initial sign-in credentials by email, and that a saved decision cannot be changed.')}
+          </label>
           <div className="flex flex-wrap gap-3">
-            <Button type="submit" className={actionClass} disabled={!canApprove} aria-describedby={detail.organization_name === null ? `${noteId}-organization` : undefined}>{t('Approve request')}</Button>
+            <Button type="submit" className={actionClass} disabled={!canApprove || !confirmed} aria-describedby={detail.organization_name === null ? `${noteId}-organization` : undefined}>{t('Approve request')}</Button>
             <Button type="button" variant="outline" className={`${actionClass} text-destructive hover:text-destructive`} disabled={!canDecide} onClick={form.handleSubmit(({ note }) => submit('reject', note))}>{t('Reject request')}</Button>
           </div>
         </form> : null}

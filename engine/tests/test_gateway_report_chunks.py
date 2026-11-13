@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.records.outbound_plan import OutboundProvider
 from app.services import gateway_report_relay as relay
 from app.services.channels import outbound_plan
 from app.services.channels.outbound_errors import ProviderPayloadRejectedError
@@ -138,7 +139,7 @@ async def test_only_typed_immutable_payload_rejection_is_terminal(monkeypatch):
     store = RelayStore()
     store.install(monkeypatch)
     row = store.intent("im")
-    store.send_error = ProviderPayloadRejectedError("slack", "msg_too_long")
+    store.send_error = ProviderPayloadRejectedError(OutboundProvider.SLACK, "msg_too_long")
 
     await relay.relay_batch(store.clock)
 

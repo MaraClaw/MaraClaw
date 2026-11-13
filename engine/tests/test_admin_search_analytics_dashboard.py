@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import ResponseValidationError
 from psycopg import OperationalError
 from tests.analytics_response_fixtures import dashboard_projection
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.test_admin_search_analytics_http_contracts import analytics_app, client
 
 from app.api import admin_search_analytics as analytics
@@ -100,6 +101,7 @@ async def test_dashboard_keeps_real_password_change_gate(
 
     monkeypatch.setattr(security, "load_user_principal", principal)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     token = await security.create_access_token(str(user.id), "platform_admin", identity_id=user.identity_id)
     response = await client.get("/api/admin/search-analytics/dashboard", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403

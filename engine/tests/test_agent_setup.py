@@ -123,6 +123,24 @@ async def test_creation_snapshots_resolved_files_skills_and_optional_servers(set
     assert store.terminal == [None]
 
 
+async def test_submitted_soul_replaces_scaffold_soul_and_renders_placeholders(setup_case, monkeypatch):
+    store, _storage, root = setup_case
+    template_dir = root / "template"
+    template_dir.mkdir()
+    (template_dir / "soul.md").write_text("# Scaffold soul\n", encoding="utf-8")
+    create = AsyncMock()
+    monkeypatch.setattr(agent_setup.agent_manager, "_template_dir", lambda: template_dir)
+    monkeypatch.setattr("app.services.agent_workspace.user_dao.get", AsyncMock(return_value=None))
+    monkeypatch.setattr(agent_setup, "resolve_setup_skills", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_setup.agent_setup_dao, "create", create)
+    monkeypatch.setattr(agent_setup.agent_setup_mcp_dao, "seed", AsyncMock())
+    edited = "# Soul - {{agent_name}}\n\n## Personality\nEdited by the creator.\n"
+    await agent_setup.persist_agent_setup(store.agent, AgentCreate(name=store.agent.name, soul=edited), "oc-key")
+    snapshot = AgentSetupInputs.model_validate(create.call_args.kwargs["obj_in"]["inputs"])
+    soul = base64.b64decode(snapshot.files["soul.md"]).decode()
+    assert soul == f"# Soul - {store.agent.name}\n\n## Personality\nEdited by the creator.\n"
+
+
 async def test_deleted_or_superseded_claim_cannot_recreate_workspace(setup_case):
     store, _storage, root = setup_case
     store.current = False

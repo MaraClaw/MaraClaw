@@ -1,11 +1,14 @@
 import asyncio
+import copy
 import itertools
 import os
+import resource
 import signal
 import sys
 import tracemalloc
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +16,7 @@ from pydantic import ValidationError
 
 from app.services.sandbox.base import ExecutionDeadline, TerminationReason
 from app.services.sandbox.config import SandboxConfig, SandboxConfigOverrides, SandboxType
+from app.services.sandbox.local import subprocess_backend
 from app.services.sandbox.local.subprocess_backend import SubprocessBackend, _terminate_process_group, _TransportProcess
 from app.services.sandbox.registry import get_sandbox_backend
 
@@ -43,6 +47,10 @@ class BlockingProcess:
         self.killed = True
         self.returncode = -9
         self.finished.set()
+
+
+def leftover_scripts(work_dir: Path) -> list[Path]:
+    return list(work_dir.glob("_exec_tmp*"))
 
 
 @pytest.mark.asyncio
@@ -141,7 +149,7 @@ async def test_execute_terminates_child_when_cancelled(tmp_path: Path, monkeypat
 
     # Then: the child is killed before cancellation reaches the caller
     assert process.killed
-    assert not (tmp_path / "_exec_tmp.py").exists()
+    assert leftover_scripts(tmp_path) == []
 
 
 def test_subprocess_backend_proxy_env_propagation(tmp_path: Path) -> None:
@@ -278,7 +286,7 @@ async def test_execute_enforces_canonical_timeout(tmp_path: Path, monkeypatch: p
     assert result.exit_code == 124
     assert not process.started.is_set()
     assert not process.killed
-    assert not (tmp_path / "_exec_tmp.py").exists()
+    assert leftover_scripts(tmp_path) == []
 
 
 def test_sandbox_config_proxy_parsing() -> None:
@@ -478,7 +486,7 @@ async def test_execute_retains_raw_byte_prefixes_and_drains_both_streams(
     assert process.stdout.read_count == process.stderr.read_count == 3
     assert len(chunks) == 4
     assert [label for _, label in chunks] == ["stdout", "stderr", "stderr", "stdout"]
-    assert not (tmp_path / "_exec_tmp.py").exists()
+    assert leftover_scripts(tmp_path) == []
 
 
 async def test_execute_large_output_remains_bounded_and_preserves_display_clipping(
@@ -527,7 +535,7 @@ async def test_execute_over_budget_preserves_timeout_and_cancellation_cleanup(
     # Then: the process is reaped and its temporary script is removed even after overflow.
     assert process.killed
     assert process.reaped
-    assert not (tmp_path / "_exec_tmp.py").exists()
+    assert leftover_scripts(tmp_path) == []
 
 
 async def test_execute_cancellation_joins_output_readers_after_overflow(
@@ -562,7 +570,7 @@ async def test_execute_cancellation_joins_output_readers_after_overflow(
         assert active_callbacks == 0
         assert process.killed
         assert process.reaped
-        assert not (tmp_path / "_exec_tmp.py").exists()
+        assert leftover_scripts(tmp_path) == []
     finally:
         release_callbacks.set()
         execution.cancel()
@@ -696,3 +704,492 @@ async def test_execute_closes_pipe_held_by_escaped_setsid_process_after_leader_e
         if escaped.returncode is None:
             escaped.kill()
         await escaped.wait()
+
+
+class LimitRecorder:
+    """Records requested rlimits and stands in for the process-changing calls a preexec hook makes."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, failing: int | None = None) -> None:
+        self.limits: list[tuple[int, tuple[int, int]]] = []
+        self.chroots: list[Path] = []
+        self.failing = failing
+        module = "app.services.sandbox.local.subprocess_backend"
+        monkeypatch.setattr(f"{module}.resource.setrlimit", self.setrlimit)
+        monkeypatch.setattr(f"{module}.os.chroot", self.chroots.append)
+        monkeypatch.setattr(f"{module}.os.geteuid", lambda: 0)
+        for name in ("chdir", "umask", "setgid", "setuid"):
+            monkeypatch.setattr(f"{module}.os.{name}", lambda *_: 0)
+
+    def setrlimit(self, limit: int, values: tuple[int, int]) -> None:
+        self.limits.append((limit, values))
+        if limit == self.failing:
+            raise ValueError("limit rejected")
+
+
+def launching_backend(
+    monkeypatch: pytest.MonkeyPatch, config: SandboxConfig, bwrap: list[str] | None
+) -> tuple[SubprocessBackend, list[tuple[tuple[object, ...], dict[str, object]]]]:
+    backend = SubprocessBackend(config)
+    launches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    async def ensure_venv(_: Path) -> None:
+        return None
+
+    async def launch(*args: object, **kwargs: object) -> OutputProcess:
+        launches.append((args, kwargs))
+        return OutputProcess(iter(()), iter(()))
+
+    monkeypatch.setattr(backend, "_ensure_workspace_venv", ensure_venv)
+    monkeypatch.setattr(backend, "_build_bwrap_command", lambda command, *_: None if bwrap is None else bwrap + command)
+    monkeypatch.setattr("app.services.sandbox.local.subprocess_backend.asyncio.create_subprocess_exec", launch)
+    return backend, launches
+
+
+def run_preexec(launch: tuple[tuple[object, ...], dict[str, object]]) -> None:
+    preexec = launch[1]["preexec_fn"]
+    assert callable(preexec)
+    preexec()
+
+
+async def test_bwrap_launch_carries_memory_and_cpu_ceilings_without_nproc_or_chroot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a 1g memory ceiling, a proxy that must stay off argv, and a root effective UID.
+    config = SandboxConfig(memory_limit="1g", max_timeout=60, allow_network=True, http_proxy="http://user:pw@proxy:1")
+    backend, launches = launching_backend(monkeypatch, config, ["bwrap"])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    result = await backend.execute("print(1)", "python", exec_timeout=7, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then: bwrap (and everything it starts) gets the data ceiling and a CPU ceiling equal to the timeout, nothing else.
+    assert result.success
+    assert recorder.limits == [
+        (resource.RLIMIT_DATA, (1024**3, 1024**3)),
+        (resource.RLIMIT_CPU, (7, 7)),
+    ]
+    assert recorder.chroots == []
+    args, kwargs = launches[0]
+    assert all("proxy" not in str(arg) for arg in args)
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["http_proxy"] == "http://user:pw@proxy:1"
+
+
+async def test_bwrap_cpu_ceiling_never_exceeds_max_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: a requested timeout above the configured maximum.
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(max_timeout=5), ["bwrap"])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    _ = await backend.execute("print(1)", "python", exec_timeout=30, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then: the default 256m ceiling and the capped CPU seconds are requested.
+    assert recorder.limits == [
+        (resource.RLIMIT_DATA, (256 * 1024**2, 256 * 1024**2)),
+        (resource.RLIMIT_CPU, (5, 5)),
+    ]
+
+
+def test_bwrap_node_command_runs_without_v8_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: node resolved on the host path.
+    monkeypatch.setattr("app.services.sandbox.local.subprocess_backend.shutil.which", lambda _: "/usr/bin/node")
+    # When
+    command = SubprocessBackend(SandboxConfig())._build_command("node", "/workspace/_exec_tmp.js")
+    # Then: the JIT stays on (--jitless removes WebAssembly, which fetch() needs).
+    assert command == ["/usr/bin/node", "/workspace/_exec_tmp.js"]
+
+
+async def test_fallback_applies_every_limit_when_one_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: bubblewrap is missing, unsafe fallback is enabled and the address-space limit is rejected.
+    config = SandboxConfig(memory_limit="1g", max_timeout=60, allow_unsafe_fallback_when_bwrap_missing=True)
+    backend, launches = launching_backend(monkeypatch, config, None)
+    recorder = LimitRecorder(monkeypatch, failing=resource.RLIMIT_AS)
+    # When
+    result = await backend.execute("print(1)", "python", exec_timeout=7, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then: the remaining limits are still requested and root still chroots into the workspace.
+    assert result.success
+    assert recorder.limits == [
+        (resource.RLIMIT_CPU, (7, 7)),
+        (resource.RLIMIT_AS, (1024**3, 1024**3)),
+        (resource.RLIMIT_FSIZE, (10 * 1024**2, 10 * 1024**2)),
+        (resource.RLIMIT_NOFILE, (64, 64)),
+        (resource.RLIMIT_NPROC, (32, 32)),
+        (resource.RLIMIT_CORE, (0, 0)),
+    ]
+    assert [str(path) for path in recorder.chroots] == [launches[0][1]["cwd"]]
+
+
+async def test_missing_bwrap_fails_closed_without_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: bubblewrap is missing and the unsafe fallback is not enabled.
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(), None)
+    # When
+    result = await backend.execute("print(1)", "python", exec_timeout=7, work_dir=str(tmp_path))
+    # Then
+    assert not result.success
+    assert launches == []
+
+
+MODULE = "app.services.sandbox.local.subprocess_backend"
+CEILING = 256 * 1024**2
+DEFAULT_VMDATA_KIB = 312_708
+JITLESS_VMDATA_KIB = 50_040
+RESERVATION = (DEFAULT_VMDATA_KIB - JITLESS_VMDATA_KIB) * 1024
+
+
+class ProbeProcess(BlockingProcess):
+    """A VmData probe that prints `output` and exits with `returncode`, after `release` when one is given."""
+
+    def __init__(self, output: bytes, returncode: int = 0, release: asyncio.Event | None = None) -> None:
+        super().__init__()
+        self.output = output
+        self.exit_code = returncode
+        self.release = release
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        if self.release is not None:
+            await self.release.wait()
+        self.returncode = self.exit_code
+        return self.output, b""
+
+
+def vmdata(kib: int) -> ProbeProcess:
+    return ProbeProcess(f"{kib}\n".encode())
+
+
+class NodeProbes:
+    """Serves `node ... -e <script>` probes in order; every other launch reaches the fake installed before it."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, probes: list[ProbeProcess]) -> None:
+        self.probes = iter(probes)
+        self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        self.node_lookups = 0
+        self.both_looked_up = asyncio.Event()
+        self.sandbox_launch: Callable[..., Awaitable[object]] = asyncio.create_subprocess_exec
+        monkeypatch.setattr(f"{MODULE}.asyncio.create_subprocess_exec", self.launch)
+        monkeypatch.setattr(f"{MODULE}.shutil.which", self.which)
+        monkeypatch.setattr(SubprocessBackend, "_node_jit_reservation_bytes", None)
+        monkeypatch.setattr(SubprocessBackend, "_node_jit_lock", asyncio.Lock())
+
+    async def launch(self, *args: object, **kwargs: object) -> object:
+        if "-e" not in args:
+            return await self.sandbox_launch(*args, **kwargs)
+        self.calls.append((args, kwargs))
+        return next(self.probes)
+
+    def which(self, name: str) -> str:
+        if name == "node":
+            self.node_lookups += 1
+            if self.node_lookups == 2:
+                self.both_looked_up.set()
+        return f"/usr/bin/{name}"
+
+
+async def test_bwrap_node_data_ceiling_adds_measured_jit_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a proxy-enabled config and a node whose default boot holds more private memory than --jitless.
+    config = SandboxConfig(allow_network=True, http_proxy="http://user:pw@proxy:1")
+    backend, launches = launching_backend(monkeypatch, config, ["bwrap"])
+    probes = NodeProbes(monkeypatch, [vmdata(DEFAULT_VMDATA_KIB), vmdata(JITLESS_VMDATA_KIB)])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    result = await backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then: the sandboxed node's data ceiling is the configured one plus the measured difference.
+    assert result.success
+    assert [args[:2] for args, _ in probes.calls] == [("/usr/bin/node", "-e"), ("/usr/bin/node", "--jitless")]
+    envs = [kwargs["env"] for _, kwargs in probes.calls]
+    assert all(isinstance(env, dict) and "http_proxy" not in env for env in envs)
+    assert recorder.limits == [
+        (resource.RLIMIT_DATA, (CEILING + RESERVATION, CEILING + RESERVATION)),
+        (resource.RLIMIT_CPU, (7, 7)),
+    ]
+
+
+@pytest.mark.parametrize(("language", "code"), [("python", "print(1)"), ("bash", "echo 1")])
+async def test_bwrap_python_and_bash_keep_plain_ceiling_without_measurement(
+    language: str, code: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(), ["bwrap"])
+    probes = NodeProbes(monkeypatch, [])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    result = await backend.execute(code, language, exec_timeout=7, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then
+    assert result.success
+    assert probes.calls == []
+    assert recorder.limits[0] == (resource.RLIMIT_DATA, (CEILING, CEILING))
+
+
+async def test_node_jit_reservation_is_measured_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: two backend instances, as every execute_code call builds its own.
+    first, launches = launching_backend(monkeypatch, SandboxConfig(), ["bwrap"])
+    probes = NodeProbes(monkeypatch, [vmdata(DEFAULT_VMDATA_KIB), vmdata(JITLESS_VMDATA_KIB)])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    results = [
+        await backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path))
+        for backend in (first, copy.copy(first))
+    ]
+    for launch in launches:
+        run_preexec(launch)
+    # Then
+    assert [result.success for result in results] == [True, True]
+    assert len(probes.calls) == 2
+    assert [values for limit, values in recorder.limits if limit == resource.RLIMIT_DATA] == [
+        (CEILING + RESERVATION, CEILING + RESERVATION)
+    ] * 2
+
+
+async def test_concurrent_first_node_executions_share_one_measurement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the first probe keeps running until both executions have reached the measurement.
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(), ["bwrap"])
+    release = asyncio.Event()
+    held = ProbeProcess(f"{DEFAULT_VMDATA_KIB}\n".encode(), release=release)
+    probes = NodeProbes(monkeypatch, [held, vmdata(JITLESS_VMDATA_KIB)])
+    # When
+    executions = [
+        asyncio.create_task(backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path / name)))
+        for name in ("a", "b")
+    ]
+    await asyncio.wait_for(probes.both_looked_up.wait(), timeout=5)
+    release.set()
+    results = await asyncio.gather(*executions)
+    # Then
+    assert [result.success for result in results] == [True, True]
+    assert len(probes.calls) == 2
+    assert len(launches) == 2
+
+
+@pytest.mark.parametrize(
+    ("failing_probe", "probe_timeout"),
+    [
+        pytest.param(lambda: ProbeProcess(b"", returncode=1), 5.0, id="exit"),
+        pytest.param(lambda: ProbeProcess(b"VmData: unknown\n"), 5.0, id="garbage"),
+        pytest.param(lambda: ProbeProcess(b"", release=asyncio.Event()), 0.0, id="timeout"),
+    ],
+)
+async def test_failed_jit_measurement_launches_nothing_and_is_not_cached(
+    failing_probe: Callable[[], ProbeProcess],
+    probe_timeout: float,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the first measurement fails; a later one succeeds.
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(), ["bwrap"])
+    failing = failing_probe()
+    probes = NodeProbes(monkeypatch, [failing, vmdata(DEFAULT_VMDATA_KIB), vmdata(JITLESS_VMDATA_KIB)])
+    default_timeout = subprocess_backend._NODE_PROBE_TIMEOUT_SECONDS
+    monkeypatch.setattr(f"{MODULE}._NODE_PROBE_TIMEOUT_SECONDS", probe_timeout)
+    # When
+    failed = await backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path))
+    launched_after_failure = len(launches)
+    monkeypatch.setattr(f"{MODULE}._NODE_PROBE_TIMEOUT_SECONDS", default_timeout)
+    retried = await backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path))
+    # Then: nothing ran without a measured ceiling, the probe was not left running and the next call measured again.
+    assert (failed.success, launched_after_failure) == (False, 0)
+    assert failing.returncode is not None
+    assert retried.success
+    assert (len(probes.calls), len(launches)) == (3, 1)
+
+
+async def test_jitless_boot_larger_than_default_clamps_reservation_to_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: --jitless reports more private memory than the default boot.
+    backend, launches = launching_backend(monkeypatch, SandboxConfig(), ["bwrap"])
+    _ = NodeProbes(monkeypatch, [vmdata(JITLESS_VMDATA_KIB), vmdata(DEFAULT_VMDATA_KIB)])
+    recorder = LimitRecorder(monkeypatch)
+    # When
+    result = await backend.execute("console.log(1)", "node", exec_timeout=7, work_dir=str(tmp_path))
+    run_preexec(launches[0])
+    # Then
+    assert result.success
+    assert recorder.limits[0] == (resource.RLIMIT_DATA, (CEILING, CEILING))
+
+
+class GatedProcess(OutputProcess):
+    """A child that stays alive until `gate` opens."""
+
+    def __init__(self, gate: asyncio.Event) -> None:
+        super().__init__(iter(()), iter(()))
+        self.gate = gate
+
+    @override
+    async def wait(self) -> int:
+        await self.gate.wait()
+        return await super().wait()
+
+
+@pytest.mark.parametrize("bwrap", [["bwrap"], None], ids=["bwrap", "host-fallback"])
+async def test_concurrent_executions_in_one_workspace_run_their_own_script(
+    bwrap: list[str] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: two executions share one work dir and neither child exits before both were launched.
+    backend, _ = launching_backend(monkeypatch, SandboxConfig(allow_unsafe_fallback_when_bwrap_missing=True), bwrap)
+    gate = asyncio.Event()
+    both_launched = asyncio.Event()
+    launched: list[tuple[str, str]] = []
+
+    async def launch(*args: object, **_: object) -> GatedProcess:
+        script = tmp_path / Path(str(args[-1])).name
+        launched.append((script.name, script.read_text(encoding="utf-8")))
+        if len(launched) == 2:
+            both_launched.set()
+        return GatedProcess(gate)
+
+    monkeypatch.setattr(f"{MODULE}.asyncio.create_subprocess_exec", launch)
+    # When
+    executions = [
+        asyncio.create_task(backend.execute(code, "python", work_dir=str(tmp_path)))
+        for code in ("print('a')", "print('b')")
+    ]
+    async with asyncio.timeout(5):
+        await both_launched.wait()
+    gate.set()
+    results = await asyncio.gather(*executions)
+    # Then: each child was handed a script holding its own code under its own name, and none is left behind.
+    assert [result.success for result in results] == [True, True]
+    assert sorted(content for _, content in launched) == ["print('a')", "print('b')"]
+    assert len({name for name, _ in launched}) == 2
+    assert leftover_scripts(tmp_path) == []
+
+
+class VenvProcess:
+    """A `uv venv` child that exits with `exit_code` once finished and then leaves its interpreter behind."""
+
+    def __init__(self, venv_path: Path, *, interpreter_first: bool) -> None:
+        self.pid = 999_999
+        self.returncode: int | None = None
+        self.exit_code = 0
+        self.interpreter = venv_path / "bin" / "python"
+        self.finished = asyncio.Event()
+        if interpreter_first:
+            self.create_interpreter()
+
+    def create_interpreter(self) -> None:
+        self.interpreter.parent.mkdir(parents=True, exist_ok=True)
+        self.interpreter.touch()
+
+    async def wait(self) -> int:
+        await self.finished.wait()
+        self.returncode = self.exit_code
+        if self.exit_code == 0:
+            self.create_interpreter()
+        return self.exit_code
+
+    def finish(self, exit_code: int = 0) -> None:
+        self.exit_code = exit_code
+        self.finished.set()
+
+
+class FakeUv:
+    """Replaces `uv venv`: every launch becomes a `VenvProcess` the test finishes itself.
+
+    Thread hops run inline so that a call which does not wait for the creation is already done after one loop turn.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, interpreter_first: bool = False) -> None:
+        self.interpreter_first = interpreter_first
+        self.processes: list[VenvProcess] = []
+        self.launches: asyncio.Queue[VenvProcess] = asyncio.Queue()
+        monkeypatch.setattr(f"{MODULE}.shutil.which", lambda _: "/usr/bin/uv")
+        monkeypatch.setattr(f"{MODULE}.asyncio.create_subprocess_exec", self.launch)
+        monkeypatch.setattr(f"{MODULE}._terminate_process_group", self.terminate)
+        monkeypatch.setattr(f"{MODULE}.asyncio.to_thread", self.inline)
+
+    async def launch(self, *args: object, **_: object) -> VenvProcess:
+        process = VenvProcess(Path(str(args[-1])), interpreter_first=self.interpreter_first)
+        self.processes.append(process)
+        self.launches.put_nowait(process)
+        return process
+
+    async def terminate(self, child: VenvProcess, deadline: ExecutionDeadline | None = None) -> None:
+        del child, deadline
+
+    async def inline(self, func: Callable[..., object], *args: object, **kwargs: object) -> object:
+        return func(*args, **kwargs)
+
+    async def next_launch(self) -> VenvProcess:
+        async with asyncio.timeout(5):
+            return await self.launches.get()
+
+
+@pytest.mark.parametrize("interpreter_first", [False, True], ids=["interpreter-last", "interpreter-first"])
+async def test_concurrent_venv_calls_share_one_uv_and_wait_for_it(
+    interpreter_first: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: uv takes a while to create the venv; real uv lays the interpreter down before seeding, so it may exist early.
+    uv = FakeUv(monkeypatch, interpreter_first=interpreter_first)
+    backend = SubprocessBackend(SandboxConfig())
+    venv = tmp_path / ".venv"
+    # When: three executions need the same venv at once.
+    calls = [asyncio.create_task(backend._ensure_workspace_venv(venv)) for _ in range(3)]
+    creating = await uv.next_launch()
+    await asyncio.sleep(0)
+    # Then: one uv runs, and nobody takes the half-made venv for ready before it exits.
+    assert len(uv.processes) == 1
+    assert not any(call.done() for call in calls)
+    creating.finish()
+    async with asyncio.timeout(5):
+        _ = await asyncio.gather(*calls)
+    assert len(uv.processes) == 1
+    assert SubprocessBackend._venv_creations == {}
+
+
+@pytest.mark.parametrize("fails", [True, False], ids=["fails", "cancelled"])
+async def test_waiting_venv_call_creates_the_venv_itself_when_the_creating_call_ends_without_one(
+    fails: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: one call is creating the venv and another waits for it.
+    uv = FakeUv(monkeypatch)
+    backend = SubprocessBackend(SandboxConfig())
+    venv = tmp_path / ".venv"
+    creator = asyncio.create_task(backend._ensure_workspace_venv(venv))
+    failing = await uv.next_launch()
+    waiter = asyncio.create_task(backend._ensure_workspace_venv(venv))
+    await asyncio.sleep(0)
+    assert len(uv.processes) == 1
+    # When: the creating call fails or is cancelled.
+    if fails:
+        failing.finish(exit_code=1)
+        with pytest.raises(RuntimeError, match="uv failed"):
+            await creator
+    else:
+        _ = creator.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await creator
+    # Then: the waiting call neither hangs nor trusts the missing venv: it checks again and creates the venv itself.
+    retry = await uv.next_launch()
+    retry.finish()
+    async with asyncio.timeout(5):
+        await waiter
+    assert len(uv.processes) == 2
+    assert SubprocessBackend._venv_creations == {}
+
+
+async def test_venv_creation_for_different_paths_does_not_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the venv of one agent is still being created.
+    uv = FakeUv(monkeypatch)
+    backend = SubprocessBackend(SandboxConfig())
+    slow = asyncio.create_task(backend._ensure_workspace_venv(tmp_path / "a" / ".venv"))
+    slow_uv = await uv.next_launch()
+    # When: another agent needs its own venv.
+    other = asyncio.create_task(backend._ensure_workspace_venv(tmp_path / "b" / ".venv"))
+    other_uv = await uv.next_launch()
+    other_uv.finish()
+    # Then: it is ready while the first one is still being created.
+    async with asyncio.timeout(5):
+        await other
+    assert not slow.done()
+    slow_uv.finish()
+    async with asyncio.timeout(5):
+        await slow

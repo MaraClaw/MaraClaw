@@ -1,4 +1,4 @@
-"""Platform-admin company list wire models: picker options, stats rows and keyset pages."""
+"""Platform-admin company wire models: picker options, stats rows, keyset pages and agent section visibility."""
 
 import uuid
 from datetime import datetime
@@ -41,3 +41,16 @@ class CompanyStats(CompanyOption):
 class CompanyPageOut(BaseModel):
     items: list[CompanyStats]
     next_cursor: str | None
+
+
+class CompanyAgentSections(BaseModel):
+    """Agent page sections: every canonical id, and the ones hidden from members of the company."""
+
+    sections: list[str]
+    hidden_sections: list[str]
+
+
+class CompanyAgentSectionsUpdate(BaseModel):
+    """Replacement hidden list; duplicates collapse and the stored order is canonical."""
+
+    hidden_sections: list[str]

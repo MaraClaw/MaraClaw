@@ -6,18 +6,20 @@ import gzip
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Final, Protocol
 from uuid import UUID, uuid4
 
 from app.config import get_settings
 from app.core.logging import logger
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.records.web_search_event import WebSearchEventRecord
+from app.runtime.tasks import loop_progress
 
 _SAFE_INSTANCE = re.compile(r"[^A-Za-z0-9._-]+")
 _CLAIM_LIMIT = 500
 _STALE = timedelta(minutes=15)
 _MAX_BYTES = 8 * 1024 * 1024
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
 class AnalyticsObjectSink(Protocol):
@@ -175,6 +177,7 @@ async def start_web_search_export_daemon() -> None:
     """Worker loop: drain pending exports and apply retention."""
     import asyncio
 
+    progress = loop_progress()
     ticks = 0
     while True:
         try:
@@ -182,6 +185,7 @@ async def start_web_search_export_daemon() -> None:
                 _ = await drain_pending_exports()
             else:
                 _ = await web_search_event_dao.reclaim_exporting()
+            progress.beat()
         except Exception:
             logger.exception("web search export drain failed")
         ticks += 1

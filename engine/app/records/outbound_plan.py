@@ -1,13 +1,24 @@
 """Versioned, credential-free provider payloads persisted before the first send."""
 
+from enum import StrEnum
 from typing import Literal, final
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-type OutboundProvider = Literal[
-    "feishu", "slack", "microsoft_teams", "google_chat", "wecom", "dingtalk", "whatsapp", "wechat", "discord"
-]
+
+class OutboundProvider(StrEnum):
+    """Providers a persisted outbound plan can target, a subset of the stored channel types."""
+
+    FEISHU = "feishu"
+    SLACK = "slack"
+    MICROSOFT_TEAMS = "microsoft_teams"
+    GOOGLE_CHAT = "google_chat"
+    WECOM = "wecom"
+    DINGTALK = "dingtalk"
+    WHATSAPP = "whatsapp"
+    WECHAT = "wechat"
+    DISCORD = "discord"
 
 
 @final

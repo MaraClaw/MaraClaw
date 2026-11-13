@@ -1,12 +1,14 @@
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
+from typing import Final
 from uuid import UUID
 
 import anyio
 
 from app.core.logging import logger
 from app.dao.whatsapp_personal_dao import candidates, claim
+from app.runtime.tasks import loop_progress
 from app.services.channels.whatsapp_personal_child import run_child
 from app.services.channels.whatsapp_personal_diagnostics import error_summary
 
@@ -15,12 +17,14 @@ _POLL_SECONDS = 1.0
 _BACKOFF_START_SECONDS = 1.0
 _BACKOFF_MAX_SECONDS = 30.0
 _COOLDOWN_SECONDS = 30.0
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
 async def personal_supervisor(clock: Callable[[], float] = monotonic) -> None:
     running: set[UUID] = set()
     cooldowns: dict[UUID, float] = {}
     backoff = _BACKOFF_START_SECONDS
+    progress = loop_progress()
     async with anyio.create_task_group() as tasks:
 
         async def owned(config_id: UUID) -> None:
@@ -59,4 +63,5 @@ async def personal_supervisor(clock: Callable[[], float] = monotonic) -> None:
                 if connection.config_id not in running and connection.config_id not in cooldowns:
                     running.add(connection.config_id)
                     tasks.start_soon(owned, connection.config_id)
+            progress.beat()
             await anyio.sleep(_POLL_SECONDS)

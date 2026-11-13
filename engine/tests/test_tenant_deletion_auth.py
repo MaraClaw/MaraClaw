@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import tenants
 from app.core import security
@@ -36,6 +37,7 @@ async def test_tenant_deletion_http_role_matrix(
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     get = AsyncMock(return_value=TenantRecord(id=tenant_id, name="Target", slug="target"))
     counts = {"users_count": 2, "agents_count": 3, "schedules_count": 5}
     count = AsyncMock(return_value=counts)
@@ -95,6 +97,7 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     tenant = TenantRecord(
         id=tenant_id,
         name="Target",

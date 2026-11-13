@@ -46,6 +46,7 @@ from app.services.guest_identity import (
     owned_guest_containers,
     stop_guest_containers,
 )
+from app.services.guest_image import ensure_guest_image
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.llm import get_model_api_key
@@ -261,7 +262,7 @@ class AgentManager:
     @staticmethod
     def _connect_docker() -> DockerClient | None:
         try:
-            return DockerClient()
+            return DockerClient(default_timeout=settings.OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS or None)
         except ClientNotFoundError, DockerException:
             return None
 
@@ -700,6 +701,7 @@ class AgentManager:
         except (OSError, ValueError, HTTPError, HTTPException) as exc:
             raise GuestStartPreflightError("Guest start preparation failed") from exc
 
+        await ensure_guest_image(client, guest_image)
         async with guest_admission(client, agent, self._agent_dir(agent.id).parent):
             try:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
@@ -735,6 +737,7 @@ class AgentManager:
                         guest_image,
                         ["openclaw", "gateway"],
                         detach=True,
+                        pull="never",
                         name=guest_container_name(agent.id),
                         networks=[settings.DOCKER_NETWORK],
                         publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],

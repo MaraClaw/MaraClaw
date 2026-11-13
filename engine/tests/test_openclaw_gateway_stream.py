@@ -174,6 +174,11 @@ async def test_overflow_bounds_scheduled_callbacks_and_drops_without_blocking():
 
     await asyncio.wait_for(asyncio.to_thread(flood), 5)
     assert relay.dropped == 100
+    # A thread that finishes before the loop watches it hands back its result without a loop turn, so the callbacks
+    # `offer` scheduled may not have run yet. This marker queues behind all of them.
+    scheduled = asyncio.Event()
+    relay.loop.call_soon(scheduled.set)
+    await asyncio.wait_for(scheduled.wait(), 5)
     assert relay.queue.qsize() == streaming.QUEUE_SIZE
     relay.finish()
     await asyncio.wait_for(relay.publish(), 5)

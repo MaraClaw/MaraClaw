@@ -2,12 +2,12 @@ import { useTranslation } from '@/hooks/use-translation'
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
-import { AppShell } from '@/components/layout/app-shell'
-import { OnboardingGate } from '@/components/layout/onboarding-gate'
-import { AgentLayout } from '@/components/layout/agent-layout'
 import { ProtectedRoute } from '@/routes/protected'
 import { openclawUpdateRoute } from '@/lib/openclaw-update-policy'
 
+const AppShell = lazy(() => import('@/components/layout/app-shell').then((module) => ({ default: module.AppShell })))
+const OnboardingGate = lazy(() => import('@/components/layout/onboarding-gate').then((module) => ({ default: module.OnboardingGate })))
+const AgentLayout = lazy(() => import('@/components/layout/agent-layout').then((module) => ({ default: module.AgentLayout })))
 const AgentChannelsPage = lazy(() => import('@/pages/app/agent-channels').then((module) => ({ default: module.AgentChannelsPage })))
 const AgentPermissionsPage = lazy(() => import('@/pages/app/agent-permissions').then((module) => ({ default: module.AgentPermissionsPage })))
 const AgentRelationshipsPage = lazy(() => import('@/pages/app/agent-relationships').then((module) => ({ default: module.AgentRelationshipsPage })))

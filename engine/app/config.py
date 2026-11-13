@@ -5,12 +5,16 @@ import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar, Final, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.sandbox.config import SandboxConfig, SandboxType
+
+# Retention settings stop at 100 years, which keeps ``now - timedelta(days=...)`` far from datetime overflow.
+MAX_RETENTION_DAYS: Final = 36500
+MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
 
 
 def _running_in_container() -> bool:
@@ -108,6 +112,24 @@ class Settings(BaseSettings):
     DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS: int = Field(default=60000, ge=0, le=2147483647)
     # The durable pool is sized on its own; it no longer inherits DATABASE_POOL_MAX_SIZE.
     DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
+    # Days to keep chat_history_changes journal rows; 0 keeps them forever.
+    CHAT_HISTORY_RETENTION_DAYS: int = Field(default=30, ge=0)
+    # Days to keep agent_activity_logs rows, counted from created_at; 0 keeps them forever.
+    ACTIVITY_LOG_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep completed/failed trigger_executions rows, counted from finished_at; 0 keeps them forever.
+    TRIGGER_EXECUTION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
+    @field_validator("TRIGGER_EXECUTION_RETENTION_DAYS")
+    @classmethod
+    def validate_trigger_execution_retention(cls, value: int) -> int:
+        # Deleting a finished execution frees its (trigger_id, idempotency_key) pair, so a late webhook
+        # redelivery inside the sender's retry window would run the trigger a second time.
+        if 0 < value < MIN_TRIGGER_EXECUTION_RETENTION_DAYS:
+            raise ValueError(
+                f"TRIGGER_EXECUTION_RETENTION_DAYS must be 0 (keep everything) or at least "
+                f"{MIN_TRIGGER_EXECUTION_RETENTION_DAYS}: a shorter window lets a late webhook redelivery run again"
+            )
+        return value
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -186,6 +208,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
     OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES: int = Field(default=0, ge=0)
+    # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
+    OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
+    # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.
+    OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_guest_memory_capacity(self) -> Settings:
@@ -271,6 +297,10 @@ class Settings(BaseSettings):
     SANDBOX_HTTP_PROXY: str = ""
     SANDBOX_HTTPS_PROXY: str = ""
     SANDBOX_NO_PROXY: str = ""
+    # Maximum execute_code runs at once across all agents.
+    SANDBOX_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1)
+    # Seconds an execute_code call may wait for a free slot before it is refused.
+    SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS: float = Field(default=10.0, ge=0)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=[".env", "../.env"],

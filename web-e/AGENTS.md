@@ -36,7 +36,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - Member auth uses server-enforced member-audience routes and DTOs. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.
 - Capture the current session owner for async work; discard stale completions after logout, replacement, or tenant switch. Use session-scoped workspace query/mutation hooks; AppShell creates a per-owner QueryClient and cancels/clears retired-owner work.
 - Join is invitation-driven: `/join` previews a code, then accepts it or continues in the default organization. Transfer requires an invitation code plus password, loads a quote and may force an explicit paid or free choice. Results are an immediate join (access token), a pending/approved admission, or a payment-review transfer request. Pending outcomes keep the source session and link to `/app/admissions/:id` or `/app/admissions/transfers/:id`; approved admissions enter the target only through the switch/replacement session flow.
-- Keep the inline FOUC script and ThemeProvider aligned: `maraclaw-theme`, system/light/dark resolution, and theme-color `#faf8f5` / `#1c1612`. ThemeToggle uses the provider, not another theme store.
+- Keep the FOUC script (`public/theme-init.js`, loaded synchronously from `index.html` because the image CSP blocks inline scripts) and ThemeProvider aligned: `maraclaw-theme`, system/light/dark resolution, and theme-color `#faf8f5` / `#1c1612`. ThemeToggle uses the provider, not another theme store.
 
 ## CONVENTIONS AND BOUNDARIES
 

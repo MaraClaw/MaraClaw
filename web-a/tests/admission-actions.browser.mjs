@@ -7,6 +7,8 @@ export const detailCall = (id) => (call) => call.method === 'GET' && call.path =
 export const decisionCall = (id) => (call) => call.method === 'POST' && call.path === `/api/company-admissions/${id}/decision`
 export const reviewLink = (page, id) => page.locator(`main ul[aria-label="Admission requests"] a[href="/admission-approvals/${id}"]`)
 export const reasonField = (page) => page.getByLabel('Reason (optional)', { exact: true })
+export const decisionReady = (page) => page.locator('main input[type="checkbox"]:not(:disabled)')
+export const confirmDecision = async (page) => { await page.snapshot(); await page.locator('main input[type="checkbox"]').check() }
 export async function assertList(h, page, state, rows, number = 1, status = 'pending') {
   if (rows.length) await visible(reviewLink(page, rows[0].id))
   else await visible(page.locator('main h2').filter({ hasText: exact(`No ${status} requests`) }))
@@ -48,7 +50,7 @@ export async function openDetail(page, state, id) {
   const since = state.calls.length
   await page.snapshot(); await reviewLink(page, id).click()
   await state.waitCall(since, detailCall(id))
-  await visible(enabledButton(page, 'Approve request'))
+  await visible(decisionReady(page))
 }
 export async function backToList(h, page, state, history = false) {
   const since = state.calls.length

@@ -151,6 +151,27 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]
 
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        """Delete up to ``limit`` rows created before ``older_than``, oldest first, and return how many went.
+
+        Rows another transaction holds are skipped, never waited on; the next pass takes them. The picked rows
+        are deleted by ``ctid`` (a TID scan): ``id IN (SELECT ... LIMIT)`` plans as a scan of the whole table per batch.
+        The statement's own row locks keep each ``ctid`` in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM agent_activity_logs
+                    WHERE created_at < %(cutoff)s
+                    ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM agent_activity_logs WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": older_than, "limit": limit},
+            )
+            return len(rows)
+
     async def tokens_by_day(self, start: datetime | date, end: datetime | date) -> dict[date, int]:
         async with self.session() as db:
             rows = await db.fetchall(

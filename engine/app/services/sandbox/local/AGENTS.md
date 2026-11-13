@@ -14,6 +14,10 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 - Host/source default may allow unsafe fallback; container/production default must remain false.
 - `SANDBOX_ALLOW_NETWORK=False` should isolate network access; do not silently re-enable network for convenience.
 - Execution uses the agent workspace as `HOME`, repairs/uses workspace `.venv`, and puts `.venv/bin` first in `PATH`.
+- Runs for one agent are concurrent. Each execution writes its code to its own `_exec_tmp_<uuid hex><ext>` in the workspace root and removes it in `finally`; keep the `_exec_tmp` prefix, `workspace_temp` skips it when flushing. Creating a workspace `.venv` is single-flight per venv path within the engine process (`SubprocessBackend._venv_creations`); nothing else serializes same-agent runs.
+- Bubblewrap path limits are set in `preexec_fn`, so they bind bwrap and everything it starts: `RLIMIT_DATA` at `config.memory_limit_bytes` and `RLIMIT_CPU` at `min(timeout, max_timeout)` seconds (at least 1). No `RLIMIT_AS` (node does not boot under it at the default ceiling), no `RLIMIT_NPROC` (counted per real UID, it can stop bwrap from cloning) and no chroot (bwrap owns the filesystem view). A rejected `setrlimit` aborts the launch instead of running unlimited.
+- On the bubblewrap path node's `RLIMIT_DATA` is the configured ceiling plus V8's JIT code-range reservation, measured once per engine process (VmData of a default node boot minus a `--jitless` boot, run outside the sandbox) and cached; node itself is launched with no extra V8 flags. A failed measurement is not cached and fails that node execution with no sandbox launch.
+- Host fallback (`allow_unsafe_fallback_when_bwrap_missing`) applies `RLIMIT_CPU`, `RLIMIT_AS` (the memory ceiling), `RLIMIT_FSIZE` 10 MiB, `RLIMIT_NOFILE` 64, `RLIMIT_NPROC` 32 and `RLIMIT_CORE` 0, each in its own guarded step so one rejected limit leaves the rest set, and chroots into the workspace only as root.
 - Dangerous-pattern filtering exists here and in `agent_tool_exec/code_exec.py`; update both when changing blocked patterns.
 
 ## Bubblewrap compatibility
@@ -34,6 +38,8 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 ## Docker Safety
 
 - Preserve cleanup paths for stopped/removed containers, even on timeout or error.
+- Every `pywhales` call (client construction, `info`, `image.exists`, `image.pull`, `run`, `container.wait`, log collection, `container.remove`) runs in a worker thread through AnyIO `to_thread`, never on the event loop. One `ExecutionDeadline` (the caller's, else `exec_timeout`) covers client load, image check, pull, creation, wait and logs; expiry returns exit code 124 with `TerminationReason.SANDBOX_TIMEOUT`. The `run` kwargs are unchanged.
+- A container whose `run` returns after a timeout or cancellation is removed by the worker thread that created it (`_ContainerSlot` hand-off); otherwise the event loop removes it in a detached task that no caller cancellation can stop, awaited for at most the deadline's settle budget. Known limit: if `run` raises after Docker created the container (for example a failed start), the backend holds no handle and cannot remove it; that container carries no label.
 - Do not require a live Docker daemon at import time; tests use fakes around the client API.
 - Keep output truncation and configured timeout behavior consistent with the base sandbox contract.
 - Keep no-network behavior explicit; tests cover `networks=["none"]` when `allow_network` is false.

@@ -12,7 +12,7 @@ from redis.exceptions import RedisError
 from app.config import get_settings
 from app.core.events import get_redis
 from app.core.permissions import check_agent_access, is_agent_expired
-from app.core.security import check_token_generation, load_user_principal
+from app.core.security import check_membership_generation, check_token_generation, load_user_principal
 from app.dao.chat_dao import chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
@@ -37,6 +37,7 @@ class ChatTicketBinding(BaseModel):
     session_id: uuid.UUID
     auth_deadline: int
     auth_generation: int = Field(strict=True, ge=0)
+    membership_generation: int = Field(default=0, strict=True, ge=0)
 
 
 def ticket_key(ticket: str) -> str:
@@ -51,6 +52,7 @@ async def authorize(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord
     if user.identity is None:
         raise HTTPException(401, "Identity unavailable")
     await check_token_generation(user.identity.id, binding.auth_generation)
+    await check_membership_generation(user.id, binding.membership_generation)
     if user.tenant_id != binding.tenant_id:
         raise HTTPException(403, "Membership changed")
     agent, level = await check_agent_access(user, binding.agent_id, fresh=True)
@@ -89,7 +91,7 @@ async def resolve_session(request: ChatTicketRequest, user_id: uuid.UUID) -> uui
 
 
 async def create(
-    request: ChatTicketRequest, user: UserRecord, auth_deadline: int, auth_generation: int
+    request: ChatTicketRequest, user: UserRecord, auth_deadline: int, auth_generation: int, membership_generation: int
 ) -> ChatTicketResponse:
     if user.tenant_id is None:
         raise HTTPException(403, "Tenant membership required")
@@ -103,6 +105,7 @@ async def create(
         session_id=await resolve_session(request, user.id),
         auth_deadline=auth_deadline,
         auth_generation=auth_generation,
+        membership_generation=membership_generation,
     )
     return await issue(binding)
 

@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis, sign_in_state
 from tests.transaction_pool_fakes import CountingPool
 
@@ -75,6 +76,7 @@ async def test_auth_response_union_preserves_payloads(
     monkeypatch.setattr(auth.user_dao, "get_with_identity", AsyncMock(return_value=users[0]))
     monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=users[0]))
     monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(auth.tenant_dao, "get", AsyncMock(return_value=tenants[0]))
     monkeypatch.setattr(auth.tenant_dao, "get_by_ids", AsyncMock(return_value=tenants))
     monkeypatch.setattr(auth.identity_provider_dao, "get_preferred", AsyncMock(return_value=None))

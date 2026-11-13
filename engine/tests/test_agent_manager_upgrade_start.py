@@ -28,9 +28,15 @@ class _Containers:
         return None
 
 
+class _Images:
+    def exists(self, _reference: str) -> bool:
+        return True
+
+
 class _Docker:
     def __init__(self) -> None:
         self.container = _Containers()
+        self.image = _Images()
         self.images: list[str] = []
         self.mounts: list[tuple[str, str, str]] = []
 

@@ -142,12 +142,12 @@ async def test_whatsapp_checks_strict_window_at_actual_transport_boundary(monkey
     if reason is not None:
         with pytest.raises(WhatsAppReplyWindowError) as failure:
             await outbound_transport.send_chunk(
-                configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
+                configured(OutboundProvider.WHATSAPP), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
             )
         assert failure.value.reason == reason
     else:
         await outbound_transport.send_chunk(
-            configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
+            configured(OutboundProvider.WHATSAPP), OutboundChunk(text="reply", key=uuid4()), clock=lambda: now
         )
     assert len(requests) == (1 if reason is None else 0)
     lookup.assert_awaited_once()
@@ -176,7 +176,9 @@ async def test_whatsapp_acknowledgement_requires_every_provider_message_id(monke
     transport(monkeypatch, respond)
 
     with pytest.raises(ProviderDeliveryError) as failure:
-        await outbound_transport.send_chunk(configured("whatsapp"), OutboundChunk(text="reply", key=uuid4()))
+        await outbound_transport.send_chunk(
+            configured(OutboundProvider.WHATSAPP), OutboundChunk(text="reply", key=uuid4())
+        )
 
     assert failure.value.code == "missing_ack"
     assert len(requests) == 1
@@ -224,7 +226,7 @@ async def test_http_and_application_errors_are_conservative(monkeypatch, status,
     transport(monkeypatch, lambda _request: httpx.Response(status, json=body))
 
     with pytest.raises((ProviderDeliveryError, httpx.HTTPStatusError)) as failure:
-        await outbound_transport.send_chunk(configured("slack"), OutboundChunk(text="text", key=uuid4()))
+        await outbound_transport.send_chunk(configured(OutboundProvider.SLACK), OutboundChunk(text="text", key=uuid4()))
 
     assert isinstance(failure.value, ProviderPayloadRejectedError) == terminal
 
@@ -241,7 +243,9 @@ async def test_discord_rejects_only_conclusive_content_errors(monkeypatch, body,
     transport(monkeypatch, lambda _request: httpx.Response(400, json=body))
 
     with pytest.raises((ProviderDeliveryError, httpx.HTTPStatusError)) as failure:
-        await outbound_transport.send_chunk(configured("discord"), OutboundChunk(text="text", key=uuid4()))
+        await outbound_transport.send_chunk(
+            configured(OutboundProvider.DISCORD), OutboundChunk(text="text", key=uuid4())
+        )
 
     assert isinstance(failure.value, ProviderPayloadRejectedError) == terminal
 

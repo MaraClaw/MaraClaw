@@ -56,6 +56,7 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
                 <span className="block text-muted-foreground">${formatNumber(plan.additional_account_monthly_usd)} {translate("USD / additional account / month")}</span>
                 <span className="block">{translate('Up to {count} human accounts', { count: formatNumber(plan.max_accounts) })}</span>
                 <span className="block">{translate('Up to {count} agents per account', { count: formatNumber(plan.max_agents_per_account) })}</span>
+                <span className="block">{translate('Up to {count} messages per agent per day', { count: formatNumber(plan.daily_messages_per_agent) })}</span>
                 <span className="block">{translate('{size} GiB managed S3 storage per agent', { size: formatNumber(plan.storage_limit_bytes / (1024 ** 3)) })}</span>
                 <span className="block">{translate('{size} MiB per managed S3 file', { size: formatNumber(plan.max_file_size_bytes / (1024 ** 2)) })}</span>
               </span>
@@ -65,7 +66,7 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
       </fieldset>
 
       <p id="pricing-terms" className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
-        {translate("Human accounts include your organization admin. Each account, including additional accounts and organization admins, has its own agent allowance; agents are not pooled. Agent creation caps are enforced for approved tiered organizations. Existing quotas remain for organizations without a tier. Human account allocations and monthly USD prices remain proposals subject to approval, not enforced quotas or paid activation. You pay your own model and tool providers.")}</p>
+        {translate("Human accounts include your organization admin. Each account, including additional accounts and organization admins, has its own agent allowance; agents are not pooled. Agent creation caps and daily message caps per agent are enforced for approved tiered organizations; an agent's daily count resets at midnight in your organization admin's timezone (UTC if none is set). Existing quotas remain for organizations without a tier. Human account allocations and monthly USD prices remain proposals subject to approval, not enforced quotas or paid activation. Your organization pays its own model and tool providers.")}</p>
 
       <p className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
         {translate("Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.")}</p>

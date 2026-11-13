@@ -1,7 +1,7 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { Link, matchPath, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, matchPath, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
@@ -9,6 +9,8 @@ import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Button } from '@/components/ui/button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
+import { hiddenSectionRedirect, visibleAgentTabs } from '@/lib/agent-section-visibility'
+import { fetchMyTenant } from '@/lib/auth-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import { canMountAgentOutlet } from '@/lib/openclaw-update-policy'
 import { getAgent } from '@/lib/workspace-api'
@@ -72,7 +74,10 @@ export function AgentLayout() {
     retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
     retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
   })
-  const visibleTabs = tabs.filter((tab) => tab.id !== 'activity' || query.data?.access_level === 'manage')
+  // Same key as AppShell, so this hits its cache. Loading or failed tenant data hides nothing (visibility only).
+  const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
+  const hiddenSections = tenantQuery.data?.hidden_agent_sections ?? []
+  const visibleTabs = visibleAgentTabs(tabs, hiddenSections, query.data?.access_level)
 
   if (!query.data) {
     if (query.isLoading) {
@@ -104,6 +109,9 @@ export function AgentLayout() {
       </div>
     )
   }
+
+  const redirect = hiddenSectionRedirect(tabs, hiddenSections, visibleTabs, pathname)
+  if (redirect) return <Navigate to={redirect} replace />
 
   const agent = query.data
 

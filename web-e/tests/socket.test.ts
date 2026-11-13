@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { ChatEventType } from '../src/lib/chat/protocol.ts'
 import { createChatSubmissions } from '../src/lib/chat/submissions.ts'
 import { connectAgentChat, isTurnRejected } from '../src/lib/chat/ws-client.ts'
-import { ControlledSocket, canonicalSession, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
+import { ControlledSocket, canonicalSession, drain, fixture, firstSubmission, secondSubmission, submission } from './socket-fixture.ts'
 
 test('queued sends flush in order when the current socket opens', async () => {
   // Given
@@ -66,10 +66,11 @@ test('reconnect timer is cleared and already queued callback is fenced when owne
   f.socket().end(1006)
   conn.send(submission('reconnect-pending'))
   assert.ok(queued)
+  const cleared = clear.mock.callCount()
   // When
   f.store.beginReplacement(f.store.capture(), 'token-b')
   // Then
-  assert.equal(clear.mock.callCount(), 1)
+  assert.equal(clear.mock.callCount(), cleared + 1)
   t.mock.timers.tick(8000)
   queued()
   assert.equal(f.sockets.length, 1)
@@ -325,3 +326,457 @@ for (const frame of [
     assert.deepEqual(f.events, [{ type: ChatEventType.ERROR, content: 'Malformed chat event' }])
   })
 }
+
+const connectedFrame = JSON.stringify({ type: ChatEventType.CONNECTED, session_id: canonicalSession })
+const heartbeatFrame = JSON.stringify({ type: ChatEventType.HEARTBEAT })
+
+async function connectedSession(f: ReturnType<typeof fixture>, extra?: Parameters<ReturnType<typeof fixture>['timed']>[0]) {
+  const conn = f.timed(extra)
+  await drain()
+  f.socket().open()
+  f.socket().frame(connectedFrame)
+  return conn
+}
+
+test('socket URL opts in to server heartbeats', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = f.timed()
+  t.after(conn.close)
+  // When
+  await drain()
+  // Then
+  assert.equal(new URL(f.urls[0] ?? '').searchParams.get('heartbeat'), '1')
+})
+
+test('heartbeat frames prove life without reaching onEvent', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When
+  f.clock.advance(20_000)
+  f.socket().frame(heartbeatFrame)
+  f.clock.advance(20_000)
+  // Then
+  assert.equal(f.socket().closes, 0)
+  assert.deepEqual(f.events, [{ type: ChatEventType.CONNECTED, session_id: canonicalSession }])
+})
+
+test('a silent connected socket is discarded at 25 s and reconnects through backoff without onclose', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  const silent = f.socket()
+  // When
+  f.clock.advance(24_999)
+  assert.equal(silent.closes, 0)
+  f.clock.advance(1)
+  // Then
+  assert.equal(silent.closes, 1)
+  assert.deepEqual([silent.onopen, silent.onmessage, silent.onclose], [null, null, null])
+  assert.equal(f.states.at(-1), 'reconnecting')
+  f.clock.advance(599)
+  await drain()
+  assert.equal(f.tickets(), 1)
+  f.clock.advance(1)
+  await drain()
+  assert.equal(f.tickets(), 2)
+  assert.equal(f.sockets.length, 2)
+})
+
+test('frames arriving before each deadline keep the socket alive across many deadlines', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When
+  for (let index = 0; index < 20; index++) {
+    f.clock.advance(20_000)
+    f.socket().frame(index % 2 ? heartbeatFrame : '{"type":"chunk","content":"x"}')
+  }
+  // Then
+  assert.equal(f.socket().closes, 0)
+  assert.equal(f.tickets(), 1)
+})
+
+test('a throttled deadline timer that runs late after recent frames re-arms for the remainder', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When: frames keep arriving while the throttled 25 s timer runs 35 s late
+  for (let index = 0; index < 3; index++) {
+    f.clock.lag(20_000)
+    f.socket().frame(heartbeatFrame)
+  }
+  f.clock.advance(0)
+  // Then
+  assert.equal(f.socket().closes, 0)
+  f.clock.advance(24_999)
+  assert.equal(f.socket().closes, 0)
+  f.clock.advance(1)
+  assert.equal(f.socket().closes, 1)
+})
+
+test('a deadline timer waking far late re-checks once so already-queued frames still count', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When: after an hour asleep the timer runs before the queued frame is dispatched
+  f.clock.lag(3_600_000)
+  f.clock.advance(0)
+  f.socket().frame(heartbeatFrame)
+  f.clock.advance(24_000)
+  // Then
+  assert.equal(f.socket().closes, 0)
+  assert.equal(f.tickets(), 1)
+})
+
+test('late close and message events from a discarded socket are ignored', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  const { onclose: lateClose, onmessage: lateMessage } = f.socket()
+  f.clock.advance(25_000)
+  // When
+  lateMessage?.({ data: '{"type":"chunk","content":"late"}' })
+  lateClose?.({ code: 1006 })
+  await f.elapse(15_000)
+  // Then
+  assert.equal(f.tickets(), 2)
+  assert.equal(f.sockets.length, 2)
+  assert.deepEqual(f.events, [{ type: ChatEventType.CONNECTED, session_id: canonicalSession }])
+})
+
+test('liveness is armed only after connected and cleared when the socket closes', async () => {
+  // Given
+  const f = fixture()
+  const conn = f.timed()
+  await drain()
+  f.socket().open()
+  // When / Then: before connected only the 15 s connect deadline is armed, never the 25 s liveness timer
+  f.clock.advance(14_999)
+  assert.equal(f.socket().closes, 0)
+  assert.equal(f.clock.pending, 1)
+  assert.equal(f.clock.nextDue(), 15_000)
+  f.socket().frame(connectedFrame)
+  assert.equal(f.clock.pending, 1)
+  f.socket().end(1006)
+  assert.equal(f.clock.pending, 1)
+  conn.close()
+  assert.equal(f.clock.pending, 0)
+})
+
+test('a ticket request that never settles is aborted at the 15 s connect deadline and retried through backoff', async (t) => {
+  // Given
+  const f = fixture()
+  f.stall(true)
+  const conn = f.timed()
+  t.after(conn.close)
+  await drain()
+  const request = f.hung[0]
+  assert.ok(request)
+  // When
+  f.clock.advance(14_999)
+  assert.equal(request.signal.aborted, false)
+  assert.equal(f.states.at(-1), 'connecting')
+  f.clock.advance(1)
+  // Then
+  assert.equal(request.signal.aborted, true)
+  assert.equal(f.states.at(-1), 'reconnecting')
+  assert.deepEqual(f.codes, [])
+  f.clock.advance(599)
+  await drain()
+  assert.equal(f.tickets(), 1)
+  f.clock.advance(1)
+  await drain()
+  assert.equal(f.tickets(), 2)
+  assert.equal(f.sockets.length, 0)
+})
+
+test('a socket that opens but never sends connected is closed client-side at the connect deadline and retried through backoff', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = f.timed()
+  t.after(conn.close)
+  await drain()
+  const silent = f.socket()
+  silent.open()
+  // When
+  f.clock.advance(14_999)
+  assert.equal(silent.closes, 0)
+  f.clock.advance(1)
+  // Then
+  assert.equal(silent.closes, 1)
+  assert.deepEqual([silent.onopen, silent.onmessage, silent.onclose], [null, null, null])
+  assert.equal(f.states.at(-1), 'reconnecting')
+  assert.deepEqual(f.codes, [])
+  f.clock.advance(599)
+  await drain()
+  assert.equal(f.tickets(), 1)
+  f.clock.advance(1)
+  await drain()
+  assert.equal(f.tickets(), 2)
+  assert.equal(f.sockets.length, 2)
+})
+
+test('when every attempt hangs chat suspends by 120 s with no timers or tickets left and retry starts exactly one attempt', async (t) => {
+  // Given
+  const f = fixture()
+  f.stall(true)
+  const conn = f.timed()
+  t.after(conn.close)
+  // When
+  await f.elapse(119_999)
+  assert.equal(f.states.at(-1), 'reconnecting')
+  await f.elapse(1)
+  // Then
+  assert.equal(f.states.at(-1), 'suspended')
+  assert.equal(f.hung.length, f.tickets())
+  assert.ok(f.hung.every(({ signal }) => signal.aborted))
+  const tickets = f.tickets()
+  await f.elapse(3_600_000)
+  assert.equal(f.tickets(), tickets)
+  assert.equal(f.clock.pending, 0)
+  conn.retry()
+  conn.retry()
+  await drain()
+  assert.equal(f.tickets(), tickets + 1)
+})
+
+test('a connection that connected before the connect deadline is not discarded while frames keep flowing', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When
+  for (let index = 0; index < 3; index++) {
+    f.clock.advance(10_000)
+    f.socket().frame(heartbeatFrame)
+  }
+  // Then
+  assert.equal(f.socket().closes, 0)
+  assert.equal(f.tickets(), 1)
+  assert.equal(f.states.at(-1), 'connected')
+  assert.equal(f.clock.pending, 1)
+})
+
+test('a ticket that resolves after its attempt was abandoned creates no second socket', async (t) => {
+  // Given
+  const f = fixture()
+  f.stall(true)
+  const conn = f.timed()
+  t.after(conn.close)
+  await drain()
+  f.clock.advance(15_000)
+  f.stall(false)
+  f.clock.advance(600)
+  await drain()
+  const current = f.socket()
+  assert.equal(f.sockets.length, 1)
+  // When
+  f.hung[0]?.release()
+  await drain()
+  // Then
+  assert.equal(f.sockets.length, 1)
+  assert.equal(f.urls.length, 1)
+  assert.equal(current.closes, 0)
+  assert.equal(f.states.at(-1), 'reconnecting')
+})
+
+for (const race of ['timer first', 'online first', 'suspended'] as const) {
+  test(`racing online, backoff timer, visibility, retry and send (${race}) make one ticket request and one socket`, async (t) => {
+    // Given
+    const f = fixture()
+    const conn = await connectedSession(f)
+    t.after(conn.close)
+    f.socket().end(1006)
+    if (race === 'suspended') {
+      f.outage(true)
+      await f.elapse(120_000)
+      assert.equal(f.states.at(-1), 'suspended')
+      f.outage(false)
+    }
+    const tickets = f.tickets()
+    const sockets = f.sockets.length
+    // When
+    if (race === 'timer first') f.clock.advance(600)
+    f.network.set(true)
+    f.clock.advance(8_000)
+    f.visibility.set(true)
+    conn.retry()
+    conn.send(submission('racing'))
+    await drain()
+    conn.retry()
+    f.network.set(true)
+    // Then
+    assert.equal(f.tickets(), tickets + 1)
+    assert.equal(f.sockets.length, sockets + 1)
+  })
+}
+
+for (const moment of ['at start', 'while connected'] as const) {
+  test(`offline ${moment} requests no ticket until online, then exactly one`, async (t) => {
+    // Given
+    const f = fixture()
+    if (moment === 'at start') f.network.set(false)
+    const conn = moment === 'at start' ? f.timed() : await connectedSession(f)
+    t.after(conn.close)
+    const tickets = f.tickets()
+    // When
+    f.network.set(false)
+    conn.retry()
+    conn.send(submission('offline'))
+    f.visibility.set(true)
+    await f.elapse(600_000)
+    // Then
+    assert.equal(f.tickets(), tickets)
+    assert.equal(f.clock.pending, 0)
+    f.network.set(true)
+    await drain()
+    assert.equal(f.tickets(), tickets + 1)
+    assert.deepEqual(f.states, moment === 'at start' ? ['offline', 'connecting'] : ['connecting', 'connected', 'offline', 'reconnecting'])
+  })
+}
+
+test('an outage past 120 s suspends without timers or tickets and keeps the subscription and ledger', async (t) => {
+  // Given
+  const f = fixture()
+  const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+  const conn = await connectedSession(f, { submissions })
+  t.after(conn.close)
+  f.outage(true)
+  f.socket().end(1006)
+  conn.send(submission('waiting'))
+  // When
+  await f.elapse(119_999)
+  assert.equal(f.states.at(-1), 'reconnecting')
+  await f.elapse(1)
+  // Then
+  assert.equal(f.states.at(-1), 'suspended')
+  const tickets = f.tickets()
+  await f.elapse(3_600_000)
+  assert.equal(f.tickets(), tickets)
+  assert.equal(f.clock.pending, 0)
+  assert.deepEqual(submissions.pending(), [submission('waiting')])
+  assert.deepEqual([f.network.listeners, f.visibility.listeners], [1, 1])
+  f.store.logout(f.store.capture())
+  assert.equal(submissions.active, false)
+})
+
+for (const trigger of ['online', 'visible', 'send', 'retry'] as const) {
+  test(`suspended chat resumes on ${trigger} with one ticket, pending work resent once and onReconnect`, async (t) => {
+    // Given
+    const f = fixture()
+    let reconnects = 0
+    const conn = await connectedSession(f, { onReconnect: () => { reconnects++ } })
+    t.after(conn.close)
+    f.outage(true)
+    f.visibility.set(false)
+    f.socket().end(1006)
+    conn.send(submission('waiting'))
+    conn.send({ kind: 'onboarding_trigger' })
+    await f.elapse(120_000)
+    assert.equal(f.states.at(-1), 'suspended')
+    f.outage(false)
+    const tickets = f.tickets()
+    // When
+    switch (trigger) {
+      case 'online': f.network.set(true); break
+      case 'visible': f.visibility.set(true); break
+      case 'send': conn.send(submission('waiting')); break
+      case 'retry': conn.retry(); break
+      default: trigger satisfies never
+    }
+    await drain()
+    f.socket().open()
+    f.socket().frame(connectedFrame)
+    // Then
+    assert.equal(f.tickets(), tickets + 1)
+    assert.deepEqual(f.socket().sent.map((data) => JSON.parse(data)), [submission('waiting'), { kind: 'onboarding_trigger' }])
+    assert.equal(reconnects, 1)
+    assert.equal(f.states.at(-1), 'connected')
+  })
+}
+
+for (const code of [4001, 4003]) {
+  test(`terminal ${code} on a live session leaves no retry, timer or listener`, async () => {
+    // Given
+    const f = fixture()
+    const conn = await connectedSession(f)
+    // When
+    f.socket().end(code)
+    conn.retry()
+    f.network.set(true)
+    f.visibility.set(true)
+    await f.elapse(600_000)
+    // Then
+    assert.deepEqual(f.codes, [code])
+    assert.equal(f.tickets(), 1)
+    assert.equal(f.clock.pending, 0)
+    assert.deepEqual([f.network.listeners, f.visibility.listeners], [0, 0])
+    assert.deepEqual(f.states, ['connecting', 'connected'])
+  })
+}
+
+for (const state of ['connecting', 'connected', 'reconnecting', 'offline', 'suspended'] as const) {
+  test(`close while ${state} leaves no timer, listener or later ticket request`, async () => {
+    // Given
+    const f = fixture()
+    const submissions = createChatSubmissions(f.store.capture(), 'agent-a', 'thread-a')
+    const conn = state === 'connecting' || state === 'offline' ? f.timed({ submissions }) : await connectedSession(f, { submissions })
+    switch (state) {
+      case 'connecting': case 'connected': break
+      case 'reconnecting': f.socket().end(1006); break
+      case 'offline': f.network.set(false); break
+      case 'suspended': f.outage(true); f.socket().end(1006); await f.elapse(120_000); break
+      default: state satisfies never
+    }
+    assert.equal(f.states.at(-1), state)
+    // When
+    conn.close()
+    // Then
+    assert.equal(f.clock.pending, 0)
+    assert.deepEqual([f.network.listeners, f.visibility.listeners], [0, 0])
+    const tickets = f.tickets()
+    f.network.set(true)
+    f.visibility.set(true)
+    conn.retry()
+    await f.elapse(600_000)
+    assert.equal(f.tickets(), tickets)
+    f.store.logout(f.store.capture())
+    assert.equal(submissions.active, true)
+  })
+}
+
+test('connection states follow connect, reconnect, a window reset by connected, suspension and retry', async (t) => {
+  // Given
+  const f = fixture()
+  const conn = await connectedSession(f)
+  t.after(conn.close)
+  // When
+  f.outage(true)
+  f.socket().end(1006)
+  await f.elapse(100_000)
+  f.outage(false)
+  await f.elapse(8_000)
+  f.socket().open()
+  f.socket().frame(connectedFrame)
+  f.outage(true)
+  f.socket().end(1006)
+  await f.elapse(119_999)
+  const beforeWindow = f.states.at(-1)
+  await f.elapse(1)
+  f.outage(false)
+  conn.retry()
+  await drain()
+  f.socket().open()
+  f.socket().frame(connectedFrame)
+  // Then
+  assert.equal(beforeWindow, 'reconnecting')
+  assert.deepEqual(f.states, ['connecting', 'connected', 'reconnecting', 'connected', 'reconnecting', 'suspended', 'reconnecting', 'connected'])
+})

@@ -11,7 +11,9 @@ import pytest
 from pywhales import DockerClient, Image
 from pywhales.exceptions import DockerException, NoSuchImage
 
-from app.services.openclaw_update_docker import UpgradeDocker, _repository
+from app.config import get_settings
+from app.services.guest_image import image_repository
+from app.services.openclaw_update_docker import UpgradeDocker
 
 DIGEST = "sha256:" + "a" * 64
 PULLED_ID = "sha256:" + "1" * 64
@@ -49,8 +51,9 @@ def _docker(monkeypatch: pytest.MonkeyPatch, *pull_lines: str, cached: bool = Tr
     client = DockerClient()
     daemon = _Daemon(list(pull_lines))
 
-    def pull(reference: str, *, stream_logs: bool) -> Iterator[tuple[str, bytes]]:
+    def pull(reference: str, *, stream_logs: bool, timeout: float) -> Iterator[tuple[str, bytes]]:
         assert stream_logs
+        assert timeout == get_settings().OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS
         daemon.pulled.append(reference)
         yield from ((reference, line.encode()) for line in daemon.pull_lines)
 
@@ -100,7 +103,7 @@ def test_cached_registry_image_is_still_pulled(monkeypatch: pytest.MonkeyPatch, 
     # Then it uses the freshly pulled manifest rather than the cached mutable tag.
     assert image_id == PULLED_ID
     assert daemon.pulled == [reference]
-    assert daemon.inspected == [f"{_repository(reference)}@{DIGEST}"]
+    assert daemon.inspected == [f"{image_repository(reference)}@{DIGEST}"]
 
 
 @pytest.mark.parametrize("reference", ["ns/openclaw:1", "registry.example:5000/ns/openclaw:1"])
@@ -109,8 +112,9 @@ def test_registry_pull_failure_does_not_use_cached_image(monkeypatch: pytest.Mon
     docker, daemon = _docker(monkeypatch)
     failure = DockerException(["docker", "pull", reference], 1, stderr=b"pull access denied")
 
-    def pull(reference: str, *, stream_logs: bool) -> Iterator[tuple[str, bytes]]:
+    def pull(reference: str, *, stream_logs: bool, timeout: float) -> Iterator[tuple[str, bytes]]:
         assert stream_logs
+        assert timeout == get_settings().OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS
         daemon.pulled.append(reference)
         raise failure
 
@@ -163,7 +167,7 @@ def test_digest_pinned_reference_is_pulled_before_it_is_inspected(
     ],
 )
 def test_repository_strips_only_the_tag(reference: str, repository: str):
-    assert _repository(reference) == repository
+    assert image_repository(reference) == repository
 
 
 @pytest.mark.parametrize("owner", ["deadbeef-0000-4000-8000-000000000001", None])

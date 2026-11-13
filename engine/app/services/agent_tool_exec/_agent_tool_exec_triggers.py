@@ -69,7 +69,7 @@ async def _handle_set_trigger(
     if ttype == "on_message":
         await trigger_helpers._snapshot_latest_message(agent_tools, agent_id, config)
     elif ttype == "webhook":
-        config["token"] = secrets.token_urlsafe(8)
+        config["token"] = secrets.token_urlsafe(16)
 
     await trigger_helpers._record_origin_metadata(agent_tools, agent_id, config, session_id=session_id, user_id=user_id)
 

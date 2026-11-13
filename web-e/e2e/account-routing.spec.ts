@@ -37,9 +37,13 @@ async function prepareMember(page: Page, mustChangePassword: boolean) {
         requiresPassword = false
         await route.fulfill({ json: { ok: true, must_change_password: false, access_token: syntheticToken } satisfies ChangePasswordResponse })
         break
+      case '/api/agents/templates':
       case '/api/auth/providers':
       case '/api/auth/my-tenants':
         await route.fulfill({ json: [] })
+        break
+      case '/api/agents/default-soul':
+        await route.fulfill({ json: { soul: '# Soul - {{agent_name}}\n' } })
         break
       case '/api/tenants/me':
         await route.fulfill(requiresPassword ? passwordRequired : { json: company })

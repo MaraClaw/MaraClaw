@@ -1,16 +1,16 @@
 """Shared Chrome rendering helpers for document conversion."""
 
 import asyncio
-import json
 import os
 import shutil
 from pathlib import Path
 
-from app.core.json_types import JsonObject, JsonValue, json_as_str, json_loads_object, json_object_from
+from app.core.json_types import JsonObject, JsonValue, json_as_str, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_runtime import (
-    chrome_arguments,
+    PolicedCdpSession,
     create_cdp_target,
+    launch_chrome,
     local_ephemeral_port,
     terminate_process,
     trusted_executable,
@@ -18,6 +18,7 @@ from app.services.document_conversion.chrome_runtime import (
     wait_for_cdp,
     write_temporary_bytes,
 )
+from app.services.document_conversion.resource_policy import ResourcePolicy
 
 
 def chrome_executable() -> str | None:
@@ -70,12 +71,6 @@ def _json_float(value: object, default: float) -> float:
     raise TypeError(f"float() argument must be a string or a real number, not '{type(raw).__name__}'")
 
 
-def _cdp_payload(raw: object) -> JsonObject:
-    if isinstance(raw, str | bytes | bytearray):
-        return json_loads_object(raw)
-    return json_object_from(raw)
-
-
 def _cdp_nested(message: JsonObject, *keys: str) -> object:
     current: object = message
     for key in keys:
@@ -85,6 +80,7 @@ def _cdp_nested(message: JsonObject, *keys: str) -> object:
 
 async def collect_browser_layout(
     src_file: Path,
+    policy: ResourcePolicy,
     design_w_px: int,
     design_h_px: int,
     render_mode: str,
@@ -102,17 +98,13 @@ async def collect_browser_layout(
 
     profile_dir = tempfile.TemporaryDirectory(prefix="maraclaw-html-pptx-")
 
-    proc = await asyncio.create_subprocess_exec(
-        *chrome_arguments(Path(chrome), port, profile_dir.name),
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    proc = await launch_chrome(Path(chrome), port, profile_dir.name)
     try:
         if not await wait_for_cdp(port):
             return None
 
         file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
-        ws_url = await create_cdp_target(port, file_url)
+        ws_url = await create_cdp_target(port)
         ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
         if ws_url in (None, ""):
             return None
@@ -298,20 +290,11 @@ roots = [body];
 })()
 """
 
-        msg_id = 0
-
-        async with websockets.connect(ws_url, max_size=20_000_000) as ws_conn:
-
-            async def send(method: str, params: JsonObject | None = None) -> JsonObject:
-                nonlocal msg_id
-                msg_id += 1
-                await ws_conn.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
-                while True:
-                    raw = await asyncio.wait_for(ws_conn.recv(), timeout=8)
-                    message = _cdp_payload(raw)
-                    if message.get("id") == msg_id:
-                        return message
-
+        async with (
+            websockets.connect(ws_url, max_size=20_000_000) as ws_conn,
+            PolicedCdpSession(ws_conn, policy, reply_timeout=8) as session,
+        ):
+            send = session.send
             _ = await send("Page.enable")
             _ = await send("Runtime.enable")
             _ = await send(
@@ -323,13 +306,9 @@ roots = [body];
                     "mobile": False,
                 },
             )
-            _ = await send("Page.navigate", {"url": file_url})
-            load_deadline = asyncio.get_running_loop().time() + 8
-            while asyncio.get_running_loop().time() < load_deadline:
-                raw = await asyncio.wait_for(ws_conn.recv(), timeout=8)
-                message = _cdp_payload(raw)
-                if message.get("method") == "Page.loadEventFired":
-                    break
+            await session.navigate(file_url, load_deadline_seconds=8)
+            if session.blocked_urls:
+                logger.info(f"HTML to PPTX skipped {len(session.blocked_urls)} resource(s) outside the workspace")
             await asyncio.sleep(0.25)
             result = await send(
                 "Runtime.evaluate",

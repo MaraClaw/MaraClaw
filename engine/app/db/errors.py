@@ -128,7 +128,8 @@ def map_psycopg_error(exc: BaseException) -> DbError:
         return LockNotAvailableError(orig=exc)
     if isinstance(exc, pg_errors.UniqueViolation):
         return UniqueViolationError(constraint=_constraint_name(exc), orig=exc)
-    if isinstance(exc, pg_errors.ForeignKeyViolation):
+    # PostgreSQL 18 reports a RESTRICT foreign key as restrict_violation (23001), not 23503.
+    if isinstance(exc, (pg_errors.ForeignKeyViolation, pg_errors.RestrictViolation)):
         return ForeignKeyViolationError(constraint=_constraint_name(exc), orig=exc)
     if isinstance(exc, pg_errors.CheckViolation):
         return CheckViolationError(constraint=_constraint_name(exc), orig=exc)

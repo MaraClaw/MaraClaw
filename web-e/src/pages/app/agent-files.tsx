@@ -256,7 +256,7 @@ export function AgentFilesPage() {
             {token && /\.(png|jpe?g|gif|webp|svg)$/i.test(selected) ? (
               <FileImagePreview key={`${agent.id}:${selected}`} agentId={agent.id} path={selected} />
             ) : null}
-            <Textarea className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+            <Textarea aria-label={translate("Contents of {path}", { path: selected })} className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
             {revisions.isError ? <RequestErrorToast error={revisions.error} message="Unable to load file revisions. Try again." /> : null}
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">

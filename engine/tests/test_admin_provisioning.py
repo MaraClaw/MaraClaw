@@ -9,11 +9,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from tests.membership_generation_fixtures import recording_user_writes
 
 from app.api import admin as admin_api, tenants as tenants_api, users as users_api
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
+from app.records.user import UserRecord
 from app.services import admin_provisioning as provisioning
 from app.services.tenant_provisioning import AdminEmailTakenError
 
@@ -581,3 +583,84 @@ async def test_set_peer_admin_active_activates_inactive_platform_admin(monkeypat
     assert updated.is_active is True
     assert write_admin_audit.await_args is not None
     assert write_admin_audit.await_args.kwargs["action"] == "user_activate"
+
+
+_BUMP = "membership_generation = membership_generation + "
+
+
+def _membership(*, role: UserRole, tenant_id: uuid.UUID, is_active: bool, is_genesis: bool = False) -> UserRecord:
+    return UserRecord(
+        id=uuid.uuid4(),
+        identity_id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        role=role,
+        is_active=is_active,
+        is_genesis=is_genesis,
+    )
+
+
+@pytest.fixture
+def quiet_side_effects(monkeypatch):
+    for dao, name in (
+        (provisioning.agent_dao, "disable_for_creator"),
+        (provisioning.agent_trigger_dao, "disable_for_creator"),
+        (provisioning.agent_schedule_dao, "disable_for_creator"),
+    ):
+        monkeypatch.setattr(dao, name, AsyncMock(return_value=[]))
+    monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+
+
+@pytest.mark.parametrize("is_active", [False, True], ids=["deactivate", "activate"])
+async def test_end_user_toggle_writes_the_generation_with_is_active_and_touches_no_identity_counter(
+    monkeypatch, quiet_side_effects, is_active
+):
+    # Given an org admin toggling a member through the real UserDAO writer.
+    tenant_id = uuid.uuid4()
+    actor = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=True)
+    target = _membership(role=UserRole.MEMBER, tenant_id=tenant_id, is_active=not is_active)
+    with recording_user_writes(monkeypatch, target) as raw:
+        # When the admin deactivates or activates the member.
+        updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=is_active)
+    # Then one UPDATE carries is_active and the guarded advance, so activation can never advance it.
+    assert updated.is_active is is_active
+    [(query, params)] = raw.updates_to("users")
+    assert "is_active = %(is_active)s" in query
+    assert _BUMP in query
+    assert params["is_active"] is is_active
+    assert [executed for executed, _ in raw.executed if "membership_generation" in executed] == [query]
+    assert not raw.updates_to("identities")
+    assert not any("auth_generation" in executed for executed, _ in raw.executed)
+
+
+async def test_peer_admin_deactivation_advances_the_generation_in_the_guard_update(monkeypatch, quiet_side_effects):
+    # Given the genesis org admin removing another org admin of the company.
+    tenant_id = uuid.uuid4()
+    genesis = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=True, is_genesis=True)
+    peer = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=True)
+    with recording_user_writes(monkeypatch, peer) as raw:
+        # When the guard deactivates the peer.
+        updated = await provisioning.set_peer_admin_active(actor=genesis, target=peer, is_active=False)
+    # Then the same UPDATE clears is_active and advances the generation, and no identity counter moves.
+    assert updated.is_active is False
+    [(query, _params)] = raw.updates_to("users")
+    assert "SET is_active = FALSE" in query
+    assert _BUMP in query
+    assert not raw.updates_to("identities")
+    assert not any("auth_generation" in executed for executed, _ in raw.executed)
+
+
+async def test_peer_admin_activation_does_not_mention_the_generation_outside_the_guarded_expression(
+    monkeypatch, quiet_side_effects
+):
+    # Given the genesis org admin restoring a deactivated org admin.
+    tenant_id = uuid.uuid4()
+    genesis = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=True, is_genesis=True)
+    peer = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=False)
+    with recording_user_writes(monkeypatch, peer) as raw:
+        # When the peer is activated.
+        updated = await provisioning.set_peer_admin_active(actor=genesis, target=peer, is_active=True)
+    # Then the single UPDATE can only advance for an old-active, new-inactive transition, which this is not.
+    assert updated.is_active is True
+    [(query, params)] = raw.updates_to("users")
+    assert params["is_active"] is True
+    assert "CASE WHEN is_active AND NOT %(is_active)s THEN 1 ELSE 0 END" in query

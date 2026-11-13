@@ -18,6 +18,7 @@ Ten leaf modules plus a docstring-only `__init__.py` (11 `.py` files). They impo
 | `focus.py` | `FocusStatus`, `FocusKind` | `agent_focus_items.status` / `kind` |
 | `okr.py` | `PeriodFrequency`, `KeyResultStatus` | OKR period and key-result rows |
 | `control.py` | `ControlEnvironment`, `ControlStatus` | Take Control wire results in `api/agentbay_control.py`; not stored |
+| `agent_sections.py` | `AGENT_SECTION_IDS`, `DEFAULT_HIDDEN_AGENT_SECTIONS` (used until a company saves a choice), `canonical_agent_sections` | Member agent page sections a platform admin can hide per company; stored in `tenants.im_config["hidden_agent_sections"]`, not an enum |
 
 ## Shared and easy to confuse
 

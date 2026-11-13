@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { TransferPolicySettings } from './transfer-policy-settings'
 import { TenantEmailSettings } from './tenant-email-settings'
+import { OrganizationTimezoneSettings } from './organization-timezone-settings'
 import { SettingsPassword } from './settings-password'
 import { useTranslation } from '@/hooks/use-translation'
 import { languageName } from '@/lib/i18n'
@@ -79,6 +80,7 @@ export function SettingsPage() {
       </Card>
 
       <TenantEmailSettings />
+      <OrganizationTimezoneSettings />
       {isPlatformAdminUser(user) ? <TransferPolicySettings /> : null}
       <SettingsPassword />
 

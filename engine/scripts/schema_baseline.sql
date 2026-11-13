@@ -395,10 +395,25 @@ CREATE TABLE IF NOT EXISTS users (
 	quota_max_agents INTEGER NOT NULL DEFAULT 2, 
 	quota_agent_ttl_hours INTEGER NOT NULL DEFAULT 0, 
 	is_genesis BOOLEAN NOT NULL DEFAULT false, 
+	membership_generation INTEGER NOT NULL DEFAULT 0, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(identity_id) REFERENCES identities (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
 );
+
+-- Explicit legacy upgrade: memberships created before session revocation lack the generation column. One block adds
+-- it (matching the fresh definition, which also places it last): active rows stay at 0 and rows that are already
+-- inactive start at 1, so a token issued before the upgrade can never revive them on reactivation. Marking happens
+-- only in the run that creates the column, so reruns skip and never touch a generation again.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'membership_generation'
+	) THEN
+		ALTER TABLE users ADD COLUMN membership_generation INTEGER NOT NULL DEFAULT 0;
+		UPDATE users SET membership_generation = 1 WHERE is_active IS FALSE;
+	END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 
@@ -556,6 +571,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
     ON organization_admission_requests(email) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS ix_organization_admission_status
     ON organization_admission_requests(status,created_at DESC,id DESC);
+-- The tier lookup runs on every accepted human message (per-agent daily cap).
+CREATE INDEX IF NOT EXISTS ix_organization_admission_provisioned_tenant
+    ON organization_admission_requests(provisioned_tenant_id, provisioned_at, id)
+    WHERE status='approved' AND provisioned_tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
@@ -757,6 +776,15 @@ CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id);
 CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
+
+-- Human messages accepted per agent on one local calendar day (tier-governed organizations only); a row holding an
+-- earlier usage_date counts as zero, so there is no reset job.
+CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    usage_date DATE NOT NULL,
+    messages_used INTEGER NOT NULL CHECK (messages_used >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -1133,6 +1161,11 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 
 CREATE INDEX IF NOT EXISTS ix_agent_triggers_agent_id ON agent_triggers (agent_id);
 
+-- Serves agent_trigger_dao.find_webhook_by_token on the public webhook endpoint; the predicate must stay identical to
+-- that query's WHERE so the planner can use it. Deliberately not UNIQUE: tokens are not unique by constraint, and a
+-- unique build would abort this single-transaction baseline on a database that already holds duplicates.
+CREATE INDEX IF NOT EXISTS ix_agent_triggers_webhook_token ON agent_triggers ((config->>'token')) WHERE type = 'webhook' AND is_enabled IS TRUE;
+
 CREATE TABLE IF NOT EXISTS agent_user_onboardings (
 	agent_id UUID NOT NULL, 
 	user_id UUID NOT NULL, 
@@ -1434,8 +1467,23 @@ CREATE TABLE IF NOT EXISTS chat_history_changes (
     revision UUID NOT NULL,
     previous_revision UUID NOT NULL,
     message_id UUID,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, revision)
 );
+
+-- Explicit legacy upgrade: journals created before retention lack the write time. now() is stable, so PostgreSQL
+-- stores it as the missing value without rewriting the table: legacy rows read the upgrade time, reruns skip.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'chat_history_changes' AND column_name = 'recorded_at'
+	) THEN
+		ALTER TABLE chat_history_changes ADD COLUMN recorded_at TIMESTAMPTZ NOT NULL DEFAULT now();
+	END IF;
+END $$;
+
+-- Retention purge order. On a large journal, build it first with CREATE INDEX CONCURRENTLY IF NOT EXISTS.
+CREATE INDEX IF NOT EXISTS ix_chat_history_changes_recorded_at ON chat_history_changes (recorded_at);
 
 CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
 DECLARE
@@ -1453,12 +1501,12 @@ BEGIN
              THEN new_conversation::uuid END
     ) ORDER BY id FOR UPDATE LOOP
         next_revision := gen_random_uuid();
-        INSERT INTO chat_history_changes (session_id, revision, previous_revision, message_id)
+        INSERT INTO chat_history_changes (session_id, revision, previous_revision, message_id, recorded_at)
         VALUES (changed_session.id, next_revision, changed_session.history_revision,
             CASE WHEN TG_OP = 'DELETE' OR
                 (TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.conversation_id, OLD.created_at) IS DISTINCT FROM
                                      ROW(NEW.id, NEW.conversation_id, NEW.created_at))
-                THEN NULL ELSE NEW.id END);
+                THEN NULL ELSE NEW.id END, clock_timestamp());
         UPDATE chat_sessions SET history_revision = next_revision WHERE id = changed_session.id;
     END LOOP;
     RETURN NULL;
@@ -2185,6 +2233,8 @@ CREATE INDEX IF NOT EXISTS ix_trigger_executions_status_scheduled ON trigger_exe
 CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions (agent_id);
 
 CREATE INDEX IF NOT EXISTS ix_trigger_executions_trigger_id ON trigger_executions (trigger_id);
+
+CREATE INDEX IF NOT EXISTS ix_trigger_executions_finished_at ON trigger_executions (finished_at) WHERE status IN ('completed', 'failed');
 
 CREATE TABLE IF NOT EXISTS tavily_api_keys (
 	id UUID NOT NULL,

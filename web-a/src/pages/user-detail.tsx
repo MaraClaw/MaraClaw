@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { AgentDailyMessages } from '@/components/users/agent-daily-messages'
 import { ApiError } from '@/lib/http'
 import { agentStatusLabel, getUserDetail, roleLabel } from '@/lib/users-api'
 import { useTranslation } from '@/hooks/use-translation'
@@ -116,6 +117,7 @@ export function UserDetailPage() {
                     >
                       {owned(agentStatusLabel(agent.status, agent.is_expired))}
                     </Badge>
+                    <AgentDailyMessages owner={person} agent={agent} />
                   </div>
                 ))
               )}

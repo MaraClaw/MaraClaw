@@ -97,6 +97,12 @@ function AgentRelationships({ agent }: { readonly agent: AgentOut }) {
           <Button type="submit" disabled={!memberId || add.isPending}>{translate("Add")}</Button>
         </form>
       ) : null}
+      {canManage && candidates.isError ? (
+        <div className="space-y-2">
+          <RequestErrorToast error={candidates.error} message={userFacingRequestError(candidates.error, translate("Unable to load people to add."))} />
+          <Button size="sm" variant="outline" onClick={() => candidates.refetch()}>{translate("Retry people list")}</Button>
+        </div>
+      ) : null}
       {rows.isLoading ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading relationships…")}</p> : null}
       {rows.isError ? (
         <div className="space-y-2">

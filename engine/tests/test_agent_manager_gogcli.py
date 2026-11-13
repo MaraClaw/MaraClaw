@@ -28,6 +28,11 @@ class _RecordingContainerAPI:
         return None
 
 
+class _RecordingImageAPI:
+    def exists(self, _reference: str) -> bool:
+        return True
+
+
 class RecordingDockerClient:
     def __init__(self) -> None:
         self.run_args = None
@@ -35,6 +40,7 @@ class RecordingDockerClient:
         self.execute_calls = []
         self.execute_output = "Open https://accounts.google.com/o/oauth2/v2/auth?client_id=public-client to continue"
         self.container = _RecordingContainerAPI()
+        self.image = _RecordingImageAPI()
 
     def run(self, *args, **kwargs):
         self.run_args = args

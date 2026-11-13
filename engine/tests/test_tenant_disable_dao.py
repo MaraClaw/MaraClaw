@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from tests.membership_generation_fixtures import recording_user_writes
 
+from app.core.domain.users import UserRole
 from app.dao.agent_dao import agent_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
 from app.db import session as session_module
 from app.db.connection import Params
+from app.db.session import connection_ctx
+from app.records.user import UserRecord
 
 
 class _FakeCursor:
@@ -151,3 +155,101 @@ async def test_disable_creator_clears_provenance_in_scope(monkeypatch, scoped):
     assert ("AND tenant_id = %(tenant_id)s" in query) is scoped
     assert params == ({"creator_id": creator_id, "tenant_id": tenant_id} if scoped else {"creator_id": creator_id})
     assert count == 1
+
+
+_BUMP = "membership_generation = membership_generation + 1"
+_GUARDED_BUMP = (
+    "membership_generation = membership_generation + CASE WHEN is_active AND NOT %(is_active)s THEN 1 ELSE 0 END"
+)
+
+
+def _membership(*, tenant_id: UUID, role: UserRole = UserRole.MEMBER, is_active: bool = True) -> UserRecord:
+    return UserRecord(id=uuid4(), identity_id=uuid4(), tenant_id=tenant_id, role=role, is_active=is_active)
+
+
+async def test_tenant_disable_advances_the_generation_in_the_deactivating_update(monkeypatch):
+    # Given an active member of a company.
+    tenant_id = uuid4()
+    member = _membership(tenant_id=tenant_id)
+    with recording_user_writes(monkeypatch, member) as raw:
+        # When the company is disabled.
+        await user_dao.deactivate_for_tenant(tenant_id)
+    # Then one UPDATE clears is_active and advances the generation, only for rows leaving the active state.
+    [(query, _params)] = raw.updates_to("users")
+    assert "SET is_active = FALSE" in query
+    assert _BUMP in query
+    assert "AND is_active IS TRUE" in query
+    assert not raw.updates_to("identities")
+    assert not any("auth_generation" in executed for executed, _ in raw.executed)
+
+
+async def test_tenant_enable_leaves_the_generation_alone(monkeypatch):
+    # Given a member deactivated with the company.
+    tenant_id = uuid4()
+    member = _membership(tenant_id=tenant_id, is_active=False)
+    with recording_user_writes(monkeypatch, member) as raw:
+        # When the company is enabled again.
+        await user_dao.reactivate_for_tenant(tenant_id)
+    # Then the activating UPDATE does not mention the generation, so earlier sessions stay revoked.
+    [(query, _params)] = raw.updates_to("users")
+    assert "SET is_active = TRUE" in query
+    assert "membership_generation" not in query
+    assert not raw.updates_to("identities")
+
+
+async def test_deactivating_an_admin_with_a_peer_advances_the_generation_in_the_same_update(monkeypatch):
+    # Given an org admin and the last-admin guard writer.
+    admin = _membership(tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
+    with recording_user_writes(monkeypatch, admin) as raw:
+        # When it deactivates that admin.
+        updated = await user_dao.deactivate_unless_last_active(admin.id, role=admin.role, tenant_id=admin.tenant_id)
+    # Then the guard's UPDATE clears is_active and advances the generation in one statement.
+    assert updated is not None
+    [(query, params)] = raw.updates_to("users")
+    assert "SET is_active = FALSE" in query
+    assert _BUMP in query
+    assert "AND is_active IS TRUE" in query
+    assert params["user_id"] == admin.id
+    assert not any("auth_generation" in executed for executed, _ in raw.executed)
+
+
+@pytest.mark.parametrize("is_active", [False, True], ids=["deactivate", "activate"])
+async def test_generic_update_carries_the_guarded_advance_in_its_own_statement(monkeypatch, is_active):
+    # Given a membership written through the generic update, as the activation and deactivation routes do.
+    member = _membership(tenant_id=uuid4(), is_active=not is_active)
+    with recording_user_writes(monkeypatch, member) as raw:
+        async with connection_ctx():
+            # When is_active is written.
+            await user_dao.update(db_obj=member, obj_in={"is_active": is_active})
+    # Then the same UPDATE decides the advance from the row's old state and the new value; there is no second write.
+    [(query, params)] = raw.updates_to("users")
+    assert "is_active = %(is_active)s" in query
+    assert _GUARDED_BUMP in query
+    assert params["is_active"] is is_active
+    assert not raw.updates_to("identities")
+    assert not any("auth_generation" in executed for executed, _ in raw.executed)
+
+
+async def test_generic_update_without_is_active_never_mentions_the_generation(monkeypatch):
+    # Given a membership edited without touching is_active.
+    member = _membership(tenant_id=uuid4())
+    with recording_user_writes(monkeypatch, member) as raw:
+        # When the profile is written.
+        await user_dao.update(db_obj=member, obj_in={"display_name": "Renamed"})
+    # Then the statement leaves the generation alone.
+    [(query, _params)] = raw.updates_to("users")
+    assert "membership_generation" not in query
+
+
+async def test_generation_is_read_from_sql_by_user_id(monkeypatch):
+    # Given the generation column of one membership.
+    member = _membership(tenant_id=uuid4())
+    with recording_user_writes(monkeypatch, member) as raw:
+        raw.generation = 4
+        # When it is read for the bearer check.
+        value = await user_dao.get_membership_generation(member.id)
+    # Then it comes from the users table by primary key, never from a session snapshot.
+    assert value == 4
+    [(query, params)] = raw.executed
+    assert query.startswith("SELECT membership_generation FROM users")
+    assert params == {"user_id": member.id}

@@ -50,14 +50,21 @@ async def enqueue_webhook_execution(
 
     Returns `(execution, created)` where `created=False` means an identical
     idempotency key already exists and the event should be treated as a no-op.
+
+    A signed trigger (config `secret`) dedups on the body alone: the signature covers only the body, so a header
+    a replaying caller can change must not decide whether the delivery is new.
     """
-    delivery_key = (
-        request_headers.get("x-idempotency-key")
-        or request_headers.get("x-github-delivery")
-        or request_headers.get("x-request-id")
-        or request_headers.get("x-event-id")
-        or hashlib.sha256(body).hexdigest()
-    )[:255]
+    secret = (trigger.config or {}).get("secret")
+    if isinstance(secret, str) and secret:
+        delivery_key = f"signed:{hashlib.sha256(trigger.id.bytes + body).hexdigest()}"
+    else:
+        delivery_key = (
+            request_headers.get("x-idempotency-key")
+            or request_headers.get("x-github-delivery")
+            or request_headers.get("x-request-id")
+            or request_headers.get("x-event-id")
+            or hashlib.sha256(body).hexdigest()
+        )[:255]
 
     return await enqueue_trigger_execution(
         trigger=trigger,

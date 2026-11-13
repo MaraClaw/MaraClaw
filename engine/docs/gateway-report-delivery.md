@@ -19,6 +19,9 @@ their independent provider intent atomically at enqueue. Claims require a comple
 source message, so accepted pending turns cannot send early. Worker-enabled processes
 run `gateway_report_relay` under `Runtime.tasks`; API-only and connector-only
 processes do not. Runtime cancels and drains the relay before closing PostgreSQL.
+The relay has a 300-second readiness progress budget: it beats after each claim
+attempt, which first waits for a free delivery slot. A failed claim and the
+delivery tasks never beat.
 
 `record_report` conceals the underlying model before `complete`: the result passes through
 `response_identity.response_guard`, so the stored result, assistant transcript, `done` event, IM chunks and agent

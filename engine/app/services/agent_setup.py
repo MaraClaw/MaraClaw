@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from typing import Final
 from uuid import UUID
 
 import anyio
@@ -23,6 +24,7 @@ from app.db.session import connection_ctx, flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.agent_setup import AgentSetupInputs, AgentSetupRecord, AgentSetupStatus
 from app.records.user import UserRecord
+from app.runtime.tasks import loop_progress
 from app.schemas.schemas import AgentCreate
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
@@ -33,6 +35,7 @@ from app.services.okr_agent_hook import hook_new_agent
 from app.services.openclaw_keys import write_gateway_api_key
 from app.services.openclaw_update_exclusion import locked_fresh_agent
 
+PROGRESS_BUDGET_SECONDS: Final = 300.0
 _WORKER_IO_ERRORS = (DbError, OperationalError, PoolTimeout, OSError)
 
 
@@ -89,7 +92,11 @@ def _expected_worker_io(error: BaseException) -> bool:
 
 async def persist_agent_setup(agent: AgentRecord, data: AgentCreate, raw_key: str) -> None:
     files = await render_agent_files(
-        agent, agent_manager._template_dir(), personality=data.personality or "", boundaries=data.boundaries or ""
+        agent,
+        agent_manager._template_dir(),
+        personality=data.personality or "",
+        boundaries=data.boundaries or "",
+        soul=data.soul,
     )
     folders: list[str] = []
     servers: tuple[str, ...] = ()
@@ -177,21 +184,31 @@ async def run_agent_setup(claim: AgentSetupRecord) -> None:
 
 
 async def start_agent_setup_worker() -> None:
+    """Claim and replay setups; beat after each completed pass, never after a failed claim.
+
+    Setup runs exempt, including its unbounded workspace-lock wait (the holder, such as an upgrade
+    cutover, owns that duration). A setup that raises does not beat: the error either ends the loop
+    or is an expected IO error retried in place like a failed claim.
+    """
+    progress = loop_progress()
     while True:
         new_trace_id()
         clear_row_memo()
         try:
             claim = await agent_setup_dao.claim()
             if claim is not None:
-                await run_agent_setup(claim)
+                with progress.exempt(restart_on_error=False):
+                    await run_agent_setup(claim)
             optional = await agent_setup_mcp_dao.claim()
             if optional is not None:
-                await run_agent_setup_mcp(optional)
+                with progress.exempt(restart_on_error=False):
+                    await run_agent_setup_mcp(optional)
         except _WORKER_IO_ERRORS as exc:
             if not _expected_worker_io(exc):
                 raise
             logger.warning("Agent setup claim unavailable error_type={}", type(exc).__name__)
             await anyio.sleep(1)
             continue
+        progress.beat()
         if claim is None and optional is None:
             await anyio.sleep(1)

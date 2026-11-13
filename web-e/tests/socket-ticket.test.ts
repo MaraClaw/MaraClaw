@@ -35,8 +35,8 @@ for (const code of [4002, 1011, 1006]) {
     await Promise.resolve()
     assert.equal(f.urls.length, 2)
     assert.deepEqual(f.urls.map((url) => [...new URL(url).searchParams]), [
-      [['ticket', 'opaque-1'], ['session_id', canonicalSession], ['lang', 'en']],
-      [['ticket', 'opaque-2'], ['session_id', canonicalSession], ['lang', 'en']],
+      [['ticket', 'opaque-1'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],
+      [['ticket', 'opaque-2'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],
     ])
     conn.close()
   })
@@ -168,8 +168,9 @@ for (const outcome of ['success', 'error'] as const) {
     await Promise.resolve()
     f.socket().end(1006)
     assert.ok(retry)
-    retry()
-    retry()
+    const backoff = retry
+    backoff()
+    backoff()
     assert.equal(signals[1]?.aborted, true)
     latest.resolve({ ticket: 'latest', session_id: 'current-thread' })
     await Promise.resolve()

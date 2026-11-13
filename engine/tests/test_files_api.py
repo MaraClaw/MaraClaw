@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import files as files_api
 from app.core import security
@@ -402,6 +403,7 @@ async def test_ticket_for_other_path_is_consumed_and_refused(monkeypatch, downlo
 @pytest.mark.parametrize("query", ["token={jwt}", "", "ticket="])
 async def test_download_rejects_query_jwt_and_missing_credentials(download, query, monkeypatch):
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=0))
+    pin_membership_generation(monkeypatch)
     jwt = await create_access_token(str(download.user.id), "member", identity_id=download.user.identity.id)
     app = FastAPI()
     app.include_router(files_api.router, prefix="/api")

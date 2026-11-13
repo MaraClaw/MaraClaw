@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates.
+Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates.
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -17,7 +17,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 | Concern | Owner |
 |---------|-------|
 | Boot / theme | `index.html` prevents theme FOUC; `src/main.tsx`: `StrictMode` > `ThemeProvider` > `App` |
-| App composition | `src/App.tsx`: `AuthProvider` wraps `AppRouter` + `Toaster` |
+| App composition | `src/App.tsx`: `TranslationProvider` > `RootErrorBoundary` (reloads on Try again) > `AuthProvider` wraps `AppRouter` + `Toaster` |
 | Session / Query lifetime | `src/hooks/AGENTS.md`: `AuthProvider` owns the session-generation-keyed `QueryClientProvider`, not `App`; query-option factories and session-fenced mutations |
 | Paths / access gates | `src/routes/AGENTS.md`: `AppRouter`, `ProtectedRoute`, role gates, `TransferReviewRoute` |
 | Screen composition / queries | `src/pages/AGENTS.md`: auth, companies, users/departments, invitations, review queues, models, search, tools |

@@ -40,6 +40,11 @@ export const replacementAgent: AgentOut & z.input<typeof AgentOutSchema> = {
 export const delayedAgent: AgentOut & z.input<typeof AgentOutSchema> = {
   ...originalAgent, id: '466ed379-3187-43b6-ac44-e7b21fbbec32', name: 'Delayed original-company creation',
 }
+export const defaultSoul = [
+  '# Soul - {{agent_name}}', '',
+  '## Personality', "I'm {{agent_name}}. I exist to complete tasks.", '',
+  '## Boundaries', '- Comply with corporate confidentiality policies', '',
+].join('\n')
 
 export async function prepareWorkspace(page: Page, nextUser = replacementUser, switchToken = replacementToken) {
   // The fake changes its server-side identity on switch, including same-token reissuance.
@@ -114,6 +119,10 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
       case '/api/agents/templates':
       case '/api/auth/providers':
         await route.fulfill({ json: [] })
+        return
+      case '/api/agents/default-soul':
+        expect(request.method()).toBe('GET')
+        await route.fulfill({ json: { soul: defaultSoul } })
         return
       case `/api/agents/${delayedAgent.id}/sessions/${delayedSession.id}/messages/page`:
         expect(new URL(request.url()).searchParams.get('limit')).toBe('50')

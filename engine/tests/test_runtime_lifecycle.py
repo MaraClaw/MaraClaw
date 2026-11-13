@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import override
 
 import anyio
 import pytest
@@ -9,6 +10,7 @@ from app.api import background_tasks
 from app.runtime import lifecycle
 from app.runtime.tasks import OwnedTasks
 from producer_admission_fixtures import producer_admission
+from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
 
 __all__ = ["producer_admission"]
 
@@ -181,10 +183,13 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         broadcast_email_worker,
         broadcast_fanout_worker,
         cache_invalidation_worker,
+        chat_history_retention_worker,
         gateway_report_relay,
         heartbeat,
+        openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
         scheduler_tasks,
@@ -303,6 +308,9 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(export, "start_web_search_export_daemon", loop)
     monkeypatch.setattr(scheduler, "start_scheduler", loop)
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
+    monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
+    monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
@@ -404,8 +412,20 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("openclaw_dispatch" in names) == role_enabled(roles, "worker")
     assert burst_stopped.is_set() == role_enabled(roles, "worker")
     assert ("openclaw_update" in names) == role_enabled(roles, "worker")
+    assert ("web_search_export" in names) == role_enabled(roles, "worker")
+    assert ("openclaw_delayed_replies" in names) == role_enabled(roles, "worker")
+    assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
+    assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
+    assert ("whatsapp_personal" in names) == role_enabled(roles, "connector")
+    assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
     assert ("ChildManager" in names) == role_enabled(roles, "connector")
+    budgeted: set[str] = set()
+    if role_enabled(roles, "worker"):
+        budgeted |= WORKER_BUDGETED_LOOPS
+    if role_enabled(roles, "connector"):
+        budgeted |= CONNECTOR_BUDGETED_LOOPS
+    assert set(runtime.tasks.progress) == budgeted
 
 
 @pytest.mark.asyncio
@@ -718,11 +738,13 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         broadcast_email_worker,
         broadcast_fanout_worker,
         cache_invalidation_worker,
+        chat_history_retention_worker,
         gateway_report_relay,
         heartbeat,
         openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
         task_lease,
@@ -744,29 +766,28 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
     async def probe() -> bool:
         return True
 
-    async def idle() -> None:
-        await asyncio.Event().wait()
-
     def budgeted(name: str) -> Callable[[], Awaitable[None]]:
         async def run() -> None:
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == 10:
+            if len(beaten) == len(WORKER_BUDGETED_LOOPS):
                 all_beaten.set()
             await asyncio.Event().wait()
 
         return run
 
-    for module, attribute in (
-        (heartbeat, "start_heartbeat"),
-        (agent_setup, "start_agent_setup_worker"),
-        (export, "start_web_search_export_daemon"),
-        (gateway_report_relay, "start_gateway_report_relay"),
-        (openclaw_delayed_replies, "openclaw_delayed_reply_loop"),
-        (task_lease, "task_lease_recovery_loop"),
+    for module, attribute, name in (
+        (heartbeat, "start_heartbeat", "heartbeat"),
+        (agent_setup, "start_agent_setup_worker", "agent_setup"),
+        (export, "start_web_search_export_daemon", "web_search_export"),
+        (gateway_report_relay, "start_gateway_report_relay", "gateway_report_relay"),
+        (openclaw_delayed_replies, "openclaw_delayed_reply_loop", "openclaw_delayed_replies"),
+        (task_lease, "task_lease_recovery_loop", "task_lease_recovery"),
+        (chat_history_retention_worker, "start_chat_history_retention_worker", "chat_history_retention"),
+        (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
     ):
-        monkeypatch.setattr(module, attribute, idle)
+        monkeypatch.setattr(module, attribute, budgeted(name))
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", budgeted("trigger_daemon"))
     monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", budgeted("agent_start_reconciler"))
     monkeypatch.setattr(scheduler, "start_scheduler", budgeted("agent_scheduler"))
@@ -800,36 +821,126 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
     # When the worker starts and the clock passes every budget without a beat.
     await runtime.start(parse_process_roles("worker"))
     try:
-        assert set(runtime.tasks.progress) == {
-            "trigger_daemon",
-            "broadcast_email",
-            "auth_email",
-            "broadcast_fanout",
-            "cache-invalidation-recovery",
-            "organization_admission_email",
-            "openclaw_update",
-            "agent_start_reconciler",
-            "agent_scheduler",
-            "openclaw_dispatch",
-        }
+        assert set(runtime.tasks.progress) == WORKER_BUDGETED_LOOPS
         assert await runtime.readiness.check()
         now = budget_seconds
-        boundary_workers = (
-            ("broadcast_fanout",) if budget_seconds == 90 else ("cache-invalidation-recovery", "auth_email")
-        )
+        slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout"}
+        boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
         now += 1
         expected_stale = {"broadcast_fanout"}
         if budget_seconds == 300:
-            expected_stale.update({"cache-invalidation-recovery", "auth_email"})
+            expected_stale |= slow
         assert all(runtime.tasks.progress[name].stale() for name in expected_stale)
         if budget_seconds == 90:
-            assert not runtime.tasks.progress["cache-invalidation-recovery"].stale()
-            assert not runtime.tasks.progress["auth_email"].stale()
+            assert all(not runtime.tasks.progress[name].stale() for name in slow)
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())
         # And one beat per budgeted loop, through the real task context, recovers it.
+        beat.set()
+        await asyncio.wait_for(all_beaten.wait(), 5)
+        assert await runtime.readiness.check()
+    finally:
+        await runtime.stop()
+
+
+async def test_connector_start_registers_progress_budgets_and_only_the_setup_wait_is_exempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a connector runtime on a fake clock whose budgeted loops beat only when told to, and a WeChat
+    # setup that stays unfinished so transfer cleanup is still waiting for it.
+    from app.process_roles import parse_process_roles
+    from app.runtime import readiness
+    from app.runtime.tasks import loop_progress
+    from app.services import audit_logger, company_transfer_cleanup, wechat_channel
+    from app.services.channels import whatsapp_personal_supervisor
+
+    now = 0.0
+    runtime = lifecycle.Runtime()
+    runtime.tasks = OwnedTasks(lambda: now)
+    runtime.readiness = lifecycle.Readiness(runtime.tasks)
+    fake_resources(monkeypatch, [])
+    setup_entered, setup_gate, cleanup_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    beat, all_beaten = asyncio.Event(), asyncio.Event()
+    beaten: list[str] = []
+
+    async def noop(*_args: object) -> None:
+        return None
+
+    async def probe() -> bool:
+        return True
+
+    def budgeted(name: str) -> Callable[[], Awaitable[None]]:
+        async def run() -> None:
+            await beat.wait()
+            loop_progress().beat()
+            beaten.append(name)
+            if len(beaten) == len(CONNECTOR_BUDGETED_LOOPS) + 1:
+                all_beaten.set()
+            await asyncio.Event().wait()
+
+        return run
+
+    async def reconcile_transfers() -> None:
+        cleanup_entered.set()
+        await budgeted("transfer_cleanup")()
+
+    class Manager(wechat_channel.WeChatPollManager):
+        @override
+        async def reconcile_clients(self) -> None:
+            setup_entered.set()
+            await setup_gate.wait()
+
+        @override
+        async def start_all(self) -> None:
+            await budgeted("wechat-reconcile")()
+
+    monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", budgeted("whatsapp_personal"))
+    monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", reconcile_transfers)
+    monkeypatch.setattr(whatsapp_personal_supervisor, "PROGRESS_BUDGET_SECONDS", 41.0)
+    monkeypatch.setattr(company_transfer_cleanup, "PROGRESS_BUDGET_SECONDS", 42.0)
+    monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Manager(),))
+    monkeypatch.setattr(audit_logger, "write_audit_log", noop)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
+    monkeypatch.setattr(lifecycle, "init_pool", noop)
+    monkeypatch.setattr(lifecycle, "get_redis", noop)
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
+    monkeypatch.setattr(runtime.proxy, "start", noop)
+    monkeypatch.setattr(runtime.proxy, "stop", noop)
+    monkeypatch.setattr(readiness, "ping_pool", probe)
+    monkeypatch.setattr(readiness, "ping_redis", probe)
+    progress = runtime.tasks.progress
+    await runtime.start(parse_process_roles("connector"))
+    try:
+        # When far more than every budget passes while the setup is unfinished.
+        await asyncio.wait_for(setup_entered.wait(), 5)
+        now = 1000.0
+        # Then the budgets are the modules' own, and only the transfer cleanup setup wait is not staleness.
+        assert progress["whatsapp_personal"].budget_seconds == 41.0
+        assert progress["transfer_cleanup"].budget_seconds == 42.0
+        assert progress["whatsapp_personal"].stale()
+        assert not progress["transfer_cleanup"].stale()
+        # When the setup finishes, the cleanup loop starts and WeChat registers its ongoing loop.
+        setup_gate.set()
+        await asyncio.wait_for(cleanup_entered.wait(), 5)
+        assert set(progress) == {*CONNECTOR_BUDGETED_LOOPS, "wechat-reconcile"}
+        assert progress["wechat-reconcile"].budget_seconds == wechat_channel.PROGRESS_BUDGET_SECONDS
+        # Then the setup wait left the cleanup budget whole, and passing it makes readiness fail.
+        now += 42
+        assert not progress["transfer_cleanup"].stale()
+        now += 1
+        assert progress["transfer_cleanup"].stale()
+        now = 1000.0 + wechat_channel.PROGRESS_BUDGET_SECONDS + 1
+        assert not await runtime.readiness.check()
+        # And staleness neither cancels nor restarts a loop.
+        assert all(
+            not runtime.tasks.required[name][0].done() for name in (*CONNECTOR_BUDGETED_LOOPS, "wechat-reconcile")
+        )
+        # And one beat per loop, through the real task context, restores readiness.
         beat.set()
         await asyncio.wait_for(all_beaten.wait(), 5)
         assert await runtime.readiness.check()

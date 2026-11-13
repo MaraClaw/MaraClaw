@@ -7,7 +7,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.records.outbound_plan import OutboundChunk
+from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services.channels import outbound_http, outbound_transport
 from app.services.channels.outbound_errors import ProviderDeliveryError
 from app.services.channels.outbound_http import outbound_client, reset_outbound_client, shutdown_outbound_client
@@ -44,7 +44,7 @@ async def test_two_chunks_reuse_one_client_with_bounded_settings(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", factory)
 
     for _ in range(2):
-        await outbound_transport.send_chunk(configured("slack"), chunk())
+        await outbound_transport.send_chunk(configured(OutboundProvider.SLACK), chunk())
 
     assert len(built) == 1
     assert built[0]["timeout"] == 20
@@ -113,7 +113,7 @@ async def test_feishu_issues_one_token_request_for_two_chunks_under_service_cach
     transport(monkeypatch, wire)
 
     for _ in range(2):
-        await outbound_transport.send_chunk(configured("feishu"), chunk())
+        await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert wire.tokens == 1
     assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer token-1"] * 2
@@ -134,7 +134,7 @@ async def test_feishu_auth_failure_drops_cached_token_and_retries_once_with_same
     wire = FeishuWire([rejection, sent_ok()])
     transport(monkeypatch, wire)
 
-    await outbound_transport.send_chunk(configured("feishu"), chunk())
+    await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert wire.tokens == 1
     assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer stale", "Bearer token-1"]
@@ -149,7 +149,7 @@ async def test_feishu_persistent_auth_failure_retries_only_once(monkeypatch, tok
     transport(monkeypatch, wire)
 
     with pytest.raises(httpx.HTTPStatusError):
-        await outbound_transport.send_chunk(configured("feishu"), chunk())
+        await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert len(wire.requests) == 2
     assert wire.tokens == 2
@@ -160,7 +160,7 @@ async def test_feishu_other_failure_is_not_retried_and_keeps_cached_token(monkey
     transport(monkeypatch, wire)
 
     with pytest.raises(ProviderDeliveryError) as failure:
-        await outbound_transport.send_chunk(configured("feishu"), chunk())
+        await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert failure.value.code == "230001"
     assert len(wire.requests) == 1
@@ -172,7 +172,9 @@ async def test_concurrent_chunks_share_one_feishu_token_request(monkeypatch, tok
     wire = FeishuWire([sent_ok()])
     transport(monkeypatch, wire)
 
-    await asyncio.gather(*(outbound_transport.send_chunk(configured("feishu"), chunk()) for _ in range(4)))
+    await asyncio.gather(
+        *(outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk()) for _ in range(4))
+    )
 
     assert wire.tokens == 1
     assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer token-1"] * 4
@@ -184,12 +186,12 @@ async def test_refused_feishu_token_raises_typed_error_and_is_not_cached(monkeyp
     transport(monkeypatch, wire)
 
     with pytest.raises(ProviderDeliveryError) as failure:
-        await outbound_transport.send_chunk(configured("feishu"), chunk())
+        await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert failure.value.code == "authentication_failed"
     assert token_cache == {}
     wire.refuse_tokens = False
-    await outbound_transport.send_chunk(configured("feishu"), chunk())
+    await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
     assert wire.tokens == 2
     assert token_cache == {("feishu", "application", "live-secret"): "token-2"}
 
@@ -202,7 +204,7 @@ async def test_feishu_rejection_keeps_a_token_a_peer_stored_meanwhile(monkeypatc
     wire.on_send = lambda: token_cache.update({key: "peer"}) if len(wire.requests) == 1 else None
     transport(monkeypatch, wire)
 
-    await outbound_transport.send_chunk(configured("feishu"), chunk())
+    await outbound_transport.send_chunk(configured(OutboundProvider.FEISHU), chunk())
 
     assert wire.tokens == 0
     assert [request.headers["Authorization"] for request in wire.requests] == ["Bearer stale", "Bearer peer"]

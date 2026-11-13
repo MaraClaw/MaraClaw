@@ -17,6 +17,13 @@ const companyDeletionResponseSchema = z.object({
 
 export type CompanyDeletionResponse = z.infer<typeof companyDeletionResponseSchema>
 
+const companyAgentSectionsSchema = z.object({
+  sections: z.array(z.string()),
+  hidden_sections: z.array(z.string()),
+}).readonly()
+
+export type CompanyAgentSections = z.infer<typeof companyAgentSectionsSchema>
+
 export type CompanyStats = {
   id: string
   name: string
@@ -165,6 +172,23 @@ export async function deleteCompany(companyId: string): Promise<CompanyDeletionR
   return apiRequest(
     `/api/tenants/${encodeURIComponent(companyId)}`, { schema: companyDeletionResponseSchema, method: 'DELETE' },
   )
+}
+
+export async function fetchCompanyAgentSections(companyId: string, signal?: AbortSignal): Promise<CompanyAgentSections> {
+  return apiRequest(
+    `/api/admin/companies/${encodeURIComponent(companyId)}/agent-sections`, { schema: companyAgentSectionsSchema, signal },
+  )
+}
+
+export async function updateCompanyAgentSections(
+  companyId: string,
+  hiddenSections: readonly string[],
+): Promise<CompanyAgentSections> {
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/agent-sections`, {
+    schema: companyAgentSectionsSchema,
+    method: 'PUT',
+    body: { hidden_sections: hiddenSections },
+  })
 }
 
 export async function listEmailDomains(tenantId: string, signal?: AbortSignal): Promise<EmailDomain[]> {

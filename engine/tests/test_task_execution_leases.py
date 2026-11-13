@@ -7,9 +7,13 @@ import anyio
 import pytest
 
 from app.core.domain.tasks import TaskStatus, TaskType
+from app.db.errors import DbError
 from app.records.task import TaskClaim, TaskRecord
 from app.services import activity_logger, agent_context, llm, task_executor, task_lease
 from app.services.llm.background_guard import BackgroundCallOutcome
+from worker_progress_fixtures import WorkerHTTP, worker_http
+
+__all__ = ["worker_http"]
 
 
 @pytest.fixture
@@ -260,3 +264,45 @@ async def test_wall_clock_jump_cancels_active_work(monkeypatch):
         await task_lease.run_under_lease(TaskClaim(uuid4(), uuid4()), work)
 
     assert cancelled.is_set()
+
+
+async def test_idle_recovery_passes_beat_so_readiness_outlives_the_budget(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given the recovery loop as a budgeted worker loop with nothing to recover.
+    monkeypatch.setattr(task_lease.task_dao, "recover_expired", AsyncMock(return_value=[]))
+    monkeypatch.setattr(task_lease.anyio, "sleep", worker_http.pacing.wait)
+    task = worker_http.start_loop(
+        "task_lease_recovery", task_lease.task_lease_recovery_loop(), budget_seconds=task_lease.PROGRESS_BUDGET_SECONDS
+    )
+    await worker_http.pacing.paused()
+    # When four idle passes carry the clock past the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then each finished pass has beaten.
+        await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+async def test_failed_recovery_pass_does_not_beat_so_readiness_goes_stale_then_recovers(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given a healthy first pass, then a database that rejects the recovery write.
+    recover = AsyncMock(return_value=[])
+    monkeypatch.setattr(task_lease.task_dao, "recover_expired", recover)
+    monkeypatch.setattr(task_lease.anyio, "sleep", worker_http.pacing.wait)
+    task = worker_http.start_loop(
+        "task_lease_recovery", task_lease.task_lease_recovery_loop(), budget_seconds=task_lease.PROGRESS_BUDGET_SECONDS
+    )
+    await worker_http.pacing.paused()
+    recover.side_effect = DbError("recovery write failed")
+    # When failing passes alone carry the clock past the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then readiness fails while health holds and the loop keeps running.
+    await worker_http.ready(expected=False)
+    assert not task.done()
+    # And the next successful pass beats.
+    recover.side_effect = None
+    await worker_http.pacing.step()
+    await worker_http.ready(expected=True)

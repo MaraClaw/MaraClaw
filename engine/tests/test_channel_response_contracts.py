@@ -5,7 +5,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -282,10 +282,13 @@ async def test_channel_delete_keeps_empty_204(monkeypatch: pytest.MonkeyPatch, c
 async def test_webhook_json_response_keeps_status_and_headers(
     monkeypatch: pytest.MonkeyPatch, client: httpx.AsyncClient, hits: int
 ) -> None:
+    trigger = SimpleNamespace(id=uuid.uuid4(), agent_id=uuid.uuid4(), name="hook", config={})
     monkeypatch.setattr(webhooks, "_record_and_count_hits", AsyncMock(return_value=hits))
-    monkeypatch.setattr(webhooks.agent_trigger_dao, "find_webhook_by_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(webhooks.agent_trigger_dao, "find_webhook_by_token", AsyncMock(return_value=trigger))
+    monkeypatch.setattr(webhooks.agent_dao, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(webhooks, "enqueue_webhook_execution", AsyncMock(return_value=(None, True)))
 
-    response = await client.post("/api/webhooks/t/unknown", content=b"raw body")
+    response = await client.post("/api/webhooks/t/valid_token", content=b"raw body")
 
     assert response.status_code == (200 if hits == 0 else 429)
     assert TypeAdapter(OkAcknowledgement).validate_json(response.content) == {"ok": True}

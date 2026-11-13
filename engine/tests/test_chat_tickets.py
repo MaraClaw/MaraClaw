@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import uuid
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import chat_sessions, websocket
 from app.core.domain.agents import AgentType
@@ -67,6 +69,7 @@ def context(monkeypatch):
     monkeypatch.setattr(tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(tickets, "load_user_principal", AsyncMock(return_value=user))
     monkeypatch.setattr(tickets, "check_token_generation", AsyncMock())
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(tickets, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(
         tickets.chat_session_dao,
@@ -123,6 +126,91 @@ async def test_fresh_policy_is_checked(context, change, code):
     with pytest.raises(HTTPException) as error:
         await tickets.issue(binding)
     assert error.value.status_code == code
+
+
+async def test_issue_rejects_a_binding_minted_before_a_deactivation(context, monkeypatch):
+    # Given a binding minted under the membership generation that a deactivation has since replaced.
+    redis, binding, _, _ = context
+    pin_membership_generation(monkeypatch, binding.membership_generation + 1)
+
+    # When a ticket is requested for it, then the membership may be active again but nothing is stored.
+    with pytest.raises(HTTPException) as error:
+        await tickets.issue(binding)
+    assert error.value.status_code == 401
+    assert not redis.values
+
+
+async def test_issue_accepts_a_binding_minted_after_the_reactivation(context, monkeypatch):
+    # Given a membership that went through a deactivation and a binding minted under its current generation.
+    _, binding, _, _ = context
+    pin_membership_generation(monkeypatch, 1)
+    renewed = binding.model_copy(update={"membership_generation": 1})
+
+    # When a ticket is requested, then it is issued.
+    assert (await tickets.issue(renewed)).session_id == binding.session_id
+
+
+@pytest.mark.parametrize("phase", ["setup", "message"])
+async def test_socket_rejects_a_binding_revoked_by_a_deactivation_and_reactivation(context, monkeypatch, phase):
+    # Given a ticket issued before the membership is deactivated and activated again.
+    _, binding, _, _ = context
+    issued = await tickets.issue(binding)
+    if phase == "setup":
+        pin_membership_generation(monkeypatch, 1)
+    app = FastAPI()
+    app.include_router(websocket.router)
+
+    # When the socket is set up, or the next message arrives on an open socket.
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            f"/ws/chat/{binding.agent_id}?ticket={issued.ticket}&session_id={binding.session_id}"
+        ) as ws,
+    ):
+        if phase == "message":
+            assert ws.receive_json()["type"] == "connected"
+            pin_membership_generation(monkeypatch, 1)
+            ws.send_json({"content": "must not reach submission parsing"})
+
+        # Then it is refused as an expired credential and the ticket stays consumed.
+        assert ws.receive_json()["type"] == "error"
+        assert ws.receive()["code"] == 4001
+    with pytest.raises(HTTPException) as error:
+        await tickets.redeem(issued.ticket)
+    assert error.value.status_code == 400
+
+
+async def test_binding_without_a_membership_field_counts_as_generation_zero(context, monkeypatch):
+    # Given a ticket written before membership generations existed.
+    redis, binding, _, _ = context
+    payload = binding.model_dump(mode="json", exclude={"membership_generation"})
+    redis.values[tickets.ticket_key("legacy")] = (json.dumps(payload), 60)
+
+    # When it is redeemed, it works until the membership's first deactivation and never after.
+    legacy = await tickets.redeem("legacy")
+    await tickets.authorize(legacy)
+    pin_membership_generation(monkeypatch, 1)
+    with pytest.raises(HTTPException) as error:
+        await tickets.authorize(legacy)
+    assert error.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, -1, "1", 1.5, None], ids=["true", "false", "negative", "str", "float", "null"]
+)
+async def test_malformed_membership_generation_is_rejected_and_consumed(context, value):
+    # Given a stored binding whose membership generation is present but malformed.
+    redis, binding, _, _ = context
+    payload = binding.model_dump(mode="json") | {"membership_generation": value}
+    redis.values[tickets.ticket_key("malformed")] = (json.dumps(payload), 60)
+
+    # When it is redeemed, then it fails closed and remains single-use.
+    with pytest.raises(HTTPException) as error:
+        await tickets.redeem("malformed")
+    assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as retry:
+        await tickets.redeem("malformed")
+    assert retry.value.status_code == 400
 
 
 @pytest.mark.parametrize("source", ["web", "agent", "shared"])

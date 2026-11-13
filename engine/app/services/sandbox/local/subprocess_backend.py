@@ -4,12 +4,14 @@ import asyncio
 import contextlib
 import inspect
 import os
+import resource
 import shutil
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import ClassVar, NotRequired, Protocol, TypedDict, override, runtime_checkable
+from typing import ClassVar, Final, Protocol, TypedDict, override, runtime_checkable
+from uuid import uuid4
 
 from app.core.logging import logger
 from app.services.sandbox.base import (
@@ -29,7 +31,7 @@ class SubprocessExecKwargs(TypedDict):
     stderr: int
     env: dict[str, str]
     start_new_session: bool
-    preexec_fn: NotRequired[Callable[[], None]]
+    preexec_fn: Callable[[], None]
 
 
 @runtime_checkable
@@ -66,6 +68,35 @@ async def _terminate_process_group(
     finally:
         _ = waiter.cancel()
         _ = await asyncio.gather(waiter, return_exceptions=True)
+
+
+_NODE_VMDATA_SCRIPT: Final = (
+    "console.log(require('fs').readFileSync('/proc/self/status','utf8').match(/^VmData:\\s+(\\d+) kB$/m)[1])"
+)
+_NODE_PROBE_TIMEOUT_SECONDS: Final = 5.0
+
+
+async def _node_vmdata_bytes(node: str, env: dict[str, str], *flags: str) -> int:
+    """Boot node outside the sandbox with `flags` and return its VmData; any failure raises."""
+    process = await asyncio.create_subprocess_exec(
+        node,
+        *flags,
+        "-e",
+        _NODE_VMDATA_SCRIPT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        async with asyncio.timeout(_NODE_PROBE_TIMEOUT_SECONDS):
+            stdout, _ = await process.communicate()
+    finally:
+        if process.returncode is None:
+            await _terminate_process_group(process)
+    if process.returncode != 0:
+        raise RuntimeError(f"node VmData probe exited with {process.returncode}")
+    return int(stdout) * 1024
 
 
 # Security patterns - reused from agent_tools.py
@@ -196,6 +227,9 @@ class SubprocessBackend(BaseSandboxBackend):
     """
 
     _bwrap_missing_warned: ClassVar[bool] = False
+    _node_jit_reservation_bytes: ClassVar[int | None] = None
+    _node_jit_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+    _venv_creations: ClassVar[dict[Path, asyncio.Event]] = {}
 
     def __init__(self, config: SandboxConfig):
         self.config: SandboxConfig = config
@@ -267,25 +301,36 @@ class SubprocessBackend(BaseSandboxBackend):
 
     async def _ensure_workspace_venv(self, venv_path: Path) -> None:
         venv_python = venv_path / "bin" / "python"
+        creations = SubprocessBackend._venv_creations
+        # One uv per venv path. uv lays down bin/python before it has seeded the venv, so a venv under creation is
+        # never judged by that file: callers wait for the creator, then look again. If the creator failed or was
+        # cancelled, the first waiter to look finds no interpreter and creates the venv itself.
+        while (creating := creations.get(venv_path)) is not None:
+            await creating.wait()
         if not venv_python.exists():
-            uv_executable = shutil.which("uv")
-            if uv_executable in (None, ""):
-                raise RuntimeError("uv executable is required to create the sandbox virtual environment")
-            process = await asyncio.create_subprocess_exec(
-                uv_executable,
-                "venv",
-                "--seed",
-                str(venv_path),
-                cwd=str(venv_path.parent),
-                start_new_session=True,
-            )
+            created = creations[venv_path] = asyncio.Event()
             try:
-                returncode = await process.wait()
-            except asyncio.CancelledError:
-                await _terminate_process_group(process)
-                raise
-            if returncode != 0:
-                raise RuntimeError("uv failed to create the sandbox virtual environment")
+                uv_executable = shutil.which("uv")
+                if uv_executable in (None, ""):
+                    raise RuntimeError("uv executable is required to create the sandbox virtual environment")
+                process = await asyncio.create_subprocess_exec(
+                    uv_executable,
+                    "venv",
+                    "--seed",
+                    str(venv_path),
+                    cwd=str(venv_path.parent),
+                    start_new_session=True,
+                )
+                try:
+                    returncode = await process.wait()
+                except asyncio.CancelledError:
+                    await _terminate_process_group(process)
+                    raise
+                if returncode != 0:
+                    raise RuntimeError("uv failed to create the sandbox virtual environment")
+            finally:
+                del creations[venv_path]
+                created.set()
 
         # Fix shebang lines in pip scripts to use bwrap-visible path
         # venv creates scripts with absolute paths to the host Python,
@@ -303,36 +348,71 @@ class SubprocessBackend(BaseSandboxBackend):
                 _ = pip_path.write_text(wrapper_script, encoding="utf-8")
                 pip_path.chmod(0o755)
 
-    def _build_exec_kwargs(self, work_path: Path, timeout: int, use_preexec: bool = False) -> SubprocessExecKwargs:
-        kwargs: SubprocessExecKwargs = {
+    def _build_exec_kwargs(self, work_path: Path, preexec_fn: Callable[[], None]) -> SubprocessExecKwargs:
+        return {
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
             "env": self._build_safe_env(work_path),
             "start_new_session": True,
+            "preexec_fn": preexec_fn,
         }
-        if use_preexec:
-            kwargs["preexec_fn"] = self._build_preexec_fn(work_path, timeout)
-        return kwargs
+
+    def _cpu_seconds(self, timeout: int) -> int:
+        return max(1, min(timeout, self.config.max_timeout))
+
+    def _build_bwrap_preexec_fn(self, timeout: int, memory_bytes: int) -> Callable[[], None]:
+        """Limit bwrap and everything it starts; namespaces keep rlimits and cannot raise them.
+
+        RLIMIT_DATA bounds private writable memory without counting reserved address space; RLIMIT_AS at the default
+        256 MiB stops node from booting. No RLIMIT_NPROC (counted per real UID, it can stop bwrap from cloning) and no
+        chroot (bwrap owns the filesystem view). A failure aborts the launch rather than running without limits.
+        """
+        cpu_seconds = self._cpu_seconds(timeout)
+
+        def _preexec() -> None:
+            resource.setrlimit(resource.RLIMIT_DATA, (memory_bytes, memory_bytes))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+
+        return _preexec
+
+    async def _node_jit_reservation(self, node: str, work_path: Path) -> int:
+        """V8 reserves its JIT code range as private writable memory, which RLIMIT_DATA counts.
+
+        Measured once per process as the VmData of a default boot minus a --jitless boot of the same node, so node's
+        effective data ceiling stays at the configured one. The lock makes concurrent first callers share one
+        measurement; a failure propagates uncached so the execution fails instead of running without a ceiling.
+        """
+        async with SubprocessBackend._node_jit_lock:
+            reservation = SubprocessBackend._node_jit_reservation_bytes
+            if reservation is None:
+                proxy_env = self.config.resolve_proxy_env()
+                env = {key: value for key, value in self._build_safe_env(work_path).items() if key not in proxy_env}
+                default = await _node_vmdata_bytes(node, env)
+                jitless = await _node_vmdata_bytes(node, env, "--jitless")
+                reservation = max(0, default - jitless)
+                SubprocessBackend._node_jit_reservation_bytes = reservation
+            return reservation
 
     def _build_preexec_fn(self, work_path: Path, timeout: int) -> Callable[[], None]:
+        limits = (
+            (resource.RLIMIT_CPU, self._cpu_seconds(timeout)),
+            (resource.RLIMIT_AS, self.config.memory_limit_bytes),
+            (resource.RLIMIT_FSIZE, 10 * 1024 * 1024),
+            (resource.RLIMIT_NOFILE, 64),
+            (resource.RLIMIT_NPROC, 32),
+            (resource.RLIMIT_CORE, 0),
+        )
+
         def _preexec() -> None:
             os.chdir(work_path)
             _ = os.umask(0o077)
 
-            try:
-                import resource
-
-                memory_bytes = int(self.config.memory_limit.rstrip("mM")) * 1024 * 1024
-                cpu_limit = max(1, min(timeout, self.config.max_timeout))
-                resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
-                resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-                resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
-                resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-                resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
-                if hasattr(resource, "RLIMIT_CORE"):
-                    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-            except Exception as exc:
-                logger.warning(f"[Subprocess] Failed to apply resource limits: {exc}")
+            # Each limit stands alone so one rejected value cannot leave the others unset.
+            for limit, value in limits:
+                try:
+                    resource.setrlimit(limit, (value, value))
+                except (OSError, ValueError) as exc:
+                    logger.warning(f"[Subprocess] Failed to apply resource limit {limit}: {exc}")
 
             if hasattr(os, "setgid"):
                 with contextlib.suppress(OSError):
@@ -587,8 +667,8 @@ class SubprocessBackend(BaseSandboxBackend):
         else:
             ext = ".js"
 
-        # Write code to temp file
-        script_path = work_path / f"_exec_tmp{ext}"
+        # Write code to a temp file of its own: runs in one workspace are concurrent. workspace_temp skips _exec_tmp*.
+        script_path = work_path / f"_exec_tmp_{uuid4().hex}{ext}"
 
         proc: asyncio.subprocess.Process | None = None
         readers: list[asyncio.Task[None]] = []
@@ -624,13 +704,16 @@ class SubprocessBackend(BaseSandboxBackend):
                 proc = await asyncio.create_subprocess_exec(
                     *host_command,
                     cwd=str(work_path),
-                    **self._build_exec_kwargs(work_path, timeout, use_preexec=True),
+                    **self._build_exec_kwargs(work_path, self._build_preexec_fn(work_path, timeout)),
                 )
             else:
+                memory_bytes = self.config.memory_limit_bytes
+                if language == "node":
+                    memory_bytes += await self._node_jit_reservation(sandbox_command[0], work_path)
                 proc = await asyncio.create_subprocess_exec(
                     *bwrap_command,
                     cwd=str(work_path),
-                    **self._build_exec_kwargs(work_path, timeout),
+                    **self._build_exec_kwargs(work_path, self._build_bwrap_preexec_fn(timeout, memory_bytes)),
                 )
 
             async def deliver(queue: asyncio.Queue[bytes | None], label: str) -> None:

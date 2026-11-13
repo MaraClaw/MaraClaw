@@ -8,6 +8,7 @@ from pathlib import Path
 from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import collect_browser_layout
 from app.services.document_conversion.chrome_runtime import cleanup_temporary_paths
+from app.services.document_conversion.resource_policy import ResourcePolicy
 
 
 def _object_mapping(value: object) -> dict[str, object]:
@@ -64,6 +65,7 @@ async def render_html_to_pptx(
         from pptx.slide import Slide
         from pptx.util import Inches, Pt
 
+        policy = await asyncio.to_thread(ResourcePolicy.for_workspace, ws)
         html_content = await asyncio.to_thread(src_file.read_text, encoding="utf-8")
         soup = BeautifulSoup(html_content, "html.parser")
 
@@ -355,18 +357,12 @@ async def render_html_to_pptx(
             return shape
 
         def image_path(src: str | None) -> Path | None:
-            if src in (None, "") or src.startswith(("http://", "https://", "data:")):
+            if src in (None, ""):
                 return None
-            if src.startswith("file://"):
-                from urllib.parse import unquote, urlparse
-
-                p = Path(unquote(urlparse(src).path))
-                return p if p.exists() else None
-            p = Path(src)
-            candidates = [src_file.parent / p, ws / p]
-            for candidate in candidates:
-                if candidate.exists():
-                    return candidate
+            for base_dir in (src_file.parent, policy.root):
+                contained = policy.contained_reference(src, base_dir)
+                if contained is not None:
+                    return contained
             return None
 
         def element_box(style: dict[str, str]) -> tuple[float | None, float | None, float | None, float | None]:
@@ -608,7 +604,7 @@ async def render_html_to_pptx(
                 )
             return True
 
-        raw_layout = await collect_browser_layout(src_file, design_w_px, design_h_px, render_mode, render_scale)
+        raw_layout = await collect_browser_layout(src_file, policy, design_w_px, design_h_px, render_mode, render_scale)
         browser_layout = _object_mapping(raw_layout) if raw_layout is not None else None
         if (
             browser_layout is not None

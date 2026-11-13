@@ -8,9 +8,8 @@ import os
 import time
 import uuid
 from collections.abc import Mapping
-from contextlib import suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -24,6 +23,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
+from app.runtime.tasks import capped_backoff, loop_progress
 from app.services.service_contracts import WeChatContextEntry
 
 if TYPE_CHECKING:
@@ -34,6 +34,9 @@ WECHAT_CHANNEL_VERSION = "1.0.0"
 WECHAT_TEXT_LIMIT = 2000
 WECHAT_CONTEXT_CACHE_KEY = "recent_context_tokens"
 WECHAT_CONTEXT_CACHE_LIMIT = 100
+PROGRESS_BUDGET_SECONDS: Final = 300.0
+RECONCILE_RETRY_BASE_SECONDS: Final = 1.0
+RECONCILE_RETRY_CAP_SECONDS: Final = 30.0
 
 
 class WeChatSessionExpiredError(RuntimeError):
@@ -216,15 +219,30 @@ class WeChatPollManager:
         task = self._tasks.pop(agent_id, None)
         if task:
             _ = task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            _ = await asyncio.wait({task})
+            if not task.cancelled():
+                task.result()
         self._connected[agent_id] = False
         await self._set_connected(agent_id, False)
 
     async def start_all(self) -> None:
         logger.info("[WeChat] Poll manager started")
+        progress = loop_progress()
+        failures = 0
         while True:
-            await self.reconcile_clients()
+            try:
+                await self.reconcile_clients()
+            except Exception as exc:
+                logger.opt(exception=exc).warning("[WeChat] Reconcile pass failed; will retry")
+                await asyncio.sleep(
+                    capped_backoff(
+                        failures, base_seconds=RECONCILE_RETRY_BASE_SECONDS, cap_seconds=RECONCILE_RETRY_CAP_SECONDS
+                    )
+                )
+                failures += 1
+                continue
+            failures = 0
+            progress.beat()
             await asyncio.sleep(self._reconcile_interval_seconds)
 
     async def stop_all(self) -> None:

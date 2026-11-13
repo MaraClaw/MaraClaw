@@ -4,6 +4,7 @@ from uuid import UUID
 
 from anyio import to_thread
 from pywhales import ClientNotFoundError, Container, DockerClient
+from pywhales.client_config import ParsingError
 from pywhales.components.container.cli_wrapper import ContainerListFilter
 from pywhales.exceptions import DockerException, NoSuchContainer
 
@@ -37,7 +38,7 @@ async def sweep_orphan_containers(now: datetime) -> None:
         return
     try:
         filters: list[ContainerListFilter] = [("label", AGENT_LABEL), ("network", network)]
-        containers = await to_thread.run_sync(partial(client.container.list, all=True, filters=filters))
+        containers = await to_thread.run_sync(partial(client.container.list, all=True, filters=filters, hydrate=True))
         candidates: dict[str, UUID] = {}
         for container in containers:
             config = container.config
@@ -52,7 +53,7 @@ async def sweep_orphan_containers(now: datetime) -> None:
             except ValueError:
                 continue
             candidates[container.id] = agent_id
-    except (ClientNotFoundError, DockerException, OSError) as exc:
+    except (ClientNotFoundError, DockerException, ParsingError, OSError) as exc:
         logger.warning("Orphan container listing failed: %s", exc)
         return
     if not candidates:

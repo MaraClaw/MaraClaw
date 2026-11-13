@@ -57,6 +57,29 @@ async def test_exclusion_rechecked_after_waiting_for_lock(mcp: MCPHarness, clien
     assert mcp.path.read_bytes() == before
 
 
+async def test_inventory_does_not_wait_for_exclusive_workspace_lock(mcp: MCPHarness, client: httpx.AsyncClient):
+    assert (
+        await client.post(mcp.url, json={"name": "test", "transport": "sse", "url": "http://mcp"})
+    ).status_code == 201
+
+    with anyio.fail_after(5):
+        async with setup_workspace_lock(mcp.path.parent):
+            with anyio.fail_after(1):
+                response = await client.get(mcp.url)
+    assert response.status_code == 200
+    assert [server["name"] for server in response.json()["servers"]] == ["test"]
+
+
+@pytest.mark.parametrize("gate", ["update", "transfer"])
+async def test_inventory_keeps_update_and_transfer_gates(mcp: MCPHarness, client: httpx.AsyncClient, gate: str):
+    match gate:
+        case "update":
+            mcp.update_active = True
+        case "transfer":
+            mcp.transfer_pending = True
+    assert (await client.get(mcp.url)).status_code == (409 if gate == "update" else 423)
+
+
 async def test_concurrent_creates_preserve_both_servers(mcp: MCPHarness, client: httpx.AsyncClient):
     responses: list[httpx.Response] = []
 

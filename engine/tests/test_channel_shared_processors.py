@@ -76,6 +76,7 @@ def pipeline(context, monkeypatch):
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
     monkeypatch.setattr(submissions, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(submissions, "charge_agent_daily_message", AsyncMock())
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(chat_session_dao, "lock_for_agent", locked)
     return agent, user, shared, route, config, history, persist, enqueue

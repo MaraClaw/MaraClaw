@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import Depends, FastAPI
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import admin
 from app.core.domain.users import UserRole
@@ -54,6 +55,7 @@ async def policy_case(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PolicyCa
 
     monkeypatch.setattr(user_dao, "get_with_identity", load_user)
     monkeypatch.setattr(identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     app = FastAPI()
     app.include_router(admin.router, prefix="/api", dependencies=[Depends(bind_connection)])
     token = await create_access_token(str(user.id), user.role, identity_id=identity.id)

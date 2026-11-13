@@ -48,4 +48,4 @@ This package is the queued trigger execution runtime. It is coupled to agents, c
 - Never write internal underscore keys through `BaseDAO.update` (whole-config replace rolls the baseline back). User edits go through `merge_user_config` (SQL-side merge; `url`/`json_path` change drops `_last_value` and `_poll_checked_at` and bumps `_poll_seq`). The agent-facing trigger update tool still replaces config wholesale.
 - `from_agent_name` resolves only agents in the trigger agent's tenant.
 - A2A wake depth, TTL, and dedup guards live in `trigger_daemon.py`, not this package.
-- Webhook dedup depends on unique `(trigger_id, idempotency_key)` semantics.
+- Webhook dedup depends on unique `(trigger_id, idempotency_key)` semantics. `enqueue_webhook_execution` picks the key from the trigger's own config: a trigger with a `secret` dedups on `signed:` + sha256(trigger id + body) alone, ignoring every delivery header (a replaying caller controls them, the signature covers only the body); an unsigned trigger uses the first of `x-idempotency-key`, `x-github-delivery`, `x-request-id`, `x-event-id`, else the body hash.

@@ -52,6 +52,7 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - `code_exec.py` resolves sandbox settings via `get_sandbox_config()` then optional per-agent tool config through `SandboxConfig.from_dict`.
 - Network/proxy fields in tool config are security-sensitive; API layer restricts who may write them. Do not re-open that policy in the handler.
 - Prefer `get_sandbox_backend(sandbox_config)` over constructing backends directly.
+- Execution is admitted through one process-wide FIFO slot pool shared by every agent, event loop and backend: `SANDBOX_MAX_CONCURRENT_EXECUTIONS` slots (default 8) and `SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS` of queue wait (default 10, `0` refuses at once). Admission follows configuration and backend resolution, so a configuration error never waits for or holds a slot, and it precedes `ExecutionDeadline`, so queue time is not taken from the code's timeout. Saturation returns the `Sandbox busy` tool error (`SANDBOX_BUSY_MESSAGE`), distinct from the timeout result. A slot is released only when the backend task really finishes, so an execution abandoned past its hard deadline keeps its slot; a caller cancelled while queued leaks none. The cap lives here because `get_sandbox_backend` builds a new backend per call.
 
 ## Tests
 

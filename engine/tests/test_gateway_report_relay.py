@@ -1,14 +1,23 @@
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import NoReturn
 from uuid import uuid4
 
 import anyio
 import pytest
 
-from app.services import gateway_report_relay as relay, turn_timing
+from app.db.errors import DbError
+from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
+from app.records.gateway_report_delivery import GatewayReportDeliveryRecord
+from app.services import gateway_report_relay as relay, gateway_report_wake as wake, turn_timing
 from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
+from worker_progress_fixtures import WorkerHTTP, worker_http
+
+__all__ = ["worker_http"]
 
 
 @pytest.fixture
@@ -253,3 +262,140 @@ async def test_relay_timing_names_retry_terminal_and_lost_results(
     await relay.relay_batch(store.clock)
     ((line),) = relay_lines
     assert line["result"] == {"send": "retry", "reply_window": "terminal", "ack": "lost"}[failure]
+
+
+class ClaimGate:
+    """Fails the store's claims, or holds one call open until ``hold`` is set."""
+
+    def __init__(self, store: RelayStore, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.error: Exception | None = None
+        self.hold_call = 0
+        self.hold = asyncio.Event()
+        self.calls = 0
+        self._claim = store.claim_batch
+        monkeypatch.setattr(store, "claim_batch", self.claim_batch)
+
+    async def claim_batch(
+        self, *, limit: int, lease_seconds: float, now: datetime
+    ) -> list[GatewayReportDeliveryRecord]:
+        self.calls += 1
+        if self.calls == self.hold_call:
+            _ = await self.hold.wait()
+        if self.error is not None:
+            raise self.error
+        return await self._claim(limit=limit, lease_seconds=lease_seconds, now=now)
+
+
+@pytest.fixture
+def offline_wakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def get_redis() -> NoReturn:
+        raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(wake, "get_redis", get_redis)
+
+
+def start_relay(worker_http: WorkerHTTP, store: RelayStore) -> asyncio.Task[object]:
+    return worker_http.start_loop(
+        "gateway_report_relay",
+        relay.start_gateway_report_relay(idle_timeout=30.0, clock=store.clock),
+        budget_seconds=relay.PROGRESS_BUDGET_SECONDS,
+    )
+
+
+async def parked() -> None:
+    with anyio.fail_after(2):
+        await anyio.wait_all_tasks_blocked()
+
+
+async def next_pass(worker_http: WorkerHTTP) -> None:
+    worker_http.pacing.now += 100
+    wake.signal_local()
+    await parked()
+
+
+@pytest.mark.usefixtures("offline_wakes")
+async def test_idle_passes_beat_so_readiness_outlives_the_budget(store: RelayStore, worker_http: WorkerHTTP) -> None:
+    # Given the relay loop as a budgeted worker loop with nothing to deliver.
+    task = start_relay(worker_http, store)
+    await parked()
+    # When four idle passes carry the clock past the budget.
+    for _ in range(4):
+        await next_pass(worker_http)
+        # Then each finished pass has beaten.
+        await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+@pytest.mark.usefixtures("offline_wakes")
+async def test_failed_claims_do_not_beat_so_readiness_goes_stale_then_recovers(
+    store: RelayStore, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a database rejecting every claim.
+    gate = ClaimGate(store, monkeypatch)
+    gate.error = DbError("database unavailable")
+    task = start_relay(worker_http, store)
+    await parked()
+    # When failing passes alone carry the clock past the budget.
+    for _ in range(4):
+        await next_pass(worker_http)
+    # Then readiness fails while health holds and the loop keeps running.
+    await worker_http.ready(expected=False)
+    assert not task.done()
+    # And the next successful claim beats.
+    gate.error = None
+    await next_pass(worker_http)
+    await worker_http.ready(expected=True)
+
+
+@pytest.mark.usefixtures("offline_wakes")
+async def test_failed_provider_delivery_does_not_make_the_loop_stale(
+    store: RelayStore, worker_http: WorkerHTTP
+) -> None:
+    # Given a report whose provider send fails on its first attempt.
+    row = store.intent("im")
+    store.fail_send = True
+    task = start_relay(worker_http, store)
+    await parked()
+    assert store.rows[row.id].attempts == 1
+    assert store.rows[row.id].delivered_at is None
+    # When idle passes carry the clock past the budget while the delivery waits for its retry.
+    for _ in range(4):
+        await next_pass(worker_http)
+        # Then every finished pass still beats.
+        await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+@pytest.mark.usefixtures("offline_wakes")
+async def test_deliveries_do_not_beat_for_a_loop_body_that_is_blocked(
+    store: RelayStore, worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a delivery held inside its provider send and a loop body held inside its second claim.
+    row = store.intent("im")
+    sending, release = asyncio.Event(), asyncio.Event()
+
+    async def send(*, agent: AgentRecord, session: ChatSessionRecord, content: str, strict: bool = False) -> None:
+        sending.set()
+        _ = await release.wait()
+        store.sends.append(content)
+
+    monkeypatch.setattr(store, "send", send)
+    gate = ClaimGate(store, monkeypatch)
+    gate.hold_call = 2
+    task = start_relay(worker_http, store)
+    with anyio.fail_after(2):
+        _ = await sending.wait()
+    await parked()
+    # When the budget passes with that delivery still active, then readiness fails.
+    worker_http.pacing.now += relay.PROGRESS_BUDGET_SECONDS + 1
+    await worker_http.ready(expected=False)
+    assert not task.done()
+    # And the delivery finishing, which settles it, does not restore readiness.
+    release.set()
+    await parked()
+    assert store.rows[row.id].delivered_at is not None
+    await worker_http.ready(expected=False)
+    # Only the loop body finishing its own pass does.
+    gate.hold.set()
+    await parked()
+    await worker_http.ready(expected=True)

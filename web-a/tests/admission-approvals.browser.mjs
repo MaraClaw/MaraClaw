@@ -8,7 +8,7 @@
 import { bounded, makeRow, ordered } from './admission-fixture.browser.mjs'
 import { button, exact, matrix, runBrowser, visible } from './admission-harness.browser.mjs'
 import {
-  assertDecided, assertList, backToList, decisionCall, filterList, listAction,
+  assertDecided, assertList, backToList, confirmDecision, decisionCall, filterList, listAction,
   listCall, openDetail, reasonField,
 } from './admission-actions.browser.mjs'
 import { exerciseStates } from './admission-states.browser.mjs'
@@ -69,6 +69,7 @@ await runBrowser(async (h) => {
       await reasonField(page).fill(reason)
       await h.capture(page, state, `detail-pending-before-${status}`)
       const since = state.calls.length
+      if (status === 'approved') await confirmDecision(page)
       await page.snapshot(); await button(page, status === 'approved' ? 'Approve request' : 'Reject request').click()
       const decision = await state.waitCall(since, decisionCall(id))
       h.verify('decision uses the requested operation and retained reason', decision.payload, { decision: status, reason })

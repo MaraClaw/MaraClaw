@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import admin as admin_api
 from app.core import security
@@ -34,6 +35,7 @@ async def metric_client(monkeypatch: pytest.MonkeyPatch, metric_user: UserRecord
     monkeypatch.setattr(admin_api.user_dao, "get_with_identity", AsyncMock(return_value=metric_user))
     monkeypatch.setattr(admin_api.user_dao, "get", AsyncMock(return_value=metric_user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     app = FastAPI()
     app.include_router(admin_api.router, prefix="/api")
     token = await create_access_token(str(metric_user.id), metric_user.role)

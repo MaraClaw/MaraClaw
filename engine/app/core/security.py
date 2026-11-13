@@ -6,6 +6,7 @@ import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from typing import TypeGuard
 
 import bcrypt
 from Crypto.Cipher import AES
@@ -133,6 +134,12 @@ async def create_access_token(
         if user is None or user.identity_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
         identity_id = user.identity_id
+        membership_generation = await user_dao.get_membership_generation(uid)
+        if membership_generation is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
+    else:
+        # An identity-only subject (no users row yet) has no membership to revoke.
+        membership_generation = await user_dao.get_membership_generation(uuid.UUID(user_id)) or 0
     generation = await identity_dao.get_auth_generation(identity_id)
     if generation is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
@@ -142,6 +149,7 @@ async def create_access_token(
         "role": role,
         "exp": expire,
         "gen": generation,
+        "mgen": membership_generation,
     }
     return str(jwt.encode(dict(to_encode), settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM))
 
@@ -159,23 +167,34 @@ def decode_access_token(token: str) -> AccessTokenPayload:
     role = decoded.get("role")
     exp = decoded.get("exp")
     generation = decoded.get("gen")
+    membership_generation: object = decoded.get("mgen") if "mgen" in decoded else 0
     if (
         not isinstance(sub, str)
         or not isinstance(role, str)
         or not isinstance(exp, int)
-        or not isinstance(generation, int)
-        or isinstance(generation, bool)
-        or generation < 0
+        or not _is_generation(generation)
+        or not _is_generation(membership_generation)
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
-    return {"sub": sub, "role": role, "exp": exp, "gen": generation}
+    return {"sub": sub, "role": role, "exp": exp, "gen": generation, "mgen": membership_generation}
+
+
+def _is_generation(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 async def check_token_generation(identity_id: uuid.UUID, claimed: int) -> None:
     generation = await identity_dao.get_auth_generation(identity_id)
+    if generation is None or generation != claimed:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
+
+
+async def check_membership_generation(user_id: uuid.UUID, claimed: int) -> None:
+    """Compare a claimed membership generation with SQL on every call; the session snapshot never carries it."""
+    generation = await user_dao.get_membership_generation(user_id)
     if generation is None or generation != claimed:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
@@ -224,6 +243,7 @@ async def load_user_from_access_token(
     if user.identity_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
     await check_token_generation(user.identity_id, payload["gen"])
+    await check_membership_generation(user.id, payload["mgen"])
     if enforce_password_change:
         raise_if_password_change_required(user)
     return user

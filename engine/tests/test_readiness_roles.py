@@ -10,8 +10,9 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime import lifecycle, readiness
 from app.runtime.connectors import WeChatRuntime
 from app.runtime.tasks import OwnedTasks
-from app.services.wechat_channel import WeChatPollManager
+from app.services.wechat_channel import PROGRESS_BUDGET_SECONDS as WECHAT_BUDGET_SECONDS, WeChatPollManager
 from producer_admission_fixtures import producer_admission
+from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
 
 __all__ = ["producer_admission"]
 
@@ -39,6 +40,8 @@ async def _background_admission() -> AsyncGenerator[None]:
         "auth_email",
         "broadcast_fanout",
         "openclaw_dispatch",
+        "chat_history_retention",
+        "operational_log_retention",
         "whatsapp_personal",
     ],
 )
@@ -53,12 +56,17 @@ async def test_actual_start_registers_required_role_evidence(
         broadcast_email_worker,
         broadcast_fanout_worker,
         cache_invalidation_worker,
+        chat_history_retention_worker,
         company_transfer_cleanup,
         gateway_report_relay,
+        heartbeat,
+        openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
+        task_lease,
         trigger_daemon,
     )
     from app.services.channels import whatsapp_personal_supervisor
@@ -102,6 +110,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(lifecycle, "shutdown_llm_clients", noop)
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", loop)
+    monkeypatch.setattr(heartbeat, "start_heartbeat", loop)
     monkeypatch.setattr(agent_setup, "start_agent_setup_worker", loop)
     monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", loop)
     monkeypatch.setattr(cache_invalidation_worker, "start_cache_invalidation_worker", loop)
@@ -114,6 +123,10 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
     monkeypatch.setattr(organization_admission_email_worker, "start_organization_admission_email_worker", loop)
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", loop)
+    monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
+    monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
+    monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
@@ -137,28 +150,21 @@ async def test_actual_start_registers_required_role_evidence(
         assert ("openclaw_dispatch" in required) == role_enabled(roles, "worker")
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
+        assert ("chat_history_retention" in required) == role_enabled(roles, "worker")
+        assert ("operational_log_retention" in required) == role_enabled(roles, "worker")
+        assert ("transfer_cleanup" in required) == role_enabled(roles, "connector")
         for worker_name in ("cache-invalidation-recovery", "auth_email", "broadcast_fanout"):
             assert (worker_name in required) == role_enabled(roles, "worker")
             if role_enabled(roles, "worker"):
                 task, finite = required[worker_name]
                 assert not finite
                 assert not task.done()
-        assert set(runtime.tasks.progress) == (
-            {
-                "trigger_daemon",
-                "cache-invalidation-recovery",
-                "auth_email",
-                "broadcast_fanout",
-                "broadcast_email",
-                "organization_admission_email",
-                "openclaw_update",
-                "agent_start_reconciler",
-                "agent_scheduler",
-                "openclaw_dispatch",
-            }
-            if role_enabled(roles, "worker")
-            else set()
-        )
+        budgeted: set[str] = set()
+        if role_enabled(roles, "worker"):
+            budgeted |= WORKER_BUDGETED_LOOPS
+        if role_enabled(roles, "connector"):
+            budgeted |= CONNECTOR_BUDGETED_LOOPS
+        assert set(runtime.tasks.progress) == budgeted
         assert ("Connector" in required) == role_enabled(roles, "connector")
         assert ("whatsapp_personal" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])
@@ -205,6 +211,7 @@ async def test_wechat_first_reconciliation_is_finite_and_ongoing_loop_is_require
     assert tasks.ready()
     task, finite = tasks.required["wechat-reconcile"]
     assert not finite
+    assert tasks.progress["wechat-reconcile"].budget_seconds == WECHAT_BUDGET_SECONDS
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     assert not tasks.ready()

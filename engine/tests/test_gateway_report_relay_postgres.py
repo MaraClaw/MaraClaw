@@ -6,6 +6,7 @@ import httpx
 import pytest
 from psycopg.pq import TransactionStatus
 
+from app.dao.channel_config_dao import channel_config_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao as dao
 from app.db import session as db_session
 from app.db.session import get_connection, transaction
@@ -32,10 +33,16 @@ async def relay_db(delivery_db, monkeypatch):
             "UPDATE chat_sessions SET source_channel = 'slack', external_conv_id = 'slack_C1' WHERE id = %(id)s",
             {"id": db.session_id},
         )
-        await db.first.execute(
-            "INSERT INTO channel_configs (id, agent_id, channel_type, app_id, app_secret, is_configured, is_connected) "
-            "VALUES (%(id)s, %(agent)s, 'slack', 'account', 'live-secret', TRUE, TRUE)",
-            {"id": uuid4(), "agent": db.agent.id},
+        await channel_config_dao.create(
+            obj_in={
+                "id": uuid4(),
+                "agent_id": db.agent.id,
+                "channel_type": "slack",
+                "app_id": "account",
+                "app_secret": "live-secret",
+                "is_configured": True,
+                "is_connected": True,
+            }
         )
     return db, row
 

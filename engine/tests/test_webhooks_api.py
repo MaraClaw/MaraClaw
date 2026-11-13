@@ -11,7 +11,8 @@ from app.api import webhooks as webhooks_api
 from app.core.logging import configure_logging
 from app.main import app
 
-CANARY_TOKEN = "cnry_tkn_91"  # eleven characters: the shape that is rate limited
+CANARY_TOKEN = "cnry_tkn_91"  # eleven characters: the legacy shape, still accepted
+MINTED_TOKEN = "Ab1_-" * 4 + "Ab"  # twenty-two characters: the shape minted from 16 random bytes
 
 
 class FakeScalarResult:
@@ -71,6 +72,7 @@ class FakeAsyncSessionFactory:
 class RecordingPipeline:
     def __init__(self):
         self.zadd_entries = None
+        self.keys = []
 
     async def __aenter__(self):
         return self
@@ -78,17 +80,18 @@ class RecordingPipeline:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    def zremrangebyscore(self, _key, _minimum, _maximum):
-        return None
+    def zremrangebyscore(self, key, _minimum, _maximum):
+        self.keys.append(key)
 
-    def zadd(self, _key, entries):
+    def zadd(self, key, entries):
+        self.keys.append(key)
         self.zadd_entries = entries
 
-    def zcard(self, _key):
-        return None
+    def zcard(self, key):
+        self.keys.append(key)
 
-    def expire(self, _key, _seconds):
-        return None
+    def expire(self, key, _seconds):
+        self.keys.append(key)
 
     async def execute(self):
         return None, None, 1, None
@@ -115,8 +118,8 @@ def client():
 
 @pytest.mark.asyncio
 async def test_rate_limit_member_uses_sha256(monkeypatch):
-    # Given: a fixed token, timestamp, and Redis pipeline
-    token = "valid_token"
+    # Given: a fixed trigger, timestamp, and Redis pipeline
+    trigger_id = uuid.uuid4()
     now = 1_700_000_000.0
     redis = RecordingRedis()
 
@@ -127,11 +130,12 @@ async def test_rate_limit_member_uses_sha256(monkeypatch):
     monkeypatch.setattr(webhooks_api.time, "time", lambda: now)
 
     # When: recording a webhook hit
-    count = await webhooks_api._record_and_count_hits(token)
+    count = await webhooks_api._record_and_count_hits(trigger_id)
 
-    # Then: the collision-resistant member suffix uses SHA-256
-    expected_member = f"{now}:{hashlib.sha256(f'{token}:{now}'.encode()).hexdigest()[:8]}"
+    # Then: the collision-resistant member suffix uses SHA-256 and every key belongs to the trigger
+    expected_member = f"{now}:{hashlib.sha256(f'{trigger_id}:{now}'.encode()).hexdigest()[:8]}"
     assert redis.pipeline_instance.zadd_entries == {expected_member: now}
+    assert set(redis.pipeline_instance.keys) == {f"webhook:rate:{trigger_id}"}
     assert count == 1
 
 
@@ -154,7 +158,8 @@ async def test_count_from_pipeline_fail_closed_on_non_sequence():
 
 
 @pytest.mark.asyncio
-async def test_receive_webhook_success(monkeypatch, client):
+@pytest.mark.parametrize("token", ["valid_token", MINTED_TOKEN])
+async def test_receive_webhook_success(monkeypatch, client, token):
     # Setup test trigger and agent
     agent_id = uuid.uuid4()
     trigger = SimpleNamespace(
@@ -162,16 +167,17 @@ async def test_receive_webhook_success(monkeypatch, client):
         agent_id=agent_id,
         name="test-trigger",
         type="webhook",
-        config={"token": "valid_token"},
+        config={"token": token},
         is_enabled=True,
     )
     agent = SimpleNamespace(id=agent_id, webhook_rate_limit=5)
 
-    monkeypatch.setattr(webhooks_api.agent_trigger_dao, "find_webhook_by_token", AsyncMock(return_value=trigger))
+    lookup = AsyncMock(return_value=trigger)
+    monkeypatch.setattr(webhooks_api.agent_trigger_dao, "find_webhook_by_token", lookup)
     monkeypatch.setattr(webhooks_api.agent_dao, "get", AsyncMock(return_value=agent))
 
     # Mock redis rate limiting
-    async def fake_record_and_count_hits(token):
+    async def fake_record_and_count_hits(trigger_id):
         return 1
 
     monkeypatch.setattr(webhooks_api, "_record_and_count_hits", fake_record_and_count_hits)
@@ -183,10 +189,11 @@ async def test_receive_webhook_success(monkeypatch, client):
     monkeypatch.setattr(webhooks_api, "enqueue_webhook_execution", fake_enqueue_webhook_execution)
 
     async with await client() as ac:
-        response = await ac.post("/api/webhooks/t/valid_token", json={"event": "test"})
+        response = await ac.post(f"/api/webhooks/t/{token}", json={"event": "test"})
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+    lookup.assert_awaited_once_with(token)
 
 
 @pytest.fixture
@@ -248,7 +255,9 @@ async def test_throttled_webhook_logs_and_audit_carry_no_token_fragment(monkeypa
 
 async def test_unknown_token_stays_opaque_and_unlogged(monkeypatch, client, app_log):
     monkeypatch.setattr(webhooks_api.agent_trigger_dao, "find_webhook_by_token", AsyncMock(return_value=None))
-    monkeypatch.setattr(webhooks_api, "_record_and_count_hits", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        webhooks_api, "_record_and_count_hits", AsyncMock(side_effect=AssertionError("Unknown token reached Redis"))
+    )
 
     async with await client() as ac:
         response = await ac.post(f"/api/webhooks/t/{CANARY_TOKEN}", json={"event": "test"})

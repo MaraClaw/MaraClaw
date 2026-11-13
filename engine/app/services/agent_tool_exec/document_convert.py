@@ -58,7 +58,7 @@ async def _convert_html_to_pdf(agent_id: uuid.UUID, ws: Path, arguments: ToolArg
         return f"❌ Source file not found: {source_path}"
     from app.services.document_conversion import convert_html_to_pdf
 
-    return await convert_html_to_pdf(src_file, tgt_file, str(target_path), arguments)
+    return await convert_html_to_pdf(src_file, tgt_file, str(target_path), ws, arguments)
 
 
 async def _convert_html_to_pptx(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments) -> str:

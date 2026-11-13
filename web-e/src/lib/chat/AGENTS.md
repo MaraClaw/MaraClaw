@@ -14,7 +14,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
 - `submissions.ts`: `createChatSubmissions`, `ChatSubmissions`; frozen envelopes, pending/accepted tracking and canonical session identity.
 - `transcript.ts`: `ChatLine`, `acceptSubmission`, `mergeServerHistory`, `appendCompletion`; optimistic/history reconciliation.
 - `turn-rejection.ts`: `recoverRejectedTurn`, `restoreComposerDraft`; rejected-row state, recovery notices and draft restoration.
-- `ws-client.ts`: `connectAgentChat`, `ChatSocket`, `ChatTransport`; socket lifecycle and protocol guard/type re-exports.
+- `ws-client.ts`: `connectAgentChat`, `ChatSocket`, `ChatTransport`, `ChatConnectionState`; socket lifecycle, liveness, offline/suspended handling and protocol guard/type re-exports.
 
 ## Invariants
 
@@ -22,7 +22,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
   `connectAgentChat` -> internal `open` -> `issueChatTicket` (`src/lib/auth-api.ts`) -> `apiRequest` (`src/lib/http.ts`).
   The HTTP POST is `/api/auth/chat-ticket`; body carries `agent_id` and the known submission `session_id` when present.
   Issuance receives the captured owner and abort signal; response requires nonempty `ticket` and `session_id`.
-  Resolve the ledger to the returned session ID before building `URLSearchParams` with `ticket`, `session_id`, `lang`.
+  Resolve the ledger to the returned session ID before building `URLSearchParams` with `ticket`, `session_id`, `lang` and `heartbeat=1`.
   Pass `/ws/chat/${agentId}?${params.toString()}` to `transport.url`, then `transport.connect`.
   `handlers.issueTicket` can replace the default issuer; the socket module does not implement the HTTP mint itself.
 - Close codes 4001/4003 stop retries and call `onClose`; only 4001 calls `store.expire(owner)`.
@@ -30,6 +30,10 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
   Other closes back off with the capped delay `Math.min(8000, 600 * 2 ** attempt)` scaled by `0.5 + 0.5 * random()`; `handlers.random` injects the random source (default `Math.random`; tests pass a constant).
   Only the `connected` event resets the attempt counter, never the socket opening: a server that accepts and then closes before the handshake completes keeps backing off.
   `onReconnect` runs on successful openings after the first, not on the initial open. The engine closes local sockets with 1012 after a Redis resubscribe, which takes this reconnect path and refetches history; there is no resync event.
+- Liveness: heartbeat frames count as life and never reach `onEvent`. After `connected`, a socket with no frame for 25 s is discarded and reconnects through the backoff without waiting for `onclose`. The decision comes from the last-frame time, not from timer counts; a timer that fires more than 1 s late (throttled or sleeping tab) gets one 1 s re-check first.
+- `CONNECT_DEADLINE_MS` (15 s, capped to what is left of the retry window) bounds each attempt: one that has not received `connected` (a hung ticket request or a silent socket) is discarded and goes through the same backoff. `connected` clears it.
+- Retries stop after 120 s of continuous failure, counted from the last healthy moment or the last resume, and each backoff delay is capped to what is left of that window. The state becomes `suspended`: no timers and no ticket requests; the subscription, ledger and queued onboarding triggers are kept. `online`, a visible tab, `send` (when suspended) and `retry()` resume it, and the first two also cut a pending backoff short; pending work is resent once on the next open and `onReconnect` behaves as before. While offline no ticket is requested and the attempt, socket and timers are dropped.
+- `onConnectionState` reports `connecting` (first attempt only), `connected`, `reconnecting`, `offline` or `suspended`, on change only. `now`, `schedule`, `online` and `visible` are injectable. 4001 and 4003 behave as above.
 - `agent-chat.tsx` releases a live turn whose `done` was lost only when the authoritative history ends with an assistant row, no row is pending, the last user/assistant line is an assistant, and no applied chunk has arrived for 15 s. It calls `liveStore.clear(turnId)` with that turn's id, so later stragglers from it are ignored. A shared or trigger turn that keeps streaming refreshes the quiet clock and is never released; dropping the `turnId === null` guard in the history effect would end such turns early.
 - Parse inbound JSON with `inboundSchema.safeParse`; invalid JSON/schema emits `Malformed chat event` as an error event.
   Reserved acceptance/rejection types cannot fall through the generic event schema.
@@ -57,6 +61,6 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
 
 ## Gotchas
 
-- `close()` aborts issuance, clears socket queues/timers and unsubscribes; it does not retire a supplied submission ledger.
+- `close()` aborts issuance, clears socket queues, the retry, liveness and connect-deadline timers, and unsubscribes from the session store and the online and visibility signals; it does not retire a supplied submission ledger.
 - Ledger rejection removes pending status but retains the original envelope; retrying that ID reuses its original payload.
 - Without a completion message ID, only an identical final ID-less role/content pair suppresses an append.

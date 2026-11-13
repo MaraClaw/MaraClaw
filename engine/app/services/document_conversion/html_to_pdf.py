@@ -2,28 +2,23 @@
 
 import asyncio
 import base64
-import json
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from app.core.json_types import JsonObject, json_as_str, json_loads_object, json_object_from
+from app.core.json_types import JsonObject, json_as_str, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import chrome_executable
 from app.services.document_conversion.chrome_runtime import (
-    chrome_arguments,
+    PolicedCdpSession,
     create_cdp_target,
+    launch_chrome,
     local_ephemeral_port,
     terminate_process,
     validate_debugger_websocket_url,
     wait_for_cdp,
 )
-
-
-def _cdp_payload(raw: object) -> JsonObject:
-    if isinstance(raw, str | bytes | bytearray):
-        return json_loads_object(raw)
-    return json_object_from(raw)
+from app.services.document_conversion.resource_policy import ResourcePolicy, weasyprint_url_fetcher
 
 
 def _json_float(value: object, default: float) -> float:
@@ -48,9 +43,12 @@ def _cdp_nested(message: JsonObject, *keys: str) -> object:
     return current
 
 
-async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, arguments: Mapping[str, object]) -> str:
+async def convert_html_to_pdf(
+    src_file: Path, tgt_file: Path, target_path: str, ws: Path, arguments: Mapping[str, object]
+) -> str:
     try:
         await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
+        policy = await asyncio.to_thread(ResourcePolicy.for_workspace, ws)
         chrome_pdf_error: Exception | None = None
 
         async def try_chrome_pdf() -> bool:
@@ -63,34 +61,22 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
             port = local_ephemeral_port()
 
             profile_dir = tempfile.TemporaryDirectory(prefix="maraclaw-html-pdf-")
-            proc = await asyncio.create_subprocess_exec(
-                *chrome_arguments(Path(chrome), port, profile_dir.name),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            proc = await launch_chrome(Path(chrome), port, profile_dir.name)
             try:
                 if not await wait_for_cdp(port):
                     return False
 
                 file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
-                ws_url = await create_cdp_target(port, file_url)
+                ws_url = await create_cdp_target(port)
                 ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
                 if ws_url in (None, ""):
                     return False
 
-                msg_id = 0
-                async with websockets.connect(ws_url, max_size=20_000_000) as ws_conn:
-
-                    async def send(method: str, params: JsonObject | None = None) -> JsonObject:
-                        nonlocal msg_id
-                        msg_id += 1
-                        await ws_conn.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
-                        while True:
-                            raw = await asyncio.wait_for(ws_conn.recv(), timeout=10)
-                            message = _cdp_payload(raw)
-                            if message.get("id") == msg_id:
-                                return message
-
+                async with (
+                    websockets.connect(ws_url, max_size=20_000_000) as ws_conn,
+                    PolicedCdpSession(ws_conn, policy, reply_timeout=10) as session,
+                ):
+                    send = session.send
                     design_w_px = _json_int(arguments.get("design_width"), 1280)
                     design_h_px = _json_int(arguments.get("design_height"), 720)
                     _ = await send("Page.enable")
@@ -105,13 +91,11 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                         },
                     )
                     _ = await send("Emulation.setEmulatedMedia", {"media": "screen"})
-                    _ = await send("Page.navigate", {"url": file_url})
-                    load_deadline = asyncio.get_running_loop().time() + 8
-                    while asyncio.get_running_loop().time() < load_deadline:
-                        raw = await asyncio.wait_for(ws_conn.recv(), timeout=10)
-                        message = _cdp_payload(raw)
-                        if message.get("method") == "Page.loadEventFired":
-                            break
+                    await session.navigate(file_url, load_deadline_seconds=8)
+                    if session.blocked_urls:
+                        logger.info(
+                            f"HTML to PDF skipped {len(session.blocked_urls)} resource(s) outside the workspace"
+                        )
                     await asyncio.sleep(0.25)
 
                     page_info = await send(
@@ -173,7 +157,8 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
 
         from weasyprint import HTML
 
-        _ = await asyncio.to_thread(HTML(filename=str(src_file)).write_pdf, str(tgt_file))
+        document = HTML(filename=str(src_file), url_fetcher=weasyprint_url_fetcher(policy))
+        _ = await asyncio.to_thread(document.write_pdf, str(tgt_file))
         note = f" Chrome fallback reason: {chrome_pdf_error}" if chrome_pdf_error else ""
         return f"✅ Successfully converted HTML to PDF with WeasyPrint: {target_path}.{note}"
     except Exception as e:

@@ -13,7 +13,7 @@ TRIGGER_AGENT_TOOLS: list[ToolDefinition] = [
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Unique name for this trigger, e.g. 'daily_briefing' or 'wait_morty_reply'",
+                        "description": "Unique name for this trigger, e.g. 'daily_briefing' or 'wait_researcher_reply'",
                     },
                     "type": {
                         "type": "string",
@@ -22,7 +22,7 @@ TRIGGER_AGENT_TOOLS: list[ToolDefinition] = [
                     },
                     "config": {
                         "type": "object",
-                        "description": 'Type-specific config. cron: {"expr": "0 9 * * *"}. once: {"at": "2026-03-10T09:00:00+08:00"}. interval: {"minutes": 30}. poll: {"url": "...", "json_path": "$.status", "fire_on": "change", "interval_min": 5}. on_message: {"from_agent_name": "Morty"} or {"from_user_name": "张三"} (for human users on Feishu/Slack/Discord). webhook: {"secret": "optional_hmac_secret"} (system auto-generates the URL)',
+                        "description": 'Type-specific config. cron: {"expr": "0 9 * * *"}. once: {"at": "2026-03-10T09:00:00+08:00"}. interval: {"minutes": 30}. poll: {"url": "...", "json_path": "$.status", "fire_on": "change", "interval_min": 5}. on_message: {"from_agent_name": "Researcher"} or {"from_user_name": "张三"} (for human users on Feishu/Slack/Discord). webhook: {"secret": "optional_hmac_secret"} (system auto-generates the URL)',
                     },
                     "reason": {
                         "type": "string",

@@ -8,6 +8,7 @@ from typing import Any, cast, override
 import pytest
 from anyio import CancelScope, current_time
 
+from app.services.sandbox.base import ExecutionDeadline, TerminationReason
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local import docker_backend as docker_backend_module
 from app.services.sandbox.local.docker_backend import DockerBackend
@@ -429,3 +430,245 @@ async def test_execute_timeout_and_cancellation_remove_owned_container_while_wor
         api.release.set()
         execution.cancel()
         await asyncio.gather(execution, return_exceptions=True)
+
+
+class Gate:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def park(self) -> None:
+        self.entered.set()
+        assert self.release.wait(timeout=5)
+
+
+class GatedImageApi(FakeImageApi):
+    def __init__(self, client: GatedClient, exists_result: bool) -> None:
+        super().__init__(exists_result=exists_result)
+        self.client = client
+
+    @override
+    def exists(self, image: str) -> bool:
+        self.client.reach("exists")
+        return super().exists(image)
+
+    @override
+    def pull(self, image: str) -> None:
+        self.client.reach("pull")
+        super().pull(image)
+
+
+class GatedContainerApi(FakeContainerApi):
+    def __init__(self, client: GatedClient) -> None:
+        super().__init__()
+        self.client = client
+
+    @override
+    def wait(self, container: FakeContainer) -> int:
+        self.client.reach("wait")
+        return super().wait(container)
+
+    @override
+    def logs(self, container: FakeContainer, stream: bool = False) -> Iterator[tuple[str, bytes]]:
+        self.client.reach("logs")
+        return super().logs(container, stream)
+
+    @override
+    def remove(self, container: FakeContainer, force: bool = True) -> None:
+        self.client.reach("remove")
+        super().remove(container, force)
+        self.client.removed.set()
+
+
+class GatedClient(FakeDockerClient):
+    def __init__(self, parked_stage: str) -> None:
+        super().__init__(image_exists=parked_stage != "pull")
+        self.parked_stage = parked_stage
+        self.gate = Gate()
+        self.removed = threading.Event()
+        self.threads: dict[str, int] = {}
+        self.image = GatedImageApi(self, exists_result=parked_stage != "pull")
+        self.container = GatedContainerApi(self)
+
+    def reach(self, stage: str) -> None:
+        self.threads[stage] = threading.get_ident()
+        if stage == self.parked_stage:
+            self.gate.park()
+
+    def build(self) -> GatedClient:
+        self.reach("client")
+        return self
+
+    @override
+    def info(self):
+        self.reach("info")
+        return super().info()
+
+    @override
+    def run(self, *args: Any, **kwargs: Any) -> FakeContainer:
+        self.reach("run")
+        return super().run(*args, **kwargs)
+
+
+def make_gated(monkeypatch: pytest.MonkeyPatch, stage: str) -> tuple[GatedClient, DockerBackend]:
+    client = GatedClient(stage)
+    backend = make_backend(client)
+    if stage == "client":
+        backend._client = None
+        monkeypatch.setattr(docker_backend_module, "_get_docker", lambda: client.build)
+    return client, backend
+
+
+def expire_deadline_scopes(monkeypatch: pytest.MonkeyPatch) -> list[CancelScope]:
+    scopes: list[CancelScope] = []
+    fail_after = docker_backend_module.fail_after
+
+    @contextmanager
+    def controlled_deadline(delay: float) -> Generator[CancelScope]:
+        with fail_after(delay) as scope:
+            scopes.append(scope)
+            yield scope
+
+    monkeypatch.setattr(docker_backend_module, "fail_after", controlled_deadline)
+    return scopes
+
+
+async def loop_round_trip() -> None:
+    signal = asyncio.Event()
+    asyncio.get_running_loop().call_soon(signal.set)
+    await asyncio.wait_for(signal.wait(), timeout=5)
+
+
+async def settle(client: GatedClient, task: asyncio.Task[Any]) -> None:
+    client.gate.release.set()
+    task.cancel()
+    _ = await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("stage", ["client", "info", "exists", "pull", "run", "wait", "logs", "remove"])
+async def test_docker_call_runs_off_the_loop_thread_and_leaves_the_loop_responsive(
+    monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    # Given: one SDK call is parked in its worker thread.
+    client, backend = make_gated(monkeypatch, stage)
+
+    async def drive() -> bool:
+        if stage == "info":
+            return await backend.health_check()
+        return (await backend.execute("pass", "python", exec_timeout=30)).success
+
+    task = asyncio.create_task(drive())
+    try:
+        # When: the loop is asked for other work while the call is blocked.
+        assert await asyncio.to_thread(client.gate.entered.wait, 5)
+        await loop_round_trip()
+        # Then: the call did not run on the loop thread, and the execution still completes once released.
+        assert client.threads[stage] != threading.get_ident()
+        client.gate.release.set()
+        assert await asyncio.wait_for(task, 5)
+    finally:
+        await settle(client, task)
+
+
+@pytest.mark.parametrize("stage", ["client", "exists", "pull", "run"])
+async def test_deadline_expiring_before_the_container_is_running_returns_the_timeout_result(
+    monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    # Given: the deadline expires while client construction, the image check, the pull or the run is blocked.
+    client, backend = make_gated(monkeypatch, stage)
+    scopes = expire_deadline_scopes(monkeypatch)
+    task = asyncio.create_task(backend.execute("pass", "python", exec_timeout=30))
+    try:
+        assert await asyncio.to_thread(client.gate.entered.wait, 5)
+        # When
+        scopes[0].deadline = current_time() - 1
+        result = await asyncio.wait_for(task, 5)
+        # Then: the timeout result comes back while the worker is still parked, and says it was a timeout.
+        assert not result.success
+        assert result.exit_code == 124
+        assert result.error == "Code execution timed out after 30s"
+        assert result.termination == TerminationReason.SANDBOX_TIMEOUT
+        assert client.container.remove_calls == []
+    finally:
+        await settle(client, task)
+
+
+async def test_container_returned_after_the_deadline_is_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the deadline expired and the caller already has its timeout result while run is still blocked.
+    client, backend = make_gated(monkeypatch, "run")
+    scopes = expire_deadline_scopes(monkeypatch)
+    task = asyncio.create_task(backend.execute("pass", "python", exec_timeout=30))
+    try:
+        assert await asyncio.to_thread(client.gate.entered.wait, 5)
+        scopes[0].deadline = current_time() - 1
+        assert (await asyncio.wait_for(task, 5)).exit_code == 124
+        assert client.container.remove_calls == []
+        # When: the handle finally arrives
+        client.gate.release.set()
+        # Then: whoever receives it removes it
+        assert await asyncio.to_thread(client.removed.wait, 5)
+        assert client.container.remove_calls == [(client.created_container, True)]
+    finally:
+        await settle(client, task)
+
+
+async def test_caller_deadline_bounds_creation_before_docker_is_touched() -> None:
+    # Given: the caller's deadline has no time left although exec_timeout is generous.
+    client = FakeDockerClient()
+    backend = make_backend(client)
+    # When
+    result = await backend.execute("pass", "python", exec_timeout=30, deadline=ExecutionDeadline(0))
+    # Then
+    assert result.exit_code == 124
+    assert result.termination == TerminationReason.SANDBOX_TIMEOUT
+    assert client.run_args is None
+    assert client.container.remove_calls == []
+
+
+@pytest.mark.parametrize("stage", ["exists", "pull", "run", "wait", "logs"])
+async def test_cancelling_the_caller_leaves_no_container_behind(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    # Given: the SDK call of one stage is blocked in its worker thread.
+    client, backend = make_gated(monkeypatch, stage)
+    created = [(client.created_container, True)] if stage in ("run", "wait", "logs") else []
+    task = asyncio.create_task(backend.execute("pass", "python", exec_timeout=30))
+    try:
+        assert await asyncio.to_thread(client.gate.entered.wait, 5)
+        # When
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Then: a container the loop already holds is gone before the cancellation escapes ...
+        assert client.container.remove_calls == (created if stage in ("wait", "logs") else [])
+        # ... and one still being created is removed by the worker when its handle arrives.
+        client.gate.release.set()
+        if stage == "run":
+            assert await asyncio.to_thread(client.removed.wait, 5)
+        assert client.container.remove_calls == created
+        assert (client.run_args is not None) == bool(created)
+    finally:
+        await settle(client, task)
+
+
+async def test_scope_cancellation_is_redelivered_yet_the_container_is_still_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: wait is blocked inside an anyio scope, whose cancellation interrupts every later await too.
+    client, backend = make_gated(monkeypatch, "wait")
+    scope = CancelScope()
+
+    async def drive() -> None:
+        with scope:
+            _ = await backend.execute("pass", "python", exec_timeout=30)
+
+    task = asyncio.create_task(drive())
+    try:
+        assert await asyncio.to_thread(client.gate.entered.wait, 5)
+        # When
+        scope.cancel()
+        await asyncio.wait_for(task, 5)
+        # Then
+        assert scope.cancelled_caught
+        assert await asyncio.to_thread(client.removed.wait, 5)
+        assert client.container.remove_calls == [(client.created_container, True)]
+    finally:
+        await settle(client, task)

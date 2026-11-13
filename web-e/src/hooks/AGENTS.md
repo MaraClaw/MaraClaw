@@ -15,7 +15,7 @@ Scope: auth/theme context lifetimes, session-fenced query adapters, query-option
 - `openclaw-update-options.ts`: `agentUpdateKey`, `upgradeMutationKey`, `agentUpdateOptions`, `upgradeOpenClawOptions`; update polling, upgrade mutation and related invalidation.
 - `agent-lifecycle-options.ts`, `agent-setup-options.ts`: lifecycle and setup keys, polling query options, optional-MCP and setup retry mutations.
 - `agent-skills-options.ts`: `installedAgentSkillsOptions`; installed skills for chat mentions.
-- `onboarding-options.ts`: `assistantOnboardingOptions`; start, create-assistant and complete as one scoped mutation.
+- `onboarding-options.ts`: `assistantOnboardingOptions`; `startOnboarding`, `createAgent` (`POST /api/agents/`) and `completeOnboarding` as one scoped mutation taking the `AgentCreate` body; no synchronous start outcome.
 
 ### Workspace scope utilities and hooks
 

@@ -131,6 +131,7 @@ export function CompaniesPage() {
                   className="relative z-20"
                   disabled={toggle.isPending}
                   onClick={() => toggle.mutate(company.id)}
+                  aria-label={t(company.is_active ? 'Disable {name}' : 'Enable {name}', { name: company.name })}
                 >
                   {t(company.is_active ? 'Disable' : 'Enable')}
                 </Button>

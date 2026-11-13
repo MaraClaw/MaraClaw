@@ -24,6 +24,7 @@ from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.personal_burst_input import ReceiptKey
 from app.records.user import UserRecord
 from app.records.whatsapp_personal import PersonalSource
+from app.services.agent_message_quota import charge_agent_daily_message
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channel_session import find_or_create_channel_session
 from app.services.channels.binding import bind_channel_conversation, persist_channel_user_message, resolve_bound_sender
@@ -234,6 +235,9 @@ async def accept_channel_event(
             conversation_id=str(session.id),
             content=event.text if saved_content is None else saved_content,
         )
+        # Last before enqueue: the per-agent counter row stays locked until commit and is shared by every conversation
+        # with this agent, so it must not be held across route selection.
+        await charge_agent_daily_message(agent)
         await enqueue_prepared_openclaw_message(
             prepared,
             sender_user_id=sender.id,

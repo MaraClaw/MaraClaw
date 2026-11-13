@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from '@/hooks/use-translation'
 import { ArrowLeft } from 'lucide-react'
-import { type ComponentProps, useId, useRef } from 'react'
+import { type ComponentProps, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useParams } from 'react-router-dom'
 import { z } from 'zod'
@@ -33,6 +33,7 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
   const { t, distance, owned } = useTranslation()
   const reasonId = useId()
   const submitting = useRef(false)
+  const [confirmed, setConfirmed] = useState(false)
   const decision = useAdmissionDecision(request.id)
   const form = useForm<ReasonDraft>({ resolver: zodResolver(reasonDraftSchema), defaultValues: { reason: '' } })
   const canDecide = ready && request.status === 'pending' && !decision.isPending
@@ -49,9 +50,9 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
   ] as const
 
   function submit(value: AdmissionDecision['decision'], reason: string) {
-    if (!canDecide || submitting.current) return
+    if (!canDecide || (value === 'approved' && !confirmed) || submitting.current) return
     submitting.current = true
-    decision.mutate({ decision: value, reason: reason || null }, { onSettled: () => { submitting.current = false } })
+    decision.mutate({ decision: value, reason: reason || null }, { onSettled: () => { submitting.current = false; setConfirmed(false) } })
   }
 
   return (
@@ -85,8 +86,12 @@ function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail
               <p id={`${reasonId}-hint`} className="text-xs text-muted-foreground">{t('Up to 2,000 characters. This reason is saved with the decision.')}</p>
               {form.formState.errors.reason ? <p id={`${reasonId}-error`} role="alert" className="text-sm text-destructive">{owned(form.formState.errors.reason.message)}</p> : null}
             </div>
+            <label htmlFor={`${reasonId}-confirm`} className="flex min-h-11 cursor-pointer items-start gap-3 py-2 text-sm leading-relaxed">
+              <input id={`${reasonId}-confirm`} type="checkbox" checked={confirmed} disabled={!canDecide} onChange={(event) => setConfirmed(event.currentTarget.checked)} className="mt-1 size-5 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50" />
+              {t('I understand that approval admits this applicant to {name}, and that a saved decision cannot be changed.', { name: request.target_tenant.name })}
+            </label>
             <div className="flex flex-wrap gap-3">
-              <Button type="submit" className={actionClass} disabled={!canDecide}>{t(decision.isPending && decision.variables?.decision === 'approved' ? 'Approving...' : 'Approve request')}</Button>
+              <Button type="submit" className={actionClass} disabled={!canDecide || !confirmed}>{t(decision.isPending && decision.variables?.decision === 'approved' ? 'Approving...' : 'Approve request')}</Button>
               <Button type="button" variant="outline" className={actionClass} disabled={!canDecide} onClick={form.handleSubmit(({ reason }) => submit('rejected', reason))}>{t(decision.isPending && decision.variables?.decision === 'rejected' ? 'Rejecting...' : 'Reject request')}</Button>
             </div>
           </form>

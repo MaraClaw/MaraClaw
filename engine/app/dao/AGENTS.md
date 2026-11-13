@@ -30,6 +30,7 @@ Cascade gaps vs baseline (will 23503 on real data): `skill_files` before `skills
 - Auth-critical fields on `identities` include `is_platform_admin`, `email_verified`, and `must_change_password`.
 - Any `LEFT JOIN identities` that builds `IdentityRecord` must select **all** identity columns used by `IdentityRecord.from_row` (see `_IDENTITY_COLUMNS` in `identity_dao.py` and `user_dao.py`). Dropping `must_change_password` from the join fails the force-change gate open.
 - `UserDAO.get_with_identity` may serve a Redis session snapshot (no `password_hash`, no quota counters). Updates / tenant deactivate / `delete_cascade` must bump session/tenant versions. Password verify uses SQL via `load_identity_for_password`. Redis errors fall back to this join.
+- `users.membership_generation` is deliberately not in `_USER_COLUMNS` or `UserRecord` (a snapshot would decode a missing field as 0): read it with `UserDAO.get_membership_generation` (SQL). Every active-to-inactive writer advances it in its own UPDATE: `deactivate_for_tenant` and `deactivate_unless_last_active` add `+ 1` next to `is_active = FALSE` (both already filter `is_active IS TRUE`), and `UserDAO.update` gets a guarded `CASE WHEN is_active AND NOT %(is_active)s` expression through `BaseDAO.update_side_effects`, so one statement both writes and advances, and activation or a repeated deactivation never advances. Do not bump it in a second statement and do not touch `identities.auth_generation` here.
 
 ## Avoid
 

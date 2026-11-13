@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
 
 import pytest
 
@@ -200,3 +201,97 @@ def test_authority_survives_copy() -> None:
     copied = platform_config().model_copy()
     # Then: the copy keeps its authority.
     assert copied.operator_url == PLATFORM_URL
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("256m", 256 * 1024**2),
+        ("1g", 1024**3),
+        ("2G", 2 * 1024**3),
+        ("512M", 512 * 1024**2),
+        ("6144k", 6 * 1024**2),
+        ("6291456", 6 * 1024**2),
+    ],
+)
+@pytest.mark.parametrize("sandbox_type", [SandboxType.SUBPROCESS, SandboxType.DOCKER])
+def test_memory_limit_grammar_accepts_bytes_and_binary_suffixes(
+    value: str, expected: int, sandbox_type: SandboxType
+) -> None:
+    # Given / When
+    config = SandboxConfig(type=sandbox_type, memory_limit=value)
+    # Then: the string Docker receives is unchanged and the local ceiling is parsed once from it.
+    assert config.memory_limit == value
+    assert config.memory_limit_bytes == expected
+
+
+@pytest.mark.parametrize(
+    "value", ["12qq", "0", "0m", "-1g", "1.5g", "256mb", "1t", " 256m", "", "5m", "\u0662\u0665\u0666m", "9" * 20]
+)
+@pytest.mark.parametrize("sandbox_type", [SandboxType.SUBPROCESS, SandboxType.DOCKER])
+def test_memory_limit_outside_the_grammar_is_a_configuration_error(value: str, sandbox_type: SandboxType) -> None:
+    # Given / When / Then
+    with pytest.raises(ValueError, match="memory_limit"):
+        _ = SandboxConfig(type=sandbox_type, memory_limit=value)
+
+
+def test_per_agent_memory_limit_outside_the_grammar_is_a_configuration_error() -> None:
+    # Given: a valid platform configuration.
+    # When / Then: an agent override cannot replace it with an unsupported ceiling.
+    with pytest.raises(ValueError, match="memory_limit"):
+        _ = SandboxConfig.from_dict({"memory_limit": "12qq"}, SandboxConfig())
+
+
+def test_remote_backend_memory_value_passes_through_unparsed() -> None:
+    # Given / When: Judge0 receives its own memory units.
+    config = SandboxConfig(type=SandboxType.JUDGE0, memory_limit="128000")
+    # Then
+    assert config.memory_limit == "128000"
+
+
+@pytest.fixture
+def platform_memory_limit(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str], None]]:
+    from app.config import get_settings
+
+    def configure(value: str) -> None:
+        monkeypatch.setenv("SANDBOX_TYPE", "subprocess")
+        monkeypatch.setenv("SANDBOX_MEMORY_LIMIT", value)
+        get_settings.cache_clear()
+
+    yield configure
+    get_settings.cache_clear()
+
+
+def test_platform_memory_limit_outside_the_grammar_is_a_configuration_error(
+    platform_memory_limit: Callable[[str], None],
+) -> None:
+    from app.config import get_sandbox_config
+
+    # Given
+    platform_memory_limit("1.5g")
+    # When / Then
+    with pytest.raises(ValueError, match="memory_limit"):
+        _ = get_sandbox_config()
+
+
+@pytest.mark.parametrize("layer", ["platform", "agent"])
+async def test_execute_code_reports_unsupported_memory_limit_without_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_memory_limit: Callable[[str], None], layer: str
+) -> None:
+    from app.services import agent_tools
+
+    # Given: one configuration layer sets an unsupported memory ceiling.
+    selected: list[SandboxConfig] = []
+    agent_config: JsonObject = {"memory_limit": "12qq"} if layer == "agent" else {}
+
+    async def get_tool_config(agent_id: object, tool_name: str) -> JsonObject:
+        return agent_config
+
+    platform_memory_limit("12qq" if layer == "platform" else "256m")
+    monkeypatch.setattr(agent_tools, "_get_tool_config", get_tool_config)
+    monkeypatch.setattr("app.services.sandbox.registry.get_sandbox_backend", selected.append)
+    # When
+    result = await agent_tools._execute_code(None, tmp_path, {"code": "print(1)"})
+    # Then: the existing configuration error is returned and no backend is ever selected.
+    assert result.startswith("\u274c Sandbox configuration error:")
+    assert selected == []
