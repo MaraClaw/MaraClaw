@@ -911,6 +911,17 @@ CREATE OR REPLACE TRIGGER agent_start_retry_state_changed
     AFTER UPDATE OR DELETE ON agent_start_operations
     FOR EACH ROW EXECUTE FUNCTION sync_agent_start_retry_metadata();
 
+-- One recorded guest loss per agent, cleared when a start publishes a new guest. No foreign key:
+-- agent and tenant deletion remove it explicitly, like agent_start_operations.
+CREATE TABLE IF NOT EXISTS agent_runtime_losses (
+    agent_id uuid PRIMARY KEY,
+    reason text NOT NULL CHECK (reason IN ('container_missing', 'image_unavailable')),
+    recorded_container_id text,
+    image text,
+    detected_at timestamptz NOT NULL DEFAULT now(),
+    notified_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS agent_setups (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     inputs JSONB NOT NULL,

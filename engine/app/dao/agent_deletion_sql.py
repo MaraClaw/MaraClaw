@@ -21,6 +21,7 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM gateway_messages WHERE agent_id = %(aid)s",
     "DELETE FROM published_pages WHERE agent_id = %(aid)s",
     "DELETE FROM notifications WHERE agent_id = %(aid)s",
+    "DELETE FROM agent_runtime_losses WHERE agent_id = %(aid)s",
     "DELETE FROM daily_token_usage WHERE agent_id = %(aid)s",
     "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE agent_id = %(aid)s)",
     "DELETE FROM tasks WHERE agent_id = %(aid)s",
