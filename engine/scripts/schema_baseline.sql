@@ -556,6 +556,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
     ON organization_admission_requests(email) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS ix_organization_admission_status
     ON organization_admission_requests(status,created_at DESC,id DESC);
+-- The tier lookup runs on every accepted human message (per-agent daily cap).
+CREATE INDEX IF NOT EXISTS ix_organization_admission_provisioned_tenant
+    ON organization_admission_requests(provisioned_tenant_id, provisioned_at, id)
+    WHERE status='approved' AND provisioned_tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
