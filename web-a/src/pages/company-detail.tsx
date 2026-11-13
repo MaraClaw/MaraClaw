@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -17,6 +17,7 @@ import {
   deleteEmailDomain,
   listEmailDomains,
   setDefaultEmailDomain,
+  type EmailDomain,
 } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { CompanyDeletion } from '@/pages/company-deletion'
@@ -29,6 +30,7 @@ export function CompanyDetailPage() {
   const location = useLocation()
   const queryClient = useQueryClient()
   const [domain, setDomain] = useState('')
+  const domainInput = useRef<HTMLInputElement>(null)
 
   function goBack() {
     if (location.key !== 'default') {
@@ -65,7 +67,10 @@ export function CompanyDetailPage() {
   })
   const remove = useMutation({
     mutationFn: (domainId: string) => deleteEmailDomain(companyId!, domainId),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      domainInput.current?.focus()
+    },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : t('Could not delete domain')),
   })
 
@@ -121,6 +126,7 @@ export function CompanyDetailPage() {
             }}
           >
             <Input
+              ref={domainInput}
               value={domain}
               onChange={(event) => setDomain(event.target.value)}
               placeholder="acme.com"
@@ -136,28 +142,94 @@ export function CompanyDetailPage() {
           ) : null}
 
           {(domains.data ?? []).map((item) => (
-            <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 last:border-0">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-sm">{item.domain}</span>
-                {item.is_default ? <Badge variant="outline">{t('Default')}</Badge> : null}
-              </div>
-              <div className="flex gap-2">
-                {!item.is_default ? (
-                  <Button variant="outline" size="sm" onClick={() => makeDefault.mutate(item.id)}>
-                    {t('Make default')}
-                  </Button>
-                ) : null}
-                <Button variant="ghost" size="sm" onClick={() => remove.mutate(item.id)}>
-                  {t('Remove')}
-                </Button>
-              </div>
-            </div>
+            <DomainRow
+              key={item.id}
+              item={item}
+              removing={remove.isPending && remove.variables === item.id}
+              onMakeDefault={() => makeDefault.mutate(item.id)}
+              onRemove={() => remove.mutate(item.id)}
+            />
           ))}
         </CardContent>
       </Card>
       {company && !companies.error && !company.is_system && !company.is_default_end_user_org ? (
         <CompanyDeletion key={JSON.stringify([company.id, company.name])} company={company} />
       ) : null}
+    </div>
+  )
+}
+
+function DomainRow({
+  item,
+  removing,
+  onMakeDefault,
+  onRemove,
+}: {
+  item: EmailDomain
+  removing: boolean
+  onMakeDefault: () => void
+  onRemove: () => void
+}) {
+  const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
+  const confirm = useRef<HTMLParagraphElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const restore = useRef(false)
+  useLayoutEffect(() => {
+    if (confirming) confirm.current?.focus()
+    else if (restore.current) {
+      trigger.current?.focus()
+      restore.current = false
+    }
+  }, [confirming])
+  function cancel() {
+    restore.current = true
+    setConfirming(false)
+  }
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b py-2 last:border-0">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-sm">{item.domain}</span>
+        {item.is_default ? <Badge variant="outline">{t('Default')}</Badge> : null}
+      </div>
+      {confirming ? (
+        <section
+          aria-label={t('Remove domain confirmation')}
+          className="flex flex-col gap-2"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !removing) {
+              event.preventDefault()
+              cancel()
+            }
+          }}
+        >
+          <p ref={confirm} tabIndex={-1} className="font-medium focus-visible:outline-2 focus-visible:outline-ring">
+            {t('Remove {domain}?', { domain: item.domain })}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t('New registrations from this domain will stop routing to this organization.')}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" disabled={removing} onClick={cancel}>
+              {t('Cancel')}
+            </Button>
+            <Button type="button" variant="destructive" size="sm" disabled={removing} onClick={onRemove}>
+              {t(removing ? 'Removing…' : 'Confirm remove')}
+            </Button>
+          </div>
+        </section>
+      ) : (
+        <div className="flex gap-2">
+          {!item.is_default ? (
+            <Button variant="outline" size="sm" onClick={onMakeDefault}>
+              {t('Make default')}
+            </Button>
+          ) : null}
+          <Button ref={trigger} type="button" variant="ghost" size="sm" onClick={() => setConfirming(true)}>
+            {t('Remove')}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
