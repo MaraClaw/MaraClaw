@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { orgDepartment, prepareOrgDepartments } from './org-departments-fixture'
 import {
-  deferCreation, delayedAgent, replacementToken, replacementUser, tokenKey, writeFromOtherTab,
+  defaultSoul, deferCreation, delayedAgent, replacementToken, replacementUser, tokenKey, writeFromOtherTab,
 } from './session-fencing-fixture'
 
 const newAgentPath = '/app/agents/new'
@@ -48,7 +48,7 @@ for (const { label, name, valid } of [
       await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
       expect(writes).toEqual([{ method: 'POST', body: {
         name: name.trim(), role_description: '', permission_scope_type: 'user',
-        permission_access_level: 'use', gogcli_enabled: false,
+        permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
       } }])
     } else {
       await expect(create).toBeDisabled()
@@ -118,7 +118,7 @@ for (const activation of ['option card', 'Space key'] as const) {
     await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
     expect(writes).toEqual([{ method: 'POST', body: {
       name: delayedAgent.name, role_description: '', permission_scope_type: 'user',
-      permission_access_level: 'use', gogcli_enabled: true,
+      permission_access_level: 'use', gogcli_enabled: true, soul: defaultSoul,
     } }])
   })
 }
@@ -142,7 +142,7 @@ for (const visibility of ['default private', 'private', 'company'] as const) {
     await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
     expect(writes).toEqual([{ method: 'POST', body: {
       name: delayedAgent.name, role_description: '', permission_scope_type: visibility === 'company' ? 'company' : 'user',
-      permission_access_level: 'use', gogcli_enabled: false,
+      permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
     } }])
     expect(state.privilegedRequests).toBe(0)
   })
@@ -165,7 +165,7 @@ test('creates one department grant atomically and prevents pending duplicate sub
   await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(1)
   expect(writes).toEqual([{ method: 'POST', body: {
     name: delayedAgent.name, role_description: '', permission_scope_type: 'custom',
-    department_ids: [orgDepartment.id], permission_access_level: 'use', gogcli_enabled: false,
+    department_ids: [orgDepartment.id], permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
   } }])
   expect(state.privilegedRequests).toBe(0)
 })
@@ -201,7 +201,7 @@ test('keeps private and company creation available while department options load
   await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
   await page.getByLabel('Visibility').selectOption('department')
 
-  await expect(page.getByRole('status')).toContainText('Loading org departments')
+  await expect(page.locator('#department-status')).toContainText('Loading org departments')
   await expect(page.getByLabel('Department (required)')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeDisabled()
   await page.locator('form').dispatchEvent('submit')
@@ -339,7 +339,7 @@ test('explains empty local departments and leaves company visibility usable', as
 
   await page.getByLabel('Visibility').selectOption('department')
 
-  await expect(page.getByRole('status')).toContainText('No org departments yet')
+  await expect(page.locator('#department-status')).toContainText('No org departments yet')
   await expect(page.locator('#department-admin-hint')).toBeVisible()
   await expect(page.getByLabel('Department (required)')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeDisabled()
