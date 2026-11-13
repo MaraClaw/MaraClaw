@@ -323,6 +323,7 @@ export const vietnamese = {
   'Domain': 'Miền',
   'Add domain': 'Thêm miền',
   'Failed to load domains': 'Không tải được miền',
+  'No domains yet. Add one to route new registrations to this organization.': 'Chưa có miền nào. Hãy thêm miền để đưa người đăng ký mới vào tổ chức này.',
   'Make default': 'Đặt làm mặc định',
   'Remove domain confirmation': 'Xác nhận gỡ bỏ miền',
   'Remove {domain}?': 'Gỡ bỏ {domain}?',

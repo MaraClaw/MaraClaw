@@ -146,6 +146,12 @@ export function CompanyDetailPage() {
             <ErrorToast error={domains.error} message={domains.error instanceof ApiError ? domains.error.message : t('Failed to load domains')} />
           ) : null}
 
+          {domains.data?.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('No domains yet. Add one to route new registrations to this organization.')}
+            </p>
+          ) : null}
+
           {(domains.data ?? []).map((item) => (
             <DomainRow
               key={item.id}
