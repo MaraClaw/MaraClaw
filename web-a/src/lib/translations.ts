@@ -320,6 +320,7 @@ export const vietnamese = {
   'Inactive users': 'Người dùng không hoạt động',
   'Email domains': 'Miền email',
   'One domain can belong to only one company. Mark one as default for invites.': 'Mỗi miền chỉ thuộc một công ty. Đặt một miền làm mặc định cho lời mời.',
+  'Domain': 'Miền',
   'Add domain': 'Thêm miền',
   'Failed to load domains': 'Không tải được miền',
   'Make default': 'Đặt làm mặc định',

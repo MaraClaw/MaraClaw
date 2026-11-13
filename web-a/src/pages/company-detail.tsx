@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -10,6 +10,7 @@ import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { companyStatsOptions } from '@/hooks/company-options'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import {
@@ -31,6 +32,7 @@ export function CompanyDetailPage() {
   const queryClient = useQueryClient()
   const [domain, setDomain] = useState('')
   const domainInput = useRef<HTMLInputElement>(null)
+  const domainInputId = useId()
 
   function goBack() {
     if (location.key !== 'default') {
@@ -119,19 +121,22 @@ export function CompanyDetailPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <form
-            className="flex flex-wrap gap-2"
+            className="flex flex-wrap items-end gap-2"
             onSubmit={(event) => {
               event.preventDefault()
               if (domain.trim()) add.mutate()
             }}
           >
-            <Input
-              ref={domainInput}
-              value={domain}
-              onChange={(event) => setDomain(event.target.value)}
-              placeholder="acme.com"
-              className="max-w-xs"
-            />
+            <div className="w-full max-w-xs space-y-2">
+              <Label htmlFor={domainInputId}>{t('Domain')}</Label>
+              <Input
+                id={domainInputId}
+                ref={domainInput}
+                value={domain}
+                onChange={(event) => setDomain(event.target.value)}
+                placeholder="acme.com"
+              />
+            </div>
             <Button type="submit" disabled={!canEditDomains || add.isPending || !domain.trim()}>
               {t('Add domain')}
             </Button>
