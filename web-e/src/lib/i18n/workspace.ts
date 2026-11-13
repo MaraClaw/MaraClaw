@@ -709,6 +709,8 @@ export const workspace = {
   "Unable to load relationships.": "Không thể tải các mối quan hệ.",
   "Restart relationships": "Khởi động lại mối quan hệ",
   "Retry relationships": "Thử lại mối quan hệ",
+  "Unable to load people to add.": "Không thể tải danh sách người để thêm.",
+  "Retry people list": "Thử lại danh sách người",
   "No relationships yet.": "Chưa có mối quan hệ nào.",
   "Relationships": "Mối quan hệ",
   "Relationship pages": "Trang mối quan hệ",
