@@ -9,7 +9,7 @@ import { agentDailyMessagesResetOptions } from '@/hooks/agent-daily-messages-opt
 import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { useTranslation } from '@/hooks/use-translation'
-import { agentDailyMessagesError, canResetAgentDailyMessages } from '@/lib/agent-daily-messages'
+import { agentDailyMessagesError, canResetAgentDailyMessages, isAgentDailyLimitReached } from '@/lib/agent-daily-messages'
 import { cn } from '@/lib/utils'
 import type { AdminUser, AgentDailyMessages, UserAgent } from '@/lib/users-api'
 
@@ -23,7 +23,7 @@ function CappedAgentMessages({ owner, agent, daily }: {
   const [open, setOpen] = useState(false)
   const resetCount = useSessionMutation(agentDailyMessagesResetOptions(useQueryClient(), owner.id, agent.id))
   const canReset = canResetAgentDailyMessages(user, owner) && !mustChangePassword
-  const atLimit = daily.used >= daily.limit
+  const atLimit = isAgentDailyLimitReached(daily)
 
   function onOpenChange(next: boolean) {
     if (resetCount.isPending) return
@@ -49,7 +49,7 @@ function CappedAgentMessages({ owner, agent, daily }: {
     </div>
     {canReset ? <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Trigger asChild>
-        <Button type="button" variant="outline" aria-label={t('Reset daily messages for {name}', { name: agent.name })}>{t('Reset daily messages')}</Button>
+        <Button type="button" variant="outline" disabled={!atLimit} aria-label={t('Reset daily messages for {name}', { name: agent.name })}>{t('Reset daily messages')}</Button>
       </Dialog.Trigger>
       <Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm" />
         <Dialog.Content className="fixed start-1/2 top-1/2 z-50 flex max-h-[90svh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-5 overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-card [overflow-wrap:anywhere]">

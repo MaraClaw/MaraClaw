@@ -1,6 +1,10 @@
 import { ApiError } from './http.ts'
 import type { UserOut } from './types/auth.ts'
-import type { AdminUser } from './users-api.ts'
+import type { AdminUser, AgentDailyMessages } from './users-api.ts'
+
+export function isAgentDailyLimitReached(daily: Pick<AgentDailyMessages, 'used' | 'limit'>): boolean {
+  return daily.used >= daily.limit
+}
 
 /** Mirrors the engine: platform admins reach any organization, org admins only their own. */
 export function canResetAgentDailyMessages(viewer: UserOut | null | undefined, owner: Pick<AdminUser, 'tenant_id'>): boolean {

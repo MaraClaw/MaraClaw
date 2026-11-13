@@ -4,7 +4,7 @@ import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { agentDailyMessagesResetOptions } from '../src/hooks/agent-daily-messages-options.ts'
-import { canResetAgentDailyMessages } from '../src/lib/agent-daily-messages.ts'
+import { canResetAgentDailyMessages, isAgentDailyLimitReached } from '../src/lib/agent-daily-messages.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { resetAgentDailyMessages, type UserAgent, type UserDetail } from '../src/lib/users-api.ts'
 import { agentId, sourceId, sourceMember, targetId, tenantId } from './agent-lifecycle-fixtures.ts'
@@ -48,6 +48,14 @@ test('only platform admins and same-organization org admins can reset', () => {
   assert.equal(canResetAgentDailyMessages({ ...orgAdmin, tenant_id: null }, { ...sourceMember, tenant_id: null }), false)
   assert.equal(canResetAgentDailyMessages({ ...orgAdmin, role: 'member' }, sourceMember), false)
   assert.equal(canResetAgentDailyMessages(null, sourceMember), false)
+})
+
+test('reset is offered only once the agent has used all of today’s messages', () => {
+  // Given / When / Then
+  assert.equal(isAgentDailyLimitReached({ used: 0, limit: 100 }), false)
+  assert.equal(isAgentDailyLimitReached({ used: 99, limit: 100 }), false)
+  assert.equal(isAgentDailyLimitReached({ used: 100, limit: 100 }), true)
+  assert.equal(isAgentDailyLimitReached({ used: 101, limit: 100 }), true)
 })
 
 test('a successful reset shows the returned count for that agent only and refreshes the detail', async (t) => {
