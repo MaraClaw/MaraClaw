@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Protocol, TypeIs
 
+from app.services.document_conversion.resource_policy import ResourcePolicy, weasyprint_url_fetcher
+
 
 class _DocxCell(Protocol):
     text: str
@@ -35,7 +37,7 @@ class _WeasyHtml(Protocol):
 
 
 class _WeasyprintModule(Protocol):
-    def HTML(self, string: str = "", base_url: str | None = None) -> _WeasyHtml: ...
+    def HTML(self, string: str = "", base_url: str | None = None, url_fetcher: object = None) -> _WeasyHtml: ...
 
 
 def _is_docx_module(value: object) -> TypeIs[_DocxModule]:
@@ -221,5 +223,8 @@ def _convert_markdown_to_pdf(src_file: Path, tgt_file: Path, target_path: str, w
         "</body></html>"
     )
     tgt_file.parent.mkdir(parents=True, exist_ok=True)
-    weasyprint_mod.HTML(string=full_html, base_url=str(ws.resolve())).write_pdf(str(tgt_file))
+    policy = ResourcePolicy.for_workspace(ws)
+    weasyprint_mod.HTML(
+        string=full_html, base_url=str(policy.root), url_fetcher=weasyprint_url_fetcher(policy)
+    ).write_pdf(str(tgt_file))
     return f"✅ Successfully converted Markdown to PDF: {target_path}"
