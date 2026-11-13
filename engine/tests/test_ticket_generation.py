@@ -30,7 +30,8 @@ def transport(request, monkeypatch):
     }
     if request.param == "chat":
         service = chat_tickets
-        binding = chat_tickets.ChatTicketBinding(**fields, session_id=uuid.uuid4())
+        binding = chat_tickets.ChatTicketBinding(**fields, session_id=uuid.uuid4(), membership_generation=0)
+        monkeypatch.setattr(chat_tickets, "check_membership_generation", AsyncMock())
         monkeypatch.setattr(
             chat_tickets.chat_session_dao,
             "get_for_agent",
@@ -166,6 +167,7 @@ async def test_create_preserves_presenting_generation_instead_of_principal_snaps
             transport.user,
             binding.auth_deadline,
             generation,
+            0,
         )
     else:
         issued = await file_download_tickets.create(
@@ -193,6 +195,7 @@ async def test_admission_race_cannot_upgrade_presenting_generation(transport):
                 transport.user,
                 binding.auth_deadline,
                 binding.auth_generation,
+                0,
             )
         assert transport.redis.values == {}
     else:

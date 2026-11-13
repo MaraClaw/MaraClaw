@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from tests.membership_generation_fixtures import pin_membership_generation
 
 import app.services.sso_scan_sessions as service
 from app.api import sso
@@ -88,6 +89,7 @@ def install_session(
     monkeypatch.setattr(security.user_dao, "get_with_identity", get_with_identity)
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     return dao, user, session_id
 
 

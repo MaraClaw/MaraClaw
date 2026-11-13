@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import admin as admin_api, auth as auth_api
@@ -151,6 +152,7 @@ async def test_login_returns_must_change_password(monkeypatch):
     monkeypatch.setattr("app.dao.user_dao.get_by_identity_id", AsyncMock(return_value=[user]))
     monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr("app.dao.tenant_dao.get", AsyncMock(return_value=tenant))
 
     data: Any = SimpleNamespace(
@@ -172,6 +174,7 @@ async def test_get_current_user_blocks_when_must_change_password(monkeypatch):
     user = _user_record(identity)
     monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     token = await security_mod.create_access_token(str(user.id), user.role)
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
@@ -190,6 +193,7 @@ async def test_get_authenticated_user_allows_must_change_password(monkeypatch):
     user = _user_record(identity)
     monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     token = await security_mod.create_access_token(str(user.id), user.role)
 
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
@@ -205,6 +209,7 @@ async def test_load_user_from_access_token_enforces_password_change(monkeypatch)
     user = _user_record(identity)
     monkeypatch.setattr(security_mod.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security_mod.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     token = await security_mod.create_access_token(str(user.id), user.role)
     monkeypatch.setattr("app.dao.user_dao.get_with_identity", AsyncMock(return_value=user))
 
@@ -234,6 +239,7 @@ async def test_change_password_clears_must_change_flag(monkeypatch: pytest.Monke
     bump = AsyncMock(return_value=8)
     monkeypatch.setattr(auth_api.identity_dao, "bump_auth_generation", bump)
     monkeypatch.setattr(auth_api.identity_dao, "get_auth_generation", AsyncMock(return_value=8))
+    pin_membership_generation(monkeypatch)
 
     # When the admin replaces the initial password.
     data = auth_api.ChangePasswordRequest(old_password="old-password", new_password="new-secure-password")
@@ -799,6 +805,7 @@ class _SeededAccounts:
         monkeypatch.setattr(users, "get", self.get_user)
         monkeypatch.setattr(users, "get_with_identity", self.get_user)
         monkeypatch.setattr(users, "get_by_identity_id", self.users_for_identity)
+        pin_membership_generation(monkeypatch)
 
     async def create_identity(self, **fields: Any) -> IdentityRecord:
         self.identities_created += 1

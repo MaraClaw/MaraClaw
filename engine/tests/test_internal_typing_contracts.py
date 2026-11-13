@@ -22,7 +22,7 @@ from app.core.logging.service import LoggingService
 
 def test_claims_adapter_keeps_datetime_and_extra_claims() -> None:
     expiration = datetime(2035, 1, 2, 3, 4, 5, tzinfo=UTC)
-    claims = {"sub": "user", "role": "member", "exp": expiration, "gen": 7, "tenant": {"id": "tenant"}}
+    claims = {"sub": "user", "role": "member", "exp": expiration, "gen": 7, "mgen": 0, "tenant": {"id": "tenant"}}
 
     parsed = TypeAdapter(AccessTokenClaims).validate_python(claims, strict=True)
 
@@ -67,6 +67,7 @@ async def test_access_token_encodes_datetime_as_numeric_date(monkeypatch: pytest
         "role": "member",
         "exp": timegm((issued_at + timedelta(seconds=90)).utctimetuple()),
         "gen": 7,
+        "mgen": 0,
     }
 
 
@@ -87,7 +88,7 @@ def test_decode_accepts_extra_claims_without_exposing_them() -> None:
 
     payload = security.decode_access_token(token)
 
-    assert set(payload) == {"sub", "role", "exp", "gen"}
+    assert set(payload) == {"sub", "role", "exp", "gen", "mgen"}
     assert payload["sub"] == "user"
     assert payload["role"] == "member"
     assert TypeAdapter(AccessTokenPayload).validate_python(payload, strict=True) == payload
@@ -102,6 +103,33 @@ def test_decode_rejects_missing_or_malformed_generation(generation: object) -> N
     token = jwt.encode(claims, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM)
 
     # When decoding it, then it is rejected rather than grandfathered in.
+    with pytest.raises(HTTPException) as caught:
+        security.decode_access_token(token)
+    assert caught.value.status_code == 401
+
+
+def test_decode_treats_a_missing_membership_claim_as_generation_zero() -> None:
+    # Given a correctly signed token minted before membership generations existed.
+    claims = {"sub": "user", "role": "member", "exp": datetime.now(UTC) + timedelta(minutes=5), "gen": 7}
+    token = jwt.encode(claims, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM)
+
+    # When decoding it, then it counts as generation 0 rather than being rejected.
+    assert security.decode_access_token(token)["mgen"] == 0
+
+
+@pytest.mark.parametrize("membership_generation", [None, True, False, -1, "0", 0.0, [], {}])
+def test_decode_rejects_malformed_membership_generation(membership_generation: object) -> None:
+    # Given a correctly signed token whose membership claim is present but malformed, null included.
+    claims = {
+        "sub": "user",
+        "role": "member",
+        "exp": datetime.now(UTC) + timedelta(minutes=5),
+        "gen": 7,
+        "mgen": membership_generation,
+    }
+    token = jwt.encode(claims, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM)
+
+    # When decoding it, then it is rejected exactly like a malformed identity generation.
     with pytest.raises(HTTPException) as caught:
         security.decode_access_token(token)
     assert caught.value.status_code == 401

@@ -77,7 +77,7 @@ async def create_chat_ticket(
 ) -> chat_tickets.ChatTicketResponse:
     payload = decode_access_token(credentials.credentials)
     user = await load_user_from_access_token(credentials.credentials, fresh=True)
-    result = await chat_tickets.create(body, user, payload["exp"], payload["gen"])
+    result = await chat_tickets.create(body, user, payload["exp"], payload["gen"], payload["mgen"])
     response.headers["Cache-Control"] = "no-store"
     return result
 

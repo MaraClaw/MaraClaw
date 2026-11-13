@@ -97,6 +97,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", persist)
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     monkeypatch.setattr(chat_tickets, "check_token_generation", AsyncMock())
+    monkeypatch.setattr(chat_tickets, "check_membership_generation", AsyncMock())
     monkeypatch.setattr(security.user_dao, "get_with_identity", identity)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))

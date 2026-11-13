@@ -1,9 +1,10 @@
 """Unit tests for the authentication API (app/api/auth.py)."""
 
 import uuid
+from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, patch
@@ -12,13 +13,18 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
+from jose import jwt
 from starlette.requests import Request
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis
+from tests.test_redis_cache import FakeRedis
 
 from app.api import auth as auth_api
-from app.core import security
+from app.core import redis_cache, security, session_cache
 from app.core.json_types import json_object_from_response, object_mapping_from
+from app.core.row_memo import clear_row_memo
 from app.core.security import create_access_token, hash_password
+from app.dao.user_dao import _IDENTITY_COLUMNS, _USER_COLUMNS, user_dao
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import UserLogin
@@ -62,6 +68,7 @@ async def test_password_write_revokes_old_bearers_and_replaces_only_active_calle
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", get_generation)
     monkeypatch.setattr(security.identity_dao, "bump_auth_generation", bump)
     monkeypatch.setattr(security.identity_dao, "update", update)
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(
         password_reset_service, "consume_password_reset_token", AsyncMock(return_value={"identity_id": identity.id})
     )
@@ -113,6 +120,7 @@ async def test_bearer_rejects_revoked_generation_with_cached_principal(monkeypat
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
     generation = AsyncMock(return_value=7)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     token = await security.create_access_token(str(user.id), user.role)
     generation.return_value = 8
 
@@ -125,12 +133,13 @@ async def test_bearer_rejects_revoked_generation_with_cached_principal(monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("missing", ["membership", "identity", "generation"])
+@pytest.mark.parametrize("missing", ["membership", "identity", "generation", "membership_generation"])
 async def test_mint_fails_closed_when_current_identity_cannot_be_resolved(monkeypatch, missing):
-    # Given no valid persisted identity generation for the membership.
+    # Given no valid persisted identity or membership generation for the membership.
     user = UserRecord(id=uuid.uuid4(), identity_id=None if missing == "identity" else uuid.uuid4())
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=None if missing == "membership" else user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=None))
+    pin_membership_generation(monkeypatch, None if missing == "membership_generation" else 0)
 
     # When minting, then no credential is issued from a snapshot or default generation.
     with pytest.raises(HTTPException) as caught:
@@ -153,12 +162,241 @@ async def test_identity_only_mint_reads_persisted_generation_without_membership(
     generation.assert_awaited_once_with(identity_id)
 
 
+@dataclass
+class _Membership:
+    """One membership row as the SQL writers leave it: only an active-to-inactive write advances the generation."""
+
+    user: UserRecord
+    generation: int = 0
+
+    def deactivate(self) -> None:
+        if self.user.is_active:
+            self.user.is_active = False
+            self.generation += 1
+
+    def activate(self) -> None:
+        self.user.is_active = True
+
+
+class _MembershipDb:
+    """The two reads the real UserDAO issues for a bearer: the joined principal and the generation column."""
+
+    def __init__(self, memberships: list[_Membership]) -> None:
+        self.rows = {row.user.id: row for row in memberships}
+
+    @asynccontextmanager
+    async def session(self) -> AsyncGenerator[_MembershipDb]:
+        yield self
+
+    async def fetchval(self, _sql: str, params: dict[str, uuid.UUID]) -> uuid.UUID | None:
+        return self.rows[params["id"]].user.identity_id
+
+    async def fetchone(self, sql: str, params: dict[str, uuid.UUID]) -> dict[str, object]:
+        row = self.rows[params["user_id"]]
+        if sql.startswith("SELECT membership_generation"):
+            return {"membership_generation": row.generation}
+        identity = row.user.identity
+        assert identity is not None
+        return {col: getattr(row.user, col) for col in _USER_COLUMNS} | {
+            f"i_{col}": getattr(identity, col) for col in _IDENTITY_COLUMNS
+        }
+
+
+class _World:
+    """Two memberships of one identity behind the real security module, UserDAO reads and session cache."""
+
+    def __init__(self, memberships: list[_Membership], *, ttl: int, invalidate: bool) -> None:
+        self.memberships = memberships
+        self.ttl = ttl
+        self.invalidate = invalidate
+
+    @property
+    def cache_can_hide_a_bump(self) -> bool:
+        return self.ttl > 0 and not self.invalidate
+
+    async def _written(self, membership: _Membership) -> None:
+        if self.invalidate:
+            await session_cache.bump_user_session(membership.user.id)
+
+    async def deactivate(self, index: int = 0) -> None:
+        self.memberships[index].deactivate()
+        await self._written(self.memberships[index])
+
+    async def activate(self, index: int = 0) -> None:
+        self.memberships[index].activate()
+        await self._written(self.memberships[index])
+
+    async def mint(self, index: int = 0) -> str:
+        clear_row_memo()
+        return await security.create_access_token(str(self.memberships[index].user.id), "member")
+
+    async def request(self, token: str, *, require_active: bool = True) -> UserRecord:
+        clear_row_memo()
+        return await security.load_user_from_access_token(token, require_active=require_active)
+
+
+@pytest.fixture(
+    params=[(0, True), (20, True), (20, False)], ids=["ttl-0", "cache-invalidated", "cache-misses-the-invalidation"]
+)
+def world(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[_World]:
+    ttl, invalidate = request.param
+    redis_cache.reset_circuit()
+    clear_row_memo()
+    redis = FakeRedis()
+
+    async def get_cache_redis() -> FakeRedis:
+        return redis
+
+    monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
+    monkeypatch.setattr(session_cache, "get_settings", lambda: SimpleNamespace(USER_SESSION_CACHE_TTL_SECONDS=ttl))
+    identity = IdentityRecord(id=uuid.uuid4(), email="member@example.com", email_verified=True)
+    memberships = [
+        _Membership(UserRecord(id=uuid.uuid4(), identity_id=identity.id, tenant_id=uuid.uuid4(), identity=identity))
+        for _ in range(2)
+    ]
+    db = _MembershipDb(memberships)
+    monkeypatch.setattr(user_dao, "session", db.session)
+    monkeypatch.setattr(user_dao, "get", AsyncMock(side_effect=lambda user_id: db.rows[user_id].user))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=5))
+    yield _World(memberships, ttl=ttl, invalidate=invalidate)
+    redis_cache.reset_circuit()
+    clear_row_memo()
+
+
+def _signed(**claims: object) -> str:
+    body = {"role": "member", "exp": datetime.now(UTC) + timedelta(minutes=5), "gen": 5} | claims
+    return str(jwt.encode(body, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM))
+
+
+@pytest.mark.parametrize("require_active", [True, False], ids=["active-only", "inactive-allowed"])
+async def test_bearer_minted_before_a_deactivation_stays_dead_after_reactivation(
+    world: _World, require_active: bool
+) -> None:
+    # Given a bearer that works and whose principal is cached when the cache is on.
+    member = world.memberships[0].user
+    old = await world.mint()
+    assert (await world.request(old, require_active=require_active)).id == member.id
+
+    # When the membership is deactivated, the cache possibly missing the invalidation.
+    await world.deactivate()
+    if world.cache_can_hide_a_bump:
+        clear_row_memo()
+        cached = await user_dao.get_with_identity(member.id)
+        assert cached is not None
+        assert cached.is_active is True
+
+    # Then the old bearer is already rejected, whatever the cached principal says.
+    with pytest.raises(HTTPException) as dead:
+        await world.request(old, require_active=require_active)
+    assert dead.value.status_code == 401
+
+    # And reactivation does not bring it back, while a bearer issued afterwards works.
+    await world.activate()
+    with pytest.raises(HTTPException) as still_dead:
+        await world.request(old, require_active=require_active)
+    assert still_dead.value.status_code == 401
+    fresh = await world.mint()
+    assert (await world.request(fresh, require_active=require_active)).id == member.id
+
+
+@pytest.mark.parametrize("require_active", [True, False], ids=["active-only", "inactive-allowed"])
+async def test_bearer_without_a_membership_claim_works_until_the_first_deactivation(
+    world: _World, require_active: bool
+) -> None:
+    # Given a bearer issued before membership generations existed.
+    member = world.memberships[0].user
+    legacy = _signed(sub=str(member.id))
+    assert (await world.request(legacy, require_active=require_active)).id == member.id
+
+    # When the membership is deactivated and reactivated, a missing claim never matches the revoked value.
+    await world.deactivate()
+    await world.activate()
+    with pytest.raises(HTTPException) as caught:
+        await world.request(legacy, require_active=require_active)
+    assert caught.value.status_code == 401
+
+
+async def test_activation_alone_never_revokes_a_bearer(world: _World) -> None:
+    # Given a membership that has not been deactivated and a bearer issued for it.
+    world.memberships[0].user.is_active = False
+    await world.activate()
+    token = await world.mint()
+
+    # When the membership is activated again, the same bearer keeps working.
+    await world.activate()
+    assert (await world.request(token)).id == world.memberships[0].user.id
+
+
+async def test_second_membership_of_the_same_identity_keeps_its_sessions(world: _World) -> None:
+    # Given one bearer per membership of a shared identity.
+    first, second = world.memberships[0].user, world.memberships[1].user
+    first_token, second_token = await world.mint(0), await world.mint(1)
+
+    # When only the first membership is deactivated and reactivated.
+    await world.deactivate(0)
+    await world.activate(0)
+
+    # Then the first bearer is dead and the other membership is untouched.
+    with pytest.raises(HTTPException) as caught:
+        await world.request(first_token)
+    assert caught.value.status_code == 401
+    assert (await world.request(second_token)).id == second.id
+    assert (await world.request(await world.mint(0))).id == first.id
+
+
+async def test_minted_bearer_carries_the_membership_generation_it_was_issued_under(world: _World) -> None:
+    # Given a membership that has been through a deactivation.
+    await world.deactivate()
+    await world.activate()
+    membership = world.memberships[0]
+    assert membership.generation != 0
+
+    # When a bearer is minted, then the claim is the stored value, not a default.
+    assert security.decode_access_token(await world.mint())["mgen"] == membership.generation
+
+
+@pytest.mark.parametrize("claim", [None, True, False, -1, "0", 1.5, [], {}])
+async def test_malformed_membership_claim_is_rejected_before_any_lookup(
+    monkeypatch: pytest.MonkeyPatch, claim: object
+) -> None:
+    # Given a signed bearer whose membership claim is present but malformed, null included.
+    lookup = AsyncMock(side_effect=AssertionError("a malformed claim must not reach any lookup"))
+    monkeypatch.setattr(security.user_dao, "get_with_identity", lookup)
+
+    # When it is presented, then it is rejected exactly like a malformed identity generation.
+    with pytest.raises(HTTPException) as caught:
+        await security.load_user_from_access_token(_signed(sub=str(uuid.uuid4()), mgen=claim))
+    assert caught.value.status_code == 401
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("stored", "claimed", "accepted"),
+    [(0, 0, True), (4, 4, True), (4, 0, False), (0, 4, False), (4, 5, False), (None, 0, False)],
+    ids=["legacy", "current", "legacy-vs-revoked", "future", "stale", "membership-gone"],
+)
+async def test_membership_generation_is_compared_for_strict_equality(
+    monkeypatch: pytest.MonkeyPatch, stored: int | None, claimed: int, accepted: bool
+) -> None:
+    # Given the stored generation of a membership, or none when the row has vanished.
+    pin_membership_generation(monkeypatch, stored)
+
+    # When a claim is compared, only an exact match passes.
+    if accepted:
+        await security.check_membership_generation(uuid.uuid4(), claimed)
+        return
+    with pytest.raises(HTTPException) as caught:
+        await security.check_membership_generation(uuid.uuid4(), claimed)
+    assert caught.value.status_code == 401
+
+
 @pytest.mark.asyncio
 async def test_chat_ticket_bearer_contract(monkeypatch):
     user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=uuid.uuid4())
     agent_id, session_id = uuid.uuid4(), uuid.uuid4()
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch, 3)
     token = await create_access_token(str(user.id), "member")
     monkeypatch.setattr(auth_api, "load_user_from_access_token", AsyncMock(return_value=user))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock())
@@ -186,6 +424,7 @@ async def test_chat_ticket_bearer_contract(monkeypatch):
     assert binding.session_id == session_id
     assert binding.auth_deadline == auth_api.decode_access_token(token)["exp"]
     assert binding.auth_generation == 7
+    assert binding.membership_generation == auth_api.decode_access_token(token)["mgen"] != 0
 
 
 def _dummy_request() -> Request:

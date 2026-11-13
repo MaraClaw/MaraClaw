@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import REDIRECT_URI, install_state_redis, sign_in_state
 from tests.transaction_pool_fakes import CountingPool
 
@@ -277,6 +278,7 @@ async def test_http_callback_preserves_unverified_identity_login(monkeypatch, is
     monkeypatch.setattr(auth.user_dao, "get_by_identity_id", AsyncMock(return_value=[user]))
     monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
 
     async def remote(*args):
         assert pool.active == 0
@@ -325,6 +327,7 @@ async def test_logout_all_commits_before_success_and_never_acknowledges_failed_c
         return 8
 
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(security.identity_dao, "bump_auth_generation", bump)
     token = await security.create_access_token(str(user.id), user.role)
     if commit_fails:
@@ -375,6 +378,7 @@ async def test_logout_all_preserves_authentication_gates_and_never_bumps_rejecte
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
     generation = AsyncMock(return_value=7)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     token = await security.create_access_token(str(user.id), user.role)
     if credential == "revoked":
         generation.return_value = 8

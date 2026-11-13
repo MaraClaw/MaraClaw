@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import (
     admin as admin_api,
@@ -955,6 +956,7 @@ async def test_security_encrypt_roundtrip_and_empty(monkeypatch):
     user = _user(role="member")
     monkeypatch.setattr(sec.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(sec.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     jwt = await sec.create_access_token(str(user.id), "member")
     assert sec.decode_access_token(jwt)["role"] == "member"
     with pytest.raises(HTTPException):
@@ -1265,6 +1267,7 @@ async def test_load_user_from_access_token_branches(monkeypatch):
     user = _user(role="member")
     monkeypatch.setattr(sec.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(sec.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     token = await sec.create_access_token(str(user.id), "member")
     monkeypatch.setattr(sec.user_dao, "get_with_identity", AsyncMock(return_value=None))
     with pytest.raises(HTTPException):
@@ -1407,6 +1410,7 @@ async def test_login_skips_inactive_memberships(monkeypatch):
     monkeypatch.setattr(auth_api.user_dao, "get_by_identity_id", AsyncMock(return_value=[inactive, active]))
     monkeypatch.setattr(auth_api.user_dao, "get", AsyncMock(return_value=active))
     monkeypatch.setattr(auth_api.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(auth_api.tenant_dao, "get", AsyncMock(return_value=_tenant(id=active.tenant_id)))
     active_background_tasks: Any = SimpleNamespace()
     result = await auth_api.login(

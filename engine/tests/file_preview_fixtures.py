@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import file_previews
 from app.core import security
@@ -51,6 +52,7 @@ async def preview_context(tmp_path, monkeypatch):
     access = AsyncMock(return_value=(None, "use"))
     monkeypatch.setattr(security.user_dao, "get_with_identity", load_principal)
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", generation)
+    pin_membership_generation(monkeypatch)
     monkeypatch.setattr(file_previews, "check_agent_access", access)
     monkeypatch.setattr(file_previews, "get_storage_backend", lambda: storage)
     token = await security.create_access_token(str(user.id), "member", identity_id=identity.id)

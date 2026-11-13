@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.membership_generation_fixtures import pin_membership_generation
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -39,6 +40,7 @@ def account(monkeypatch) -> UserRecord:
     )
     monkeypatch.setattr(auth.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(auth.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     return user
 
 

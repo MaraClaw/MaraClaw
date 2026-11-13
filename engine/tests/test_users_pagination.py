@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import users as users_api
 from app.core import security
@@ -274,9 +275,10 @@ async def test_password_change_gate_when_page_uses_real_auth_dependency(
         identity_id=UUID(int=1),
         identity=IdentityRecord(id=UUID(int=1), must_change_password=True),
     )
-    monkeypatch.setattr(security, "decode_access_token", lambda _token: {"sub": str(actor.id), "gen": 7})
+    monkeypatch.setattr(security, "decode_access_token", lambda _token: {"sub": str(actor.id), "gen": 7, "mgen": 0})
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    pin_membership_generation(monkeypatch)
     app = FastAPI()
     app.include_router(users_api.router, prefix="/api")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

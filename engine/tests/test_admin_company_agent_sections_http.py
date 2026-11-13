@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import admin
 from app.api.tenants import TenantOut
@@ -62,10 +63,13 @@ def principal(monkeypatch) -> UserRecord:
         id=uuid4(), identity_id=identity.id, tenant_id=uuid4(), identity=identity, role=UserRole.PLATFORM_ADMIN
     )
     monkeypatch.setattr(
-        security, "decode_access_token", lambda _: {"sub": str(user.id), "role": "member", "exp": 0, "gen": 1}
+        security,
+        "decode_access_token",
+        lambda _: {"sub": str(user.id), "role": "member", "exp": 0, "gen": 1, "mgen": 0},
     )
     monkeypatch.setattr(security.user_dao, "get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=1))
+    pin_membership_generation(monkeypatch)
     return user
 
 
