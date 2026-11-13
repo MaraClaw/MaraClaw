@@ -1,6 +1,5 @@
-from contextlib import nullcontext
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -10,12 +9,10 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
 from tests.test_sso_session_status import install_session
 
-from app.api import agent_credentials, enterprise, onboarding, sso, tenants
+from app.api import agent_credentials, enterprise, sso, tenants
 from app.core.domain.users import UserRole
-from app.records.agent import AgentRecord
 from app.records.agent_credential import AgentCredentialRecord
 from app.records.identity import IdentityProviderRecord
-from app.records.onboarding import UserTenantOnboardingRecord
 from app.records.system_setting import SystemSettingRecord
 from app.records.user import UserRecord
 from app.schemas import (
@@ -24,7 +21,6 @@ from app.schemas import (
     organization_response_sso as sso_contracts,
     organization_response_tenant as tenant_contracts,
 )
-from app.services.agent_provisioning import AgentProvisioning
 from app.services.llm.registry import ProviderManifest
 
 
@@ -38,7 +34,6 @@ from app.services.llm.registry import ProviderManifest
         (tenants.router, "resolve_tenant_by_domain"),
         (sso.router, "create_sso_session"),
         (sso.router, "get_sso_session_status"),
-        (onboarding.router, "create_personal_assistant"),
         (agent_credentials.router, "create_credential"),
     ],
 )
@@ -79,46 +74,6 @@ async def test_credential_http_preserves_datetime_encoding_and_hides_cookies(mon
     app.dependency_overrides.clear()
 
 
-@pytest.mark.parametrize("existing", [False, True])
-async def test_assistant_http_returns_key_only_on_creation(monkeypatch, existing):
-    # Given an isolated provisioning/start boundary for response serialization.
-    tenant_id = uuid4()
-    user = UserRecord(id=uuid4(), tenant_id=tenant_id)
-    agent = AgentRecord(id=uuid4(), name="Assistant", creator_id=user.id)
-    row = UserTenantOnboardingRecord(
-        id=uuid4(), user_id=user.id, tenant_id=tenant_id, personal_assistant_agent_id=agent.id if existing else None
-    )
-    monkeypatch.setattr(
-        onboarding, "agent_provisioning", Mock(return_value=nullcontext(AgentProvisioning(user, tenant_id, None)))
-    )
-    monkeypatch.setattr(onboarding, "_ensure_row", AsyncMock(return_value=row))
-    monkeypatch.setattr(onboarding.agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr(onboarding, "_create_personal_assistant", AsyncMock(return_value=(agent, "one-time-key")))
-    monkeypatch.setattr(onboarding.user_tenant_onboarding_dao, "update", AsyncMock(return_value=row))
-    monkeypatch.setattr(onboarding, "flush_request_transaction", AsyncMock())
-    monkeypatch.setattr(
-        onboarding,
-        "_start_personal_assistant",
-        AsyncMock(return_value=onboarding_contracts.PersonalAssistantStarted(status="started")),
-    )
-    app = FastAPI()
-    app.include_router(onboarding.router)
-    app.dependency_overrides[onboarding.get_current_user] = lambda: user
-    # When the assistant is created or resumed through its HTTP route.
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/onboarding/personal-assistant", json={"name": "Assistant"})
-    # Then the typed start outcome preserves creation-only key disclosure.
-    assert response.status_code == 200
-    assert response.json()["start"] == {"status": "started"}
-    assert response.json()["agent"] == (
-        {"id": str(agent.id), "name": "Assistant"}
-        if existing
-        else {"id": str(agent.id), "name": "Assistant", "api_key": "one-time-key"}
-    )
-    assert response.json()["onboarding"]["completed_at"] is None
-    app.dependency_overrides.clear()
-
-
 @pytest.mark.parametrize("stored", [None, {"enabled": "false", "text": ["open", None]}])
 async def test_public_notification_preserves_open_setting_values(monkeypatch, stored):
     setting = SystemSettingRecord(key="notification_bar", value=stored) if stored else None
@@ -156,7 +111,6 @@ async def test_public_notification_preserves_open_setting_values(monkeypatch, st
         TypeAdapter(tenant_contracts.TenantAssignmentResponse),
         TypeAdapter(tenant_contracts.TenantDeletedResponse),
         TypeAdapter(onboarding_contracts.OnboardingStatusPayload),
-        TypeAdapter(onboarding_contracts.PersonalAssistantResponse),
         TypeAdapter(sso_contracts.SSOSessionResponse),
         TypeAdapter(sso_contracts.SSOStatusResponse),
         TypeAdapter(sso_contracts.SSOScannedResponse),

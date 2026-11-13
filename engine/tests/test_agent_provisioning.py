@@ -2,71 +2,18 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Literal, assert_never, override
+from typing import Literal, assert_never
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
 import pytest
 
-from app.api import onboarding
-from app.db import session
-from app.db.connection import DbConnection
 from app.records.tenant import TenantRecord
-from app.services import agent_lifecycle, agent_provisioning, quota_guard
+from app.services import agent_provisioning, quota_guard
 from test_agent_create_departments import creation
-from test_onboarding import AssistantCreation, assistant_creation
 
-__all__ = ["assistant_creation", "creation"]
-
-
-class AssistantCommitConnection(DbConnection):
-    def __init__(self, fixture: AssistantCreation):
-        self.fixture: AssistantCreation = fixture
-        self.snapshots: list[tuple[list[UUID], UUID | None]] = []
-
-    @override
-    async def commit(self) -> None:
-        self.fixture.store.in_transaction = False
-        self.fixture.store.events.append("commit")
-        self.snapshots.append(
-            (
-                [agent.id for agent in self.fixture.store.agent_rows],
-                self.fixture.rows[0].personal_assistant_agent_id if self.fixture.rows else None,
-            )
-        )
-
-    @override
-    async def rollback(self) -> None:
-        self.fixture.store.agent_rows.clear()
-        self.fixture.rows.clear()
-
-
-@pytest.mark.parametrize("failure", [False, True])
-async def test_request_bound_first_commit_contains_agent_and_pointer_before_initialization(
-    assistant_creation, monkeypatch, failure
-):
-    fixture, _client = assistant_creation
-    db = AssistantCommitConnection(fixture)
-    monkeypatch.setattr(agent_provisioning, "connection_ctx", session.connection_ctx)
-    monkeypatch.setattr(onboarding, "flush_request_transaction", session.flush_request_transaction)
-    monkeypatch.setattr(agent_lifecycle, "flush_request_transaction", session.flush_request_transaction)
-
-    async def initialize(agent, **_kwargs):
-        assert db.snapshots == [([agent.id], agent.id)]
-        if failure:
-            raise OSError("disk unavailable")
-
-    fixture.initialize.side_effect = initialize
-    fixture.store.in_transaction = True
-    async with session.transaction(db):
-        response = await onboarding.create_personal_assistant(
-            onboarding.PersonalAssistantRequest(name="Committed"), fixture.store.actor
-        )
-    agent = fixture.store.agent_rows[0]
-    assert response["start"]["status"] == ("failed" if failure else "started")
-    assert db.snapshots[0] == ([agent.id], agent.id)
-    assert agent.status == ("error" if failure else "running")
+__all__ = ["creation"]
 
 
 async def test_regular_concurrent_creations_cannot_both_take_last_quota_slot(creation, monkeypatch):
@@ -164,6 +111,18 @@ async def test_regular_creation_preserves_tenant_resource_defaults(creation, mon
         agent.webhook_rate_limit,
         agent.heartbeat_interval_minutes,
     ) == (43, 8, 12, 17, max(240, heartbeat))
+
+
+async def test_user_scope_creation_is_private_with_only_creator_manage_grant(creation):
+    store, client = creation
+
+    response = await client.post("/api/agents/", json={"name": "Private", "permission_scope_type": "user"})
+
+    assert response.status_code == 201
+    assert store.agent_rows[0].access_mode == "private"
+    assert [(grant.scope_type, grant.scope_id, grant.access_level) for grant in store.grants] == [
+        ("user", store.actor.id, "manage")
+    ]
 
 
 async def test_missing_tenant_defaults_use_fresh_actor_ttl_and_regular_fallbacks(creation, monkeypatch):

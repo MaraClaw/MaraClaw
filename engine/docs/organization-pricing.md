@@ -44,7 +44,7 @@ An organization is tier-governed when an approved admission request has `provisi
 
 In a tier-governed organization the cap is the current catalog value for the tier (Pro 2, Max 5, Ultra 10) for every role, platform and organization administrators included, and it replaces the stored `quota_max_agents` (an inherited 2 never lowers Max or Ultra). The count is the creator's non-expired, non-system agents whose `tenant_id` is that organization, whatever their lifecycle status (stopped, failed setup and pending deletion all count). It is enforced under the shared tenant and user locks by:
 
-- agent creation and onboarding (`agent_provisioning`), against the explicit destination organization, so a platform administrator creating into a tiered organization is capped there only;
+- agent creation (`agent_provisioning`; the onboarding assistant is created by web-e through `POST /api/agents/`), against the explicit destination organization, so a platform administrator creating into a tiered organization is capped there only;
 - ownership transfer and creator handover (`agent_ownership_transfer`), where the whole incoming batch must fit and refusal is `409 target_quota_exceeded`;
 - paid company transfer disposition, where the full incoming ordinary batch is checked against the destination before any revocation or migration write and refusal is `409 transfer_destination_quota_exceeded`. Free transfers seal agents in the source and are never capped; untiered destinations keep their earlier behavior.
 

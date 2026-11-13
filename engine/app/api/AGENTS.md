@@ -12,6 +12,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Launch route background work with `schedule_background_task`, not `asyncio.create_task`. It starts the work after the request transaction commits, in a fresh context that carries only the trace id, and drops it on rollback. FastAPI `BackgroundTasks` still run before the request commits.
 - `openclaw_updates.py` is mounted with `API_PREFIX` (`/admin/openclaw-updates` platform-admin publish, `/openclaw-updates/{id}`, `/agents/{id}/openclaw-update`). Guest-visible file/upload mutators carry `Depends(guest_write_exclusion)` (409 during an active run); `OpenClawUpdateGateError` maps to 423/409 in `main.py`. Contract: `../../docs/openclaw-updates.md`.
 - `departments.py` is mounted with `API_PREFIX` (`/api/departments`, `PUT /api/users/{id}/departments`, and singular `/department`).
+- `onboarding.py` exposes only `GET /status`, `POST /start` and `POST /complete`. `POST /onboarding/personal-assistant` is retired: web-e creates the onboarding assistant through `POST /api/agents/` between `start` and `complete`. The `personal_assistant_agent_id` column and `/status` field remain, but nothing in the engine writes the pointer.
 
 ## Sessions, triggers, broadcasts
 

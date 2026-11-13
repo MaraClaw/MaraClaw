@@ -12754,39 +12754,6 @@
         "title": "PersonRef",
         "type": "object"
       },
-      "PersonalAssistantRequest": {
-        "properties": {
-          "boundaries": {
-            "default": "",
-            "maxLength": 1000,
-            "title": "Boundaries",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "personality": {
-            "default": "warm",
-            "maxLength": 64,
-            "title": "Personality",
-            "type": "string"
-          },
-          "work_style": {
-            "default": "concise",
-            "maxLength": 64,
-            "title": "Work Style",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "PersonalAssistantRequest",
-        "type": "object"
-      },
       "PersonalError": {
         "enum": [
           "logged_out",
@@ -39178,51 +39145,6 @@
         ]
       }
     },
-    "/api/onboarding/personal-assistant": {
-      "post": {
-        "description": "Create the user's private assistant and advance onboarding.",
-        "operationId": "post_2f6170692f6f6e626f617264696e672f706572736f6e616c2d617373697374616e74",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PersonalAssistantRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Personal Assistant",
-        "tags": [
-          "onboarding"
-        ]
-      }
-    },
     "/api/onboarding/start": {
       "post": {
         "description": "Start or resume onboarding for the current user/company.",
@@ -45152,7 +45074,6 @@
       "PeriodOut",
       "PermissionAccessLevel",
       "PermissionGrantScope",
-      "PersonalAssistantRequest",
       "PersonalRelink",
       "PersonalStart",
       "PersonalStatus",
@@ -45492,7 +45413,6 @@
       "PermissionAccessLevel",
       "PermissionGrantScope",
       "PersonRef",
-      "PersonalAssistantRequest",
       "PersonalError",
       "PersonalQR",
       "PersonalRelink",

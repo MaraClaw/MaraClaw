@@ -6,7 +6,7 @@ This is the singular runtime workspace scaffold used to initialize each new agen
 
 - `Settings.AGENT_TEMPLATE_DIR` defaults to `<repo>/agent_template` from source and `/app/agent_template` in containers.
 - `render_agent_files()` in `app/services/agent_workspace.py` reads every file here except `tasks.json`, `todo.json`, `.maraclaw-gateway-key` and anything under `enterprise_info/`, then renders `soul.md` and `state.json`. The loop is file-based, so empty directories need a placeholder such as `.gitkeep`.
-- `write_missing_agent_files()` creates each rendered object at `<agent_id>/...` with `create_bytes_if_absent`, under the per-agent `setup_workspace_lock`. Callers: `AgentManager.initialize_agent_files()` (seeders, onboarding) and worker-owned setup in `app/services/agent_setup.py`, which stores the rendered files first and writes them later.
+- `write_missing_agent_files()` creates each rendered object at `<agent_id>/...` with `create_bytes_if_absent`, under the per-agent `setup_workspace_lock`. Callers: `AgentManager.initialize_agent_files()` (seeders) and worker-owned setup in `app/services/agent_setup.py`, which stores the rendered files first and writes them later.
 - Initialization is resumable: every missing object is created even when the agent prefix already exists, and an existing prefix never causes an early return. Existing objects are never overwritten, so user edits survive a re-run.
 - A template edit therefore reaches an existing agent only for objects it lacks. Pushing changed content to existing workspaces needs a separate backfill.
 - `.maraclaw-gateway-key` is never copied from here; the runtime writes it.
