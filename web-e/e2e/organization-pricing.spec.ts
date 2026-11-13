@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test'
 import { OrganizationAgentLimit, OrganizationFileLimitBytes, OrganizationStorageLimitBytes } from '../src/lib/engine-contracts.generated.ts'
 
 const plans = [
-  { id: 'pro', name: 'Pro', currency: 'USD', monthly_price_usd: 99, included_accounts: 5, additional_account_monthly_usd: 12, max_accounts: 25, max_agents_per_account: 2, storage_limit_bytes: 1073741824, max_file_size_bytes: 26214400 },
-  { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 299, included_accounts: 15, additional_account_monthly_usd: 10, max_accounts: 75, max_agents_per_account: 5, storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800 },
-  { id: 'ultra', name: 'Ultra', currency: 'USD', monthly_price_usd: 799, included_accounts: 40, additional_account_monthly_usd: 8, max_accounts: 200, max_agents_per_account: 10, storage_limit_bytes: 10737418240, max_file_size_bytes: 104857600 },
+  { id: 'pro', name: 'Pro', currency: 'USD', monthly_price_usd: 49, included_accounts: 5, additional_account_monthly_usd: 6, max_accounts: 25, max_agents_per_account: 2, storage_limit_bytes: 1073741824, max_file_size_bytes: 26214400, daily_messages_per_agent: 100 },
+  { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 149, included_accounts: 15, additional_account_monthly_usd: 5, max_accounts: 75, max_agents_per_account: 5, storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800, daily_messages_per_agent: 200 },
+  { id: 'ultra', name: 'Ultra', currency: 'USD', monthly_price_usd: 399, included_accounts: 40, additional_account_monthly_usd: 4, max_accounts: 200, max_agents_per_account: 10, storage_limit_bytes: 10737418240, max_file_size_bytes: 104857600, daily_messages_per_agent: 500 },
 ]
 
 test('catalog loading and error recover through retry and render live allocations', async ({ page }) => {

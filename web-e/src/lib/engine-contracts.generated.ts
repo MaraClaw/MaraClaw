@@ -100,6 +100,9 @@ export type AgentCredentialPayload = z.infer<typeof AgentCredentialPayloadSchema
 export const AgentCredentialUpdateSchema = z.looseObject({ ["cookies_json"]: z.union([z.string(), z.null()]).optional(), ["credential_type"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["expected_revision"]: z.number().gt(0).refine(Number.isInteger), ["platform"]: z.union([z.string(), z.null()]).optional(), ["status"]: z.union([z.string(), z.null()]).optional() });
 export type AgentCredentialUpdate = z.infer<typeof AgentCredentialUpdateSchema>;
 
+export const AgentDailyMessagesOutSchema = z.looseObject({ ["limit"]: z.number().refine(Number.isInteger), ["resets_at"]: z.iso.datetime({ offset: true, local: true }), ["timezone"]: z.string(), ["used"]: z.number().refine(Number.isInteger) });
+export type AgentDailyMessagesOut = z.infer<typeof AgentDailyMessagesOutSchema>;
+
 export const AgentInstalledToolResponseSchema = z.looseObject({ ["agent_id"]: z.string(), ["agent_tool_id"]: z.string(), ["category"]: z.string(), ["configured"]: z.boolean(), ["description"]: z.string(), ["enabled"]: z.boolean(), ["installed_at"]: z.union([z.string(), z.null()]), ["installed_by_agent_id"]: z.union([z.string(), z.null()]), ["installed_by_agent_name"]: z.union([z.string(), z.null()]), ["mcp_server_name"]: z.union([z.string(), z.null()]), ["mcp_server_url"]: z.union([z.string(), z.null()]), ["mcp_tool_name"]: z.union([z.string(), z.null()]), ["source"]: z.string(), ["tool_display_name"]: z.string(), ["tool_id"]: z.string(), ["tool_name"]: z.string(), ["type"]: z.string() });
 export type AgentInstalledToolResponse = z.infer<typeof AgentInstalledToolResponseSchema>;
 
@@ -789,9 +792,9 @@ export type OrgAdminOut = z.infer<typeof OrgAdminOutSchema>;
 export const OrgUsersPageOutSchema = z.looseObject({ ["items"]: z.array(AuthUserSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
 export type OrgUsersPageOut = z.infer<typeof OrgUsersPageOutSchema>;
 
-export const OrganizationAdditionalAccountMonthlyUsdValues = [12,10,8] as const;
-export const OrganizationAdditionalAccountMonthlyUsd = { PRO: 12, MAX: 10, ULTRA: 8 } as const;
-export const OrganizationAdditionalAccountMonthlyUsdSchema = z.intersection(z.union([z.literal(12), z.literal(10), z.literal(8)]), z.number().refine(Number.isInteger));
+export const OrganizationAdditionalAccountMonthlyUsdValues = [6,5,4] as const;
+export const OrganizationAdditionalAccountMonthlyUsd = { PRO: 6, MAX: 5, ULTRA: 4 } as const;
+export const OrganizationAdditionalAccountMonthlyUsdSchema = z.intersection(z.union([z.literal(6), z.literal(5), z.literal(4)]), z.number().refine(Number.isInteger));
 export type OrganizationAdditionalAccountMonthlyUsd = z.infer<typeof OrganizationAdditionalAccountMonthlyUsdSchema>;
 
 export const OrganizationAdmissionAcknowledgmentSchema = z.looseObject({ ["status"]: z.intersection(z.literal("pending"), z.string()).optional() });
@@ -808,6 +811,11 @@ export const OrganizationCurrencyValues = ["USD"] as const;
 export const OrganizationCurrency = { USD: "USD" } as const;
 export const OrganizationCurrencySchema = z.intersection(z.literal("USD"), z.string());
 export type OrganizationCurrency = z.infer<typeof OrganizationCurrencySchema>;
+
+export const OrganizationDailyAgentMessageLimitValues = [100,200,500] as const;
+export const OrganizationDailyAgentMessageLimit = { PRO: 100, MAX: 200, ULTRA: 500 } as const;
+export const OrganizationDailyAgentMessageLimitSchema = z.intersection(z.union([z.literal(100), z.literal(200), z.literal(500)]), z.number().refine(Number.isInteger));
+export type OrganizationDailyAgentMessageLimit = z.infer<typeof OrganizationDailyAgentMessageLimitSchema>;
 
 export const OrganizationPlanIdValues = ["pro","max","ultra"] as const;
 export const OrganizationPlanId = { PRO: "pro", MAX: "max", ULTRA: "ultra" } as const;
@@ -839,7 +847,7 @@ export const OrganizationStorageLimitBytes = { PRO: 1073741824, MAX: 5368709120,
 export const OrganizationStorageLimitBytesSchema = z.intersection(z.union([z.literal(1073741824), z.literal(5368709120), z.literal(10737418240)]), z.number().refine(Number.isInteger));
 export type OrganizationStorageLimitBytes = z.infer<typeof OrganizationStorageLimitBytesSchema>;
 
-export const OrganizationPlanSchema = z.strictObject({ ["additional_account_monthly_usd"]: OrganizationAdditionalAccountMonthlyUsdSchema, ["currency"]: OrganizationCurrencySchema, ["id"]: OrganizationPlanIdSchema, ["included_accounts"]: z.number().min(1).refine(Number.isInteger), ["max_accounts"]: OrganizationMaxAccountsSchema, ["max_agents_per_account"]: OrganizationAgentLimitSchema, ["max_file_size_bytes"]: OrganizationFileLimitBytesSchema, ["monthly_price_usd"]: z.number().min(0).refine(Number.isInteger), ["name"]: OrganizationPlanNameSchema, ["storage_limit_bytes"]: OrganizationStorageLimitBytesSchema });
+export const OrganizationPlanSchema = z.strictObject({ ["additional_account_monthly_usd"]: OrganizationAdditionalAccountMonthlyUsdSchema, ["currency"]: OrganizationCurrencySchema, ["daily_messages_per_agent"]: OrganizationDailyAgentMessageLimitSchema, ["id"]: OrganizationPlanIdSchema, ["included_accounts"]: z.number().min(1).refine(Number.isInteger), ["max_accounts"]: OrganizationMaxAccountsSchema, ["max_agents_per_account"]: OrganizationAgentLimitSchema, ["max_file_size_bytes"]: OrganizationFileLimitBytesSchema, ["monthly_price_usd"]: z.number().min(0).refine(Number.isInteger), ["name"]: OrganizationPlanNameSchema, ["storage_limit_bytes"]: OrganizationStorageLimitBytesSchema });
 export type OrganizationPlan = z.infer<typeof OrganizationPlanSchema>;
 
 export const OrganizationAdmissionItemSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["credential_email_error"]: z.union([z.string(), z.null()]), ["credential_email_status"]: z.union([CredentialEmailStatusSchema, z.null()]), ["email"]: z.string(), ["id"]: z.guid(), ["organization_name"]: z.union([z.string(), z.null()]), ["plan"]: OrganizationPlanSchema, ["review_note"]: z.union([z.string(), z.null()]), ["reviewed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["reviewed_by"]: z.union([z.guid(), z.null()]), ["status"]: ApprovalStatusSchema, ["tier"]: OrganizationPlanIdSchema });
@@ -1131,7 +1139,7 @@ export type UploadPolicy = z.infer<typeof UploadPolicySchema>;
 export const UserActiveUpdateSchema = z.looseObject({ ["is_active"]: z.boolean() });
 export type UserActiveUpdate = z.infer<typeof UserActiveUpdateSchema>;
 
-export const UserAgentOutSchema = z.looseObject({ ["id"]: z.guid(), ["is_expired"]: z.boolean().optional(), ["is_system"]: z.boolean(), ["last_active_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["name"]: z.string(), ["role_description"]: z.union([z.string(), z.null()]).optional(), ["status"]: AgentStatusSchema });
+export const UserAgentOutSchema = z.looseObject({ ["daily_messages"]: z.union([AgentDailyMessagesOutSchema, z.null()]).optional(), ["id"]: z.guid(), ["is_expired"]: z.boolean().optional(), ["is_system"]: z.boolean(), ["last_active_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["name"]: z.string(), ["role_description"]: z.union([z.string(), z.null()]).optional(), ["status"]: AgentStatusSchema });
 export type UserAgentOut = z.infer<typeof UserAgentOutSchema>;
 
 export const UserDetailOutSchema = z.looseObject({ ["agents"]: z.array(UserAgentOutSchema).optional(), ["agents_count"]: z.number().refine(Number.isInteger).optional(), ["created_at"]: z.union([z.string(), z.null()]).optional(), ["display_name"]: z.union([z.string(), z.null()]).optional(), ["effective_max_agents"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["email"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_genesis"]: z.boolean().optional(), ["quota_agent_ttl_hours"]: z.number().refine(Number.isInteger), ["quota_max_agents"]: z.number().refine(Number.isInteger), ["quota_message_limit"]: z.number().refine(Number.isInteger), ["quota_message_period"]: z.string(), ["quota_messages_used"]: z.number().refine(Number.isInteger), ["role"]: UserRoleSchema, ["source"]: z.string().optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
