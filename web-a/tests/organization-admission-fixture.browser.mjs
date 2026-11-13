@@ -14,8 +14,9 @@ export function makeFixture(receipt, name) {
   const row = (number, organizationName) => ({
     id: uuid(number), organization_name: organizationName, email: `founder-${number}@example.test`,
     tier: 'max', plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 199,
-      included_accounts: 5, additional_account_monthly_usd: 12, max_accounts: 75,
-      max_agents_per_account: 5, storage_limit_bytes: 1073741824, max_file_size_bytes: 26214400 },
+      included_accounts: 5, additional_account_monthly_usd: 5, max_accounts: 75,
+      max_agents_per_account: 5, storage_limit_bytes: 1073741824, max_file_size_bytes: 26214400,
+      daily_messages_per_agent: 200 },
     status: 'pending', created_at: '2026-11-01T08:00:00Z', reviewed_at: null, reviewed_by: null, review_note: null,
     credential_email_status: null, credential_email_error: null,
   })

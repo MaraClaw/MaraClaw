@@ -55,6 +55,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
     ['Additional account / month', usd(detail.plan.additional_account_monthly_usd)],
     ['Maximum accounts', number(detail.plan.max_accounts)],
     ['Maximum agents per account', number(detail.plan.max_agents_per_account)],
+    ['Daily messages per agent', number(detail.plan.daily_messages_per_agent)],
     ['Managed S3 storage per agent', `${number(detail.plan.storage_limit_bytes / (1024 ** 3))} GiB`],
     ['Maximum managed S3 file size', `${number(detail.plan.max_file_size_bytes / (1024 ** 2))} MiB`],
     ['Requested', date(detail.created_at)],

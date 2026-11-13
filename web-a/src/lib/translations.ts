@@ -521,6 +521,7 @@ export const vietnamese = {
   'Additional account / month': 'Tài khoản bổ sung / tháng',
   'Maximum accounts': 'Số tài khoản tối đa',
   'Maximum agents per account': 'Số trợ lý tối đa mỗi tài khoản',
+  'Daily messages per agent': 'Số tin nhắn mỗi trợ lý mỗi ngày',
   'Managed S3 storage per agent': 'Dung lượng S3 được quản lý mỗi trợ lý',
   'Maximum managed S3 file size': 'Kích thước tệp S3 được quản lý tối đa',
   'Reviewed by': 'Người xét duyệt',
