@@ -12182,9 +12182,9 @@
       "OrganizationAdditionalAccountMonthlyUsd": {
         "description": "Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live.",
         "enum": [
-          12,
-          10,
-          8
+          6,
+          5,
+          4
         ],
         "title": "OrganizationAdditionalAccountMonthlyUsd",
         "type": "integer",
@@ -12415,6 +12415,16 @@
           "USD"
         ]
       },
+      "OrganizationDailyAgentMessageLimit": {
+        "description": "Human messages one agent accepts per local day (organization admin's timezone), per tier; the only place the numbers live.",
+        "enum": [
+          100,
+          200,
+          500
+        ],
+        "title": "OrganizationDailyAgentMessageLimit",
+        "type": "integer"
+      },
       "OrganizationFileLimitBytes": {
         "description": "Largest single managed file in bytes, per tier; the only place the numbers live.",
         "enum": [
@@ -12455,6 +12465,9 @@
           "currency": {
             "$ref": "#/components/schemas/OrganizationCurrency"
           },
+          "daily_messages_per_agent": {
+            "$ref": "#/components/schemas/OrganizationDailyAgentMessageLimit"
+          },
           "id": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           },
@@ -12494,7 +12507,8 @@
           "max_accounts",
           "max_agents_per_account",
           "storage_limit_bytes",
-          "max_file_size_bytes"
+          "max_file_size_bytes",
+          "daily_messages_per_agent"
         ],
         "title": "OrganizationPlan",
         "type": "object"
@@ -45554,6 +45568,7 @@
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
       "OrganizationCurrency",
+      "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
       "OrganizationMaxAccounts",
       "OrganizationPlan",

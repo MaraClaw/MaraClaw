@@ -9,6 +9,7 @@ from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationAgentLimit,
     OrganizationCurrency,
+    OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
     OrganizationMaxAccounts,
     OrganizationPlan,
@@ -47,11 +48,28 @@ def test_catalog_grants_per_agent_storage_and_file_byte_limits():
     assert [plan.max_file_size_bytes for plan in ORGANIZATION_PLANS] == list(OrganizationFileLimitBytes)
 
 
+def test_catalog_grants_per_agent_daily_messages():
+    assert [(plan.id, plan.daily_messages_per_agent) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 100),
+        (OrganizationPlanId.MAX, 200),
+        (OrganizationPlanId.ULTRA, 500),
+    ]
+    assert [plan.daily_messages_per_agent for plan in ORGANIZATION_PLANS] == list(OrganizationDailyAgentMessageLimit)
+
+
+def test_catalog_prices_the_organization_fee_per_month():
+    assert [(plan.id, plan.monthly_price_usd, plan.included_accounts) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 49, 5),
+        (OrganizationPlanId.MAX, 149, 15),
+        (OrganizationPlanId.ULTRA, 399, 40),
+    ]
+
+
 def test_catalog_quotes_additional_account_prices_and_account_caps():
     assert [(plan.id, plan.additional_account_monthly_usd, plan.max_accounts) for plan in ORGANIZATION_PLANS] == [
-        (OrganizationPlanId.PRO, 12, 25),
-        (OrganizationPlanId.MAX, 10, 75),
-        (OrganizationPlanId.ULTRA, 8, 200),
+        (OrganizationPlanId.PRO, 6, 25),
+        (OrganizationPlanId.MAX, 5, 75),
+        (OrganizationPlanId.ULTRA, 4, 200),
     ]
     assert [plan.additional_account_monthly_usd for plan in ORGANIZATION_PLANS] == list(
         OrganizationAdditionalAccountMonthlyUsd
@@ -69,11 +87,13 @@ def test_current_snapshot_round_trips_as_current():
     assert stored.max_agents_per_account is OrganizationAgentLimit.ULTRA
     assert stored.storage_limit_bytes is OrganizationStorageLimitBytes.ULTRA
     assert stored.max_file_size_bytes is OrganizationFileLimitBytes.ULTRA
+    assert stored.daily_messages_per_agent is OrganizationDailyAgentMessageLimit.ULTRA
     assert stored.additional_account_monthly_usd is OrganizationAdditionalAccountMonthlyUsd.ULTRA
     assert stored.max_accounts is OrganizationMaxAccounts.ULTRA
-    assert (raw["additional_account_monthly_usd"], raw["max_accounts"]) == (8, 200)
+    assert (raw["monthly_price_usd"], raw["additional_account_monthly_usd"], raw["max_accounts"]) == (399, 4, 200)
     assert raw["storage_limit_bytes"] == 10_737_418_240
     assert raw["max_file_size_bytes"] == 104_857_600
+    assert raw["daily_messages_per_agent"] == 500
     assert stored.model_dump(mode="json") == raw
 
 
@@ -90,7 +110,8 @@ def _old_wire_format() -> dict[str, object]:
 
 
 _BAD_BYTES = (None, True, 0, 1024, 26_214_401, 1_073_741_825, 1_073_741_824.5)
-_BAD_PRICES = (None, True, 0, 9, 11, 13, 100, 12.5)
+_BAD_PRICES = (None, True, 0, 3, 7, 12, 100, 12.5)
+_BAD_DAILY = (None, True, 0, 1, 99, 101, 250, 501, 100.5)
 _BAD_ACCOUNTS = (None, True, 0, 24, 26, 30, 201, 25.5)
 _BAD_NAMES = (None, True, 0, "", "pro", "PRO", "Pro ", "Max quoted", "Enterprise")
 _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
@@ -107,6 +128,9 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         {**_current(), "unexpected": True},
         {key: value for key, value in _current().items() if key != "storage_limit_bytes"},
         {key: value for key, value in _current().items() if key != "max_file_size_bytes"},
+        {key: value for key, value in _current().items() if key != "daily_messages_per_agent"},
+        *({**_current(), "daily_messages_per_agent": value} for value in _BAD_DAILY),
+        {**_current(), "daily_messages_per_agent": OrganizationAgentLimit.MAX},
         *({**_current(), "storage_limit_bytes": value} for value in _BAD_BYTES),
         *({**_current(), "max_file_size_bytes": value} for value in _BAD_BYTES),
         {**_current(), "storage_limit_bytes": OrganizationFileLimitBytes.MAX},
@@ -129,6 +153,9 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         "extra",
         "no-storage",
         "no-file-size",
+        "no-daily-messages",
+        *(f"daily-messages-{value!r}" for value in _BAD_DAILY),
+        "daily-messages-holds-agent-limit",
         *(f"storage-{value!r}" for value in _BAD_BYTES),
         *(f"file-{value!r}" for value in _BAD_BYTES),
         "storage-holds-file-limit",
@@ -167,6 +194,9 @@ def test_admission_row_reads_the_current_shape_and_refuses_the_old_wire_format()
     }
     with pytest.raises(ValidationError):
         _ = OrganizationAdmissionRecord.from_row({**row, "plan": old_without_storage})
+    without_daily = {key: value for key, value in _current().items() if key != "daily_messages_per_agent"}
+    with pytest.raises(ValidationError):
+        _ = OrganizationAdmissionRecord.from_row({**row, "plan": without_daily})
 
 
 @pytest.mark.parametrize("tier", list(OrganizationPlanId))

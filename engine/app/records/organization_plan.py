@@ -29,9 +29,9 @@ class OrganizationCurrency(StrEnum):
 class OrganizationAdditionalAccountMonthlyUsd(IntEnum):
     """Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live."""
 
-    PRO = 12
-    MAX = 10
-    ULTRA = 8
+    PRO = 6
+    MAX = 5
+    ULTRA = 4
 
 
 class OrganizationMaxAccounts(IntEnum):
@@ -66,6 +66,14 @@ class OrganizationFileLimitBytes(IntEnum):
     ULTRA = 104_857_600
 
 
+class OrganizationDailyAgentMessageLimit(IntEnum):
+    """Human messages one agent accepts per local day (organization admin's timezone), per tier; the only place the numbers live."""
+
+    PRO = 100
+    MAX = 200
+    ULTRA = 500
+
+
 class OrganizationPlan(BaseModel):
     """Whole-USD monthly commercial terms. The human account count includes the org admin; model charges are separate."""
 
@@ -81,3 +89,4 @@ class OrganizationPlan(BaseModel):
     max_agents_per_account: OrganizationAgentLimit
     storage_limit_bytes: OrganizationStorageLimitBytes
     max_file_size_bytes: OrganizationFileLimitBytes
+    daily_messages_per_agent: OrganizationDailyAgentMessageLimit

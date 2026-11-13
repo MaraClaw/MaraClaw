@@ -1,16 +1,16 @@
 # Organization pricing and admission
 
-Research date: November 5, 2026. Currency: USD. Billing basis: monthly per organization. These are proposed MaraClaw commercial terms for approval, not a claim that billing exists. The per-account agent cap below is enforced by the engine for organizations provisioned through an approved admission.
+Research date: November 5, 2026. Currency: USD. Billing basis: monthly per organization. These are proposed MaraClaw commercial terms for approval, not a claim that billing exists. The per-account agent cap and the per-agent daily message cap below are enforced by the engine for organizations provisioned through an approved admission. On 2026-11-13 the organization fee and the additional-account price were halved and rounded down to whole USD (Pro $99 to $49, Max $299 to $149, Ultra $799 to $399; additional accounts $12 to $6, $10 to $5, $8 to $4) because organizations pay for their own LLM inference (see below).
 
-| Tier | Organization / month | Included human accounts | Each additional account / month | Maximum human accounts | Agents per account |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Pro | $99 | 5 | $12 | 25 | 2 |
-| Max | $299 | 15 | $10 | 75 | 5 |
-| Ultra | $799 | 40 | $8 | 200 | 10 |
+| Tier | Organization / month | Included human accounts | Each additional account / month | Maximum human accounts | Agents per account | Messages per agent / day |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pro | $49 | 5 | $6 | 25 | 2 | 100 |
+| Max | $149 | 15 | $5 | 75 | 5 | 200 |
+| Ultra | $399 | 40 | $4 | 200 | 10 | 500 |
 
-One account means one human, including the organization administrator. A digital employee is a separate OpenClaw agent, and the tier sets how many ordinary agents each account may own, organization administrators included. The monthly quote is the organization fee plus the number of accounts beyond the included allocation multiplied by the tier's additional-account price. For example, 7 Pro accounts cost $99 + (2 x $12) = $123/month; 20 Max accounts cost $349/month; 50 Ultra accounts cost $879/month. Each additional account brings its own per-account agent allowance. Requests beyond the account or per-account agent limit need a different plan or a reviewed agreement.
+One account means one human, including the organization administrator. A digital employee is a separate OpenClaw agent, and the tier sets how many ordinary agents each account may own, organization administrators included. The monthly quote is the organization fee plus the number of accounts beyond the included allocation multiplied by the tier's additional-account price. For example, 7 Pro accounts cost $49 + (2 x $6) = $61/month; 20 Max accounts cost $149 + (5 x $5) = $174/month; 50 Ultra accounts cost $399 + (10 x $4) = $439/month. Each additional account brings its own per-account agent allowance. Requests beyond the account or per-account agent limit need a different plan or a reviewed agreement.
 
-The additional-account price and the maximum human accounts are the shared numeric contract enums `OrganizationAdditionalAccountMonthlyUsd` (Pro 12, Max 10, Ultra 8) and `OrganizationMaxAccounts` (Pro 25, Max 75, Ultra 200) in `app/records/organization_plan.py`; the catalog references the members and plan snapshots must hold exactly these values. This defines the quoted terms only: the engine does not enforce the account maximum or bill additional accounts.
+The additional-account price and the maximum human accounts are the shared numeric contract enums `OrganizationAdditionalAccountMonthlyUsd` (Pro 6, Max 5, Ultra 4) and `OrganizationMaxAccounts` (Pro 25, Max 75, Ultra 200) in `app/records/organization_plan.py`; the catalog references the members and plan snapshots must hold exactly these values. This defines the quoted terms only: the engine does not enforce the account maximum or bill additional accounts.
 
 The customer configures organization model providers and pays their inference charges separately. Third-party paid tools and services are also separate. The platform price does not include model tokens, promise unlimited work, or promise dedicated hardware, uptime or support service levels.
 
@@ -65,7 +65,7 @@ Scope of these numbers:
 - `storage_limit_bytes` is per agent: the logical bytes of that agent's current managed S3 objects. Direct guest or local-disk writes and historical S3 object versions are not counted.
 - `max_file_size_bytes` is the largest single managed file, not the size of any individual HTTP upload.
 - This is not a limit on all workspace storage, and it does not make every API upload accept 100 MiB. Individual upload tools and document-parser paths can enforce stricter limits of their own, and the global operation upload maximum is unchanged.
-- Prices and the per-account agent cap are unchanged.
+- Storage limits leave the prices and the per-account agent cap as they are.
 
 Like the rest of the plan, stored snapshots must carry both fields; a snapshot without them, or with a value outside the enum, is refused when read, and there is no default or compatibility parser.
 
