@@ -18,6 +18,7 @@ from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import UserPagePosition, user_dao
+from app.db.session import flush_request_transaction
 from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
@@ -33,6 +34,11 @@ from app.services.admin_provisioning import (
     is_genesis_org_admin,
     set_end_user_active,
     set_peer_admin_active,
+)
+from app.services.agent_message_quota import (
+    AgentDailyMessages,
+    daily_messages_for_agents,
+    reset_agent_daily_messages,
 )
 from app.services.organization_plans import tier_for_tenant
 from app.services.quota_guard import agent_limit_for_tier
@@ -304,6 +310,15 @@ async def update_user_quota(
     return _user_out(user, agents_count=agents_count, tier=await tier_for_tenant(user.tenant_id))
 
 
+class AgentDailyMessagesOut(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+    used: int = Field(description="Human messages the agent accepted today; 0 when its stored day is not today.")
+    limit: int = Field(description="The organization tier's daily cap per agent.")
+    timezone: str = Field(description="IANA timezone whose calendar day is counted (UTC when the admin has none).")
+    resets_at: AwareDatetime = Field(description="Next local midnight in `timezone`.")
+
+
 class UserAgentOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -312,10 +327,18 @@ class UserAgentOut(BaseModel):
     is_expired: bool = False
     role_description: str | None = None
     last_active_at: datetime | None = None
+    daily_messages: AgentDailyMessagesOut | None = Field(
+        default=None,
+        description="Today's message usage; null for system agents and organizations without a tier.",
+    )
 
 
 class UserDetailOut(AdminUserSummary):
     agents: list[UserAgentOut] = Field(default_factory=list)
+
+
+def _daily_messages_out(value: AgentDailyMessages | None) -> AgentDailyMessagesOut | None:
+    return None if value is None else AgentDailyMessagesOut.model_validate(value)
 
 
 def _require_admin_user_scope(actor: UserRecord, target: UserRecord) -> None:
@@ -580,8 +603,10 @@ async def get_user_detail(
 
     agents = await agent_dao.list_for_creator(target.id, tenant_id=target.tenant_id)
     agents_count = len(agents)
-    base = _user_out(target, agents_count=agents_count, tier=await tier_for_tenant(target.tenant_id))
+    tier = await tier_for_tenant(target.tenant_id)
+    base = _user_out(target, agents_count=agents_count, tier=tier)
     detail = UserDetailOut.model_validate(base)
+    daily = await daily_messages_for_agents(target.tenant_id, tier, agents)
     detail.agents = [
         UserAgentOut(
             id=agent.id,
@@ -591,10 +616,34 @@ async def get_user_detail(
             is_expired=bool(agent.is_expired),
             role_description=agent.role_description or None,
             last_active_at=agent.last_active_at,
+            daily_messages=_daily_messages_out(daily.get(agent.id)),
         )
         for agent in agents
     ]
     return detail
+
+
+@router.post("/{user_id}/agents/{agent_id}/daily-messages/reset", response_model=AgentDailyMessagesOut)
+async def reset_user_agent_daily_messages(
+    user_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    current_user: UserRecord = Depends(get_current_user),
+    client_ip: str | None = Depends(get_client_ip),
+) -> AgentDailyMessagesOut:
+    """Zero today's message count of an agent the user created (same visibility as the user detail page)."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    target = await user_dao.get_with_identity(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    _require_admin_user_scope(current_user, target)
+
+    snapshot = await reset_agent_daily_messages(
+        actor=current_user, target=target, agent_id=agent_id, ip_address=client_ip
+    )
+    await flush_request_transaction()
+    return AgentDailyMessagesOut.model_validate(snapshot)
 
 
 @router.patch("/{user_id}/role", response_model=None)

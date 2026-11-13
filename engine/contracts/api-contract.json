@@ -1503,6 +1503,39 @@
         "title": "AgentCredentialUpdate",
         "type": "object"
       },
+      "AgentDailyMessagesOut": {
+        "properties": {
+          "limit": {
+            "description": "The organization tier's daily cap per agent.",
+            "title": "Limit",
+            "type": "integer"
+          },
+          "resets_at": {
+            "description": "Next local midnight in `timezone`.",
+            "format": "date-time",
+            "title": "Resets At",
+            "type": "string"
+          },
+          "timezone": {
+            "description": "IANA timezone whose calendar day is counted (UTC when the admin has none).",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "used": {
+            "description": "Human messages the agent accepted today; 0 when its stored day is not today.",
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "limit",
+          "timezone",
+          "resets_at"
+        ],
+        "title": "AgentDailyMessagesOut",
+        "type": "object"
+      },
       "AgentDirectoryOut": {
         "properties": {
           "access_mode": {
@@ -12423,7 +12456,12 @@
           500
         ],
         "title": "OrganizationDailyAgentMessageLimit",
-        "type": "integer"
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
       },
       "OrganizationFileLimitBytes": {
         "description": "Largest single managed file in bytes, per tier; the only place the numbers live.",
@@ -18273,6 +18311,17 @@
       },
       "UserAgentOut": {
         "properties": {
+          "daily_messages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentDailyMessagesOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Today's message usage; null for system agents and organizations without a tier."
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -44640,6 +44689,65 @@
         ]
       }
     },
+    "/api/users/{user_id}/agents/{agent_id}/daily-messages/reset": {
+      "post": {
+        "description": "Zero today's message count of an agent the user created (same visibility as the user detail page).",
+        "operationId": "post_2f6170692f75736572732f7b757365725f69647d2f6167656e74732f7b6167656e745f69647d2f6461696c792d6d657373616765732f7265736574",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDailyMessagesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reset User Agent Daily Messages",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/users/{user_id}/department": {
       "put": {
         "operationId": "put_2f6170692f75736572732f7b757365725f69647d2f6465706172746d656e74",
@@ -45076,6 +45184,7 @@
       "AgentCredentialCreate",
       "AgentCredentialPayload",
       "AgentCredentialUpdate",
+      "AgentDailyMessagesOut",
       "AgentInstalledToolResponse",
       "AgentLifecycleOut",
       "AgentOut",
@@ -45232,6 +45341,7 @@
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
       "OrganizationCurrency",
+      "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
       "OrganizationMaxAccounts",
       "OrganizationPlanId",
@@ -45353,6 +45463,7 @@
       "AgentCredentialCreate",
       "AgentCredentialPayload",
       "AgentCredentialUpdate",
+      "AgentDailyMessagesOut",
       "AgentDirectoryOut",
       "AgentInstalledToolResponse",
       "AgentLifecycleAvailabilityOut",

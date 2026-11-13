@@ -35,6 +35,7 @@ from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationAgentLimit,
     OrganizationCurrency,
+    OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
     OrganizationMaxAccounts,
     OrganizationPlanId,
@@ -132,6 +133,7 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     OrganizationAgentLimit,
     OrganizationStorageLimitBytes,
     OrganizationFileLimitBytes,
+    OrganizationDailyAgentMessageLimit,
     ChatRejectionReason,
     ChatEventType,
 )
