@@ -603,6 +603,8 @@ export const workspace = {
   "Unlock": "Mở khóa",
   "Unable to delete this file.": "Không thể xóa tập tin này.",
   "Contents of {path}": "Nội dung của {path}",
+  "Editing {name}…": "Đang chỉnh sửa {name}…",
+  "Editing a file…": "Đang chỉnh sửa một tập tin…",
   "Revisions": "Sửa đổi",
   "Restored": "Đã khôi phục",
   "Unable to restore this revision.": "Không thể khôi phục bản sửa đổi này.",

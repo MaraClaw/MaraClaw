@@ -313,7 +313,7 @@ export function AgentChatPage() {
         if (archived !== undefined) {
           if (archived !== activeId) return
           setArchivedId(archived)
-          setInfo('Archived conversation. Read-only history.')
+          setInfo(translate('Archived conversation. Read-only history.'))
           setBusy(false)
           setThinking('')
           setSocketStopped(true)
@@ -374,7 +374,7 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.WORKSPACE_DRAFT: {
-          setInfo(`Editing ${event.name ?? 'file'}…`)
+          setInfo(event.name ? translate('Editing {name}…', { name: event.name }) : translate('Editing a file…'))
           return
         }
         case ChatEventType.STATUS: {
@@ -406,7 +406,7 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.ERROR: {
-          setInfo(textContent || 'Chat error')
+          setInfo(textContent || translate('Chat error'))
           setThinking('')
           setBusy(false)
           if (submissions.pending().length) setSlow(true)
