@@ -232,11 +232,11 @@ function DomainRow({
       ) : (
         <div className="flex gap-2">
           {!item.is_default ? (
-            <Button variant="outline" size="sm" onClick={onMakeDefault}>
+            <Button variant="outline" size="sm" onClick={onMakeDefault} aria-label={t('Make {name} the default', { name: item.domain })}>
               {t('Make default')}
             </Button>
           ) : null}
-          <Button ref={trigger} type="button" variant="ghost" size="sm" onClick={() => setConfirming(true)}>
+          <Button ref={trigger} type="button" variant="ghost" size="sm" onClick={() => setConfirming(true)} aria-label={t('Remove {name}', { name: item.domain })}>
             {t('Remove')}
           </Button>
         </div>

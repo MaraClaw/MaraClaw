@@ -51,6 +51,7 @@ export function UserCard({
             className="relative z-20"
             disabled={pending}
             onClick={onToggle}
+            aria-label={t(row.is_active ? 'Deactivate {name}' : 'Activate {name}', { name: row.display_name || row.email || t('user') })}
           >
             {t(row.is_active ? 'Deactivate' : 'Activate')}
           </Button>

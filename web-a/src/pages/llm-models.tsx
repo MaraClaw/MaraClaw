@@ -878,6 +878,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
               size="sm"
               className={cn(pendingRemove && 'hidden')}
               onClick={() => setPendingRemove(true)}
+              aria-label={t('Remove {name}', { name: item.label })}
             >
               {t('Remove')}
             </Button>

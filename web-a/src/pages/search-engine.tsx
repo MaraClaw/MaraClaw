@@ -346,7 +346,7 @@ function KeyCard({
           </div>
         ) : (
           <div>
-            <Button type="button" variant="ghost" size="sm" onClick={onAskRemove}>
+            <Button type="button" variant="ghost" size="sm" onClick={onAskRemove} aria-label={t('Remove {name}', { name: item.label || t('Untitled key') })}>
               {t('Remove')}
             </Button>
           </div>
