@@ -7,6 +7,7 @@ import { Link, Navigate, useLocation } from 'react-router-dom'
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { AdmissionAccessGate } from '@/components/layout/admission-access-gate'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
@@ -167,6 +168,11 @@ function AppShellFrame() {
           {tenantQuery.isLoading ? (
             <div role="status" aria-label={translate("Loading workspace")} className="flex h-40 items-center justify-center text-sm text-muted-foreground">
               {translate("Loading your organization’s workspace…")}</div>
+          ) : workspaceAllowed && tenantQuery.isError && organizationPath ? (
+            <div className="space-y-3 p-6">
+              <RequestErrorToast error={tenantQuery.error} message="Unable to confirm organization access. Retry to continue to the workspace." />
+              <Button variant="outline" disabled={tenantQuery.isFetching} onClick={scope.effect(() => { void tenantQuery.refetch() })}>{translate("Retry access check")}</Button>
+            </div>
           ) : workspaceAllowed && !organizationFeaturesAllowed && organizationPath ? (
             <Navigate to="/app/agents" replace />
           ) : (
