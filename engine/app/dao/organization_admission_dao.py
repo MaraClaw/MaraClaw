@@ -5,7 +5,7 @@ from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import str_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
-from app.records.organization_admission import OrganizationAdmissionRecord
+from app.records.organization_admission import LinkedAdmissionPlan, OrganizationAdmissionRecord
 from app.records.organization_plan import OrganizationPlan, OrganizationPlanId
 
 
@@ -64,6 +64,27 @@ class OrganizationAdmissionDAO(BaseDAO[OrganizationAdmissionRecord]):
                 {"tenant": tenant_id},
             )
             return [OrganizationPlanId(str_from_row(row["tier"])) for row in rows]
+
+    async def approved_plans_for_tenant(self, tenant_id: UUID) -> list[LinkedAdmissionPlan]:
+        """Raw ``id, tier, plan`` of approved requests that provisioned ``tenant_id`` (same order and two-row cap as
+        ``approved_tiers_for_tenant``). It skips ``OrganizationAdmissionRecord`` validation so an outdated snapshot
+        can still be read and refreshed."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT id, tier, plan FROM {self.table} WHERE status='approved' AND provisioned_tenant_id=%(tenant)s "
+                "ORDER BY provisioned_at,id LIMIT 2",
+                {"tenant": tenant_id},
+            )
+            return [LinkedAdmissionPlan.from_row(row) for row in rows]
+
+    async def refresh_tier_and_plan(
+        self, request_id: UUID, *, tier: OrganizationPlanId, plan: OrganizationPlan
+    ) -> None:
+        async with self.session() as db:
+            await db.execute(
+                f"UPDATE {self.table} SET tier=%(tier)s, plan=%(plan)s WHERE id=%(id)s",
+                {"id": request_id, "tier": tier.value, "plan": as_jsonb(plan.model_dump(mode="json"))},
+            )
 
     async def list_by_status(
         self, status: ApprovalStatus, *, limit: int, offset: int

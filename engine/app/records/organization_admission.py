@@ -59,3 +59,16 @@ class OrganizationAdmissionRecord:
             provisioned_tenant_id=uuid_from_row_opt(row.get("provisioned_tenant_id")),
             provisioned_admin_user_id=uuid_from_row_opt(row.get("provisioned_admin_user_id")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedAdmissionPlan:
+    """Stored tier and plan snapshot of an approved admission, left unvalidated: an outdated snapshot may not parse."""
+
+    id: UUID
+    tier: OrganizationPlanId
+    plan: object
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> LinkedAdmissionPlan:
+        return cls(id=uuid_from_row(row["id"]), tier=OrganizationPlanId(str_from_row(row["tier"])), plan=row["plan"])
