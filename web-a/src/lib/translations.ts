@@ -116,6 +116,7 @@ export const vietnamese = {
   'Confirm remove': 'Xác nhận gỡ bỏ',
   'Retry': 'Thử lại',
   'Try again': 'Thử lại',
+  'Something went wrong': 'Đã xảy ra lỗi',
   'Previous': 'Trước',
   'Next': 'Tiếp',
   'Refresh': 'Làm mới',

@@ -17,7 +17,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 | Concern | Owner |
 |---------|-------|
 | Boot / theme | `index.html` prevents theme FOUC; `src/main.tsx`: `StrictMode` > `ThemeProvider` > `App` |
-| App composition | `src/App.tsx`: `AuthProvider` wraps `AppRouter` + `Toaster` |
+| App composition | `src/App.tsx`: `TranslationProvider` > `RootErrorBoundary` (reloads on Try again) > `AuthProvider` wraps `AppRouter` + `Toaster` |
 | Session / Query lifetime | `src/hooks/AGENTS.md`: `AuthProvider` owns the session-generation-keyed `QueryClientProvider`, not `App`; query-option factories and session-fenced mutations |
 | Paths / access gates | `src/routes/AGENTS.md`: `AppRouter`, `ProtectedRoute`, role gates, `TransferReviewRoute` |
 | Screen composition / queries | `src/pages/AGENTS.md`: auth, companies, users/departments, invitations, review queues, models, search, tools |
