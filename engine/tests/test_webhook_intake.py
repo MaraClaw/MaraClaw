@@ -12,6 +12,7 @@ from tests.test_webhooks_api import MINTED_TOKEN, RecordingRedis
 from tests.webhook_intake_fixtures import ASGIInput, drive_asgi
 
 from app.api import webhooks
+from app.services.trigger_runtime import queue
 
 LEGACY_TOKEN = "valid_token"
 
@@ -233,3 +234,136 @@ async def test_malformed_unknown_and_forged_requests_are_indistinguishable(monke
     shapes = {(r.status_code, r.content, r.headers["content-type"], r.headers["content-length"]) for r in responses}
     assert shapes == {(200, b'{"ok":true}', "application/json", "11")}
     enqueue.assert_not_called()
+
+
+class FakeExecutions:
+    """In-memory stand-in for the ``(trigger_id, idempotency_key)`` unique constraint of ``trigger_executions``."""
+
+    def __init__(self) -> None:
+        self.seen: set[tuple[uuid.UUID, str]] = set()
+        self.keys: list[str] = []
+
+    async def try_enqueue(self, *, obj_in):
+        pair = (obj_in["trigger_id"], obj_in["idempotency_key"])
+        if pair in self.seen:
+            return None, False
+        self.seen.add(pair)
+        self.keys.append(obj_in["idempotency_key"])
+        return SimpleNamespace(**obj_in), True
+
+
+@pytest.fixture
+def executions(monkeypatch) -> FakeExecutions:
+    fake = FakeExecutions()
+    monkeypatch.setattr(queue.trigger_execution_dao, "try_enqueue", fake.try_enqueue)
+    return fake
+
+
+def _webhook_trigger(config) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid.uuid4(), agent_id=uuid.uuid4(), name="hook", type="webhook", config=config)
+
+
+async def _enqueue(trigger, body: bytes, headers: dict[str, str]) -> bool:
+    _, created = await queue.enqueue_webhook_execution(
+        trigger=trigger, body=body, payload_text=body.decode(), payload_obj=None, request_headers=headers
+    )
+    return created
+
+
+DELIVERY_HEADERS = ["x-idempotency-key", "x-github-delivery", "x-request-id", "x-event-id"]
+
+
+@pytest.mark.parametrize("header", DELIVERY_HEADERS)
+async def test_signed_trigger_dedups_on_the_body_whichever_delivery_header_changes(executions, header):
+    # Given: a trigger with a secret and a captured, validly signed body.
+    trigger = _webhook_trigger({"token": LEGACY_TOKEN, "secret": "secret"})
+    body = b'{"event":"push"}'
+
+    # When: the same body is replayed with a different value of one delivery header each time.
+    first = await _enqueue(trigger, body, {header: "delivery-1"})
+    replay = await _enqueue(trigger, body, {header: "delivery-2"})
+    bare = await _enqueue(trigger, body, {})
+    changed_body = await _enqueue(trigger, b'{"event":"tag"}', {header: "delivery-1"})
+
+    # Then: the replays are duplicates and only a different body is a new execution.
+    assert (first, replay, bare, changed_body) == (True, False, False, True)
+    assert all("delivery" not in key and len(key) <= 255 for key in executions.keys)
+
+
+async def test_signed_trigger_ignores_every_delivery_header_at_once(executions):
+    # Given: a signed trigger and a body first seen with all four delivery headers.
+    trigger = _webhook_trigger({"secret": "secret"})
+    body = b"payload"
+    first = await _enqueue(trigger, body, dict.fromkeys(DELIVERY_HEADERS, "a"))
+
+    # When: the replay changes every header at once.
+    replay = await _enqueue(trigger, body, dict.fromkeys(DELIVERY_HEADERS, "b"))
+
+    # Then: it is still one execution.
+    assert (first, replay) == (True, False)
+
+
+async def test_signed_keys_are_namespaced_by_trigger(executions):
+    # Given: two signed triggers receiving the same body.
+    first, second = _webhook_trigger({"secret": "one"}), _webhook_trigger({"secret": "two"})
+
+    # When: both enqueue it.
+    results = [await _enqueue(first, b"same", {}), await _enqueue(second, b"same", {})]
+
+    # Then: each trigger runs it once under its own key.
+    assert results == [True, True]
+    assert len(set(executions.keys)) == 2
+
+
+@pytest.mark.parametrize("config", [{}, {"token": LEGACY_TOKEN}, {"secret": ""}, {"secret": None}, {"secret": 5}])
+async def test_unsigned_trigger_keeps_header_then_body_keys(executions, config):
+    # Given: a trigger without a usable secret.
+    trigger = _webhook_trigger(config)
+    body = b'{"event":"push"}'
+
+    # When: deliveries vary by header, precedence and body.
+    created = [
+        await _enqueue(trigger, body, {"x-idempotency-key": "k1"}),
+        await _enqueue(trigger, body, {"x-idempotency-key": "k1"}),
+        await _enqueue(trigger, body, {"x-idempotency-key": "k2"}),
+        await _enqueue(trigger, body, {"x-github-delivery": "g1", "x-request-id": "r1"}),
+        await _enqueue(trigger, body, {}),
+        await _enqueue(trigger, body, {}),
+    ]
+
+    # Then: today's behavior holds: the first present header names the delivery, a bare body dedups on its hash.
+    assert created == [True, False, True, True, True, False]
+    assert executions.keys == ["k1", "k2", "g1", hashlib.sha256(body).hexdigest()]
+
+
+@pytest.mark.parametrize("signed", [True, False])
+async def test_route_replay_with_changed_headers_runs_once_only_for_signed_triggers(
+    monkeypatch, intake_client, executions, signed
+):
+    # Given: the real route and queue over the in-memory constraint, with a signed or unsigned trigger.
+    config = {"secret": "secret"} if signed else {}
+    trigger = _webhook_trigger(config)
+    monkeypatch.setattr(webhooks.agent_trigger_dao, "find_webhook_by_token", AsyncMock(return_value=trigger))
+    monkeypatch.setattr(webhooks.agent_dao, "get", AsyncMock(return_value=SimpleNamespace(webhook_rate_limit=100)))
+    monkeypatch.setattr(webhooks, "_record_and_count_hits", AsyncMock(return_value=1))
+
+    def signature(body: bytes) -> dict[str, str]:
+        return (
+            {"x-hub-signature-256": "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()} if signed else {}
+        )
+
+    async def deliver(body: bytes, header_value: str) -> None:
+        response = await intake_client.post(
+            f"/api/webhooks/t/{LEGACY_TOKEN}",
+            content=body,
+            headers={**signature(body), "x-idempotency-key": header_value},
+        )
+        assert (response.status_code, response.json()) == (200, {"ok": True})
+
+    # When: a delivery is replayed under a new idempotency header, then a different body arrives.
+    await deliver(b'{"n":1}', "first")
+    await deliver(b'{"n":1}', "second")
+    await deliver(b'{"n":2}', "third")
+
+    # Then: a signed trigger ran the replayed body once; an unsigned trigger still trusts the header.
+    assert len(executions.keys) == (2 if signed else 3)
