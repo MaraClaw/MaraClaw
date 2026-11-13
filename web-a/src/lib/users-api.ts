@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
+import { AgentDailyMessagesOutSchema } from './engine-contracts.generated.ts'
 import { apiRequest } from './http.ts'
+
+export const agentDailyMessagesSchema = AgentDailyMessagesOutSchema.strip().readonly()
+export type AgentDailyMessages = z.infer<typeof agentDailyMessagesSchema>
 
 export type UserAgent = {
   id: string
@@ -10,6 +14,7 @@ export type UserAgent = {
   is_system: boolean
   role_description: string | null
   last_active_at: string | null
+  daily_messages?: AgentDailyMessages | null
 }
 
 export type UserDetail = AdminUser & {
@@ -123,6 +128,13 @@ export async function exportCompanyUsers(input: CompanyRosterRequest, signal?: A
 
 export async function getUserDetail(userId: string, signal?: AbortSignal): Promise<UserDetail> {
   return apiRequest<UserDetail>(`/api/users/${userId}`, { signal })
+}
+
+export async function resetAgentDailyMessages(userId: string, agentId: string): Promise<AgentDailyMessages> {
+  return apiRequest(`/api/users/${encodeURIComponent(userId)}/agents/${encodeURIComponent(agentId)}/daily-messages/reset`, {
+    method: 'POST',
+    schema: agentDailyMessagesSchema,
+  })
 }
 
 export async function listPlatformAdmins(signal?: AbortSignal): Promise<PlatformAdmin[]> {
