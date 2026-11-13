@@ -395,10 +395,25 @@ CREATE TABLE IF NOT EXISTS users (
 	quota_max_agents INTEGER NOT NULL DEFAULT 2, 
 	quota_agent_ttl_hours INTEGER NOT NULL DEFAULT 0, 
 	is_genesis BOOLEAN NOT NULL DEFAULT false, 
+	membership_generation INTEGER NOT NULL DEFAULT 0, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(identity_id) REFERENCES identities (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
 );
+
+-- Explicit legacy upgrade: memberships created before session revocation lack the generation column. One block adds
+-- it (matching the fresh definition, which also places it last): active rows stay at 0 and rows that are already
+-- inactive start at 1, so a token issued before the upgrade can never revive them on reactivation. Marking happens
+-- only in the run that creates the column, so reruns skip and never touch a generation again.
+DO $$ BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'membership_generation'
+	) THEN
+		ALTER TABLE users ADD COLUMN membership_generation INTEGER NOT NULL DEFAULT 0;
+		UPDATE users SET membership_generation = 1 WHERE is_active IS FALSE;
+	END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
 

@@ -131,6 +131,12 @@ class UserDAO(BaseDAO[UserRecord]):
 
     table: ClassVar[str] = "users"
     columns: ClassVar[tuple[str, ...]] = _USER_COLUMNS
+    update_side_effects: ClassVar[Mapping[str, str]] = {
+        "is_active": (
+            "membership_generation = membership_generation + "
+            "CASE WHEN is_active AND NOT %(is_active)s THEN 1 ELSE 0 END"
+        )
+    }
     record_factory = staticmethod(_user_record_from_row)
 
     def _identity_select(self) -> str:
@@ -262,6 +268,14 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return int_from_row(row["quota_messages_used"]) if row is not None else None
 
+    async def get_membership_generation(self, user_id: UUID) -> int | None:
+        """Read the revocation counter from SQL; never from the session snapshot, which does not carry it."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT membership_generation FROM users WHERE id = %(user_id)s", {"user_id": user_id}
+            )
+            return int_from_row(row["membership_generation"]) if row is not None else None
+
     @override
     async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:
         if not {"tenant_id", "role", "is_active", "identity_id"}.intersection(obj_in):
@@ -333,8 +347,8 @@ class UserDAO(BaseDAO[UserRecord]):
 
             await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
-                "UPDATE users SET is_active = FALSE, updated_at = now() "
-                "WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
+                "UPDATE users SET is_active = FALSE, membership_generation = membership_generation + 1, "
+                "updated_at = now() WHERE tenant_id = %(tenant_id)s AND is_active IS TRUE "
                 "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
@@ -517,8 +531,8 @@ class UserDAO(BaseDAO[UserRecord]):
             await lock_tenants(db, (subject.tenant_id,))
             await lock_user(db, user_id, subject.tenant_id)
             row = await db.fetchone(
-                "UPDATE users SET is_active = FALSE, updated_at = now() "
-                "WHERE id = %(user_id)s AND is_active IS TRUE AND ("
+                "UPDATE users SET is_active = FALSE, membership_generation = membership_generation + 1, "
+                "updated_at = now() WHERE id = %(user_id)s AND is_active IS TRUE AND ("
                 f"SELECT COUNT(*) FROM users WHERE role = %(role)s AND is_active IS TRUE{tenant_sql}"
                 f") > 1 RETURNING {self._select_list()}",
                 params,

@@ -2,7 +2,7 @@
 
 The only supported legacy upgrades are the explicit guarded ``DO`` blocks in the baseline (``tasks`` lease columns,
 organization admission provisioning, ``approval_requests.execution_args``, ``gateway_messages.reply_binding_id``,
-``chat_history_changes.recorded_at``).
+``chat_history_changes.recorded_at``, ``users.membership_generation``).
 Schema errors are fatal.
 """
 

@@ -45,7 +45,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - Update docs when runner behavior changes in `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
 - Prefer concise operational notes over broad design essays; `../AGENTS.md` carries engine commands and hierarchy.
 - Credential docs may describe paths and rotation, but must not include live tokens, OAuth refresh secrets, keyring passwords, or customer data.
-- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the five guarded baseline upgrades (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
+- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the six guarded baseline upgrades (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
 
 ## Avoid
 
