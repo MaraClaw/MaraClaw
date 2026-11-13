@@ -33,6 +33,18 @@ export async function fetchCurrentUser(token: string, signal?: AbortSignal): Pro
   })
 }
 
+export async function updateMyTimezone(
+  timezone: string,
+  signal?: AbortSignal,
+): Promise<AuthUser> {
+  return apiRequest('/api/auth/me', {
+    schema: AuthUserSchema,
+    method: 'PATCH',
+    body: { timezone },
+    signal,
+  })
+}
+
 export async function forgotPasswordRequest(
   email: string,
   signal?: AbortSignal,

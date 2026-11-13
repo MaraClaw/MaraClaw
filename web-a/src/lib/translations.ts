@@ -1328,6 +1328,17 @@ export const vietnamese = {
   'JPY requires a whole-number amount; decimal places are not allowed.': 'Số tiền JPY phải là số nguyên, không được có phần thập phân.',
   'Company CSV download started. Check your browser downloads for completion.': 'Đã bắt đầu tải tệp CSV thành viên công ty. Kiểm tra mục tải xuống của trình duyệt để biết khi nào hoàn tất.',
   'Could not export company users. Try again.': 'Không xuất được danh sách thành viên công ty. Hãy thử lại.',
+  'Organization timezone': 'Múi giờ của tổ chức',
+  'Daily message limits for every agent in your organization reset at midnight in this timezone. Changing it moves the reset time immediately. Only the organization’s genesis administrator can change it.': 'Giới hạn tin nhắn trong ngày của mọi trợ lý trong tổ chức được đặt lại vào nửa đêm theo múi giờ này. Khi đổi múi giờ, thời điểm đặt lại thay đổi ngay lập tức. Chỉ quản trị viên khởi tạo của tổ chức mới có thể đổi.',
+  'before changing the organization timezone.': 'trước khi đổi múi giờ của tổ chức.',
+  'Current timezone: {timezone}': 'Múi giờ hiện tại: {timezone}',
+  'No timezone is set, so UTC is used.': 'Chưa đặt múi giờ nên hệ thống dùng UTC.',
+  'Timezone': 'Múi giờ',
+  'Save timezone': 'Lưu múi giờ',
+  'Saving timezone…': 'Đang lưu múi giờ…',
+  'Timezone saved. Daily message limits now reset at midnight in {timezone}.': 'Đã lưu múi giờ. Giới hạn tin nhắn trong ngày giờ được đặt lại vào nửa đêm theo {timezone}.',
+  'Choose a valid timezone.': 'Chọn một múi giờ hợp lệ.',
+  'Unable to save the timezone. Check your connection and try again.': 'Không lưu được múi giờ. Kiểm tra kết nối rồi thử lại.',
 } as const
 
 export type MessageKey = keyof typeof vietnamese
