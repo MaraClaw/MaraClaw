@@ -2234,6 +2234,8 @@ CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions 
 
 CREATE INDEX IF NOT EXISTS ix_trigger_executions_trigger_id ON trigger_executions (trigger_id);
 
+CREATE INDEX IF NOT EXISTS ix_trigger_executions_finished_at ON trigger_executions (finished_at) WHERE status IN ('completed', 'failed');
+
 CREATE TABLE IF NOT EXISTS tavily_api_keys (
 	id UUID NOT NULL,
 	tenant_id UUID,

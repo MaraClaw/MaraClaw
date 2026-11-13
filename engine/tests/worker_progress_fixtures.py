@@ -30,6 +30,7 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
         "openclaw_delayed_replies",
         "task_lease_recovery",
         "chat_history_retention",
+        "operational_log_retention",
     }
 )
 CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "transfer_cleanup"})

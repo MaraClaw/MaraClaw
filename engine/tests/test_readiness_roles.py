@@ -41,6 +41,7 @@ async def _background_admission() -> AsyncGenerator[None]:
         "broadcast_fanout",
         "openclaw_dispatch",
         "chat_history_retention",
+        "operational_log_retention",
         "whatsapp_personal",
     ],
 )
@@ -62,6 +63,7 @@ async def test_actual_start_registers_required_role_evidence(
         openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
         task_lease,
@@ -124,6 +126,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
@@ -148,6 +151,7 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
         assert ("chat_history_retention" in required) == role_enabled(roles, "worker")
+        assert ("operational_log_retention" in required) == role_enabled(roles, "worker")
         assert ("transfer_cleanup" in required) == role_enabled(roles, "connector")
         for worker_name in ("cache-invalidation-recovery", "auth_email", "broadcast_fanout"):
             assert (worker_name in required) == role_enabled(roles, "worker")

@@ -153,6 +153,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as OPENCLAW_UPDATE_BUDGET_SECONDS,
                 start_openclaw_update_worker,
             )
+            from app.services.operational_log_retention_worker import (
+                PROGRESS_BUDGET_SECONDS as OPERATIONAL_LOG_RETENTION_BUDGET_SECONDS,
+                start_operational_log_retention_worker,
+            )
             from app.services.organization_admission_email_worker import (
                 PROGRESS_BUDGET_SECONDS as ADMISSION_EMAIL_BUDGET_SECONDS,
                 start_organization_admission_email_worker,
@@ -224,6 +228,12 @@ class Runtime:
                 start_chat_history_retention_worker(),
                 requirement="loop",
                 progress_budget_seconds=CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "operational_log_retention",
+                start_operational_log_retention_worker(),
+                requirement="loop",
+                progress_budget_seconds=OPERATIONAL_LOG_RETENTION_BUDGET_SECONDS,
             )
             self.tasks.start(
                 "organization_admission_email",

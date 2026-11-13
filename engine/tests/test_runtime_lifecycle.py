@@ -189,6 +189,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
         scheduler_tasks,
@@ -309,6 +310,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
@@ -413,6 +415,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("web_search_export" in names) == role_enabled(roles, "worker")
     assert ("openclaw_delayed_replies" in names) == role_enabled(roles, "worker")
     assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
+    assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("whatsapp_personal" in names) == role_enabled(roles, "connector")
     assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
@@ -741,6 +744,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         openclaw_delayed_replies,
         openclaw_dispatch_reconciler,
         openclaw_update_worker,
+        operational_log_retention_worker,
         organization_admission_email_worker,
         scheduler,
         task_lease,
@@ -781,6 +785,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (openclaw_delayed_replies, "openclaw_delayed_reply_loop", "openclaw_delayed_replies"),
         (task_lease, "task_lease_recovery_loop", "task_lease_recovery"),
         (chat_history_retention_worker, "start_chat_history_retention_worker", "chat_history_retention"),
+        (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
     ):
         monkeypatch.setattr(module, attribute, budgeted(name))
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", budgeted("trigger_daemon"))
