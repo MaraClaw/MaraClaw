@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from app.core.domain.agents import AgentStatus
 from app.records.agent_setup import AgentSetupStatus
 from app.records.agent_start_retry import StartFailureCode
+from app.schemas.agent_runtime_loss import AgentRuntimeLossOut
 from app.schemas.agent_setup_mcp import AgentSetupMCPStatus
 from app.schemas.openclaw_updates import AgentUpdateOut
 from app.services.agent_work_eligibility import AgentWorkBlockCode
@@ -22,6 +23,7 @@ class AgentLifecycleRuntimeOut(BaseModel):
 
     recorded_status: AgentStatus
     recorded_container_id: str | None
+    loss: AgentRuntimeLossOut | None = None
 
 
 class AgentLifecycleStartOut(BaseModel):

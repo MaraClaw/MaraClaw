@@ -65,6 +65,7 @@ def agent(actor: UserRecord, monkeypatch: pytest.MonkeyPatch) -> AgentRecord:
     for module in (agents, relationships, advanced):
         monkeypatch.setattr(module, "check_agent_access", AsyncMock(return_value=(record, "manage")))
     monkeypatch.setattr(agents, "_lazy_reset_token_counters", AsyncMock(return_value=False))
+    monkeypatch.setattr(agents, "get_runtime_loss", AsyncMock(return_value=None))
     monkeypatch.setattr(onboarding, "is_onboarded", AsyncMock(return_value=False))
     return record
 
