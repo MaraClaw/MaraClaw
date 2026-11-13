@@ -758,6 +758,15 @@ CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
 
+-- Human messages accepted per agent on one local calendar day (tier-governed organizations only); a row holding an
+-- earlier usage_date counts as zero, so there is no reset job.
+CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    usage_date DATE NOT NULL,
+    messages_used INTEGER NOT NULL CHECK (messages_used >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) = 32)

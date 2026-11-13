@@ -2,6 +2,7 @@ from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.admin_audit_dao import admin_audit_log_dao
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_credential_dao import agent_credential_dao
+from app.dao.agent_daily_message_usage_dao import agent_daily_message_usage_dao
 from app.dao.agent_dao import agent_dao, agent_permission_dao
 from app.dao.agent_deletion_request_dao import agent_deletion_request_dao
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
@@ -73,6 +74,7 @@ __all__ = [
     "agent_activity_log_dao",
     "agent_agent_relationship_dao",
     "agent_credential_dao",
+    "agent_daily_message_usage_dao",
     "agent_dao",
     "agent_deletion_request_dao",
     "agent_focus_item_dao",
