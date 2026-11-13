@@ -8,6 +8,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
+from app.records.agent_start import AgentStartOperation
 from app.services.agent_lifecycle_events import AgentStopped, publish_agent_stopped
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel
@@ -56,24 +57,29 @@ async def start_agent_guest(agent_id: UUID, _persist: RuntimePersistence = persi
             if pending is None:
                 return LifecycleFailure(409, "guest_start_ineligible", "Agent is not eligible to start")
             operation, agent = pending
-            try:
-                published = await execute_start(operation, agent)
-            except GuestAdmissionError as exc:
-                logger.warning("Guest admission refused for agent {}: {}", agent_id, exc.code)
-                return LifecycleFailure(409, exc.code, exc.message)
-            except GuestStartPreflightError as exc:
-                logger.warning("Guest start preparation failed for agent {}: {}", agent_id, exc.code)
-                if exc.code == "guest_recreation_required":
-                    return LifecycleFailure(409, exc.code, exc.reason)
-                return LifecycleFailure(502, "guest_start_failed", "Guest start preparation failed")
-            except GuestOwnershipError as exc:
-                logger.warning("Guest start ownership refused for agent {}: {}", agent_id, exc)
-                return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
-            if not published:
-                return LifecycleFailure(502, "guest_start_failed", "Guest could not be started")
-            return LifecycleSuccess(agent)
+            return await run_start(operation, agent)
 
     return await drain_on_cancel(section())
+
+
+async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> LifecycleOutcome:
+    """Execute a begun start under the caller's lifecycle lock and map its outcome to the HTTP contract."""
+    try:
+        published = await execute_start(operation, agent)
+    except GuestAdmissionError as exc:
+        logger.warning("Guest admission refused for agent {}: {}", agent.id, exc.code)
+        return LifecycleFailure(409, exc.code, exc.message)
+    except GuestStartPreflightError as exc:
+        logger.warning("Guest start preparation failed for agent {}: {}", agent.id, exc.code)
+        if exc.code == "guest_recreation_required":
+            return LifecycleFailure(409, exc.code, exc.reason)
+        return LifecycleFailure(502, "guest_start_failed", "Guest start preparation failed")
+    except GuestOwnershipError as exc:
+        logger.warning("Guest start ownership refused for agent {}: {}", agent.id, exc)
+        return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
+    if not published:
+        return LifecycleFailure(502, "guest_start_failed", "Guest could not be started")
+    return LifecycleSuccess(agent)
 
 
 async def stop_agent_guest(agent_id: UUID, persist: RuntimePersistence = persist_agent_runtime) -> LifecycleOutcome:

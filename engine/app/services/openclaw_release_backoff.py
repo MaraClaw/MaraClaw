@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from typing import final
+from uuid import UUID
 
 from app.services.openclaw_native_capacity import LaneKey
 
@@ -39,6 +40,11 @@ class ReleaseBackoff:
 
     def settled(self, key: LaneKey) -> None:
         _ = self._entries.pop(key, None)
+
+    def forget_agent(self, agent_id: UUID) -> None:
+        """Drop every lane of one agent, e.g. once a new guest is published for it."""
+        for key in [key for key in self._entries if key.agent_id == agent_id]:
+            del self._entries[key]
 
     def waiting(self, key: LaneKey) -> bool:
         entry = self._entries.get(key)

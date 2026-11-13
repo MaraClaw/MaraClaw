@@ -73,6 +73,8 @@ export function AgentLayout() {
     enabled: Boolean(agentId),
     retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
     retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
+    // A lost container is recorded while members are in chat; poll there, and while a loss shows so it clears on its own.
+    refetchInterval: (current) => (chat || current.state.data?.runtime_loss ? 30_000 : false),
   })
   // Same key as AppShell, so this hits its cache. Loading or failed tenant data hides nothing (visibility only).
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })

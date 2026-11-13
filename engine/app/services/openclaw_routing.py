@@ -263,6 +263,15 @@ def wake_shared_lane(agent: AgentRecord, message_id: UUID) -> None:
     _schedule_inbox_wake(agent, "", message_id)
 
 
+def wake_agent_lanes(agent: AgentRecord) -> None:
+    """Rescan every pending lane head of ``agent`` in this process (after commit inside a transaction).
+
+    Safe without a running event loop or during shutdown: the wake is then skipped and the worker's
+    one-second dispatch reconciler picks the pending heads up instead.
+    """
+    _schedule_inbox_wake(agent, "")
+
+
 def _schedule_inbox_wake(agent: AgentRecord, content: str, message_id: UUID | None = None) -> None:
     """Start inbox wake without blocking the chat socket."""
     if not _wake_admission.accepting:

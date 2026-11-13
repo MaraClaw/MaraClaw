@@ -1821,6 +1821,17 @@
             "title": "Role Description",
             "type": "string"
           },
+          "runtime_loss": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntimeLossOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Recorded loss of the agent's guest container; populated only by GET /api/agents/{agent_id}."
+          },
           "secondary_model_id": {
             "anyOf": [
               {
@@ -2118,6 +2129,16 @@
       },
       "AgentLifecycleRuntimeOut": {
         "properties": {
+          "loss": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntimeLossOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recorded_container_id": {
             "anyOf": [
               {
@@ -2494,6 +2515,17 @@
             "title": "Role Description",
             "type": "string"
           },
+          "runtime_loss": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntimeLossOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Recorded loss of the agent's guest container; populated only by GET /api/agents/{agent_id}."
+          },
           "secondary_model_id": {
             "anyOf": [
               {
@@ -2732,6 +2764,30 @@
           "target_agent_id"
         ],
         "title": "AgentRelationshipIn",
+        "type": "object"
+      },
+      "AgentRuntimeLossOut": {
+        "description": "A recorded observation that the agent's guest container is gone and must be started anew.",
+        "properties": {
+          "detected_at": {
+            "format": "date-time",
+            "title": "Detected At",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "container_missing",
+              "image_unavailable"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "detected_at"
+        ],
+        "title": "AgentRuntimeLossOut",
         "type": "object"
       },
       "AgentSetupMCPRetry": {
@@ -28527,6 +28583,55 @@
         ]
       }
     },
+    "/api/agents/{agent_id}/start-new-container": {
+      "post": {
+        "description": "Start a new guest container for an agent whose guest container or pinned image is gone.",
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f73746172742d6e65772d636f6e7461696e6572",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start New Agent Container Route",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
     "/api/agents/{agent_id}/stop": {
       "post": {
         "description": "Stop an agent's container.",
@@ -45477,6 +45582,7 @@
       "AgentPermissionUserAccess",
       "AgentRelationshipBatchIn",
       "AgentRelationshipIn",
+      "AgentRuntimeLossOut",
       "AgentSetupMCPRetry",
       "AgentSetupMCPStatus",
       "AgentSetupStatus",

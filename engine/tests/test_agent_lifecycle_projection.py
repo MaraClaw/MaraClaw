@@ -8,6 +8,7 @@ from psycopg.types.json import Jsonb
 import test_agent_start_postgres as fixtures
 from app.api.agent_lifecycle import router
 from app.core.security import get_current_user, load_user_principal
+from app.dao.agent_runtime_loss_dao import agent_runtime_loss_dao
 from app.dao.agent_setup_mcp_dao import AGENT_SETUP_MCP_WORK_DDL
 from app.schemas.agent_lifecycle import AgentLifecycleOut
 from app.services.agent_manager import agent_manager
@@ -200,6 +201,46 @@ async def test_upgrade_projection_reuses_safe_contract_and_disables_mutation_cap
     assert not body.availability.can_start
     assert not body.availability.can_retry_setup
     assert not body.availability.can_retry_mcp
+
+
+async def test_runtime_loss_is_projected_from_committed_rows(lifecycle_db, no_docker):
+    # Given a recorded lost guest that is re-reported with another reason after its alert was claimed.
+    _operation, record = await fixtures.pending_start(lifecycle_db)
+    first = await agent_runtime_loss_dao.record(
+        lifecycle_db, record.id, "container_missing", recorded_container_id="lost", image=None
+    )
+    assert await agent_runtime_loss_dao.claim_notification(lifecycle_db, record.id)
+    assert not await agent_runtime_loss_dao.claim_notification(lifecycle_db, record.id)
+    again = await agent_runtime_loss_dao.record(
+        lifecycle_db, record.id, "image_unavailable", recorded_container_id="other", image="sha256:gone"
+    )
+    assert (again.reason, again.image, again.recorded_container_id) == ("image_unavailable", "sha256:gone", "lost")
+    assert again.detected_at == first.detected_at
+    assert not await agent_runtime_loss_dao.claim_notification(lifecycle_db, record.id)
+    user = await load_user_principal(record.creator_id)
+    # When lifecycle is read.
+    response = await get_lifecycle(record.id, user)
+    # Then the loss comes from the database without a Docker observation, and a clear removes it.
+    assert response.status_code == 200
+    body = AgentLifecycleOut.model_validate_json(response.content)
+    assert body.runtime.loss is not None
+    assert (body.runtime.loss.reason, body.runtime.loss.detected_at) == ("image_unavailable", first.detected_at)
+    await agent_runtime_loss_dao.clear(lifecycle_db, record.id)
+    assert (await get_lifecycle(record.id, user)).json()["runtime"]["loss"] is None
+
+
+async def test_image_pin_changes_only_from_the_expected_value(lifecycle_db):
+    # Given an agent pinned to a vanished image.
+    _operation, record = await fixtures.pending_start(lifecycle_db)
+    await lifecycle_db.execute("UPDATE agents SET openclaw_image_id='sha256:gone' WHERE id=%(id)s", {"id": record.id})
+    # When the pin is cleared and restored with compare-and-set.
+    assert not await agent_runtime_loss_dao.unpin_image(lifecycle_db, record.id, "sha256:other")
+    assert await agent_runtime_loss_dao.unpin_image(lifecycle_db, record.id, "sha256:gone")
+    assert await agent_runtime_loss_dao.repin_image(lifecycle_db, record.id, "sha256:gone")
+    # Then a pin set by someone else is never overwritten.
+    assert not await agent_runtime_loss_dao.repin_image(lifecycle_db, record.id, "sha256:older")
+    pinned = await lifecycle_db.fetchval("SELECT openclaw_image_id FROM agents WHERE id=%(id)s", {"id": record.id})
+    assert pinned == "sha256:gone"
 
 
 async def test_policy_blockers_are_not_confused_with_recorded_runtime(lifecycle_db, no_docker):

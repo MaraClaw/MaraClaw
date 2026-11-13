@@ -6,7 +6,7 @@ export { createSchedule, deleteSchedule, listScheduleHistory, listSchedules, run
 export type { ScheduleOut } from './schedules-api.ts'
 export { completeOnboarding, getOnboardingStatus, markOnboardingSkipped, ONBOARDING_SKIP_KEY, startOnboarding, wasOnboardingSkipped } from './onboarding-api.ts'
 export type { OnboardingStatus } from './onboarding-api.ts'
-export { createAgent, deleteAgent, getAgent, getAgentPermissions, getDefaultSoul, handoverAgent, listAgents, listPermissionCandidates, listTemplates, startAgent, stopAgent, updateAgent, updateAgentPermissions } from './agents-api.ts'
+export { createAgent, deleteAgent, getAgent, getAgentPermissions, getDefaultSoul, handoverAgent, listAgents, listPermissionCandidates, listTemplates, startAgent, startNewContainer, stopAgent, updateAgent, updateAgentPermissions } from './agents-api.ts'
 export type { AgentOut, AgentPermissions, AgentTemplate } from './agents-api.ts'
 export { completeFocus, createTask, deleteTrigger, listFocus, listTaskLogs, listTasks, listTriggers, patchTrigger, triggerTask, upsertFocus } from './agent-work-api.ts'
 export type { FocusItem, TaskOut } from './agent-work-api.ts'

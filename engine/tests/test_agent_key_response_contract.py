@@ -62,6 +62,7 @@ async def surface(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[AsyncC
     monkeypatch.setattr(agents, "flush_request_transaction", AsyncMock())
     monkeypatch.setattr(agents, "check_agent_access", AsyncMock(return_value=(agent, PermissionAccessLevel.MANAGE)))
     monkeypatch.setattr(agents, "_lazy_reset_token_counters", AsyncMock(return_value=False))
+    monkeypatch.setattr(agents, "get_runtime_loss", AsyncMock(return_value=None))
     monkeypatch.setattr(agents.user_dao, "get_with_identity", AsyncMock(return_value=actor))
     monkeypatch.setattr(agents, "list_visible_agents", AsyncMock(return_value=[agent]))
     monkeypatch.setattr(agents.agent_dao, "apply_token_counter_resets_many", AsyncMock())

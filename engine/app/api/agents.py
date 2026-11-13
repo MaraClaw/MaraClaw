@@ -35,6 +35,7 @@ from app.db.session import connection_ctx, flush_request_transaction, optional_c
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.schemas.agent_directory import AgentDirectoryOut, AgentPageOut
+from app.schemas.agent_runtime_loss import runtime_loss_out
 from app.schemas.collaboration_response_agents import (
     AgentApiKeyResponse,
     AgentApprovalResolvedResponse,
@@ -60,6 +61,7 @@ from app.schemas.collaboration_response_agents import (
 from app.schemas.collaboration_response_relationships import CollaborationAcknowledgement
 from app.schemas.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.access_relationships import ensure_access_granted_platform_relationships
+from app.services.agent_container_recovery import start_new_agent_container
 from app.services.agent_directory_cursor import AgentDirectoryCursor, parse_agent_directory_cursor
 from app.services.agent_lifecycle import (
     LifecycleFailure,
@@ -70,6 +72,7 @@ from app.services.agent_lifecycle import (
 )
 from app.services.agent_manager import agent_manager
 from app.services.agent_provisioning import agent_provisioning, provision_agent
+from app.services.agent_runtime_loss import get_runtime_loss
 from app.services.agent_setup import persist_agent_setup
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
 from app.services.agent_workspace import read_default_soul
@@ -346,6 +349,7 @@ async def get_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_
     agent, access_level = await check_agent_access(current_user, agent_id)
     _ = await _lazy_reset_token_counters(agent)
     out_model = await _agent_to_out(agent, current_user)
+    out_model.runtime_loss = runtime_loss_out(await get_runtime_loss(agent.id))
     out = agent_model_dump(out_model)
 
     if agent.creator_id:
@@ -832,6 +836,27 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
 
     outcome = await start_agent_guest(agent_id, _persist_agent_runtime)
+    match outcome:
+        case LifecycleSuccess(agent=agent):
+            return await _agent_to_out(agent, current_user)
+        case LifecycleFailure(status_code=code, code=error_code, message=message):
+            raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
+        case unreachable:
+            assert_never(unreachable)
+
+
+@router.post("/{agent_id}/start-new-container", response_model=AgentOut)
+async def start_new_agent_container_route(
+    agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
+) -> AgentOut:
+    """Start a new guest container for an agent whose guest container or pinned image is gone."""
+    agent, access_level = await check_agent_access(current_user, agent_id)
+    if access_level != "manage":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager can start agent")
+    if agent.setup_pending:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
+
+    outcome = await start_new_agent_container(agent_id)
     match outcome:
         case LifecycleSuccess(agent=agent):
             return await _agent_to_out(agent, current_user)

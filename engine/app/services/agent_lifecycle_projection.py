@@ -10,6 +10,7 @@ from app.core.row_memo import clear_row_memo
 from app.core.security import load_user_principal
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_lifecycle_projection_dao import agent_lifecycle_projection_dao
+from app.dao.agent_runtime_loss_dao import agent_runtime_loss_dao
 from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.agent_setup_mcp_dao import agent_setup_mcp_dao
 from app.db.session import connection_ctx
@@ -19,6 +20,7 @@ from app.schemas.agent_lifecycle import (
     AgentLifecycleRuntimeOut,
     LifecycleBlockCode,
 )
+from app.schemas.agent_runtime_loss import runtime_loss_out
 from app.services.agent_work_eligibility import agent_work_blocking_codes
 from app.services.openclaw_update_service import agent_update
 
@@ -40,6 +42,7 @@ async def get_agent_lifecycle(agent_id: UUID, user_id: UUID) -> AgentLifecycleOu
         if setup is None:
             raise HTTPException(404, "Agent not found")
         start = await agent_lifecycle_projection_dao.start(db, agent_id)
+        loss = await agent_runtime_loss_dao.get(db, agent_id)
         optional_mcp = tuple(await agent_setup_mcp_dao.statuses(agent_id))
         upgrade = await agent_update(agent, PermissionAccessLevel.MANAGE)
         policy_codes = await agent_work_blocking_codes(agent)
@@ -58,7 +61,11 @@ async def get_agent_lifecycle(agent_id: UUID, user_id: UUID) -> AgentLifecycleOu
         policy_eligible = not policy_codes
         return AgentLifecycleOut(
             as_of=TypeAdapter(datetime).validate_python(await db.fetchval("SELECT clock_timestamp()")).astimezone(UTC),
-            runtime=AgentLifecycleRuntimeOut(recorded_status=agent.status, recorded_container_id=agent.container_id),
+            runtime=AgentLifecycleRuntimeOut(
+                recorded_status=agent.status,
+                recorded_container_id=agent.container_id,
+                loss=runtime_loss_out(loss),
+            ),
             setup=setup,
             start=start,
             optional_mcp=optional_mcp,

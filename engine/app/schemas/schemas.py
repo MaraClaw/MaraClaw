@@ -22,6 +22,7 @@ from app.core.domain.channels import ChannelType
 from app.core.domain.tasks import TaskPriority, TaskStatus, TaskType
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
+from app.schemas.agent_runtime_loss import AgentRuntimeLossOut
 from app.schemas.company_admission import RequestSummary
 from app.services.oauth_state import MAX_REDIRECT_URI_LENGTH, MAX_STATE_LENGTH
 from app.services.schedule_time import validate_timezone
@@ -326,6 +327,10 @@ class AgentOut[CreatedAt: datetime | None = datetime](BaseModel):
     onboarded_for_me: bool = True
     created_at: CreatedAt
     last_active_at: datetime | None = None
+    runtime_loss: AgentRuntimeLossOut | None = Field(
+        default=None,
+        description="Recorded loss of the agent's guest container; populated only by GET /api/agents/{agent_id}.",
+    )
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 

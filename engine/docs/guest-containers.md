@@ -664,3 +664,80 @@ repeating Stop produces duplicate events and consumers must tolerate them. A
 failed stop already committed `stopped`, so a later successful retry still
 publishes. Heartbeat retries, disables, crashes and the stopped-container worker
 are not producers of this event.
+
+## Lost Guest Recovery
+
+A guest container can disappear outside the engine (manual `docker rm`, a Docker
+reset), and an agent pinned to an image id loses its image when that local image
+is rebuilt. The engine records such a loss, alerts platform admins once and lets
+the agent manager start a new container. It never starts one by itself.
+
+**Detection** ([recording](../app/services/agent_runtime_loss.py)):
+
+- `image_unavailable`: a start (HTTP or the start reconciler) fails because the
+  image is a local reference or `sha256:` id that is absent from the daemon
+  ([`GuestImageUnavailableError`](../app/services/guest_image.py)). Its failure
+  code stays `runtime_failed`, so the reconciler keeps retrying as before. Pull
+  failures, deadlines and Docker errors are not losses.
+- `container_missing`: native dispatch finds no owned guest at all while the
+  agent is recorded `running`, no start operation is pending and no OpenClaw
+  update run is active. A stopped guest or a Docker inspection error is not a
+  loss. The dispatch outcome (`guest_unavailable`, row released to `pending`) is
+  unchanged.
+
+One `agent_runtime_losses` row per agent keeps the first detection time; a
+re-report with another reason replaces reason and image. Recording and alerting
+are best effort and never change the start or dispatch result. The table is a new
+baseline `CREATE TABLE IF NOT EXISTS` with no foreign key; agent and company
+deletion remove its rows. No existing table is altered and no upgrade patch is
+involved.
+
+**Visibility:** `GET /api/agents/{id}/lifecycle` returns `runtime.loss`
+(`{"reason": "container_missing" | "image_unavailable", "detected_at": "<UTC>"}`
+or `null`) from the database without Docker. `GET /api/agents/{id}` returns the
+same object as `runtime_loss` so chat members see it; list endpoints leave it `null`.
+
+**Notification:** the first report of a loss claims `notified_at` with a
+conditional update, so exactly one process sends one `system_alert` to every active
+platform admin. Rows carry `ref_id` = agent id, `link` = `/companies/{tenant_id}`
+(or none) and sender `System`, and never `agent_id`: heartbeat drains unread rows by
+`agent_id` into the agent prompt. The plain-text body lists agent, company, reason,
+recorded container, unavailable, pinned and configured images, detection time,
+pending message count and the recovery action. A loss cleared by a published start
+and later detected again alerts again.
+
+**Recovery endpoint:** `POST /api/agents/{agent_id}/start-new-container`
+([service](../app/services/agent_container_recovery.py)) has the same
+authorization as `/start` (`manage`, else 403; incomplete setup 409) and runs in
+the same exclusive per-agent section, so the start reconciler defers. It refuses
+with 409 `guest_container_present` while any owned guest exists (use Start) and
+409 `guest_image_unavailable` when neither a usable pin nor the configured image
+is present. An inspection or snapshot failure is 502 `guest_start_failed`.
+Otherwise it takes over the pending start operation exactly like `/start` and
+returns the same `AgentOut` or failure codes. Without Docker it follows `/start`'s
+`idle` path.
+
+**What carries over:** everything durable lives in the host agent directory
+mounted at `/home/node/custom-state`: OpenClaw transcripts (the session key comes
+from the Postgres reply binding), `openclaw.json` MCP servers, `state/openclaw.sqlite`
+(cron jobs, MCP OAuth, skill uploads, plugin state), `skills/`, `plugin-skills/`
+and gogcli credentials. The new container is created with the usual rehydration,
+so history, MCP, skills and cron jobs survive; only container-layer caches are
+lost. No history is injected.
+
+**Snapshot:** when the agent is pinned to a vanished image and the configured
+image differs, the new guest may migrate state one way. The endpoint first commits
+a copy of the agent directory under `_upgrade_snapshots/<id>` (a fixed id per agent,
+distinct from upgrade run ids), clears the pin with a compare-and-set and starts on
+the configured image. Success drops the snapshot. Failure removes owned guests the
+attempt left, restores the snapshot and re-pins the old image only if the pin is
+still empty. If that removal fails, the snapshot is kept rather than restored under
+a live guest, and the next published start drops it.
+
+**After publication:** every published start clears the loss, drops a leftover
+recovery snapshot, forgets this process's release backoff for the agent and wakes
+all its pending lanes, so messages queued during the loss are answered at once.
+Other processes keep their own backoff (up to 30 s) and catch up through the
+one-second dispatch reconciler, about 31 s in the worst case. OpenClaw cron runs
+that fell due while the guest was gone are not replayed by the engine; the jobs
+themselves persist, and any catch-up is up to OpenClaw's own scheduler.

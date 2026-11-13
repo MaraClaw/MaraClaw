@@ -16,6 +16,7 @@ from app.core.domain.agents import (
 from app.core.domain.approvals import ApprovalStatus
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
+from app.schemas.agent_runtime_loss import AgentRuntimeLossOut
 from app.schemas.schemas import AgentOut
 
 
@@ -90,6 +91,7 @@ class AgentModelDump(TypedDict):
     onboarded_for_me: bool
     created_at: datetime
     last_active_at: datetime | None
+    runtime_loss: AgentRuntimeLossOut | None
 
 
 def agent_model_dump(model: AgentOut) -> AgentModelDump:
@@ -144,6 +146,7 @@ def agent_model_dump(model: AgentOut) -> AgentModelDump:
         "onboarded_for_me": model.onboarded_for_me,
         "created_at": model.created_at,
         "last_active_at": model.last_active_at,
+        "runtime_loss": model.runtime_loss,
     }
 
 

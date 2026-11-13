@@ -2,6 +2,7 @@ import { useTranslation } from '@/hooks/use-translation'
 import { Button } from '@/components/ui/button'
 import type { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
 import { lifecycleBlockMessage, mcpWarningMessage, recordedStatus, startFailureMessage } from '@/lib/agent-lifecycle-policy'
+import { runtimeLossSummary } from '@/lib/agent-runtime-loss'
 import { relativeTime } from '@/lib/relative-time'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
@@ -27,6 +28,10 @@ export function AgentLifecycleStatus({ query, expired, upgrading }: {
       {lifecycle && !query.isError ? <>
         <div role="status" aria-live="polite" className="space-y-2">
           <p>{translate("Recorded runtime:")}{' '}<strong className="font-medium">{owned(recordedStatus[lifecycle.runtime.recorded_status])}</strong></p>
+          {lifecycle.runtime.loss ? <>
+            <p>{translate("Runtime loss:")}{' '}{translate(runtimeLossSummary[lifecycle.runtime.loss.reason])}</p>
+            <p className="text-muted-foreground">{translate("Detected")}{' '}<time dateTime={lifecycle.runtime.loss.detected_at} title={formatDate(lifecycle.runtime.loss.detected_at, { dateStyle: 'medium', timeStyle: 'short' })}>{relativeTime(lifecycle.runtime.loss.detected_at, undefined, locale)}</time></p>
+          </> : null}
           <p className="text-muted-foreground">{translate("Recorded state is not a live readiness check.")}</p>
           <p>{translate("Policy:")} {!query.confirmed ? translate("Unconfirmed") : expired || !lifecycle.availability.policy_eligible ? translate("Blocked") : translate("Eligible")}</p>
           {expired && !lifecycle.availability.blocking_codes.includes('expired') ? <p>{owned(lifecycleBlockMessage.expired)}</p> : null}

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { Link, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { AgentRuntimeLossNotice } from '@/components/agent-runtime-loss-notice'
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { LiveReply } from '@/components/chat/live-reply'
 import { ChatTranscript } from '@/components/chat/transcript'
@@ -593,6 +594,7 @@ export function AgentChatPage() {
           {suspended ? <Button type="button" size="sm" variant="outline" className="h-11"
             onClick={() => { if (isCurrent()) retryRef.current?.() }}>{translate("Retry connection")}</Button> : null}
         </div>
+        <AgentRuntimeLossNotice agent={agent} className="mx-4 mt-4 shrink-0" />
         <div
           ref={threadRef}
           onScroll={threadScroll.onScroll}

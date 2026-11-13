@@ -75,6 +75,11 @@ export async function startAgent(agentId: string): Promise<AgentOut> {
   return apiRequest(`/api/agents/${agentId}/start`, { schema: memberAgentSchema, method: 'POST' })
 }
 
+/** Recovery for an agent whose container or image is gone; the engine refuses while an owned container still exists. */
+export async function startNewContainer(agentId: string): Promise<AgentOut> {
+  return apiRequest(`/api/agents/${agentId}/start-new-container`, { schema: memberAgentSchema, method: 'POST' })
+}
+
 export async function stopAgent(agentId: string): Promise<AgentOut> {
   return apiRequest(`/api/agents/${agentId}/stop`, { schema: memberAgentSchema, method: 'POST' })
 }

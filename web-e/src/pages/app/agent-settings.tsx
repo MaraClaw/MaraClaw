@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 
 import { AgentOpenClawUpgrade } from '@/components/agent-openclaw-upgrade'
 import { AgentDeletionRequest } from '@/components/agent-deletion-request'
+import { AgentRuntimeLossNotice } from '@/components/agent-runtime-loss-notice'
 import { AgentSetupStatus } from '@/components/agent-setup-status'
 import { AgentLifecycleStatus } from '@/components/agent-lifecycle-status'
 import { Badge } from '@/components/ui/badge'
@@ -116,13 +117,14 @@ export function AgentSettingsPage() {
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{agent.role_description}</p>
         ) : null}
       </div>
+      <AgentRuntimeLossNotice agent={agent} />
       <AgentOpenClawUpgrade agentId={agent.id} status={agent.status} query={openclaw} />
       {canManage ? <AgentLifecycleStatus query={lifecycle} expired={expired} upgrading={upgrading} /> : null}
       {canManage ? <AgentSetupStatus query={setup} retryAllowed={lifecycle.confirmed && Boolean(lifecycle.data?.availability.can_retry_setup) && !expired && !upgrading} /> : null}
       <div className="flex flex-wrap items-start gap-2">
         {canManage ? (
           <>
-            {agent.status !== 'running' ? (
+            {agent.status !== 'running' && !agent.runtime_loss ? (
               <Button size="sm" variant="outline" disabled={start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start} onClick={() => start.mutate()}>
                 {translate("Start")}</Button>
             ) : null}
