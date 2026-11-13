@@ -32,6 +32,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.services.agent_runtime_loss import report_missing_guest
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.guest_bootstrap import BOOTSTRAP_PENDING_EXIT, BOOTSTRAP_PENDING_STDERR, guarded_argv
 from app.services.guest_identity import GuestOwnershipError, guest_resolutions, resolve_guest
@@ -211,6 +212,7 @@ async def execute_gateway_turn(
 
                 guest = await drain_on_cancel(native_capacity().run(inspect))
                 if guest is None:
+                    await report_missing_guest(fresh)
                     return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
                 guest_resolutions.put(fresh, guest)
 

@@ -11,6 +11,7 @@ from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.runtime.tasks import loop_progress
 from app.services.agent_manager import agent_manager
+from app.services.agent_runtime_loss import guest_published, report_runtime_loss
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
@@ -21,6 +22,7 @@ from app.services.guest_identity import (
     guest_resolutions,
     inspect_guest_container,
 )
+from app.services.guest_image import GuestImageUnavailableError
 from app.services.guest_start import start_operation_id
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
@@ -35,6 +37,10 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
     except GuestAdmissionError as exc:
         code = "capacity_exceeded" if exc.code == "guest_memory_capacity_exceeded" else "configuration_failed"
         await start_store.fail(operation, code)
+        raise
+    except GuestImageUnavailableError as exc:
+        await report_runtime_loss(agent, "image_unavailable", image=exc.image)
+        await start_store.fail(operation, "runtime_failed")
         raise
     except GuestStartPreflightError as exc:
         code = "configuration_failed" if exc.code == "guest_recreation_required" else exc.code
@@ -51,6 +57,8 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
         raise
     if not published:
         await start_store.fail(operation, "publication_failed")
+    else:
+        await guest_published(agent, agent_manager._agent_dir(agent.id))
     return published
 
 
