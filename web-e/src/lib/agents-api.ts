@@ -49,6 +49,12 @@ export async function listTemplates(): Promise<AgentTemplate[]> {
   return apiRequest('/api/agents/templates')
 }
 
+/** The unrendered scaffold soul.md; the engine fills its `{{placeholders}}` when the agent is created. */
+export async function getDefaultSoul(): Promise<string> {
+  const { soul } = await apiRequest('/api/agents/default-soul', { schema: z.object({ soul: z.string() }) })
+  return soul
+}
+
 export async function getAgent(agentId: string): Promise<AgentOut> {
   return apiRequest(`/api/agents/${agentId}`, { schema: memberAgentSchema })
 }
