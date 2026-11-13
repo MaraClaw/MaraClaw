@@ -12,10 +12,11 @@ Scope: this directory's styled controls and composition primitives.
 - `password-field.tsx`: labeled password input, visibility toggle and error display.
 - `select.tsx`: styled native select with disclosure icon.
 - `separator.tsx`: orientation-aware Radix separator.
+- `switch.tsx`: styled Radix switch (`role="switch"`); label it with `<Label htmlFor>`.
 
 ## Invariants
 
-1. All eight files import `cn` from `@/lib/utils`.
+1. All nine files import `cn` from `@/lib/utils`.
    Definition: `web-a/src/lib/utils.ts`; returns `twMerge(clsx(inputs))`.
 2. `Button` uses `buttonVariants`; variant and size both default to `default`.
    `asChild` selects Radix `Slot`; otherwise renders a native `button`.

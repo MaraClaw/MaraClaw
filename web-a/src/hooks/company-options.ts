@@ -1,6 +1,12 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query'
 
-import { getCompanyStats, getTenant, listCompaniesPage, listCompanyOptions } from '../lib/companies-api.ts'
+import {
+  fetchCompanyAgentSections,
+  getCompanyStats,
+  getTenant,
+  listCompaniesPage,
+  listCompanyOptions,
+} from '../lib/companies-api.ts'
 import { ApiError } from '../lib/http.ts'
 
 export function companiesPageOptions(tenantId: string | null, search: string) {
@@ -36,6 +42,14 @@ export function companyStatsOptions(companyId: string) {
   return queryOptions({
     queryKey: ['admin-companies', 'stats', companyId],
     queryFn: ({ signal }) => getCompanyStats(companyId, signal),
+    enabled: Boolean(companyId),
+  })
+}
+
+export function companyAgentSectionsOptions(companyId: string) {
+  return queryOptions({
+    queryKey: ['admin-companies', 'agent-sections', companyId],
+    queryFn: ({ signal }) => fetchCompanyAgentSections(companyId, signal),
     enabled: Boolean(companyId),
   })
 }

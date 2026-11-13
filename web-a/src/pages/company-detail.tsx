@@ -21,6 +21,7 @@ import {
   type EmailDomain,
 } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
+import { CompanyAgentSections } from '@/pages/company-agent-sections'
 import { CompanyDeletion } from '@/pages/company-deletion'
 import { useTranslation } from '@/hooks/use-translation'
 
@@ -163,6 +164,7 @@ export function CompanyDetailPage() {
           ))}
         </CardContent>
       </Card>
+      {company && !companies.error ? <CompanyAgentSections companyId={company.id} /> : null}
       {company && !companies.error && !company.is_system && !company.is_default_end_user_org ? (
         <CompanyDeletion key={JSON.stringify([company.id, company.name])} company={company} />
       ) : null}

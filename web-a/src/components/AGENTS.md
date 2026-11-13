@@ -14,7 +14,7 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 
 | Family | Files / responsibility |
 |--------|------------------------|
-| Primitives | `ui/{badge,button,card,input,label,password-field,select,separator}.tsx` |
+| Primitives | `ui/{badge,button,card,input,label,password-field,select,separator,switch}.tsx` |
 | Shells | `layout/admin-shell.tsx`: protected nav + `Outlet`; `layout/auth-shell.tsx`: forgot/reset chrome (login has its own) |
 | Navigation | `layout/nav-icon.tsx`: active/inactive assets; `layout/section-rail.tsx`: route links or local selection |
 | Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
