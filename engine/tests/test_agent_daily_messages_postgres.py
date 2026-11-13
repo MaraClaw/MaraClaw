@@ -214,18 +214,18 @@ async def test_concurrent_charges_cannot_exceed_the_limit(
     assert await _usage(db) == (TODAY, limit)
 
 
-async def test_refused_web_message_rolls_back_the_user_charge_and_the_whole_turn(writable_receipt_db: ReceiptDatabase):
-    # Given an agent at its daily limit and a sender with quota to spare.
+async def test_refused_web_message_rolls_back_the_whole_turn(writable_receipt_db: ReceiptDatabase):
+    # Given an agent at its daily limit in a tier-governed organization.
     db = writable_receipt_db
     tenant_id = await _govern(db)
     await _set_usage(db, PRO_LIMIT)
 
-    # When the sender submits another message.
+    # When a member submits another message.
     with pytest.raises(QuotaExceeded) as refused:
         async with transaction(db.first):
             _ = await accept_submission(
                 ChatSubmission(client_submission_id=uuid4(), content="one too many"),
-                user=db.user,
+                user=replace(db.user, tenant_id=tenant_id),
                 agent=replace(db.agent, tenant_id=tenant_id),
                 session_id=db.session_id,
                 history=[],
@@ -243,7 +243,7 @@ async def test_refused_web_message_rolls_back_the_user_charge_and_the_whole_turn
     assert await _usage(db) == (TODAY, PRO_LIMIT)
 
 
-async def test_accepted_web_message_charges_the_user_and_the_agent_once_and_replay_charges_neither(
+async def test_accepted_web_message_charges_only_the_agent_once_and_replay_charges_nothing(
     writable_receipt_db: ReceiptDatabase,
 ):
     db = writable_receipt_db
@@ -263,10 +263,51 @@ async def test_accepted_web_message_charges_the_user_and_the_agent_once_and_repl
 
     async with transaction(db.first):
         charged = await db.first.fetchval("SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id})
-    assert (charged, await _usage(db)) == (1, (TODAY, 1))
+    assert (charged, await _usage(db)) == (0, (TODAY, 1))
 
 
-async def test_refused_channel_event_rolls_back_the_sender_charge_and_the_receipt(channel_db: ChannelDatabase):
+@pytest.mark.parametrize(
+    ("tier", "admitted"), [(OrganizationPlanId.PRO, True), (None, False)], ids=["tiered-admits", "untiered-refuses"]
+)
+async def test_exhausted_per_user_quota_only_refuses_in_an_untiered_organization(
+    writable_receipt_db: ReceiptDatabase, tier: OrganizationPlanId | None, admitted: bool
+):
+    # Given a member whose stored permanent allowance is spent, in an organization with or without a tier.
+    db = writable_receipt_db
+    tenant_id = await _govern(db, tier)
+    async with transaction(db.first):
+        await db.first.execute(
+            "UPDATE users SET quota_message_limit = 50, quota_message_period = 'permanent', quota_messages_used = 50 "
+            "WHERE id = %(id)s",
+            {"id": db.user.id},
+        )
+
+    async def submit() -> None:
+        async with transaction(db.first):
+            _ = await accept_submission(
+                ChatSubmission(client_submission_id=uuid4(), content="after the allowance"),
+                user=replace(db.user, tenant_id=tenant_id),
+                agent=replace(db.agent, tenant_id=tenant_id),
+                session_id=db.session_id,
+                history=[],
+            )
+
+    # When the member sends another message.
+    if admitted:
+        await submit()
+    else:
+        with pytest.raises(QuotaExceeded) as refused:
+            await submit()
+        assert refused.value.quota_type == "conversation"
+
+    # Then only the agent's daily counter moves in a tiered organization, and the stored allowance never does.
+    async with transaction(db.first):
+        charged = await db.first.fetchval("SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id})
+    assert charged == 50
+    assert await _usage(db) == ((TODAY, 1) if admitted else None)
+
+
+async def test_refused_channel_event_rolls_back_the_receipt(channel_db: ChannelDatabase):
     # Given a channel agent at its daily limit.
     db = channel_db.db
     await _tier_channel_agent(channel_db)
@@ -287,14 +328,14 @@ async def test_refused_channel_event_rolls_back_the_sender_charge_and_the_receip
         )
     assert left == {"receipts": 0, "charged": 0}
 
-    # And once the agent has room the same event is accepted and charges both counters.
+    # And once the agent has room the same event is accepted and charges the agent, not the sender's own allowance.
     await _set_usage(db, PRO_LIMIT - 1)
     async with transaction(db.first):
         _ = await accept_channel_event(channel_db.event)
         charged = await db.first.fetchval(
             "SELECT quota_messages_used FROM users WHERE id = %(sender)s", {"sender": channel_db.sender_id}
         )
-    assert (charged, await _usage(db)) == (1, (TODAY, PRO_LIMIT))
+    assert (charged, await _usage(db)) == (0, (TODAY, PRO_LIMIT))
 
 
 async def test_personal_original_over_the_agent_limit_is_a_quota_rejection_that_charges_nobody(linked: LinkedBurst):
@@ -306,18 +347,18 @@ async def test_personal_original_over_the_agent_limit_is_a_quota_rejection_that_
     # When its owner sends another self message.
     rejected = await submit(linked, "n1", "over the limit")
 
-    # Then it is the existing quota rejection, and the sender's own charge is undone with it.
+    # Then it is the existing quota rejection, and no message or sender charge is left behind.
     assert isinstance(rejected.personal, PersonalRejected)
     assert rejected.personal.outcome == "quota_rejected"
     assert await scalar(linked, "SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id}) == 0
     assert await scalar(linked, "SELECT count(*) FROM chat_messages WHERE role = 'user'") == 0
     assert await _usage(db) == (TODAY, PRO_LIMIT)
 
-    # And with room left the next message is admitted and charges the sender and the agent.
+    # And with room left the next message is admitted and charges the agent, not the sender's own allowance.
     await _set_usage(db, PRO_LIMIT - 1)
     admitted = await submit(linked, "n2", "within the limit")
     assert isinstance(admitted.personal, PersonalAccepted)
-    assert await scalar(linked, "SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id}) == 1
+    assert await scalar(linked, "SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id}) == 0
     assert await _usage(db) == (TODAY, PRO_LIMIT)
 
 

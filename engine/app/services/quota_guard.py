@@ -43,8 +43,14 @@ AgentExpired = AgentExpiredError
 
 
 async def charge_conversation_quota(user: UserRecord) -> None:
-    """Charge one accepted turn using the freshly authorized principal's exemption."""
+    """Charge one accepted turn using the freshly authorized principal's exemption.
+
+    A tier-governed organization is limited only by its per-agent daily cap (``charge_agent_daily_message``), so the
+    stored per-user allowance is not applied there, just like the stored agent count.
+    """
     if user.role in ("platform_admin", "org_admin"):
+        return
+    if await tier_for_tenant(user.tenant_id) is not None:
         return
 
     if await user_dao.charge_message_quota(user.id) is None:
