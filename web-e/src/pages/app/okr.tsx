@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -73,37 +74,55 @@ export function OkrPage() {
       </div>
 
       <section className="rounded-2xl border border-border p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="soft">{settings.data?.enabled ? translate("Enabled") : translate("Disabled")}</Badge>
-          <span className="text-sm text-muted-foreground">
-            {owned(settings.data?.period_frequency ?? 'quarterly')}
-            {settings.data?.daily_report_enabled ? translate(" · daily report {time}", { time: settings.data.daily_report_time }) : ''}
-          </span>
-          {isAdmin ? (
-            <Button size="sm" variant="outline" onClick={() => saveSettings.mutate(!settings.data?.enabled)}>
-              {settings.data?.enabled ? translate("Disable") : translate("Enable")}
-            </Button>
-          ) : null}
-        </div>
+        {settings.isSuccess ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant="soft">{settings.data.enabled ? translate("Enabled") : translate("Disabled")}</Badge>
+            <span className="text-sm text-muted-foreground">
+              {owned(settings.data.period_frequency)}
+              {settings.data.daily_report_enabled ? translate(" · daily report {time}", { time: settings.data.daily_report_time }) : ''}
+            </span>
+            {isAdmin ? (
+              <Button size="sm" variant="outline" onClick={() => saveSettings.mutate(!settings.data.enabled)}>
+                {settings.data.enabled ? translate("Disable") : translate("Enable")}
+              </Button>
+            ) : null}
+          </div>
+        ) : settings.isError ? (
+          <div className="space-y-2">
+            <RequestErrorToast error={settings.error} message={userFacingRequestError(settings.error, translate("Unable to load OKR settings."))} />
+            <Button size="sm" variant="outline" disabled={settings.isFetching} onClick={() => void settings.refetch()}>{translate("Retry OKR settings")}</Button>
+          </div>
+        ) : (
+          <p role="status" className="text-sm text-muted-foreground">{translate("Loading OKR settings…")}</p>
+        )}
       </section>
 
-      <label htmlFor="okr-period" className="block text-sm">
-        <span className="text-muted-foreground">{translate("Period")}</span>
-        <Select
-          id="okr-period"
-          fit
-          className="mt-1"
-          value={selected?.start ?? ''}
-          onChange={scope.effect((event) => setPeriodStart(event.target.value))}
-        >
-          {(periods.data ?? []).map((period) => (
-            <option key={period.start} value={period.start}>
-              {period.label}
-              {period.is_current ? translate(" (current)") : ''}
-            </option>
-          ))}
-        </Select>
-      </label>
+      {periods.isError ? (
+        <div className="space-y-2">
+          <RequestErrorToast error={periods.error} message={userFacingRequestError(periods.error, translate("Unable to load periods."))} />
+          <Button size="sm" variant="outline" disabled={periods.isFetching} onClick={() => void periods.refetch()}>{translate("Retry periods")}</Button>
+        </div>
+      ) : null}
+
+      {periods.data ? (
+        <label htmlFor="okr-period" className="block text-sm">
+          <span className="text-muted-foreground">{translate("Period")}</span>
+          <Select
+            id="okr-period"
+            fit
+            className="mt-1"
+            value={selected?.start ?? ''}
+            onChange={scope.effect((event) => setPeriodStart(event.target.value))}
+          >
+            {periods.data.map((period) => (
+              <option key={period.start} value={period.start}>
+                {period.label}
+                {period.is_current ? translate(" (current)") : ''}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : null}
 
       {selected ? <OkrObjectives key={`${selected.start}:${selected.end}`} period={selected} isAdmin={isAdmin} /> : null}
 
@@ -125,6 +144,12 @@ export function OkrPage() {
           }
         >
           {translate("Submit my report")}</Button>
+        {reports.isError ? (
+          <div className="space-y-2">
+            <RequestErrorToast error={reports.error} message={userFacingRequestError(reports.error, translate("Unable to load today’s reports."))} />
+            <Button size="sm" variant="outline" disabled={reports.isFetching} onClick={() => void reports.refetch()}>{translate("Retry reports")}</Button>
+          </div>
+        ) : null}
         <ul className="space-y-2">
           {(reports.data ?? []).map((item) => (
             <li key={item.id} className="rounded-xl border border-border px-3 py-2 text-sm">
