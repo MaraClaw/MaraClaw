@@ -1,7 +1,7 @@
 import { bounded, listPath, ordered, responseBarrier, uuid } from './admission-fixture.browser.mjs'
 import { button, detached, enabledButton, exact, visible } from './admission-harness.browser.mjs'
 import {
-  assertDecided, assertList, backToList, decisionCall, detailCall, filterList,
+  assertDecided, assertList, backToList, confirmDecision, decisionCall, decisionReady, detailCall, filterList,
   listAction, listCall, openDetail, reasonField, reviewLink,
 } from './admission-actions.browser.mjs'
 
@@ -36,14 +36,16 @@ export async function exerciseStates(h, page, state) {
   state.detailStatus = 200; since = state.calls.length
   await page.snapshot(); await button(page, 'Retry').click()
   await state.waitCall(since, detailCall(id))
-  await visible(enabledButton(page, 'Approve request'))
+  await visible(decisionReady(page))
   await detached(button(page, 'Retry'))
+  h.verify('approval needs explicit confirmation', await button(page, 'Approve request').isDisabled() && !await button(page, 'Reject request').isDisabled())
 
   // A failed decision retains the pending detail, reason draft, and manual retry.
   const reason = 'Synthetic retry draft retained across a 503.\nLongUnbrokenAdmissionReasonForMobileWrapping0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
   await reasonField(page).fill(reason)
   state.decisionStatus = 503
   const decision = responseBarrier(state, decisionCall(id))
+  await confirmDecision(page)
   await page.snapshot(); await button(page, 'Approve request').click()
   await bounded(decision.entered, 'Decision did not reach the controlled response barrier')
   await visible(button(page, 'Approving...'))
@@ -52,13 +54,15 @@ export async function exerciseStates(h, page, state) {
   await h.capture(page, state, 'detail-submitting')
   decision.release(); await bounded(decision.completed)
   await visible(page.locator('main [role="alert"]').filter({ hasText: exact('Synthetic admission decision unavailable; retry safely.') }))
-  await visible(enabledButton(page, 'Approve request'))
+  await visible(decisionReady(page))
+  h.verify('503 clears the confirmation', await button(page, 'Approve request').isDisabled())
   h.verify('503 keeps pending backend record', state.rows.find((row) => row.id === id).status, 'pending')
   h.verify('503 keeps reason draft', await reasonField(page).inputValue(), reason)
   h.verify('503 keeps current detail route', await page.evaluate(() => location.pathname), `/admission-approvals/${id}`)
   h.verify('503 never automatically retries the decision', state.calls.filter(decisionCall(id)).length, 1)
   await h.capture(page, state, 'detail-decision-503-retry')
   state.decisionStatus = 200; since = state.calls.length
+  await confirmDecision(page)
   await page.snapshot(); await button(page, 'Approve request').click()
   const retry = await state.waitCall(since, decisionCall(id))
   h.verify('manual retry preserves submitted reason', retry.payload.reason, reason)

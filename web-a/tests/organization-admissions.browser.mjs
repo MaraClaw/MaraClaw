@@ -44,6 +44,7 @@ await runBrowser(async ({ scenario, capture, verify, receipt }) => {
     }
     await button(page, 'Back to requests').click(); await visible(review(1)); await review(1).click()
     state.decisionStatus = 409
+    if (receipt.mode !== 'before') await page.locator('main input[type="checkbox"]').check()
     await enabledButton(page, 'Approve request').click(); await visible(page.locator('[role="alert"]'))
     await capture(page, state, 'conflict')
     if (receipt.mode !== 'before') {
@@ -55,7 +56,8 @@ await runBrowser(async ({ scenario, capture, verify, receipt }) => {
       verify('back restores queue heading focus', await page.evaluate(() => document.activeElement === document.querySelector('main h1')))
       await button(page, 'Refresh requests').click(); await visible(review(1))
       state.decisionStatus = 200
-      await review(1).click(); await enabledButton(page, 'Approve request').click()
+      await review(1).click(); await page.locator('main input[type="checkbox"]').check()
+      await enabledButton(page, 'Approve request').click()
       await visible(page.locator('[role="status"]').filter({ hasText: exact('Request approved.') })); await capture(page, state, 'approved')
       await button(page, 'Back to requests').click()
       await page.locator('main select').selectOption('approved'); await visible(review(3))
