@@ -35,6 +35,7 @@ Engine HTTP/WS/storage layer. Pages never `fetch()`. New domain → new `*-api.t
 | `schedule-time.ts` | IANA timezone validation and next-run formatting in the schedule's timezone. |
 | `openclaw-updates-api.ts` | Zod-parsed update notice details, per-agent update status and upgrade requests. |
 | `openclaw-update-policy.ts` | `openclawUpdateRoute` (`updates/:noticeId`), notice/settings paths and OpenClaw update work/outlet gates. |
+| `agent-section-visibility.ts` | `visibleAgentTabs` (company-hidden sections plus the manage-only Activity rule) and `hiddenSectionRedirect` (first visible tab path when the URL is inside a hidden section, else null) for `agent-layout.tsx`. |
 | `trigger-executions-api.ts` | Owner/signal-fenced, Zod-parsed cursor pages from `/api/agents/:agentId/triggers/:triggerId/executions`. |
 | `trigger-executions-query.ts` | Trigger execution visibility checks and session-scoped infinite-query options. |
 | `control-api.ts` | Take Control, `/credentials`, `/gogcli`, `/api/pages` (published `/p/{id}`) |
