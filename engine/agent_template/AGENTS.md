@@ -14,7 +14,7 @@ This is the singular runtime workspace scaffold used to initialize each new agen
 
 ## Runtime Files
 
-- `soul.md` is rendered after read. Preserve `{{agent_name}}`, `{{role_description}}`, `{{creator_name}}` and `{{created_at}}`, and keep the `## Personality` and `## Boundaries` headings: creation-time text replaces them, or is appended when absent.
+- `soul.md` is rendered after read. Preserve `{{agent_name}}`, `{{role_description}}`, `{{creator_name}}` and `{{created_at}}`, and keep the `## Personality` and `## Boundaries` headings: creation-time text replaces them, or is appended when absent. `GET /api/agents/default-soul` serves this file unrendered, and a non-blank `AgentCreate.soul` replaces it before rendering, so the placeholders work in creator-edited souls too.
 - `state.json` must stay a JSON object. `agent_id` and `name` are overwritten after read; other keys are kept.
 - `HEARTBEAT.md` is the periodic awareness contract.
 - `memory/` (`MEMORY_INDEX.md`, `curiosity_journal.md`), `workspace/archived/`, `skills/` and `daily_reports/` seed runtime directories and assets. `skills/mcp-installer/SKILL.md` is also read by `skill_seeder`, so edits change the seeded skill.

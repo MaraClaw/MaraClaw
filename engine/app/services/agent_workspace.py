@@ -37,11 +37,24 @@ def _read_template_files(template_dir: Path) -> dict[str, bytes]:
     return files
 
 
+_FALLBACK_SOUL = "# Personality\n\nI'm {{agent_name}}, {{role_description}}.\n"
+
+
+async def read_default_soul(template_dir: Path) -> str:
+    """Return the unrendered scaffold soul that new agents start from."""
+    path = template_dir / "soul.md"
+    if not await anyio.Path(path).is_file():
+        return _FALLBACK_SOUL
+    return await anyio.Path(path).read_text(encoding="utf-8")
+
+
 async def render_agent_files(
-    agent: AgentRecord, template_dir: Path, personality: str = "", boundaries: str = ""
+    agent: AgentRecord, template_dir: Path, personality: str = "", boundaries: str = "", soul: str = ""
 ) -> dict[str, bytes]:
     files = await anyio.to_thread.run_sync(_read_template_files, template_dir)
     creator = await user_dao.get(agent.creator_id)
+    if soul.strip():
+        files["soul.md"] = soul.encode()
     soul = files.get(
         "soul.md", f"# Personality\n\nI'm {agent.name}, {agent.role_description or 'a digital assistant'}.\n".encode()
     ).decode("utf-8")

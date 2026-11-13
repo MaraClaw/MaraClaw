@@ -242,6 +242,7 @@ class AgentCreate(BaseModel):
     welcome_message: str | None = None
     avatar_url: str | None = None
     # Soul
+    soul: str = Field(default="", max_length=20000, description="Full soul.md; empty uses the default scaffold soul")
     personality: str = ""
     boundaries: str = ""
     # Model

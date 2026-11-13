@@ -1230,6 +1230,13 @@
             "title": "Skill Ids",
             "type": "array"
           },
+          "soul": {
+            "default": "",
+            "description": "Full soul.md; empty uses the default scaffold soul",
+            "maxLength": 20000,
+            "title": "Soul",
+            "type": "string"
+          },
           "template_id": {
             "anyOf": [
               {
@@ -21330,6 +21337,31 @@
           }
         ],
         "summary": "Create Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/default-soul": {
+      "get": {
+        "description": "Return the unrendered soul every new agent starts from, for editing before creation.",
+        "operationId": "get_2f6170692f6167656e74732f64656661756c742d736f756c",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Default Soul",
         "tags": [
           "agents"
         ]

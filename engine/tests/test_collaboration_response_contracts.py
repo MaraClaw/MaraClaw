@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import get_type_hints
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -609,3 +610,17 @@ async def test_okr_sync_and_delete_wrappers_keep_existing_status_shapes(
 
     assert response.status_code == 200
     assert response.json() == expected
+
+
+async def test_default_soul_returns_the_unrendered_scaffold(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "soul.md").write_text("# Soul - {{agent_name}}\n\n## Personality\nSteady.\n", encoding="utf-8")
+    monkeypatch.setattr(agents.agent_manager, "_template_dir", lambda: tmp_path)
+
+    response = await client.get("/api/agents/default-soul")
+
+    assert response.status_code == 200
+    assert response.json() == {"soul": "# Soul - {{agent_name}}\n\n## Personality\nSteady.\n"}
+    hints = dict[str, TypeForm[object]](get_type_hints(agents.get_default_soul))
+    TypeAdapter[object](hints["return"]).validate_json(response.content)

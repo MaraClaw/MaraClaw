@@ -92,7 +92,11 @@ def _expected_worker_io(error: BaseException) -> bool:
 
 async def persist_agent_setup(agent: AgentRecord, data: AgentCreate, raw_key: str) -> None:
     files = await render_agent_files(
-        agent, agent_manager._template_dir(), personality=data.personality or "", boundaries=data.boundaries or ""
+        agent,
+        agent_manager._template_dir(),
+        personality=data.personality or "",
+        boundaries=data.boundaries or "",
+        soul=data.soul,
     )
     folders: list[str] = []
     servers: tuple[str, ...] = ()

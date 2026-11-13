@@ -27,6 +27,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 - Provider organization directory/sync routes are retired. `/api/org/users` and org departments remain; neither requires a provider department hierarchy.
 - `agents.py` stores `scope_type=department` at `access_level=use` only, and only for custom scope (other scopes with `department_ids` → 422). Saving private or company deletes every permission row, so those grants disappear. DB check: `ck_department_permission_use`. `GET /{agent_id}/permissions/departments` is managers-only.
 - `POST /agents/` accepts optional `department_ids` (default `[]`). Nonempty selections require custom sharing; validate every department against the resolved target tenant before writes. Creator `manage` and deduplicated department `use` grants share the agent creation transaction through `AgentPermissionDAO.create`.
+- `GET /agents/default-soul` returns the unrendered scaffold `soul.md` (`{soul}`) so web-e can show and edit it before creation; register it before `/{agent_id}`. `POST /agents/` accepts optional `soul` (max 20000): non-blank text replaces the scaffold soul, then placeholders and `personality`/`boundaries` sections are rendered as usual (`agent_workspace.render_agent_files`).
 
 ## Dependencies
 
