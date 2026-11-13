@@ -80,6 +80,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
 
     monkeypatch.setattr(chat_submissions, "connection_ctx", turn_connection)
     monkeypatch.setattr(chat_submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "charge_agent_daily_message", AsyncMock())
     monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", AsyncMock())
     monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", dispatch)
