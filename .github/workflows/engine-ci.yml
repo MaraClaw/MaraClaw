@@ -211,5 +211,6 @@ jobs:
           tests/test_shared_burst_dispatch_postgres.py
           tests/test_shared_burst_scope_postgres.py
           tests/test_shared_model_config_postgres.py
+          tests/test_webhook_token_index_postgres.py
           tests/test_whatsapp_personal*.py
           -q

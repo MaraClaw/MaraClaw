@@ -1146,6 +1146,11 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 
 CREATE INDEX IF NOT EXISTS ix_agent_triggers_agent_id ON agent_triggers (agent_id);
 
+-- Serves agent_trigger_dao.find_webhook_by_token on the public webhook endpoint; the predicate must stay identical to
+-- that query's WHERE so the planner can use it. Deliberately not UNIQUE: tokens are not unique by constraint, and a
+-- unique build would abort this single-transaction baseline on a database that already holds duplicates.
+CREATE INDEX IF NOT EXISTS ix_agent_triggers_webhook_token ON agent_triggers ((config->>'token')) WHERE type = 'webhook' AND is_enabled IS TRUE;
+
 CREATE TABLE IF NOT EXISTS agent_user_onboardings (
 	agent_id UUID NOT NULL, 
 	user_id UUID NOT NULL, 
