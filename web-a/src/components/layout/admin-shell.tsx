@@ -1,5 +1,5 @@
 import { LogOut } from 'lucide-react'
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
@@ -189,6 +189,12 @@ export function AdminShell() {
     const target = active.getBoundingClientRect()
     rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
   }, [pathname])
+  const section = navItems.find((item) => item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(`${item.to}/`))
+  useEffect(() => {
+    if (!section) return
+    document.title = `${t(section.label)} - MaraClaw Admin`
+    return () => { document.title = 'MaraClaw Admin' }
+  }, [section, t])
   const flushMain = pathname.startsWith('/search-engine')
 
   return (
