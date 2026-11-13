@@ -8,7 +8,9 @@ from typing import assert_never
 
 from app.dao.personal_burst_dao import personal_burst_dao
 from app.dao.personal_burst_input_dao import personal_burst_input_dao
+from app.db.session import connection_ctx
 from app.records.personal_burst_input import NewBurstMember, ReceiptKey
+from app.services.agent_message_quota import charge_agent_daily_message
 from app.services.channels.binding import persist_channel_user_message
 from app.services.channels.personal_burst_gateway import create_burst_anchor
 from app.services.channels.personal_burst_limits import personal_burst_limits
@@ -47,6 +49,24 @@ async def _accept(original: PersonalOriginal) -> PersonalAccepted:
     return PersonalAccepted(anchor.id, 1, started_batch=True)
 
 
+async def _charge_sender_and_agent(original: PersonalOriginal) -> bool:
+    """Charge the sender's quota and the agent's daily cap as one unit; ``False`` when either refuses, neither charged.
+
+    A refusal is a committed outcome here, not an exception, so the sender's own charge needs a savepoint to undo.
+    """
+    async with connection_ctx() as db:
+        await db.execute("SAVEPOINT personal_message_charges")
+        try:
+            await charge_conversation_quota(original.sender)
+            await charge_agent_daily_message(original.agent)
+        except QuotaExceededError:
+            await db.execute("ROLLBACK TO SAVEPOINT personal_message_charges")
+            await db.execute("RELEASE SAVEPOINT personal_message_charges")
+            return False
+        await db.execute("RELEASE SAVEPOINT personal_message_charges")
+        return True
+
+
 async def admit_personal_original(original: PersonalOriginal) -> PersonalAccepted | PersonalRejected:
     limits = personal_burst_limits()
     usage = await personal_burst_dao.pending_usage(original.agent.id, original.shared_session_id)
@@ -60,9 +80,7 @@ async def admit_personal_original(original: PersonalOriginal) -> PersonalAccepte
             pass
         case unreachable:
             assert_never(unreachable)
-    try:
-        await charge_conversation_quota(original.sender)
-    except QuotaExceededError:
+    if not await _charge_sender_and_agent(original):
         return await reject_personal_original(original, "quota_rejected", limits)
     return await _accept(original)
 
