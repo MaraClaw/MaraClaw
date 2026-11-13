@@ -1,6 +1,6 @@
 [project]
 name = "maraclaw"
-version = "1.1.0"
+version = "1.1.1"
 description = "Backend workspace for the MaraClaw enterprise digital employee platform."
 requires-python = ">=3.14.10"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
     "pydantic>=2.14.3",
-    "pydantic-settings>=2.16.2",
+    "pydantic-settings>=2.16.3",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.33",
@@ -74,7 +74,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "httpx>=0.28.1",
     "ruff>=0.17.5",
-    "ty>=0.0.102",
+    "ty>=0.0.103",
     "basedpyright>=1.40.2",
 ]
 
