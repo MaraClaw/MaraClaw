@@ -45,5 +45,5 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
-      - name: Build final nginx image
+      - name: Build final Caddy image
         run: docker build --tag maraclaw-${{ matrix.package }}:ci .
