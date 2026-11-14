@@ -3252,28 +3252,6 @@
             ],
             "title": "Heartbeat Active Hours"
           },
-          "heartbeat_enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Heartbeat Enabled"
-          },
-          "heartbeat_interval_minutes": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Heartbeat Interval Minutes"
-          },
           "max_tokens_per_day": {
             "anyOf": [
               {
@@ -4015,6 +3993,20 @@
         "title": "AuthUser",
         "type": "object"
       },
+      "Body_upload_capacity_evidence_api_capacity_orders__order_id__evidence_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_capacity_evidence_api_capacity_orders__order_id__evidence_post",
+        "type": "object"
+      },
       "Body_upload_enterprise_kb_file_api_enterprise_knowledge_base_upload_post": {
         "properties": {
           "file": {
@@ -4166,6 +4158,654 @@
           "TENANT_CHANGED",
           "AGENT_GONE"
         ]
+      },
+      "CapacityDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ApprovalAction"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "CapacityDecisionRequest",
+        "type": "object"
+      },
+      "CapacityEvidenceOut": {
+        "properties": {
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content_type",
+          "filename",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "CapacityEvidenceOut",
+        "type": "object"
+      },
+      "CapacityOrderCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "extra_accounts": {
+            "default": 0,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Extra Accounts",
+            "type": "integer"
+          },
+          "extra_agents": {
+            "default": 0,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Extra Agents",
+            "type": "integer"
+          }
+        },
+        "title": "CapacityOrderCreateRequest",
+        "type": "object"
+      },
+      "CapacityOrderKind": {
+        "enum": [
+          "purchase",
+          "renewal"
+        ],
+        "title": "CapacityOrderKind",
+        "type": "string",
+        "x-enum-varnames": [
+          "PURCHASE",
+          "RENEWAL"
+        ]
+      },
+      "CapacityOrderOut": {
+        "properties": {
+          "account_unit_usd": {
+            "title": "Account Unit Usd",
+            "type": "integer"
+          },
+          "agent_unit_usd": {
+            "title": "Agent Unit Usd",
+            "type": "integer"
+          },
+          "amount_usd_cents": {
+            "title": "Amount Usd Cents",
+            "type": "integer"
+          },
+          "amount_vnd": {
+            "title": "Amount Vnd",
+            "type": "integer"
+          },
+          "billing_month": {
+            "format": "date",
+            "title": "Billing Month",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "days_charged": {
+            "title": "Days Charged",
+            "type": "integer"
+          },
+          "days_in_month": {
+            "title": "Days In Month",
+            "type": "integer"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapacityEvidenceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_accounts": {
+            "title": "Extra Accounts",
+            "type": "integer"
+          },
+          "extra_agents": {
+            "title": "Extra Agents",
+            "type": "integer"
+          },
+          "grace_until": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grace Until"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CapacityOrderKind"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/CapacityRecipientOut"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "source_order_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Order Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CapacityOrderStatus"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          },
+          "submitted_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted By"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "tenant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Name"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "usd_vnd_rate": {
+            "title": "Usd Vnd Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "tenant_name",
+          "reference",
+          "kind",
+          "status",
+          "source_order_id",
+          "tier",
+          "billing_month",
+          "extra_accounts",
+          "extra_agents",
+          "account_unit_usd",
+          "agent_unit_usd",
+          "days_charged",
+          "days_in_month",
+          "amount_usd_cents",
+          "usd_vnd_rate",
+          "amount_vnd",
+          "recipient",
+          "grace_until",
+          "evidence",
+          "created_by",
+          "created_at",
+          "submitted_by",
+          "submitted_at",
+          "reviewed_by",
+          "reviewed_at",
+          "review_note"
+        ],
+        "title": "CapacityOrderOut",
+        "type": "object"
+      },
+      "CapacityOrderPage": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityOrderOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "CapacityOrderPage",
+        "type": "object"
+      },
+      "CapacityOrderStatus": {
+        "enum": [
+          "awaiting_payment",
+          "submitted",
+          "approved",
+          "rejected",
+          "cancelled",
+          "expired"
+        ],
+        "title": "CapacityOrderStatus",
+        "type": "string",
+        "x-enum-varnames": [
+          "AWAITING_PAYMENT",
+          "SUBMITTED",
+          "APPROVED",
+          "REJECTED",
+          "CANCELLED",
+          "EXPIRED"
+        ]
+      },
+      "CapacityOverviewOut": {
+        "description": "What the Users page needs: caps and usage, the unit prices and the clock a quote is computed on.",
+        "properties": {
+          "account_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Limit"
+          },
+          "account_unit_usd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Unit Usd"
+          },
+          "accounts_used": {
+            "title": "Accounts Used",
+            "type": "integer"
+          },
+          "agent_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Limit"
+          },
+          "agent_unit_usd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Unit Usd"
+          },
+          "agents_used": {
+            "title": "Agents Used",
+            "type": "integer"
+          },
+          "capped": {
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "current_renewal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapacityOrderOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "days_in_month": {
+            "title": "Days In Month",
+            "type": "integer"
+          },
+          "extra_accounts": {
+            "title": "Extra Accounts",
+            "type": "integer"
+          },
+          "extra_agents": {
+            "title": "Extra Agents",
+            "type": "integer"
+          },
+          "included_accounts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Accounts"
+          },
+          "included_agents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Agents"
+          },
+          "open_orders": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityOrderOut"
+            },
+            "title": "Open Orders",
+            "type": "array"
+          },
+          "payments_configured": {
+            "title": "Payments Configured",
+            "type": "boolean"
+          },
+          "remaining_days": {
+            "title": "Remaining Days",
+            "type": "integer"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationPlanId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "today": {
+            "format": "date",
+            "title": "Today",
+            "type": "string"
+          },
+          "usd_vnd_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd Vnd Rate"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "capped",
+          "tier",
+          "included_accounts",
+          "included_agents",
+          "extra_accounts",
+          "extra_agents",
+          "account_limit",
+          "agent_limit",
+          "accounts_used",
+          "agents_used",
+          "account_unit_usd",
+          "agent_unit_usd",
+          "today",
+          "days_in_month",
+          "remaining_days",
+          "payments_configured",
+          "usd_vnd_rate",
+          "open_orders",
+          "current_renewal"
+        ],
+        "title": "CapacityOverviewOut",
+        "type": "object"
+      },
+      "CapacityPaymentSettingsOut": {
+        "description": "``configured`` is false and the rest null until the genesis platform admin saves them.",
+        "properties": {
+          "account_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Number"
+          },
+          "bank_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bank Name"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "usd_vnd_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd Vnd Rate"
+          }
+        },
+        "required": [
+          "configured",
+          "bank_name",
+          "account_number",
+          "branch_name",
+          "usd_vnd_rate"
+        ],
+        "title": "CapacityPaymentSettingsOut",
+        "type": "object"
+      },
+      "CapacityPaymentSettingsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Account Number",
+            "type": "string"
+          },
+          "bank_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Bank Name",
+            "type": "string"
+          },
+          "branch_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Branch Name",
+            "type": "string"
+          },
+          "usd_vnd_rate": {
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Usd Vnd Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bank_name",
+          "account_number",
+          "branch_name",
+          "usd_vnd_rate"
+        ],
+        "title": "CapacityPaymentSettingsRequest",
+        "type": "object"
+      },
+      "CapacityRecipientOut": {
+        "properties": {
+          "account_number": {
+            "title": "Account Number",
+            "type": "string"
+          },
+          "bank_name": {
+            "title": "Bank Name",
+            "type": "string"
+          },
+          "branch_name": {
+            "title": "Branch Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bank_name",
+          "account_number",
+          "branch_name"
+        ],
+        "title": "CapacityRecipientOut",
+        "type": "object"
       },
       "CategoryConfigResponse": {
         "properties": {
@@ -11137,6 +11777,10 @@
           "agent_ownership_transferred",
           "organization_welcome",
           "organization_admission_pending",
+          "capacity_payment_submitted",
+          "capacity_payment_approved",
+          "capacity_payment_rejected",
+          "capacity_renewal_due",
           "system_alert",
           "system",
           "openclaw_update"
@@ -11159,6 +11803,10 @@
           "AGENT_OWNERSHIP_TRANSFERRED",
           "ORGANIZATION_WELCOME",
           "ORGANIZATION_ADMISSION_PENDING",
+          "CAPACITY_PAYMENT_SUBMITTED",
+          "CAPACITY_PAYMENT_APPROVED",
+          "CAPACITY_PAYMENT_REJECTED",
+          "CAPACITY_RENEWAL_DUE",
           "SYSTEM_ALERT",
           "SYSTEM",
           "OPENCLAW_UPDATE"
@@ -12219,11 +12867,26 @@
       "OrganizationAdditionalAccountMonthlyUsd": {
         "description": "Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live.",
         "enum": [
-          6,
           5,
-          4
+          4,
+          3
         ],
         "title": "OrganizationAdditionalAccountMonthlyUsd",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationAdditionalAgentMonthlyUsd": {
+        "description": "Whole USD per month for each agent beyond the included allocation, per tier; quoted only, the engine does not bill it; the only place the numbers live.",
+        "enum": [
+          35,
+          49,
+          79
+        ],
+        "title": "OrganizationAdditionalAgentMonthlyUsd",
         "type": "integer",
         "x-enum-varnames": [
           "PRO",
@@ -12427,13 +13090,28 @@
         "type": "object"
       },
       "OrganizationAgentLimit": {
-        "description": "Ordinary agents one account (organization admins included) may own, per tier; the only place the numbers live.",
+        "description": "Ordinary agents one account (organization admins included) may own, per tier; the only place the numbers live.\n\nThis is the per-account limit; the company-wide agent cap is ``OrganizationIncludedAgents`` plus purchased extras.",
         "enum": [
           2,
-          5,
-          10
+          3,
+          5
         ],
         "title": "OrganizationAgentLimit",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationAnnualPriceUsd": {
+        "description": "Whole USD per year when billed annually, per tier: ten times the monthly price (\"two months free\"); quoted only, the engine has no purchase flow; the only place the numbers live.",
+        "enum": [
+          790,
+          2490,
+          6990
+        ],
+        "title": "OrganizationAnnualPriceUsd",
         "type": "integer",
         "x-enum-varnames": [
           "PRO",
@@ -12542,14 +13220,14 @@
           "ULTRA"
         ]
       },
-      "OrganizationMaxAccounts": {
-        "description": "Most human accounts (organization admin included) a tier quotes, per tier; the only place the numbers live.",
+      "OrganizationIncludedAgents": {
+        "description": "Agents across the whole organization that the monthly price includes, per tier; the company-wide agent cap before purchased extras; the only place the numbers live.",
         "enum": [
-          25,
-          75,
-          200
+          2,
+          5,
+          10
         ],
-        "title": "OrganizationMaxAccounts",
+        "title": "OrganizationIncludedAgents",
         "type": "integer",
         "x-enum-varnames": [
           "PRO",
@@ -12559,10 +13237,16 @@
       },
       "OrganizationPlan": {
         "additionalProperties": false,
-        "description": "Whole-USD monthly commercial terms. The human account count includes the org admin; model charges are separate.",
+        "description": "Whole-USD commercial terms. The human account count includes the org admin; model charges are separate.\n\n``included_accounts`` and ``included_agents`` are the company-wide caps before purchased extras (there is no\naccount ceiling: a company buys any number of extra accounts), and ``max_agents_per_account`` is the per-account\nagent cap. ``annual_price_usd`` and the four ``*_addon_*`` fields are quoted terms only.",
         "properties": {
           "additional_account_monthly_usd": {
             "$ref": "#/components/schemas/OrganizationAdditionalAccountMonthlyUsd"
+          },
+          "additional_agent_monthly_usd": {
+            "$ref": "#/components/schemas/OrganizationAdditionalAgentMonthlyUsd"
+          },
+          "annual_price_usd": {
+            "$ref": "#/components/schemas/OrganizationAnnualPriceUsd"
           },
           "currency": {
             "$ref": "#/components/schemas/OrganizationCurrency"
@@ -12590,8 +13274,8 @@
             "title": "Included Accounts",
             "type": "integer"
           },
-          "max_accounts": {
-            "$ref": "#/components/schemas/OrganizationMaxAccounts"
+          "included_agents": {
+            "$ref": "#/components/schemas/OrganizationIncludedAgents"
           },
           "max_agents_per_account": {
             "$ref": "#/components/schemas/OrganizationAgentLimit"
@@ -12607,8 +13291,28 @@
           "name": {
             "$ref": "#/components/schemas/OrganizationPlanName"
           },
+          "storage_addon_bytes": {
+            "minimum": 1.0,
+            "title": "Storage Addon Bytes",
+            "type": "integer"
+          },
+          "storage_addon_monthly_usd": {
+            "minimum": 1.0,
+            "title": "Storage Addon Monthly Usd",
+            "type": "integer"
+          },
           "storage_limit_bytes": {
             "$ref": "#/components/schemas/OrganizationStorageLimitBytes"
+          },
+          "workspace_disk_addon_bytes": {
+            "minimum": 1.0,
+            "title": "Workspace Disk Addon Bytes",
+            "type": "integer"
+          },
+          "workspace_disk_addon_monthly_usd": {
+            "minimum": 1.0,
+            "title": "Workspace Disk Addon Monthly Usd",
+            "type": "integer"
           },
           "workspace_disk_bytes": {
             "$ref": "#/components/schemas/OrganizationWorkspaceDiskBytes"
@@ -12619,10 +13323,12 @@
           "name",
           "currency",
           "monthly_price_usd",
+          "annual_price_usd",
           "included_accounts",
           "additional_account_monthly_usd",
-          "max_accounts",
           "max_agents_per_account",
+          "included_agents",
+          "additional_agent_monthly_usd",
           "storage_limit_bytes",
           "max_file_size_bytes",
           "daily_messages_per_agent",
@@ -12630,7 +13336,11 @@
           "guest_millicpus",
           "guest_cpu_shares",
           "guest_pids_limit",
-          "workspace_disk_bytes"
+          "workspace_disk_bytes",
+          "storage_addon_bytes",
+          "storage_addon_monthly_usd",
+          "workspace_disk_addon_bytes",
+          "workspace_disk_addon_monthly_usd"
         ],
         "title": "OrganizationPlan",
         "type": "object"
@@ -19766,6 +20476,252 @@
           }
         ],
         "summary": "List Admin Audit Logs Page",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/capacity-orders": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f63617061636974792d6f7264657273",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CapacityOrderStatus",
+              "default": "submitted"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Capacity Orders",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/capacity-orders/{order_id}": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f63617061636974792d6f72646572732f7b6f726465725f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Review Capacity Order",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/capacity-orders/{order_id}/decision": {
+      "post": {
+        "operationId": "post_2f6170692f61646d696e2f63617061636974792d6f72646572732f7b6f726465725f69647d2f6465636973696f6e",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Capacity Order",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/capacity-payment-settings": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f63617061636974792d7061796d656e742d73657474696e6773",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityPaymentSettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Capacity Payment Settings",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "put_2f6170692f61646d696e2f63617061636974792d7061796d656e742d73657474696e6773",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityPaymentSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityPaymentSettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Capacity Payment Settings",
         "tags": [
           "admin"
         ]
@@ -32555,6 +33511,383 @@
         "summary": "Unbind Identity",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/capacity/orders": {
+      "get": {
+        "operationId": "get_2f6170692f63617061636974792f6f7264657273",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Capacity Orders",
+        "tags": [
+          "capacity"
+        ]
+      },
+      "post": {
+        "operationId": "post_2f6170692f63617061636974792f6f7264657273",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityOrderCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Capacity Order",
+        "tags": [
+          "capacity"
+        ]
+      }
+    },
+    "/api/capacity/orders/{order_id}": {
+      "get": {
+        "operationId": "get_2f6170692f63617061636974792f6f72646572732f7b6f726465725f69647d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Capacity Order",
+        "tags": [
+          "capacity"
+        ]
+      }
+    },
+    "/api/capacity/orders/{order_id}/cancel": {
+      "post": {
+        "operationId": "post_2f6170692f63617061636974792f6f72646572732f7b6f726465725f69647d2f63616e63656c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Capacity Order",
+        "tags": [
+          "capacity"
+        ]
+      }
+    },
+    "/api/capacity/orders/{order_id}/evidence": {
+      "get": {
+        "description": "The stored evidence with its sniffed type; sandboxed and never sniffed again by the browser.",
+        "operationId": "get_2f6170692f63617061636974792f6f72646572732f7b6f726465725f69647d2f65766964656e6365",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Capacity Evidence",
+        "tags": [
+          "capacity"
+        ]
+      },
+      "post": {
+        "description": "Attach the bank-transfer evidence (image or PDF, at most 10 MiB) and send the order for review.",
+        "operationId": "post_2f6170692f63617061636974792f6f72646572732f7b6f726465725f69647d2f65766964656e6365",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_capacity_evidence_api_capacity_orders__order_id__evidence_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Capacity Evidence",
+        "tags": [
+          "capacity"
+        ]
+      }
+    },
+    "/api/capacity/overview": {
+      "get": {
+        "operationId": "get_2f6170692f63617061636974792f6f76657276696577",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOverviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Capacity Overview",
+        "tags": [
+          "capacity"
         ]
       }
     },
@@ -46078,6 +47411,15 @@
       "BroadcastRequest",
       "BulkToolUpdateItem",
       "CancelReason",
+      "CapacityDecisionRequest",
+      "CapacityOrderCreateRequest",
+      "CapacityOrderKind",
+      "CapacityOrderOut",
+      "CapacityOrderPage",
+      "CapacityOrderStatus",
+      "CapacityOverviewOut",
+      "CapacityPaymentSettingsOut",
+      "CapacityPaymentSettingsRequest",
       "CategoryConfigResponse",
       "CategoryConfigUpdate",
       "CategoryTestResponse",
@@ -46196,12 +47538,14 @@
       "OrgAdminOut",
       "OrgUsersPageOut",
       "OrganizationAdditionalAccountMonthlyUsd",
+      "OrganizationAdditionalAgentMonthlyUsd",
       "OrganizationAdmissionAcknowledgment",
       "OrganizationAdmissionDecisionRequest",
       "OrganizationAdmissionItem",
       "OrganizationAdmissionPage",
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
+      "OrganizationAnnualPriceUsd",
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
@@ -46209,7 +47553,7 @@
       "OrganizationGuestMemoryBytes",
       "OrganizationGuestMillicpus",
       "OrganizationGuestPidsLimit",
-      "OrganizationMaxAccounts",
+      "OrganizationIncludedAgents",
       "OrganizationPlanId",
       "OrganizationPlanName",
       "OrganizationPlansResponse",
@@ -46381,6 +47725,17 @@
       "BroadcastRequest",
       "BulkToolUpdateItem",
       "CancelReason",
+      "CapacityDecisionRequest",
+      "CapacityEvidenceOut",
+      "CapacityOrderCreateRequest",
+      "CapacityOrderKind",
+      "CapacityOrderOut",
+      "CapacityOrderPage",
+      "CapacityOrderStatus",
+      "CapacityOverviewOut",
+      "CapacityPaymentSettingsOut",
+      "CapacityPaymentSettingsRequest",
+      "CapacityRecipientOut",
       "CategoryConfigResponse",
       "CategoryConfigUpdate",
       "CategoryTestResponse",
@@ -46544,12 +47899,14 @@
       "OrgAdminOut",
       "OrgUsersPageOut",
       "OrganizationAdditionalAccountMonthlyUsd",
+      "OrganizationAdditionalAgentMonthlyUsd",
       "OrganizationAdmissionAcknowledgment",
       "OrganizationAdmissionDecisionRequest",
       "OrganizationAdmissionItem",
       "OrganizationAdmissionPage",
       "OrganizationAdmissionRequest",
       "OrganizationAgentLimit",
+      "OrganizationAnnualPriceUsd",
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
@@ -46557,7 +47914,7 @@
       "OrganizationGuestMemoryBytes",
       "OrganizationGuestMillicpus",
       "OrganizationGuestPidsLimit",
-      "OrganizationMaxAccounts",
+      "OrganizationIncludedAgents",
       "OrganizationPlan",
       "OrganizationPlanId",
       "OrganizationPlanName",
