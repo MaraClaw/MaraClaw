@@ -30,6 +30,7 @@ const DirectoryPage = lazy(() => import('@/pages/app/directory').then((module) =
 const AdmissionDetailPage = lazy(() => import('@/pages/app/admission-detail').then((module) => ({ default: module.AdmissionDetailPage })))
 const TransferDetailPage = lazy(() => import('@/pages/app/transfer-detail').then((module) => ({ default: module.TransferDetailPage })))
 const NotificationsPage = lazy(() => import('@/pages/app/notifications').then((module) => ({ default: module.NotificationsPage })))
+const OrganizationPaymentPage = lazy(() => import('@/pages/organization-payment').then((module) => ({ default: module.OrganizationPaymentPage })))
 const OpenClawUpdateDetailPage = lazy(() => import('@/pages/app/openclaw-update-detail').then((module) => ({ default: module.OpenClawUpdateDetailPage })))
 const OkrPage = lazy(() => import('@/pages/app/okr').then((module) => ({ default: module.OkrPage })))
 const OnboardingPage = lazy(() => import('@/pages/app/onboarding').then((module) => ({ default: module.OnboardingPage })))
@@ -58,6 +59,7 @@ export function AppRouter() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/sso/callback" element={<SsoCallbackPage />} />
+          <Route path="/organization-payment" element={<OrganizationPaymentPage />} />
           <Route path="/join" element={<JoinOrgPage />} />
           <Route path="/transfer" element={<TransferPage />} />
 

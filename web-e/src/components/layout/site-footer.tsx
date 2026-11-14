@@ -37,8 +37,9 @@ const footerLinks = [
   },
 ]
 
-export function SiteFooter() {
+export function SiteFooter({ linksToLanding = false }: { readonly linksToLanding?: boolean }) {
   const { t: translate, owned } = useTranslation()
+  const anchor = (href: string) => (linksToLanding ? `/${href}` : href)
   const { status } = useAuth()
   const [year] = useState(() => new Date().getFullYear())
   return (
@@ -46,7 +47,7 @@ export function SiteFooter() {
       <div className="container-page py-14">
         <div className="grid gap-10 md:grid-cols-[1.2fr_1fr_1fr_1fr]">
           <div className="max-w-sm space-y-4">
-            <a href="#top" className="inline-flex items-center gap-2.5">
+            <a href={anchor('#top')} className="inline-flex items-center gap-2.5">
               <MaraClawLogo className="size-9" />
               <span className="font-display text-base font-semibold tracking-tight text-foreground">
                 MaraClaw
@@ -63,7 +64,7 @@ export function SiteFooter() {
                 {group.links.map((link) => (
                   <li key={link.label}>
                     <a
-                      href={link.href}
+                      href={anchor(link.href)}
                       className="rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {owned(link.label)}

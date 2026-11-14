@@ -6,13 +6,14 @@ This folder is **public + org-funnel only**. Workspace screens live in `pages/ap
 
 ## OVERVIEW
 
-Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/` is a different surface.
+Landing + member auth + join/transfer **outside** `/app`. Ten files here; `app/` is a different surface.
 
 ## WHERE TO LOOK
 
 | File | Route | Role |
 |------|-------|------|
 | `landing.tsx` | `/` | Composer only: Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta. Hashes stay on `/`. Copy in `@/components/sections/*`. |
+| `organization-payment.tsx` | `/organization-payment` | Public, no session. Reads the stored price quote (`organization-quote-storage.ts`; none or expired → explanation with a link to `/#pricing`). Cards: Transfer this amount (`CopyField`s for amount, bank, account, branch and transfer note), Request summary, Send your payment receipt (advisory type/10 MiB checks, `submitOrganizationAdmission`). 202 clears the quote and shows a focused outcome panel; 400/410 clear it and ask to start again; 409/413/415/429 show fixed messages, anything else `userFacingRequestError`. Owner-fenced like the landing form. |
 | `login.tsx` | `/login` | RHF+Zod. `useAuth().login`. Multi-tenant picker; unverified → `/verify-email`. `needs_org_confirm` → `/join`, except a `/transfer#code=` continuation is kept. |
 | `register.tsx` | `/register` | `fetchRegistrationConfig` (invite gate), `checkDuplicate`, `registerRequest`. Optional or required `invitation_code`; a returned admission request routes to `/app/admissions/:id`. Cannot mint `platform_admin`. |
 | `sso-callback.tsx` | `/sso/callback` | `oauthCallback` or `bindProvider` (`SSO_INTENT_KEY`) with the server-issued state kept in sessionStorage (never the URL's); a missing or differing stored state fails before any request. Multi-tenant picker. Bind → `/app/settings`. |
@@ -28,7 +29,7 @@ Landing + member auth + join/transfer **outside** `/app`. Nine files here; `app/
 - No TanStack Query. No `QueryClient`. No page-level `fetch()` — go through `@/lib/auth-api` (or `useAuth` for session).
 - Auth chrome: `@/components/auth/auth-shell`. Login/register own highlight arrays; others use `@/lib/auth-highlights`.
 - SSO buttons: `@/components/auth/sso-buttons` (login/register only).
-- Landing chrome: `SiteHeader` + `SiteFooter`. Auth pages do **not** use site chrome.
+- Landing chrome: `SiteHeader` + `SiteFooter`. Auth pages do **not** use site chrome. `organization-payment.tsx` uses the site chrome with `linksToLanding`, which makes the hash links point at `/#…` instead of the current page; links back to `/#pricing` are plain anchors (client navigation does not scroll to a hash).
 - Named exports (`LoginPage`, `JoinOrgPage`, …). Routes live in `src/routes/index.tsx`.
 - Join/transfer are **not** under `ProtectedRoute`; they self-gate on `useAuth` status and send `must_change_password` sessions to `/app/settings`.
 - Invitation codes arrive via `#code=` or router state `invitationCode`; `useInvitationLink` reads them once (256 chars max) and clears the URL. Both pages remount their form per session owner, and only the first generation keeps the initial code.

@@ -1,22 +1,28 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import type { z } from 'zod'
 import { useForm, useWatch } from 'react-hook-form'
+import { useNavigate } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { DEFAULT_PHONE_COUNTRY, phoneCountryOptions } from '@/lib/phone'
 import { userFacingRequestError } from '@/lib/http'
 import { authSession } from '@/lib/auth-session'
+import { organizationAdmissionErrorKey } from '@/lib/organization-admission-errors'
 import {
-  organizationAdmissionSchema,
-  requestOrganizationAdmission,
+  organizationQuoteFormSchema,
+  requestOrganizationQuote,
 } from '@/lib/organization-admissions-api'
-import type { OrganizationAdmission, OrganizationPlan } from '@/lib/organization-admissions-api'
+import type { OrganizationPlan, OrganizationQuoteRequest } from '@/lib/organization-admissions-api'
+import { storeOrganizationQuote } from '@/lib/organization-quote-storage'
 
-type BillingPeriod = 'monthly' | 'annual'
+type Failure = { readonly message: string; readonly inline: boolean }
 
 const GIB = 1024 ** 3
 
@@ -25,15 +31,18 @@ function annualSavingPercent(plan: OrganizationPlan): number {
 }
 
 export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly OrganizationPlan[] }) {
-  const { t: translate, formatNumber } = useTranslation()
-  const [billing, setBilling] = useState<BillingPeriod>('monthly')
-  const [success, setSuccess] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const { register, handleSubmit, control, formState: { errors, isSubmitting } } = useForm<OrganizationAdmission>({
-    resolver: zodResolver(organizationAdmissionSchema),
-    defaultValues: { organization_name: '', email: '', tier: 'pro' },
+  const { t: translate, owned, formatNumber, locale } = useTranslation()
+  const navigate = useNavigate()
+  const countries = useMemo(() => phoneCountryOptions(locale), [locale])
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const { register, handleSubmit, control, formState: { errors, isSubmitting } } = useForm<z.input<typeof organizationQuoteFormSchema>, unknown, OrganizationQuoteRequest>({
+    resolver: zodResolver(organizationQuoteFormSchema),
+    defaultValues: { organization_name: '', email: '', tier: 'pro', billing: 'monthly', phone_country: DEFAULT_PHONE_COUNTRY, phone_number: '' },
   })
+  const billing = useWatch({ control, name: 'billing' })
   const selectedTier = useWatch({ control, name: 'tier' })
+  const requiredText = useWatch({ control, name: ['organization_name', 'email', 'phone_number'] })
+  const requiredFilled = requiredText.every((value) => value.trim() !== '')
   const savingPercents = plans.map(annualSavingPercent)
   const bestSaving = Math.max(0, ...savingPercents)
   const savingLabel = savingPercents.every((percent) => percent === bestSaving)
@@ -46,23 +55,29 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
 
   const submit = handleSubmit(async (values) => {
     const owner = authSession.capture()
-    setError(null)
+    setFailure(null)
     try {
-      await requestOrganizationAdmission(values)
-      if (authSession.isCurrent(owner)) setSuccess(true)
+      const quote = await requestOrganizationQuote(values)
+      if (!authSession.isCurrent(owner)) return
+      storeOrganizationQuote(quote)
+      navigate('/organization-payment')
     } catch (cause) {
-      if (authSession.isCurrent(owner)) setError(userFacingRequestError(cause, translate("We could not send your request. Please try again.")))
+      if (!authSession.isCurrent(owner)) return
+      const refusal = organizationAdmissionErrorKey(cause)
+      setFailure(refusal === null
+        ? { inline: false, message: userFacingRequestError(cause, translate("We could not send your request. Please try again.")) }
+        : { inline: true, message: owned(refusal) })
     }
   })
 
   return (
     <form onSubmit={submit} noValidate aria-label={translate("Organization creation request")} className="mt-10 space-y-6">
-      <fieldset className="flex justify-center">
+      <fieldset disabled={isSubmitting} className="flex justify-center">
         <legend className="sr-only">{translate("Billing period")}</legend>
         <span className="inline-flex gap-1 rounded-full border border-border bg-card p-1 shadow-card">
           {billingOptions.map(({ period, label }) => (
             <label key={period} className="relative flex min-h-11 cursor-pointer items-center gap-2 rounded-full px-5 text-[17px] font-medium text-muted-foreground transition-[background-color,color] duration-150 hover:text-foreground has-checked:bg-primary has-checked:text-primary-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring has-focus-visible:ring-offset-2 has-focus-visible:ring-offset-background sm:text-base">
-              <input type="radio" name="billing-period" value={period} checked={billing === period} onChange={() => setBilling(period)} className="sr-only" />
+              <input {...register('billing')} type="radio" value={period} className="sr-only" />
               {label}
               {period === 'annual' && bestSaving > 0 && (
                 <span className="rounded-full bg-accent px-2 py-0.5 text-sm font-semibold text-accent-foreground">{savingLabel}</span>
@@ -72,7 +87,7 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
         </span>
       </fieldset>
 
-      <fieldset disabled={isSubmitting || success} className="space-y-4">
+      <fieldset disabled={isSubmitting} className="space-y-4">
         <legend className="mb-4 text-[17px] font-medium sm:text-base">{translate("Choose your proposed plan")}</legend>
         <div className="grid gap-4 lg:grid-cols-3">
           {plans.map((plan) => {
@@ -144,8 +159,8 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
       <div className="rounded-2xl border border-border bg-card p-6 shadow-card">
         <h3 className="font-display text-xl font-semibold">{translate("Create a new organization")}</h3>
         <p className="mt-2 text-[17px] leading-relaxed text-muted-foreground sm:text-base">
-          {translate("Submit your organization name, email and selected plan for review. Approval creates your organization and sends the genesis admin's initial login credentials to this email. The first login requires a password change. Payment is separate; none is collected here.")}</p>
-        <fieldset disabled={isSubmitting || success} className="mt-5 flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end">
+          {translate("Enter your organization name, email, phone number and plan, then select Create organization to see the amount and our bank details. Pay by bank transfer and upload your receipt to send the request. Once a platform admin approves it, your organization is created and the genesis admin's initial sign-in credentials are emailed to this address. The first sign-in requires a password change.")}</p>
+        <fieldset disabled={isSubmitting} className="mt-5 grid min-w-0 gap-4 sm:grid-cols-2 sm:items-end">
           <div className="min-w-0 flex-1 space-y-2">
             <Label htmlFor="organization-name" className="text-[17px] sm:text-base">{translate("Organization name")}</Label>
             <Input {...register('organization_name')} id="organization-name" autoComplete="organization" maxLength={200} required
@@ -160,15 +175,29 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
               className="text-[17px] sm:text-base" />
             {errors.email && <p id="organization-email-error" role="alert" className="text-[17px] text-destructive sm:text-base"><ValidationMessage message={errors.email.message} /></p>}
           </div>
-          <Button type="submit" className="min-h-11 shrink-0 text-base">
+          <div className="min-w-0 space-y-2">
+            <Label htmlFor="organization-phone" className="text-[17px] sm:text-base">{translate("Phone number")}</Label>
+            <div className="flex min-w-0 gap-2">
+              <Select {...register('phone_country')} aria-label={translate("Country code")}
+                aria-describedby={errors.phone_number ? 'organization-phone-error pricing-terms' : 'pricing-terms'}
+                className="w-44 shrink-0 [&_select]:min-h-11 [&_select]:text-[17px] sm:[&_select]:text-base">
+                {countries.map(({ country, label }) => <option key={country} value={country}>{label}</option>)}
+              </Select>
+              <Input {...register('phone_number')} id="organization-phone" type="tel" inputMode="tel" autoComplete="tel-national" required
+                aria-invalid={Boolean(errors.phone_number)} aria-describedby={errors.phone_number ? 'organization-phone-error pricing-terms' : 'pricing-terms'}
+                className="min-h-11 flex-1 text-[17px] sm:text-base" />
+            </div>
+            {errors.phone_number && <p id="organization-phone-error" role="alert" className="text-[17px] text-destructive sm:text-base"><ValidationMessage message={errors.phone_number.message} /></p>}
+          </div>
+          <Button type="submit" disabled={!requiredFilled} className="min-h-11 w-full text-base">
             {isSubmitting ? translate("Sending request...") : translate("Create organization")}
           </Button>
         </fieldset>
-        {error && <RequestErrorToast message={error} />}
+        {failure && !failure.inline && <RequestErrorToast message={failure.message} />}
         <div role="status" aria-live="polite" aria-atomic="true" className="mt-4 text-[17px] leading-relaxed sm:text-base">
           {isSubmitting && translate("Sending your organization request.")}
-          {success && translate("Your request is pending genesis platform-admin review. Once approved, your organization will be created and the genesis admin's initial login credentials will be emailed to the address you submitted. The first login requires a password change. Payment is separate.")}
         </div>
+        {failure?.inline && <p role="alert" className="mt-4 text-[17px] leading-relaxed text-destructive sm:text-base">{failure.message}</p>}
       </div>
     </form>
   )

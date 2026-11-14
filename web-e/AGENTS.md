@@ -16,7 +16,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 |------|----------------|
 | SPA assembly | `src/main.tsx`, `src/App.tsx` |
 | Routes and gates | `src/routes/index.tsx`, `src/routes/protected.tsx` |
-| Landing, auth, invitation join and transfer | [pages/AGENTS.md](./src/pages/AGENTS.md) |
+| Landing, organization payment, auth, invitation join and transfer | [pages/AGENTS.md](./src/pages/AGENTS.md) |
 | Member screens, admissions, agent tabs | [pages/app/AGENTS.md](./src/pages/app/AGENTS.md) |
 | Component families, chrome, brand, primitives | [components/AGENTS.md](./src/components/AGENTS.md), then its chat/layout/sections/ui guides |
 | HTTP, sockets, tickets, domain clients | [lib/AGENTS.md](./src/lib/AGENTS.md), then [lib/chat/AGENTS.md](./src/lib/chat/AGENTS.md) |
@@ -31,6 +31,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 
 - `main.tsx`: ThemeProvider wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
 - Routing uses BrowserRouter, not a data router. Public auth and session-gated `/join` / `/transfer` stay outside `/app`; landing hashes stay on `/`. No catch-all 404; no `src/routes.tsx`.
+- Organization creation is a public, paid flow with no session: the landing pricing form requests a server price quote (`POST /api/organization-admissions/quote`, stores nothing), keeps it in sessionStorage `maraclaw-organization-quote` (parsed with the generated schema; malformed or expired quotes are dropped) and navigates to the public `/organization-payment` route, which shows the transfer amount and bank details and sends the quote token with the receipt file (`POST /api/organization-admissions`). A platform admin approves later. The route stays outside `/app` and never uses AppShell.
 - ProtectedRoute sends anonymous users to `/login`, missing-org sessions to `/join` except Inbox Admissions (`/app/notifications?category=admissions`), its legacy `/app/admissions` list redirect and `/app/admissions/*` status views, and `must_change_password` to `/app/settings`. `/app/account` redirects there; settings and admissions stay outside OnboardingGate.
 - Admission access is a separate branch from onboarding. AppShell renders `AdmissionAccessGate`: a session with a pending, non-transfer admission from its current organization may use only Inbox, Settings, Account and admissions routes, and any other path redirects to `/app/notifications`. Inbox Admissions reuses the existing admission history and transfer APIs; it is a UI category, not a notification wire category. The Inbox route sits under `AdmissionInboxGate`, which adds OnboardingGate only for notification categories once workspace access is allowed. Transfer requests are their own route, `/app/admissions/transfers/:id`, beside `/app/admissions/:id`.
 - Member auth uses server-enforced member-audience routes and DTOs. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.

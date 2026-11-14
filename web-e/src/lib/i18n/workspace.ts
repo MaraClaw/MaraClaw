@@ -399,7 +399,6 @@ export const workspace = {
   "No org departments yet.": "Chưa có phòng ban tổ chức nào.",
   "Add departments in the admin console on Users.": "Thêm các phòng ban trong bảng điều khiển dành cho quản trị viên trên Người dùng.",
   "Ask an org admin to add departments.": "Yêu cầu quản trị viên tổ chức thêm phòng ban.",
-  "Submit your organization name, email and selected plan for review. Approval creates your organization and sends the genesis admin's initial login credentials to this email. The first login requires a password change. Payment is separate; none is collected here.": "Gửi tên tổ chức, email và kế hoạch đã chọn của bạn để xem xét. Phê duyệt sẽ tạo tổ chức của bạn và gửi thông tin đăng nhập ban đầu của quản trị viên gốc tới email này. Lần đăng nhập đầu tiên yêu cầu thay đổi mật khẩu. Thanh toán riêng biệt; không có gì được thu thập ở đây.",
   "Switch to light mode": "Chuyển sang chế độ ánh sáng",
   "Switch to dark mode": "Chuyển sang chế độ tối",
   "Hide password": "Ẩn mật khẩu",

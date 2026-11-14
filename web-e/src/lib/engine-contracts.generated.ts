@@ -847,15 +847,23 @@ export const OrganizationAdditionalAgentMonthlyUsd = { PRO: 35, MAX: 49, ULTRA: 
 export const OrganizationAdditionalAgentMonthlyUsdSchema = z.intersection(z.union([z.literal(35), z.literal(49), z.literal(79)]), z.number().refine(Number.isInteger));
 export type OrganizationAdditionalAgentMonthlyUsd = z.infer<typeof OrganizationAdditionalAgentMonthlyUsdSchema>;
 
-export const OrganizationAdmissionAcknowledgmentSchema = z.looseObject({ ["status"]: z.intersection(z.literal("pending"), z.string()).optional() });
+export const OrganizationAdmissionAcknowledgmentSchema = z.looseObject({ ["reference"]: z.string(), ["status"]: z.intersection(z.literal("pending"), z.string()) });
 export type OrganizationAdmissionAcknowledgment = z.infer<typeof OrganizationAdmissionAcknowledgmentSchema>;
 
 export const OrganizationAdmissionDecisionRequestSchema = z.strictObject({ ["decision"]: ApprovalActionSchema, ["note"]: z.union([z.string().refine(value => [...value].length <= 1000), z.null()]).optional() });
 export type OrganizationAdmissionDecisionRequest = z.infer<typeof OrganizationAdmissionDecisionRequestSchema>;
 
+export const OrganizationBillingCycleValues = ["monthly","annual"] as const;
+export const OrganizationBillingCycle = { MONTHLY: "monthly", ANNUAL: "annual" } as const;
+export const OrganizationBillingCycleSchema = z.intersection(z.union([z.literal("monthly"), z.literal("annual")]), z.string());
+export type OrganizationBillingCycle = z.infer<typeof OrganizationBillingCycleSchema>;
+
 export const CredentialEmailStatusValues = ["pending","sent","failed"] as const;
 export const CredentialEmailStatusSchema = z.intersection(z.union([z.literal("pending"), z.literal("sent"), z.literal("failed")]), z.string());
 export type CredentialEmailStatus = z.infer<typeof CredentialEmailStatusSchema>;
+
+export const OrganizationAdmissionEvidenceOutSchema = z.looseObject({ ["content_type"]: z.string(), ["filename"]: z.string(), ["size_bytes"]: z.number().refine(Number.isInteger) });
+export type OrganizationAdmissionEvidenceOut = z.infer<typeof OrganizationAdmissionEvidenceOutSchema>;
 
 export const OrganizationAnnualPriceUsdValues = [790,2490,6990] as const;
 export const OrganizationAnnualPriceUsd = { PRO: 790, MAX: 2490, ULTRA: 6990 } as const;
@@ -925,14 +933,17 @@ export type OrganizationWorkspaceDiskBytes = z.infer<typeof OrganizationWorkspac
 export const OrganizationPlanSchema = z.strictObject({ ["additional_account_monthly_usd"]: OrganizationAdditionalAccountMonthlyUsdSchema, ["additional_agent_monthly_usd"]: OrganizationAdditionalAgentMonthlyUsdSchema, ["annual_price_usd"]: OrganizationAnnualPriceUsdSchema, ["currency"]: OrganizationCurrencySchema, ["daily_messages_per_agent"]: OrganizationDailyAgentMessageLimitSchema, ["guest_cpu_shares"]: OrganizationGuestCpuSharesSchema, ["guest_memory_bytes"]: OrganizationGuestMemoryBytesSchema, ["guest_millicpus"]: OrganizationGuestMillicpusSchema, ["guest_pids_limit"]: OrganizationGuestPidsLimitSchema, ["id"]: OrganizationPlanIdSchema, ["included_accounts"]: z.number().min(1).refine(Number.isInteger), ["included_agents"]: OrganizationIncludedAgentsSchema, ["max_agents_per_account"]: OrganizationAgentLimitSchema, ["max_file_size_bytes"]: OrganizationFileLimitBytesSchema, ["monthly_price_usd"]: z.number().min(0).refine(Number.isInteger), ["name"]: OrganizationPlanNameSchema, ["storage_addon_bytes"]: z.number().min(1).refine(Number.isInteger), ["storage_addon_monthly_usd"]: z.number().min(1).refine(Number.isInteger), ["storage_limit_bytes"]: OrganizationStorageLimitBytesSchema, ["workspace_disk_addon_bytes"]: z.number().min(1).refine(Number.isInteger), ["workspace_disk_addon_monthly_usd"]: z.number().min(1).refine(Number.isInteger), ["workspace_disk_bytes"]: OrganizationWorkspaceDiskBytesSchema });
 export type OrganizationPlan = z.infer<typeof OrganizationPlanSchema>;
 
-export const OrganizationAdmissionItemSchema = z.looseObject({ ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["credential_email_error"]: z.union([z.string(), z.null()]), ["credential_email_status"]: z.union([CredentialEmailStatusSchema, z.null()]), ["email"]: z.string(), ["id"]: z.guid(), ["organization_name"]: z.union([z.string(), z.null()]), ["plan"]: OrganizationPlanSchema, ["review_note"]: z.union([z.string(), z.null()]), ["reviewed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["reviewed_by"]: z.union([z.guid(), z.null()]), ["status"]: ApprovalStatusSchema, ["tier"]: OrganizationPlanIdSchema });
+export const OrganizationAdmissionItemSchema = z.looseObject({ ["amount_usd"]: z.number().refine(Number.isInteger), ["amount_vnd"]: z.number().refine(Number.isInteger), ["billing"]: OrganizationBillingCycleSchema, ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["credential_email_error"]: z.union([z.string(), z.null()]), ["credential_email_status"]: z.union([CredentialEmailStatusSchema, z.null()]), ["email"]: z.string(), ["evidence"]: OrganizationAdmissionEvidenceOutSchema, ["id"]: z.guid(), ["organization_name"]: z.union([z.string(), z.null()]), ["payment_reference"]: z.string(), ["phone"]: z.string(), ["plan"]: OrganizationPlanSchema, ["recipient"]: CapacityRecipientOutSchema, ["review_note"]: z.union([z.string(), z.null()]), ["reviewed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["reviewed_by"]: z.union([z.guid(), z.null()]), ["status"]: ApprovalStatusSchema, ["tier"]: OrganizationPlanIdSchema, ["usd_vnd_rate"]: z.number().refine(Number.isInteger) });
 export type OrganizationAdmissionItem = z.infer<typeof OrganizationAdmissionItemSchema>;
 
 export const OrganizationAdmissionPageSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(OrganizationAdmissionItemSchema) });
 export type OrganizationAdmissionPage = z.infer<typeof OrganizationAdmissionPageSchema>;
 
-export const OrganizationAdmissionRequestSchema = z.strictObject({ ["email"]: z.email(), ["organization_name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200), ["tier"]: OrganizationPlanIdSchema });
-export type OrganizationAdmissionRequest = z.infer<typeof OrganizationAdmissionRequestSchema>;
+export const OrganizationAdmissionQuoteSchema = z.strictObject({ ["amount_usd"]: z.number().refine(Number.isInteger), ["amount_vnd"]: z.number().refine(Number.isInteger), ["billing"]: OrganizationBillingCycleSchema, ["email"]: z.string(), ["expires_at"]: z.iso.datetime({ offset: true, local: true }), ["organization_name"]: z.string(), ["phone"]: z.string(), ["plan"]: OrganizationPlanSchema, ["quote_token"]: z.string(), ["recipient"]: CapacityRecipientOutSchema, ["reference"]: z.string(), ["tier"]: OrganizationPlanIdSchema, ["usd_vnd_rate"]: z.number().refine(Number.isInteger) });
+export type OrganizationAdmissionQuote = z.infer<typeof OrganizationAdmissionQuoteSchema>;
+
+export const OrganizationAdmissionQuoteRequestSchema = z.strictObject({ ["billing"]: OrganizationBillingCycleSchema, ["email"]: z.email(), ["organization_name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200), ["phone"]: z.string().refine(value => [...value].length <= 16).regex(new RegExp("^\\+[1-9][0-9]{6,14}$", "u")), ["tier"]: OrganizationPlanIdSchema });
+export type OrganizationAdmissionQuoteRequest = z.infer<typeof OrganizationAdmissionQuoteRequestSchema>;
 
 export const OrganizationPlansResponseSchema = z.looseObject({ ["plans"]: z.array(OrganizationPlanSchema) });
 export type OrganizationPlansResponse = z.infer<typeof OrganizationPlansResponseSchema>;

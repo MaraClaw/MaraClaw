@@ -27,7 +27,7 @@ const navItems = [
   { href: '#faq', label: 'FAQ' },
 ]
 
-export function SiteHeader() {
+export function SiteHeader({ linksToLanding = false }: { readonly linksToLanding?: boolean }) {
   const { t: translate, owned } = useTranslation()
   const { status, logout } = useAuth()
   const signedIn = status === 'authenticated'
@@ -61,7 +61,7 @@ export function SiteHeader() {
           {navItems.map((item) => (
             <a
               key={item.href}
-              href={item.href}
+              href={linksToLanding ? `/${item.href}` : item.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
                 {owned(item.label)}
@@ -104,7 +104,7 @@ export function SiteHeader() {
                 {navItems.map((item) => (
                   <SheetClose key={item.href} asChild>
                     <a
-                      href={item.href}
+                      href={linksToLanding ? `/${item.href}` : item.href}
                       className="rounded-xl px-3 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
                     >
                       {owned(item.label)}

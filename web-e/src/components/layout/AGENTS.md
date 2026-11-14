@@ -16,7 +16,7 @@ Workspace + marketing chrome.
 | `agent-update-gate.tsx` | AgentLayout fallback when the OpenClaw update gate blocks the outlet; shows update/check status, retry on error and a link to agent Settings. Settings stays accessible through the gate. |
 | `section-rail.tsx` | Shared icon rail. Route `to` (agent tabs) or `onSelect` (directory `?tab=`). Smaller than the workspace rail — do not merge. |
 | `onboarding-gate.tsx` | First-run: no agents + status not `completed` + not skipped → `/app/onboarding`. Skip key `maraclaw-onboarding-skipped` (`wasOnboardingSkipped` in workspace-api). |
-| `site-header.tsx` / `site-footer.tsx` | Marketing chrome only. Header `navItems` omit `#enterprise`; footer has it. Known hash mismatch — do not fix one side only. |
+| `site-header.tsx` / `site-footer.tsx` | Marketing chrome only. Header `navItems` omit `#enterprise`; footer has it. Known hash mismatch — do not fix one side only. The optional `linksToLanding` prop prefixes the hash links with `/` for public pages other than landing (`/organization-payment`). |
 | `nav-icon.tsx` | Rail icons from `public/nav-icons/{name}.svg` + `{name}-inactive.svg`. Add both when extending `NavIconName`. |
 
 ## CONVENTIONS
