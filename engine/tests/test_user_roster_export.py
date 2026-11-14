@@ -13,6 +13,7 @@ from app.core import security
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.user_roster_export import _text_cell
@@ -56,7 +57,9 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setattr(users_api.user_roster_tickets, "issue", export)
     monkeypatch.setattr(users_api, "decode_access_token", lambda _token: {"exp": int(time.time()) + 3600, "gen": 7})
     monkeypatch.setattr(
-        users_api.tenant_dao, "get", AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own"))
+        users_api.tenant_dao,
+        "get",
+        AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own", tier=OrganizationPlanId.PRO)),
     )
     return export
 

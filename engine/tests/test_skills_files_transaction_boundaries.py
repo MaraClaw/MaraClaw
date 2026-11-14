@@ -18,6 +18,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db import session
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.skill import SkillRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -44,7 +45,7 @@ def boundary(monkeypatch, tmp_path):
         fresh=replace(actor),
         writes=[],
         fresh_checks=[],
-        tenant=TenantRecord(id=tenant_id, name="Example", slug="example"),
+        tenant=TenantRecord(id=tenant_id, name="Example", slug="example", tier=OrganizationPlanId.PRO),
     )
 
     async def fresh_tenants(ids):

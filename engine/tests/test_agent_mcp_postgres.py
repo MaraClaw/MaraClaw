@@ -13,6 +13,7 @@ from app.dao.agent_dao import AgentDAO, agent_dao
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import UserDAO, user_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.services import agent_manager as manager_module, guest_readiness
 from app.services.agent_manager import AgentManager
 from app.services.agent_mcp_sync import desired_servers, sync_mcp_config
@@ -173,7 +174,7 @@ async def test_real_database_authorization_and_agent_scope(
     other_url = f"/api/agents/{other.id}/mcp/servers"
     assert (await client.get(other_url)).json() == {"servers": []}
     assert (await client.patch(other_url + "/http", json={"enabled": False})).status_code == 404
-    foreign = await tenant_dao.create(obj_in={"name": "Foreign", "slug": "foreign"})
+    foreign = await tenant_dao.create(obj_in={"name": "Foreign", "slug": "foreign", "tier": OrganizationPlanId.ULTRA})
     await mcp.db.execute(
         "UPDATE users SET tenant_id=%(tenant)s WHERE id=%(user)s", {"tenant": foreign.id, "user": mcp.user.id}
     )

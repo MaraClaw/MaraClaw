@@ -4,7 +4,6 @@ import csv
 import io
 import json
 from base64 import urlsafe_b64encode
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -135,20 +134,11 @@ class FakeEpisodes:
         return self.peaks
 
 
-class FakeAdmissions:
-    def __init__(self, linked: dict[UUID, list[OrganizationPlanId]]) -> None:
-        self.linked: dict[UUID, list[OrganizationPlanId]] = linked
-        self.asked: list[list[UUID]] = []
-
-    async def approved_tiers_for_tenants(self, tenant_ids: Sequence[UUID]) -> dict[UUID, list[OrganizationPlanId]]:
-        self.asked.append(list(tenant_ids))
-        return self.linked
-
-
-def _aggregate(tenant_id: UUID, name: str = "Acme") -> TenantPressureAggregate:
+def _aggregate(tenant_id: UUID, name: str = "Acme", tier: OrganizationPlanId = PRO) -> TenantPressureAggregate:
     return TenantPressureAggregate(
         tenant_id=tenant_id,
         tenant_name=name,
+        tier=tier,
         episode_counts={MEMORY: 3, CPU: 0, DISK: 1, STORAGE: 2},
         oom_count=1,
         pressure_seconds=900,
@@ -168,7 +158,6 @@ async def test_a_summary_row_carries_the_aggregates_the_current_tier_and_the_sug
     tenant_id = uuid4()
     episodes = FakeEpisodes([_aggregate(tenant_id)], [_peak(tenant_id, PRO, MEMORY, int(1.9 * GIB))])
     monkeypatch.setattr(report, "agent_resource_pressure_episode_dao", episodes)
-    monkeypatch.setattr(report, "organization_admission_dao", FakeAdmissions({tenant_id: [PRO]}))
     filters = EpisodeFilters(tenant_id=tenant_id)
 
     (row,) = await report.tenant_summaries(filters)
@@ -195,34 +184,21 @@ async def test_only_episodes_recorded_under_the_current_tier_drive_the_suggestio
         _peak(tenant_id, MAX, DISK, int(4.8 * GIB)),
         _peak(uuid4(), MAX, CPU, 1400),
     ]
-    monkeypatch.setattr(report, "agent_resource_pressure_episode_dao", FakeEpisodes([_aggregate(tenant_id)], peaks))
-    monkeypatch.setattr(report, "organization_admission_dao", FakeAdmissions({tenant_id: [MAX]}))
+    monkeypatch.setattr(
+        report, "agent_resource_pressure_episode_dao", FakeEpisodes([_aggregate(tenant_id, tier=MAX)], peaks)
+    )
 
     (row,) = await report.tenant_summaries(EpisodeFilters())
 
     assert (row.current_tier, row.suggested_tier) == (MAX, ULTRA)
 
 
-@pytest.mark.parametrize("links", [[], [PRO, MAX]], ids=["unlinked", "ambiguous"])
-async def test_an_organization_without_exactly_one_approved_tier_gets_no_suggestion(
-    monkeypatch: pytest.MonkeyPatch, links: list[OrganizationPlanId]
-):
-    tenant_id = uuid4()
-    episodes = FakeEpisodes([_aggregate(tenant_id)], [_peak(tenant_id, PRO, MEMORY, int(1.9 * GIB))])
-    monkeypatch.setattr(report, "agent_resource_pressure_episode_dao", episodes)
-    monkeypatch.setattr(report, "organization_admission_dao", FakeAdmissions({tenant_id: links} if links else {}))
-
-    (row,) = await report.tenant_summaries(EpisodeFilters())
-
-    assert (row.current_tier, row.suggested_tier) == (None, None)
-
-
-async def test_tiers_are_read_in_one_batch_and_nothing_is_read_without_episodes(monkeypatch: pytest.MonkeyPatch):
+async def test_nothing_is_suggested_without_episodes_at_the_current_tier(monkeypatch: pytest.MonkeyPatch):
     first, second = uuid4(), uuid4()
-    admissions = FakeAdmissions({first: [PRO], second: [ULTRA]})
-    episodes = FakeEpisodes([_aggregate(first), _aggregate(second, "Zed")], [])
+    episodes = FakeEpisodes(
+        [_aggregate(first), _aggregate(second, "Zed", ULTRA)], [_peak(first, MAX, MEMORY, int(1.9 * GIB))]
+    )
     monkeypatch.setattr(report, "agent_resource_pressure_episode_dao", episodes)
-    monkeypatch.setattr(report, "organization_admission_dao", admissions)
 
     rows = await report.tenant_summaries(EpisodeFilters())
 
@@ -230,12 +206,9 @@ async def test_tiers_are_read_in_one_batch_and_nothing_is_read_without_episodes(
         ("Acme", PRO, None),
         ("Zed", ULTRA, None),
     ]
-    assert admissions.asked == [[first, second]]
 
     episodes.aggregates = []
-    admissions.asked.clear()
     assert await report.tenant_summaries(EpisodeFilters()) == []
-    assert admissions.asked == []
 
 
 def _cursor(**fields: object) -> str:

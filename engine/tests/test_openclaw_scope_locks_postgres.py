@@ -77,7 +77,8 @@ async def world(pooled_database: ReceiptDatabase) -> AsyncIterator[ScopeWorld]:
     tenant_id, other_user_id = uuid4(), uuid4()
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Scope QA', 'scope-qa')", {"id": tenant_id}
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Scope QA', 'scope-qa', 'ultra')",
+            {"id": tenant_id},
         )
         await db.first.execute(
             "UPDATE users SET tenant_id = %(tenant)s WHERE id = %(id)s", {"tenant": tenant_id, "id": db.user.id}

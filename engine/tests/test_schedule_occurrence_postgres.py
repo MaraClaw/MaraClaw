@@ -261,7 +261,7 @@ async def test_live_bulk_disable_revokes_pending_lease(live_schedule: AgentSched
     tenant_id = uuid4()
     async with connection_ctx() as db:
         await db.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Schedule QA', %(slug)s)",
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Schedule QA', %(slug)s, 'ultra')",
             {"id": tenant_id, "slug": tenant_id.hex},
         )
         await db.execute(

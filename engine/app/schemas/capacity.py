@@ -120,7 +120,7 @@ class CapacityOverviewOut(BaseModel):
 
     tenant_id: UUID
     capped: bool
-    tier: OrganizationPlanId | None
+    tier: OrganizationPlanId
     included_accounts: int | None
     included_agents: int | None
     extra_accounts: int

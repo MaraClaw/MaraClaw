@@ -25,6 +25,7 @@ from app.dao.tenant_dao import TenantDeletionPreview, tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
 from app.records.company_transfer import TransferChoice
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import ApprovedAdmissionResponse, PendingAdmissionResponse
@@ -71,6 +72,7 @@ async def get_client_ip(request: Request) -> str | None:
 
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    tier: OrganizationPlanId
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=128)
     admin_display_name: str | None = Field(default=None, max_length=200)
@@ -80,6 +82,7 @@ class TenantOut(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    tier: OrganizationPlanId
     im_provider: str
     timezone: str = "UTC"
     country_region: str = "001"
@@ -211,7 +214,7 @@ async def create_tenant(
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
 ) -> TenantCreateResponse:
-    """Create a company and its genesis org admin (platform admin only).
+    """Create a company of the chosen tier and its genesis org admin (platform admin only).
 
     The org admin is provisioned with the given email + initial password and
     must change the password after the first successful login.
@@ -222,6 +225,7 @@ async def create_tenant(
 
     try:
         provisioned = await create_tenant_with_org_admin(
+            tier=data.tier,
             name=data.name,
             admin_email=str(data.admin_email),
             admin_password=data.admin_password,
@@ -240,6 +244,7 @@ async def create_tenant(
         tenant_id=provisioned.tenant.id,
         changes={
             "name": field_change(None, provisioned.tenant.name),
+            "tier": field_change(None, provisioned.tenant.tier.value),
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},

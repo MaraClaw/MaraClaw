@@ -1,4 +1,4 @@
-"""Per-agent workspace disk soft quota of tier-governed organizations (``../../docs/organization-pricing.md``).
+"""Per-agent workspace disk soft quota of every organization (``../../docs/organization-pricing.md``).
 
 A worker measures each agent's host workspace directory plus its guest container's writable layer. An agent whose last
 measurement is over its tier's allowance refuses new human work until a later measurement is back under it; it can
@@ -27,7 +27,7 @@ from app.records.agent import AgentRecord
 from app.services.agent_manager import agent_manager
 from app.services.agent_resource_pressure import record_workspace_disk_pressure
 from app.services.notification_service import send_notification
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for, tier_for_tenant
+from app.services.organization_plans import plan_for, tier_for_tenant
 from app.services.quota_guard import QuotaExceededError
 
 LAYER_INSPECT_TIMEOUT_SECONDS: Final = 60.0
@@ -174,9 +174,8 @@ def measure_layer_bytes(client: DockerClient, container_id: str, timeout: float)
 async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) -> None:
     """Measure one agent, store the result, and send the creator the single alert of a new overage.
 
-    Agents that are not tier-governed (system agents, untenanted ones, organizations without a tier) have no allowance
-    and lose any stored row. An ambiguous tier link is skipped and logged: neither measured nor forgotten. A layer size
-    Docker cannot report keeps the previously stored one (zero without one), so a failed read never flaps the block.
+    Agents with no allowance (system agents and agents with no organization) lose any stored row. A layer size Docker
+    cannot report keeps the previously stored one (zero without one), so a failed read never flaps the block.
     ``layers`` is the worker pass's shared state: once Docker is unavailable, later agents of the same pass skip the
     read and keep their stored size. Each stored measurement also feeds the resource-pressure episodes, which can never
     fail this pass.
@@ -188,14 +187,7 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
     if agent.is_system or agent.tenant_id is None:
         _ = await agent_workspace_usage_dao.delete(record_id=agent.id)
         return
-    try:
-        tier = await tier_for_tenant(agent.tenant_id)
-    except AmbiguousOrganizationTierError:
-        logger.warning("[WorkspaceQuota] ambiguous organization tier; agent={} skipped", agent.id)
-        return
-    if tier is None:
-        _ = await agent_workspace_usage_dao.delete(record_id=agent.id)
-        return
+    tier = await tier_for_tenant(agent.tenant_id)
     started = datetime.now(UTC)
     dir_bytes = await to_thread.run_sync(
         measure_directory_bytes, agent_manager._agent_dir(agent.id), abandon_on_cancel=True
@@ -262,8 +254,9 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
 async def ensure_workspace_within_quota(agent: AgentRecord) -> None:
     """Refuse new human work for an agent whose last measurement is over its allowance.
 
-    Call it in the accepting transaction right before the daily message charge. One primary-key read; system and
-    untenanted agents are exempt. A tier change takes effect at the next measurement, which uses the current limit.
+    Call it in the accepting transaction right before the daily message charge. One primary-key read; system agents
+    and agents with no organization are exempt. A tier change takes effect at the next measurement, which uses the
+    current limit.
     """
     if agent.is_system or agent.tenant_id is None:
         return

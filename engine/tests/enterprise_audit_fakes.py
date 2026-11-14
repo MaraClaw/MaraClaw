@@ -16,6 +16,7 @@ from app.core.domain.users import UserRole
 from app.core.json_types import object_attr
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -26,7 +27,7 @@ class AuditDatabase(CountingRawConnection):
         super().__init__()
         self.model = _model(base_url="https://url-user:url-password@provider.invalid/v1?token=url-token#url-fragment")
         assert self.model.tenant_id is not None
-        self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company")
+        self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company", tier=OrganizationPlanId.PRO)
         self.actor = UserRecord(id=uuid4(), tenant_id=self.tenant.id, role=UserRole.ORG_ADMIN)
         self.rows: dict[str, dict[UUID | str, Row]] = {
             "llm_models": {self.model.id: asdict(self.model)},

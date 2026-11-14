@@ -35,7 +35,9 @@ class RosterStore:
 async def roster_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch) -> RosterStore:
     await bootstrap_db.main()
     tenant, department, membership, identity = uuid4(), uuid4(), UUID(int=2), uuid4()
-    await schema_db.execute("INSERT INTO tenants (id, name, slug) VALUES (%s, 'Acme', 'acme')", (tenant,))
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Acme', 'acme', 'ultra')", (tenant,)
+    )
     await schema_db.execute(
         "INSERT INTO local_departments (id, tenant_id, name) VALUES (%s, %s, 'Sales')", (department, tenant)
     )
@@ -129,7 +131,9 @@ async def test_roster_excludes_tenant_contaminated_assignments(
 ) -> None:
     store = roster_store
     foreign = uuid4()
-    await store.db.execute("INSERT INTO tenants (id, name, slug) VALUES (%s, 'Foreign', 'foreign')", (foreign,))
+    await store.db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Foreign', 'foreign', 'ultra')", (foreign,)
+    )
     constraints = await store.db.fetchall(
         "SELECT conname FROM pg_constraint WHERE conrelid = 'local_department_memberships'::regclass AND contype = 'f'"
     )
@@ -216,7 +220,9 @@ async def test_roster_distinguishes_empty_from_missing_or_foreign(roster_store: 
     if selection != "missing":
         tenant = store.tenant_id if selection == "empty" else uuid4()
         if selection == "foreign":
-            await store.db.execute("INSERT INTO tenants (id, name, slug) VALUES (%s, 'Foreign', 'foreign')", (tenant,))
+            await store.db.execute(
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Foreign', 'foreign', 'ultra')", (tenant,)
+            )
         await store.db.execute(
             "INSERT INTO local_departments (id, tenant_id, name) VALUES (%s, %s, 'Empty')", (selected, tenant)
         )

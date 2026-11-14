@@ -14,7 +14,7 @@ from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.channels.personal_burst_outcome import PersonalAccepted, PersonalRejected
 from app.services.channels.submissions import accept_channel_event
 from app.services.chat_submissions import ChatSubmission, accept_submission
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["channel_db", "linked", "receipt_db", "writable_receipt_db"]
 
@@ -27,14 +27,14 @@ async def _govern(db: ReceiptDatabase) -> UUID:
     tenant_id = uuid4()
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Disk QA', %(slug)s)",
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Disk QA', %(slug)s, 'ultra')",
             {"id": tenant_id, "slug": f"disk-{tenant_id.hex[:8]}"},
         )
         await db.first.execute("UPDATE users SET tenant_id = %(tenant)s", {"tenant": tenant_id})
         await db.first.execute(
             "UPDATE agents SET tenant_id = %(tenant)s WHERE id = %(id)s", {"tenant": tenant_id, "id": db.agent.id}
         )
-        _ = await approve_admission_for(db.first, tenant_id, OrganizationPlanId.PRO)
+        await set_tenant_tier(db.first, tenant_id, OrganizationPlanId.PRO)
     return tenant_id
 
 
@@ -93,7 +93,7 @@ async def test_a_blocked_agent_refuses_a_channel_event_and_the_redelivery_is_jud
 ):
     db = channel_db.db
     async with transaction(db.first):
-        _ = await approve_admission_for(db.first, channel_db.tenant_id, OrganizationPlanId.PRO)
+        await set_tenant_tier(db.first, channel_db.tenant_id, OrganizationPlanId.PRO)
     await _block(db)
 
     with pytest.raises(WorkspaceDiskQuotaExceeded):
@@ -115,7 +115,7 @@ async def test_a_blocked_agent_turns_a_personal_original_into_a_quota_rejection_
 ):
     db = linked.f.db
     async with transaction(db.first):
-        _ = await approve_admission_for(db.first, linked.f.tenant_id, OrganizationPlanId.PRO)
+        await set_tenant_tier(db.first, linked.f.tenant_id, OrganizationPlanId.PRO)
     await _block(db)
 
     rejected = await submit(linked, "n1", "while blocked")

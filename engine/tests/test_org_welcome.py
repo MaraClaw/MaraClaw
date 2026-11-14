@@ -11,6 +11,7 @@ import pytest
 
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import org_membership as membership
@@ -31,7 +32,9 @@ SMTP = SystemEmailConfig(
 
 
 def _tenant(*, name: str = "Acme", is_active: bool = True, tenant_id: uuid.UUID | None = None) -> TenantRecord:
-    return TenantRecord(id=tenant_id or uuid.uuid4(), name=name, slug="acme", is_active=is_active)
+    return TenantRecord(
+        id=tenant_id or uuid.uuid4(), name=name, slug="acme", is_active=is_active, tier=OrganizationPlanId.PRO
+    )
 
 
 def _user(

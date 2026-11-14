@@ -16,6 +16,7 @@ from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.session import bind_crud_connection
 from app.records.notification import NotificationRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.scripts import bootstrap_db
 from test_bootstrap_postgres import schema_db
@@ -48,8 +49,8 @@ async def archive_scenario(schema_db: DbConnection) -> AsyncIterator[ArchiveScen
     await bootstrap_db.main()
     await bootstrap_db.main()
     await bootstrap_db.init_pool()
-    tenant = await tenant_dao.create(obj_in={"name": "Owner", "slug": "owner"})
-    other_tenant = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
+    tenant = await tenant_dao.create(obj_in={"name": "Owner", "slug": "owner", "tier": OrganizationPlanId.ULTRA})
+    other_tenant = await tenant_dao.create(obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.ULTRA})
     owner = await user_dao.create(obj_in={"tenant_id": tenant.id, "display_name": "Owner"})
     colleague = await user_dao.create(obj_in={"tenant_id": tenant.id, "display_name": "Colleague"})
     outsider = await user_dao.create(obj_in={"tenant_id": other_tenant.id, "display_name": "Outsider"})

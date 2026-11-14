@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
@@ -11,7 +12,7 @@ from app.dao.user_dao import user_dao
 from app.db.errors import DbError, LockNotAvailableError
 from app.db.session import transaction
 from app.records.user import UserRecord
-from app.services import chat_submissions
+from app.services import chat_submissions, quota_guard
 from app.services.chat_submissions import AcceptedSubmission, ChatSubmission
 from app.services.openclaw_native_claims import claim_ordinary_turn
 from test_openclaw_scope_locks_postgres import FINISHED, Gate, Operation, ScopeWorld, finish, seed_message, waiters_of
@@ -65,6 +66,8 @@ async def test_submission_quota_and_native_scope_locks_complete_without_a_cycle(
             failures.append(error)
 
     monkeypatch.setattr(chat_submissions, "charge_conversation_quota", paused_charge)
+    # The stored per-user allowance is the quota UPDATE under test; inside an organization the daily cap replaces it.
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
     # When a real claim/settlement queues behind that transaction before the quota UPDATE proceeds.
     with anyio.fail_after(10):
         async with anyio.create_task_group() as tasks:

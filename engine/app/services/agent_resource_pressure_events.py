@@ -51,7 +51,7 @@ from app.runtime.tasks import capped_backoff
 from app.services.agent_manager import agent_manager
 from app.services.agent_resource_pressure_docker import DOCKER_TIMEOUT_SECONDS, GuestInspection, inspect_guests
 from app.services.guest_identity import AGENT_LABEL
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for, tier_for_tenant
+from app.services.organization_plans import plan_for, tier_for_tenant
 
 EVENTS_ARGUMENTS: Final = (
     "events",
@@ -126,7 +126,7 @@ async def _inspect(container_id: str) -> GuestInspection | None:
 
 
 async def record_oom_event(event: OomEvent) -> None:
-    """Store the kill when its agent exists, is not a system agent and belongs to a tier-governed organization.
+    """Store the kill when its agent exists, is not a system agent and belongs to an organization.
 
     The row carries the guest's applied memory limit like the per-pass rows do; when Docker cannot say (it is down, or
     the guest is already gone) the tier's limit stands in, and a guest without a memory limit is not recorded.
@@ -134,13 +134,7 @@ async def record_oom_event(event: OomEvent) -> None:
     agent = await agent_dao.get(event.agent_id)
     if agent is None or agent.is_system or agent.tenant_id is None:
         return
-    try:
-        tier = await tier_for_tenant(agent.tenant_id)
-    except AmbiguousOrganizationTierError:
-        logger.warning("[ResourcePressure] ambiguous organization tier; agent={} OOM event skipped", agent.id)
-        return
-    if tier is None:
-        return
+    tier = await tier_for_tenant(agent.tenant_id)
     tier_limit = int(plan_for(tier).guest_memory_bytes)
     inspection = await _inspect(event.container_id)
     limit = tier_limit

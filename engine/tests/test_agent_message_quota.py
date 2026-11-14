@@ -88,15 +88,6 @@ async def test_agents_without_a_cap_are_never_charged(monkeypatch: pytest.Monkey
     calls.charge.assert_not_awaited()
 
 
-async def test_untiered_organization_is_never_charged(monkeypatch: pytest.MonkeyPatch):
-    calls = _wire(monkeypatch, None, None)
-
-    await quota.charge_agent_daily_message(_agent())
-
-    calls.charge.assert_not_awaited()
-    calls.genesis.assert_not_awaited()
-
-
 @pytest.mark.parametrize(
     ("tier", "limit"),
     [(OrganizationPlanId.PRO, 100), (OrganizationPlanId.MAX, 200), (OrganizationPlanId.ULTRA, 500)],
@@ -163,7 +154,7 @@ async def test_usage_snapshot_covers_only_capped_agents_and_defaults_to_zero(mon
 @pytest.mark.parametrize(
     ("tier", "agents"),
     [(None, [_agent()]), (OrganizationPlanId.PRO, []), (OrganizationPlanId.PRO, [_agent(system=True)])],
-    ids=["untiered", "no-agents", "only-system"],
+    ids=["no-organization", "no-agents", "only-system"],
 )
 async def test_usage_snapshot_is_empty_without_a_cap_and_reads_nothing(
     monkeypatch: pytest.MonkeyPatch, tier: OrganizationPlanId | None, agents: list[AgentRecord]

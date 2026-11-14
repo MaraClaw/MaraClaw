@@ -101,7 +101,7 @@ async def test_real_positive_ack_survives_identity_change_during_http(relay_db, 
         tenant_id = uuid4()
         async with transaction(db.second):
             await db.second.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Changed', %(slug)s)",
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Changed', %(slug)s, 'ultra')",
                 {"id": tenant_id, "slug": tenant_id.hex},
             )
             await db.second.execute(

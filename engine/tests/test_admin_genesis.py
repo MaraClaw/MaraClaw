@@ -13,6 +13,7 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from starlette.requests import Request
 from tests.membership_generation_fixtures import pin_membership_generation
 from tests.transaction_pool_fakes import CountingPool
@@ -24,6 +25,7 @@ from app.core.json_types import object_mapping_from
 from app.core.security import decode_access_token, get_current_user, hash_password, verify_password
 from app.db import session
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.schemas import TokenResponse
 from app.services import system_org_seeder as org_seeder, tenant_provisioning
@@ -305,6 +307,7 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
         id=tenant_id,
         name="Acme",
         slug="acme-abc",
+        tier=OrganizationPlanId.MAX,
         is_active=True,
         created_at=None,
     )
@@ -314,11 +317,15 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
         admin_email="orgadmin@acme.com",
     )
     platform_user: Any = SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None)
-    monkeypatch.setattr("app.api.admin.create_tenant_with_org_admin", AsyncMock(return_value=provisioned))
+    create = AsyncMock(return_value=provisioned)
+    audit = AsyncMock()
+    monkeypatch.setattr("app.api.admin.create_tenant_with_org_admin", create)
+    monkeypatch.setattr("app.api.admin.write_admin_audit", audit)
 
     result = await admin_api.create_company(
         admin_api.CompanyCreateRequest(
             name="Acme",
+            tier=OrganizationPlanId.MAX,
             admin_email="orgadmin@acme.com",
             admin_password="temp-password",
             admin_display_name="Org Admin",
@@ -330,6 +337,25 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
     assert result.must_change_password is True
     assert result.company.id == tenant_id
     assert result.company.user_count == 1
+    assert result.company.tier is OrganizationPlanId.MAX
+    create.assert_awaited_once_with(
+        tier=OrganizationPlanId.MAX,
+        name="Acme",
+        admin_email="orgadmin@acme.com",
+        admin_password="temp-password",
+        admin_display_name="Org Admin",
+    )
+    assert audit.await_args is not None
+    assert audit.await_args.kwargs["changes"]["tier"] == {"before": None, "after": "max"}
+
+
+@pytest.mark.parametrize("fields", [{}, {"tier": "enterprise"}, {"tier": None}, {"tier": ""}])
+def test_company_create_request_requires_a_known_tier(fields):
+    with pytest.raises(ValidationError) as exc:
+        _ = admin_api.CompanyCreateRequest.model_validate(
+            {"name": "Acme", "admin_email": "orgadmin@acme.com", "admin_password": "temp-password", **fields}
+        )
+    assert [error["loc"] for error in exc.value.errors()] == [("tier",)]
 
 
 @pytest.mark.asyncio
@@ -346,6 +372,7 @@ async def test_create_company_rejects_claimed_admin_domain(monkeypatch):
         await admin_api.create_company(
             admin_api.CompanyCreateRequest(
                 name="Marathon",
+                tier=OrganizationPlanId.PRO,
                 admin_email="techadmin@marathon.vn",
                 admin_password="temp-password",
             ),
@@ -369,6 +396,7 @@ async def test_create_company_rejects_existing_admin_email(monkeypatch):
         await admin_api.create_company(
             admin_api.CompanyCreateRequest(
                 name="Acme",
+                tier=OrganizationPlanId.PRO,
                 admin_email="taken@example.com",
                 admin_password="temp-password",
             ),

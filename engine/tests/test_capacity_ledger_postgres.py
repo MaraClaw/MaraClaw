@@ -284,25 +284,18 @@ async def test_a_renewal_covers_every_approved_order_of_the_previous_month(capac
     assert (renewal["extra_accounts"], renewal["extra_agents"]) == (1 + 2 + 4, 1)
 
 
-async def test_nothing_is_generated_without_approved_coverage_a_tier_or_when_the_company_is_a_system_one(
+async def test_nothing_is_generated_without_approved_coverage_or_when_the_company_is_a_system_one(
     capacity_scenario: CapacityScenario,
 ):
     s = capacity_scenario
     await s.configure()
     _ = await s.insert_order(status="submitted", month=NOV, accounts=3)
     _ = await s.insert_order(status="rejected", month=NOV, accounts=3)
-    _ = await s.insert_order(status="approved", month=NOV, accounts=3, tenant="legacy")
     _ = await s.insert_order(status="approved", month=NOV, accounts=3, tenant="system")
 
-    outcomes = {
-        tenant: await generate_primary_renewal(s.tenants[tenant], DEC) for tenant in ("acme", "legacy", "system")
-    }
+    outcomes = {tenant: await generate_primary_renewal(s.tenants[tenant], DEC) for tenant in ("acme", "system")}
 
-    assert outcomes == {
-        "acme": RenewalOutcome.NOTHING_COVERED,
-        "legacy": RenewalOutcome.NOT_ELIGIBLE,
-        "system": RenewalOutcome.NOT_ELIGIBLE,
-    }
+    assert outcomes == {"acme": RenewalOutcome.NOTHING_COVERED, "system": RenewalOutcome.NOT_ELIGIBLE}
     assert await s.rows("SELECT 1 FROM capacity_orders WHERE kind = 'renewal'") == []
 
 
@@ -638,20 +631,6 @@ async def test_late_approval_needs_a_tier_and_survives_missing_payment_settings(
         "account_number": "0011 0022 3344",
         "branch_name": "Sai Gon",
     }
-
-
-async def test_a_company_that_lost_its_tier_gets_no_supplementary_renewal(capacity_scenario: CapacityScenario):
-    s = capacity_scenario
-    _, p = await _late_setup(s)
-    await s.db.execute(
-        "DELETE FROM organization_admission_requests WHERE provisioned_tenant_id = %(t)s", {"t": s.tenant_id}
-    )
-    s.clock.today = date(2026, 12, 3)
-
-    response = await s.decide(p["id"])
-
-    assert response.status_code == 200
-    assert [row for row in await renewals(s, DEC) if row["source_order_id"] is not None] == []
 
 
 # ── schema invariants ───────────────────────────────────────────────────

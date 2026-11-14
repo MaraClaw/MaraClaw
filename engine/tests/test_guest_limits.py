@@ -16,7 +16,6 @@ from app.records.organization_plan import OrganizationPlanId
 from app.services import guest_admission, guest_limits, guest_start
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
 from app.services.guest_limits import GuestLimits, limits_differ, resolve_guest_limits
-from app.services.organization_plans import AmbiguousOrganizationTierError
 from test_guest_start_replay import env, ready_guest
 
 __all__ = ["env", "ready_guest"]
@@ -69,38 +68,22 @@ async def test_resolve_uses_the_tier_plan_as_plain_numbers(monkeypatch, tier, me
     lookup.assert_awaited_once_with(agent.tenant_id)
 
 
-@pytest.mark.parametrize("kind", ["no-tenant", "system-agent", "untiered"])
+@pytest.mark.parametrize("kind", ["no-tenant", "system-agent"])
 async def test_resolve_falls_back_to_settings_without_cpu_shares(monkeypatch, kind):
-    # Given global settings and an agent that is system-owned, tenantless, or in an untiered organization.
+    # Given global settings and an agent that is system-owned or has no organization.
     monkeypatch.setattr(guest_limits.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 512)
     monkeypatch.setattr(guest_limits.settings, "OPENCLAW_GUEST_CPUS", 0.5)
     monkeypatch.setattr(guest_limits.settings, "OPENCLAW_GUEST_PIDS_LIMIT", 300)
     agent = organization_agent(system=kind == "system-agent", tenant=kind != "no-tenant")
-    lookup = tier_lookup(monkeypatch, None if kind == "untiered" else OrganizationPlanId.ULTRA)
+    lookup = tier_lookup(monkeypatch, OrganizationPlanId.ULTRA)
     # When its guest limits are resolved.
     limits = await resolve_guest_limits(agent)
-    # Then a system agent never reaches the tier lookup even in a tier-governed system organization, and Docker's
-    # default CPU weight is kept.
+    # Then neither reaches the tier lookup, not even a system agent of a system organization, and Docker's default
+    # CPU weight is kept.
     assert limits == GuestLimits(memory_bytes=512, cpus=0.5, cpu_shares=None, pids_limit=300, tier=None)
     assert limits.nano_cpus == 500_000_000
     assert limits.cpu_shares_option() == {}
-    assert lookup.await_count == (1 if kind == "untiered" else 0)
-
-
-async def test_resolve_reports_an_ambiguous_tier_as_a_configuration_failure(monkeypatch):
-    # Given an organization linked to several approved admissions.
-    agent = organization_agent()
-    ambiguity = AmbiguousOrganizationTierError(uuid4())
-    tier_lookup(monkeypatch, ambiguity)
-    # When its guest limits are resolved.
-    with pytest.raises(GuestStartPreflightError) as refused:
-        await resolve_guest_limits(agent)
-    # Then the start fails with a typed refusal instead of escaping as a server error.
-    assert (refused.value.code, str(refused.value), refused.value.__cause__) == (
-        "configuration_failed",
-        "Organization tier is ambiguous",
-        ambiguity,
-    )
+    lookup.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -166,11 +149,11 @@ async def test_new_guest_gets_its_tier_limits(env, monkeypatch, tier, memory, cp
     assert set(run["labels"]) == {"maraclaw.agent_id", "maraclaw.agent_name"}
 
 
-@pytest.mark.parametrize("kind", ["no-tenant", "system-agent", "untiered"])
-async def test_new_guest_of_system_or_untiered_agent_gets_settings_limits(env, monkeypatch, kind):
+@pytest.mark.parametrize("kind", ["no-tenant", "system-agent"])
+async def test_new_guest_of_system_or_tenantless_agent_gets_settings_limits(env, monkeypatch, kind):
     # Given an agent that no tier governs, beside a configured default of 20 bytes.
     manager, docker, agent = env
-    lookup = join_organization(monkeypatch, agent, None if kind == "untiered" else OrganizationPlanId.ULTRA)
+    lookup = join_organization(monkeypatch, agent, OrganizationPlanId.ULTRA)
     agent.is_system = kind == "system-agent"
     if kind == "no-tenant":
         agent.tenant_id = None
@@ -180,7 +163,7 @@ async def test_new_guest_of_system_or_untiered_agent_gets_settings_limits(env, m
     run = docker.runs[0]
     assert (run["memory"], run["memory_swap"], run["cpus"], run["pids_limit"]) == (20, 20, 1.0, 512)
     assert "cpu_shares" not in run
-    assert lookup.await_count == (1 if kind == "untiered" else 0)
+    lookup.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -205,19 +188,6 @@ async def test_replacement_admission_reserves_the_tier_target(env, monkeypatch, 
         assert refused.value.code == "guest_memory_capacity_exceeded"
         assert docker.removed == docker.runs == []
         assert (agent.status, agent.container_id) == ("running", "old")
-
-
-async def test_ambiguous_tier_refuses_replacement_before_any_docker_mutation(env, monkeypatch):
-    # Given an organization linked to several approved admissions.
-    manager, docker, agent = env
-    join_organization(monkeypatch, agent, AmbiguousOrganizationTierError(uuid4()))
-    # When its guest is replaced.
-    with pytest.raises(GuestStartPreflightError) as refused:
-        await manager.replace_container(agent)
-    # Then nothing is pulled, listed, stopped, removed or created, and the runtime record is unchanged.
-    assert refused.value.code == "configuration_failed"
-    assert docker.pulls == docker.listings == docker.updates == docker.removed == docker.runs == []
-    assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
 
 
 @pytest.mark.parametrize(("tier", "memory", "cpus", "shares", "pids"), TIERS)
@@ -245,11 +215,11 @@ async def test_resume_moves_a_stopped_guest_to_its_tier_limits(
     assert docker.runs == docker.removed == []
 
 
-@pytest.mark.parametrize("kind", ["no-tenant", "system-agent", "untiered"])
+@pytest.mark.parametrize("kind", ["no-tenant", "system-agent"])
 async def test_resume_moves_a_stopped_guest_to_settings_limits_without_cpu_shares(env, monkeypatch, kind):
     # Given a stopped guest at 256 bytes and an agent that no tier governs (default 20 bytes).
     manager, docker, agent = env
-    join_organization(monkeypatch, agent, None if kind == "untiered" else OrganizationPlanId.ULTRA)
+    join_organization(monkeypatch, agent, OrganizationPlanId.ULTRA)
     agent.is_system = kind == "system-agent"
     if kind == "no-tenant":
         agent.tenant_id = None
@@ -265,9 +235,10 @@ async def test_resume_moves_a_stopped_guest_to_settings_limits_without_cpu_share
 
 
 async def test_resume_of_a_guest_that_left_its_tier_drops_the_tier_weight(env, monkeypatch):
-    # Given a stopped guest still at the Ultra weight whose organization is no longer tiered.
+    # Given a stopped guest still at the Ultra weight whose agent no longer belongs to an organization.
     manager, docker, agent = env
-    join_organization(monkeypatch, agent, None)
+    join_organization(monkeypatch, agent, OrganizationPlanId.ULTRA)
+    agent.tenant_id = None
     guest = docker.guests["old"]
     guest.state.status = "exited"
     guest.host_config.memory = guest.host_config.memory_swap = 20
@@ -351,21 +322,6 @@ async def test_failed_update_leaves_the_stopped_guest_unchanged_and_unstarted(en
     assert (guest.state.status, guest.host_config.memory) == ("exited", 20)
     assert (agent.container_id, agent.status, agent.container_port) == ("old", "stopped", 18888)
     assert config.read_text(encoding="utf-8") == "retained config"
-
-
-async def test_ambiguous_tier_refuses_resume_before_any_docker_mutation(env, monkeypatch):
-    # Given a stopped guest of an organization linked to several approved admissions.
-    manager, docker, agent = env
-    join_organization(monkeypatch, agent, AmbiguousOrganizationTierError(uuid4()))
-    docker.guests["old"].state.status = "exited"
-    # When Start tries to resume it.
-    with pytest.raises(GuestStartPreflightError) as refused:
-        await manager.start_container(agent)
-    # Then the typed refusal precedes registration, admission, update and start.
-    assert refused.value.code == "configuration_failed"
-    assert docker.listings == docker.updates == docker.starts == docker.runs == docker.removed == []
-    assert docker.guests["old"].state.status == "exited"
-    manager._prepare_tavily_proxy_token.assert_not_awaited()
 
 
 GUEST_IMAGE = f"sha256:{'a' * 64}"

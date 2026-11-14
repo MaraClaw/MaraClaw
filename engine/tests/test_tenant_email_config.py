@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.dao.tenant_dao import tenant_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.schemas.tenant_email import TenantEmailUpdate
 from app.services import email_config
@@ -84,7 +85,7 @@ async def test_explicit_tenant_never_consults_maraclaw(monkeypatch):
 @pytest.mark.parametrize("state", ["enabled", "missing", "disabled", "incomplete", "not_system"])
 async def test_noarg_resolution_uses_only_saved_maraclaw(monkeypatch, state):
     # Given MaraClaw and distinct KABERs settings that cannot become the default.
-    mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=state != "not_system")
+    mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=state != "not_system", tier=OrganizationPlanId.PRO)
     saved = email_config.stored_settings(
         TenantEmailUpdate(enabled=state != "disabled", smtp_host="mara.example.com", from_address="mara@example.com"),
         {},

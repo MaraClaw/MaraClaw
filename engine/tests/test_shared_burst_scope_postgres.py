@@ -67,7 +67,7 @@ async def test_a_changed_fence_cancels_the_due_batch_but_keeps_transcripts_and_q
     if fence == "tenant":
         async with transaction(lane.linked.f.db.first):
             await lane.linked.f.db.first.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'x', 'x')", {"id": uuid4()}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'x', 'x', 'ultra')", {"id": uuid4()}
             )
     # When dispatch is attempted.
     await update_connection(lane, FENCES[fence])

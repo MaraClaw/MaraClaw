@@ -11,6 +11,7 @@ from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache, tenant_cache
 from app.core.row_memo import clear_row_memo
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import im_token_cache
 from app.services.channels import dedup as channel_dedup
@@ -43,6 +44,7 @@ def _tenant() -> TenantRecord:
         timezone="Asia/Shanghai",
         a2a_async_enabled=True,
         is_active=True,
+        tier=OrganizationPlanId.PRO,
     )
 
 

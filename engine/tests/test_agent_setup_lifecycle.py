@@ -28,7 +28,7 @@ async def lifecycle(setup_db, monkeypatch):
     tenant, foreign, identity = uuid4(), uuid4(), uuid4()
     for tenant_id in (tenant, foreign):
         await db.execute(
-            "INSERT INTO tenants (id,name,slug) VALUES (%(id)s,'QA',%(slug)s)",
+            "INSERT INTO tenants (id,name,slug,tier) VALUES (%(id)s,'QA',%(slug)s,'ultra')",
             {"id": tenant_id, "slug": tenant_id.hex},
         )
     await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity})

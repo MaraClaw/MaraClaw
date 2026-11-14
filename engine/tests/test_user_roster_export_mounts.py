@@ -18,6 +18,7 @@ from app.core.domain.users import UserRole
 from app.core.security import create_access_token, get_current_user
 from app.db.session import bind_crud_connection, get_connection
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import user_roster_response, user_roster_tickets
@@ -60,7 +61,9 @@ async def test_mounted_export_completes_without_entering_crud_binding(monkeypatc
     monkeypatch.setitem(main.app.dependency_overrides, bind_crud_connection, reject_crud_binding)
     monkeypatch.setitem(main.app.dependency_overrides, get_current_user, lambda: actor)
     monkeypatch.setattr(
-        users_api.tenant_dao, "get", AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own"))
+        users_api.tenant_dao,
+        "get",
+        AsyncMock(return_value=TenantRecord(id=TENANT, name="Own", slug="own", tier=OrganizationPlanId.PRO)),
     )
     monkeypatch.setattr(user_roster_tickets, "get_redis", AsyncMock(return_value=fixtures.TicketRedis()))
     monkeypatch.setattr(users_api, "decode_access_token", lambda _token: {"exp": 9999999999, "gen": 0})

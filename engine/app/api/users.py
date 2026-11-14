@@ -88,9 +88,8 @@ class AdminUserSummary(BaseModel):
     effective_max_agents: int | None = Field(
         default=None,
         description=(
-            "Agents this account may own in its organization: the organization tier's cap when the organization "
-            "was provisioned through an approved admission (quota_max_agents is then not applied), otherwise "
-            "quota_max_agents, or null for an uncapped administrator."
+            "Agents this account may own: the organization tier's cap (quota_max_agents is then not applied), "
+            "or, for an account with no organization, quota_max_agents, or null for an uncapped administrator."
         ),
     )
     # Source info
@@ -329,7 +328,7 @@ class UserAgentOut(BaseModel):
     last_active_at: datetime | None = None
     daily_messages: AgentDailyMessagesOut | None = Field(
         default=None,
-        description="Today's message usage; null for system agents and organizations without a tier.",
+        description="Today's message usage; null for system agents and agents with no organization.",
     )
 
 

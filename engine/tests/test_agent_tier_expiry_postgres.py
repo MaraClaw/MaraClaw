@@ -10,7 +10,7 @@ from httpx import Response
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app.records.organization_plan import OrganizationPlanId
 from capacity_fixtures import grant_extras
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -49,7 +49,7 @@ async def test_renewing_an_expired_agent_at_the_tier_cap_is_refused_and_leaves_i
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("owner", "One")
     _ = await scenario.agent("owner", "Two")
     gone = await _expired(scenario, "owner")
@@ -63,7 +63,7 @@ async def test_renewing_an_expired_agent_at_the_tier_cap_is_refused_and_leaves_i
 
 async def test_renewing_with_room_succeeds_and_consumes_the_slot(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("owner", "One")
     gone = await _expired(scenario, "owner")
     renewed = await _renew(scenario, gone)
@@ -78,7 +78,7 @@ async def test_the_owners_cap_governs_not_the_acting_administrators(
 ):
     scenario = deletion_scenario
     grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     for index in range(2):
         _ = await scenario.agent("owner", f"Full {index}")
     _ = await scenario.agent("oa2", "Admin one")
@@ -91,7 +91,7 @@ async def test_the_owners_cap_governs_not_the_acting_administrators(
 
 async def test_an_administrator_owner_is_capped_in_a_tiered_organization(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("oa3", "One")
     _ = await scenario.agent("oa3", "Two")
     gone = await _expired(scenario, "oa3")
@@ -101,7 +101,7 @@ async def test_an_administrator_owner_is_capped_in_a_tiered_organization(deletio
 
 async def test_concurrent_renewal_and_creation_cannot_both_take_the_last_slot(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("owner", "First")
     gone = await _expired(scenario, "owner")
     renewed, created = await asyncio.gather(
@@ -113,7 +113,7 @@ async def test_concurrent_renewal_and_creation_cannot_both_take_the_last_slot(de
 
 async def test_concurrent_renewals_of_two_expired_agents_fill_one_slot_only(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("owner", "First")
     first, second = await _expired(scenario, "owner", "A"), await _expired(scenario, "owner", "B")
     results = await asyncio.gather(_renew(scenario, first), _renew(scenario, second, "genesis"))
@@ -123,7 +123,7 @@ async def test_concurrent_renewals_of_two_expired_agents_fill_one_slot_only(dele
 
 async def test_changes_without_a_net_increase_stay_allowed_at_the_cap(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     live = await scenario.agent("owner", "One")
     _ = await scenario.agent("owner", "Two")
     gone = await _expired(scenario, "owner")
@@ -143,16 +143,7 @@ async def test_an_account_over_its_cap_keeps_agents_but_cannot_renew_another(del
     scenario = deletion_scenario
     for index in range(3):
         _ = await scenario.agent("owner", f"Legacy overflow {index}")
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     gone = await _expired(scenario, "owner")
     assert (await _renew(scenario, gone)).status_code == 403
     assert await _counted(scenario, "owner") == 3
-
-
-async def test_untiered_organizations_keep_their_legacy_renewal_behavior(deletion_scenario: DeletionScenario):
-    scenario = deletion_scenario
-    _ = await scenario.agent("owner", "One")
-    _ = await scenario.agent("owner", "Two")
-    gone = await _expired(scenario, "owner")
-    assert (await _renew(scenario, gone)).status_code == 200
-    assert await _state(scenario, gone) == (False, "idle")

@@ -53,9 +53,8 @@ class RenewalPass:
 
 
 async def eligible_tier(db: DbConnection, tenant_id: UUID) -> OrganizationPlanId | None:
-    """The tier of a company that may hold paid extras: tiered and not a system organization (checked first)."""
-    is_system = await db.fetchval("SELECT is_system FROM tenants WHERE id = %(id)s", {"id": tenant_id})
-    if is_system is None or bool(is_system):
+    """The tier of a company that may hold paid extras; ``None`` for a system organization, which cannot."""
+    if bool(await db.fetchval("SELECT is_system FROM tenants WHERE id = %(id)s", {"id": tenant_id})):
         return None
     return await tier_for_tenant(tenant_id)
 
@@ -142,9 +141,8 @@ async def supplement_late_approval(
 
     An order billed for the previous month is left alone while the current month has no primary renewal: the ledger
     fallback and generation both count it through the previous month's coverage. An older order is outside that
-    coverage, so it is always renewed, primary renewal or not. A company that is no longer a tiered, non-system one
-    needs no renewal. The caller holds the tenant lock. Without current payment settings the approved order's own
-    rate and recipient are used.
+    coverage, so it is always renewed, primary renewal or not. A system organization needs no renewal. The caller
+    holds the tenant lock. Without current payment settings the approved order's own rate and recipient are used.
     """
     month = month_start(today)
     if approved.billing_month >= month:

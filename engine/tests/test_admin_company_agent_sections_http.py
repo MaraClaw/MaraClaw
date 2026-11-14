@@ -17,6 +17,7 @@ from app.core import security
 from app.core.domain.users import UserRole
 from app.dao.tenant_dao import tenant_dao
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -45,7 +46,7 @@ _DEFAULT_HIDDEN = ["files", "channels", "people", "access", "control", "vault", 
 
 
 def _tenant(**kwargs: Any) -> TenantRecord:
-    return TenantRecord(id=_COMPANY_ID, name="Co 7", slug="co-7", **kwargs)
+    return TenantRecord(id=_COMPANY_ID, name="Co 7", slug="co-7", tier=OrganizationPlanId.PRO, **kwargs)
 
 
 @pytest.fixture

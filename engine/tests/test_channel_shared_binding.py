@@ -10,6 +10,7 @@ from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.identity import IdentityProviderRecord
 from app.records.org import OrgMemberRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.channel_user_service import ChannelUserResolutionError
@@ -33,7 +34,9 @@ def context(monkeypatch):
     monkeypatch.setattr(binding, "load_user_principal", AsyncMock(return_value=user))
     monkeypatch.setattr(binding, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(
-        binding.company_admission_dao, "tenant", AsyncMock(return_value=TenantRecord(tenant_id, "Company", "company"))
+        binding.company_admission_dao,
+        "tenant",
+        AsyncMock(return_value=TenantRecord(tenant_id, "Company", "company", tier=OrganizationPlanId.PRO)),
     )
     monkeypatch.setattr(binding, "ensure_shared_session", AsyncMock(return_value=shared))
     return agent, user, shared

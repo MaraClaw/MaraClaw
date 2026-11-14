@@ -41,7 +41,8 @@ async def webhook_db() -> AsyncIterator[WebhookDatabase]:
             await bootstrap_db._apply_sql_script(bootstrap_db.SCHEMA_BASELINE)
             tenant_id, owner_id, agent_id = uuid4(), uuid4(), uuid4()
             await db.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Webhook QA', 'webhook-qa')", {"id": tenant_id}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Webhook QA', 'webhook-qa', 'ultra')",
+                {"id": tenant_id},
             )
             await db.execute(
                 "INSERT INTO users (id, tenant_id, display_name) VALUES (%(id)s, %(tenant)s, 'Webhook QA')",

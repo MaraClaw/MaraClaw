@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import tenants as tenants_api
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import tenant_lifecycle as lifecycle
 from app.services.org_membership import DefaultOrgUnavailableError
@@ -26,6 +27,7 @@ def _tenant(**kwargs) -> TenantRecord:
         "id": uuid4(),
         "name": "Acme",
         "slug": "acme",
+        "tier": OrganizationPlanId.PRO,
         "is_active": True,
         "is_system": False,
         "is_default_end_user_org": False,

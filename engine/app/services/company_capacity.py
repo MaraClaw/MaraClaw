@@ -1,14 +1,14 @@
-"""Company-wide account and agent caps for tiered, non-system organizations.
+"""Company-wide account and agent caps for non-system organizations.
 
-A tiered organization (an approved admission provisioned it) may hold at most its plan's included accounts plus
-purchased extra accounts, and its plan's included agents plus purchased extra agents (``capacity_ledger``). System
-organizations (MaraClaw, KABERs) and untiered organizations are uncapped, so ``is_system`` is read before the tier.
-Existing members and agents are never touched: only a net increase is refused.
+An organization (``tenants.tier``) may hold at most its plan's included accounts plus purchased extra accounts, and its
+plan's included agents plus purchased extra agents (``capacity_ledger``). System organizations (MaraClaw, KABERs) are
+uncapped, so ``is_system`` is read before the tier. Existing members and agents are never touched: only a net increase
+is refused.
 
 An account is an active membership (``users.is_active``) of the company whose role is not ``platform_admin``: members,
 agent admins and organization admins alike, as the plan quote counts the administrator. IM channel and Feishu
 auto-created users are not a separate case: ``channel_user_service`` refuses to create them in any non-system,
-non-default organization, which every tiered organization is, and ``FeishuService.login_or_register`` has no caller.
+non-default organization, which every capped organization is, and ``FeishuService.login_or_register`` has no caller.
 An agent is counted exactly as the per-account cap counts it (``agent_dao.count_ordinary_for_creator``), company-wide:
 non-expired, non-system, any lifecycle status.
 
@@ -82,15 +82,12 @@ class CompanyAgentLimitReachedError(Exception):
 
 
 async def company_caps(conn: DbConnection, tenant_id: UUID | None) -> CompanyCaps | None:
-    """The caps of a tiered, non-system organization; ``None`` means uncapped (system, untiered or unknown)."""
+    """The caps of a non-system organization; ``None`` means uncapped: a system organization, or no organization."""
     if tenant_id is None:
         return None
-    is_system = await conn.fetchval("SELECT is_system FROM tenants WHERE id = %(id)s", {"id": tenant_id})
-    if is_system is None or bool(is_system):
+    if bool(await conn.fetchval("SELECT is_system FROM tenants WHERE id = %(id)s", {"id": tenant_id})):
         return None
     tier = await tier_for_tenant(tenant_id)
-    if tier is None:
-        return None
     plan = plan_for(tier)
     extras = await effective_extras(conn, tenant_id, vn_today())
     return CompanyCaps(

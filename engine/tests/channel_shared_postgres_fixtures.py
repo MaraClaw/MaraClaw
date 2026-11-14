@@ -43,7 +43,8 @@ async def live_channel(schema_db, monkeypatch):
     identities = tuple(uuid4() for _ in range(3))
     users = tuple(uuid4() for _ in range(3))
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Channel QA', 'channel-qa')", {"id": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Channel QA', 'channel-qa', 'ultra')",
+        {"id": tenant_id},
     )
     for index, (identity_id, user_id) in enumerate(zip(identities, users, strict=True)):
         await schema_db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})

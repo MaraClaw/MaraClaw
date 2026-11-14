@@ -18,6 +18,7 @@ from app.core import security
 from app.core.domain.users import UserRole
 from app.dao.tenant_dao import TenantUsageStats, tenant_dao
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -25,11 +26,12 @@ _BASE = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 _PAGE = "/api/admin/companies/page"
 
 
-def _tenant(number: int, **kwargs: Any) -> TenantRecord:
+def _tenant(number: int, tier: OrganizationPlanId = OrganizationPlanId.PRO, **kwargs: Any) -> TenantRecord:
     return TenantRecord(
         id=UUID(int=number),
         name=f"Co {number}",
         slug=f"co-{number}",
+        tier=tier,
         created_at=_BASE - timedelta(days=number),
         **kwargs,
     )
@@ -62,7 +64,11 @@ def principal(monkeypatch) -> UserRecord:
 
 @pytest.fixture
 def pages(monkeypatch) -> dict[str, AsyncMock]:
-    tenants = [_tenant(number) for number in (1, 2, 3)]
+    tenants = [
+        _tenant(1, OrganizationPlanId.MAX),
+        _tenant(2, OrganizationPlanId.PRO),
+        _tenant(3, OrganizationPlanId.ULTRA),
+    ]
     mocks = {
         "list_page": AsyncMock(return_value=tenants),
         "usage_stats": AsyncMock(return_value={tenants[0].id: TenantUsageStats(user_count=2, active_user_count=1)}),
@@ -160,11 +166,26 @@ async def test_search_returns_ranked_list_without_cursor_and_rejects_a_cursor(cl
     assert (with_cursor.status_code, too_long.status_code) == (400, 400)
 
 
+async def test_company_rows_carry_the_tier_of_their_tenant_row(client, principal, pages):
+    headers = {"Authorization": "Bearer t"}
+
+    # When a page of three is read, one company's stats and the unpaged list.
+    page = (await client.get(_PAGE, params={"limit": 3}, headers=headers)).json()
+    single = (await client.get(f"/api/admin/companies/{UUID(int=1)}/stats", headers=headers)).json()
+    unpaged = (await client.get("/api/admin/companies", headers=headers)).json()
+
+    # Then every row carries the tier stored on its tenant.
+    assert [row["tier"] for row in page["items"]] == ["max", "pro", "ultra"]
+    assert single["tier"] == "max"
+    assert [row["tier"] for row in unpaged] == ["max", "pro", "ultra"]
+
+
 async def test_options_are_stats_free_and_stats_route_reports_404(client, principal, pages):
     headers = {"Authorization": "Bearer t"}
     options = (await client.get("/api/admin/companies/options", headers=headers)).json()
     assert [row["id"] for row in options] == [str(UUID(int=n)) for n in (1, 2, 3)]
     assert "user_count" not in options[0]
+    assert "tier" not in options[0]
     assert options[0]["can_disable"] is True
     pages["usage_stats"].assert_not_awaited()
 

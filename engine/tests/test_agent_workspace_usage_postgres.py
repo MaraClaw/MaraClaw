@@ -12,14 +12,12 @@ from app.dao.agent_dao import agent_dao
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.dao.tenant_dao import tenant_dao
 from app.db.errors import CheckViolationError, ForeignKeyViolationError
-from app.db.types import as_jsonb
 from app.records.agent import AgentRecord
 from app.records.agent_workspace_usage import AgentWorkspaceUsageRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.services import agent_workspace_quota as quota
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
-from app.services.organization_plans import plan_for
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -50,7 +48,7 @@ def workspace(monkeypatch: pytest.MonkeyPatch) -> Workspace:
 async def _tiered_agent(
     scenario: DeletionScenario, tier: OrganizationPlanId = OrganizationPlanId.PRO, *, is_system: bool = False
 ) -> AgentRecord:
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, tier)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, tier)
     agent = await agent_dao.get(await scenario.agent("owner", is_system=is_system))
     assert agent is not None
     return agent
@@ -302,10 +300,7 @@ async def test_a_tier_upgrade_lifts_the_block_on_the_next_measurement(
     with pytest.raises(WorkspaceDiskQuotaExceeded):
         await quota.ensure_workspace_within_quota(agent)
 
-    await scenario.db.execute(
-        "UPDATE organization_admission_requests SET tier = 'max', plan = %(plan)s WHERE provisioned_tenant_id = %(t)s",
-        {"plan": as_jsonb(plan_for(OrganizationPlanId.MAX).model_dump(mode="json")), "t": scenario.tenant_id},
-    )
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)
     await quota.measure_agent(agent)
 
     await quota.ensure_workspace_within_quota(agent)
@@ -314,18 +309,11 @@ async def test_a_tier_upgrade_lifts_the_block_on_the_next_measurement(
     assert (row["limit_bytes"], row["over_since"]) == (5 * GIB, None)
 
 
-@pytest.mark.parametrize("kind", ["system", "untiered"])
-async def test_agents_without_an_allowance_lose_their_stale_row_and_are_never_walked(
-    deletion_scenario: DeletionScenario, workspace: Workspace, kind: str
+async def test_system_agents_lose_their_stale_row_and_are_never_walked(
+    deletion_scenario: DeletionScenario, workspace: Workspace
 ):
     scenario = deletion_scenario
-    if kind == "system":
-        agent = await _tiered_agent(scenario, is_system=True)
-    else:
-        agent_id = await scenario.agent("owner")
-        found = await agent_dao.get(agent_id)
-        assert found is not None
-        agent = found
+    agent = await _tiered_agent(scenario, is_system=True)
     _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
 
     await quota.measure_agent(agent)

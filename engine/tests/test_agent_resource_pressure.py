@@ -16,7 +16,7 @@ from app.records.agent_resource_pressure_episode import PressureResource
 from app.records.organization_plan import OrganizationPlanId
 from app.services import agent_resource_pressure as pressure
 from app.services.agent_resource_pressure_docker import GuestInspection, GuestStats
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for
+from app.services.organization_plans import plan_for
 
 GIB = 1024**3
 FINISHED = datetime(2026, 11, 13, 5, 4, 3, 123456, tzinfo=UTC)
@@ -187,9 +187,9 @@ class World:
     episodes: Episodes
     guests: Guests
     warnings: Warnings
-    tiers: dict[UUID, OrganizationPlanId | Exception | None] = field(
-        default_factory=dict[UUID, OrganizationPlanId | Exception | None]
-    )
+    tiers: dict[UUID, OrganizationPlanId] = field(default_factory=dict[UUID, OrganizationPlanId])
+    deleted_organizations: set[UUID] = field(default_factory=set[UUID])
+    tier_reads: list[list[UUID]] = field(default_factory=list[list[UUID]])
     charged: dict[UUID, int] = field(default_factory=dict[UUID, int])
     client_available: bool = True
 
@@ -199,12 +199,13 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
     episodes = Episodes()
     state = World(episodes, Guests(episodes), Warnings())
 
-    async def tier_for_tenant(tenant_id: UUID | None) -> OrganizationPlanId | None:
-        assert tenant_id is not None
-        answer = state.tiers.get(tenant_id, OrganizationPlanId.PRO)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
+    async def tiers_for(tenant_ids: Sequence[UUID]) -> dict[UUID, OrganizationPlanId]:
+        state.tier_reads.append(list(tenant_ids))
+        return {
+            tenant_id: state.tiers.get(tenant_id, OrganizationPlanId.PRO)
+            for tenant_id in tenant_ids
+            if tenant_id not in state.deleted_organizations
+        }
 
     async def charged_for_agents(_db: object, agent_ids: Sequence[UUID]) -> dict[UUID, int]:
         return {agent_id: state.charged[agent_id] for agent_id in agent_ids if agent_id in state.charged}
@@ -218,7 +219,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
             episodes.open_connections -= 1
 
     monkeypatch.setattr(pressure, "agent_resource_pressure_episode_dao", episodes)
-    monkeypatch.setattr(pressure, "tier_for_tenant", tier_for_tenant)
+    monkeypatch.setattr(pressure.tenant_dao, "tiers_for", tiers_for)
     monkeypatch.setattr(pressure, "inspect_guests", state.guests.inspect)
     monkeypatch.setattr(pressure, "guest_stats", state.guests.stats)
     monkeypatch.setattr(pressure, "connection_ctx", connection)
@@ -480,39 +481,15 @@ async def test_a_later_oom_kill_of_the_same_guest_is_a_new_row_and_one_without_a
     ]
 
 
-async def test_agents_without_a_tier_lose_their_open_episodes_and_are_never_sampled(world: World):
-    untiered, system = _agent(), _agent(system=True)
-    world.tiers[untiered.tenant_id or uuid4()] = None
-    for agent in (untiered, system):
-        _ = _guest(world, agent, memory_usage=990)
-        world.charged[agent.id] = 990
-        for resource in PressureResource:
-            world.episodes.rows.append(
-                Episode(agent.tenant_id or uuid4(), agent.id, resource, OrganizationPlanId.PRO, 1000, 950, 0.95)
-            )
+async def test_system_agents_and_agents_of_a_deleted_organization_are_never_sampled(world: World):
+    system, gone, sampled = _agent(system=True), _agent(), _agent()
+    world.deleted_organizations.add(gone.tenant_id or uuid4())
+    for agent in (system, gone, sampled):
+        _ = _guest(world, agent, memory_usage=100)
 
-    await pressure.sample_page([untiered, system])
+    await pressure.sample_page([system, gone, sampled])
 
-    assert {row.closed_reason for row in world.episodes.rows} == {"untiered"}
-    assert len(world.episodes.rows) == 8
-    assert world.guests.inspect_calls == []
-
-
-async def test_an_ambiguous_tier_skips_the_agent_with_a_warning_naming_only_its_id(world: World):
-    agent, other = _agent(), _agent()
-    world.tiers[agent.tenant_id or uuid4()] = AmbiguousOrganizationTierError(agent.tenant_id or uuid4())
-    world.episodes.rows.append(
-        Episode(agent.tenant_id or uuid4(), agent.id, PressureResource.MEMORY, OrganizationPlanId.PRO, 1000, 950, 0.95)
-    )
-    _ = _guest(world, agent, memory_usage=100)
-    _ = _guest(world, other, memory_usage=950)
-
-    await pressure.sample_page([agent, other])
-
-    assert world.warnings.messages == [f"[ResourcePressure] ambiguous organization tier; agent={agent.id} skipped"]
-    assert [row.ended for row in world.episodes.rows if row.agent_id == agent.id] == [False]
-    assert world.guests.inspect_calls == [[other.container_id]]
-    assert _only_for(world, other.id, PressureResource.MEMORY).peak_value == 950
+    assert world.guests.inspect_calls == [[sampled.container_id]]
 
 
 def _only_for(world: World, agent_id: UUID, resource: PressureResource) -> Episode:
@@ -520,15 +497,14 @@ def _only_for(world: World, agent_id: UUID, resource: PressureResource) -> Episo
     return row
 
 
-async def test_a_tier_is_resolved_once_per_organization_on_a_page(world: World, monkeypatch: pytest.MonkeyPatch):
-    tenant_id = uuid4()
-    resolve = AsyncMock(return_value=OrganizationPlanId.MAX)
-    monkeypatch.setattr(pressure, "tier_for_tenant", resolve)
-    agents = [_agent(tenant_id, container=False) for _ in range(3)]
+async def test_the_tiers_of_a_page_are_read_in_one_batch(world: World):
+    first, second = uuid4(), uuid4()
+    agents = [_agent(first, container=False), _agent(first, container=False), _agent(second, container=False)]
+    world.tiers[second] = OrganizationPlanId.MAX
 
     await pressure.sample_page(agents)
 
-    resolve.assert_awaited_once_with(tenant_id)
+    assert [sorted(read) for read in world.tier_reads] == [sorted([first, second])]
 
 
 async def test_managed_storage_is_sampled_per_agent_against_the_tier_allowance(world: World):

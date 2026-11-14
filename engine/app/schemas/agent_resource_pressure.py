@@ -27,7 +27,7 @@ class ResourcePressureTenantSummary(BaseModel):
 
     tenant_id: UUID
     tenant_name: str
-    current_tier: OrganizationPlanId | None
+    current_tier: OrganizationPlanId
     episode_counts: ResourcePressureEpisodeCounts
     oom_count: int
     pressure_seconds: int = Field(description="Sum of each threshold episode's first-to-last sample span, in seconds.")

@@ -24,6 +24,7 @@ from app.services import (
     admin_provisioning as provisioning,
     company_capacity,
     org_membership,
+    organization_plans,
     quota_guard,
     tenant_lifecycle,
     tenant_provisioning,
@@ -119,18 +120,16 @@ async def test_system_organization_is_uncapped_without_reading_the_tier(tier: As
     tier.assert_not_awaited()
 
 
-async def test_untiered_organization_is_uncapped(tier: AsyncMock):
-    tier.return_value = None
-
-    assert await company_caps(_Conn().db, uuid4()) is None
-
-
-@pytest.mark.parametrize("tenant_id", [None, uuid4()])
-async def test_missing_tenant_is_uncapped(tier: AsyncMock, tenant_id: UUID | None):
-    conn = _Conn(is_system=None)
-
-    assert await company_caps(conn.db, tenant_id) is None
+async def test_no_organization_is_uncapped(tier: AsyncMock):
+    assert await company_caps(_Conn().db, None) is None
     tier.assert_not_awaited()
+
+
+async def test_a_tenant_that_does_not_exist_is_refused_by_the_tier_read(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(organization_plans.tenant_dao, "tiers_for", AsyncMock(return_value={}))
+
+    with pytest.raises(LookupError):
+        _ = await company_caps(_Conn(is_system=None).db, uuid4())
 
 
 @pytest.mark.parametrize(
@@ -210,17 +209,14 @@ async def test_purchased_extra_accounts_raise_the_account_cap(
     assert (refused.value.limit, refused.value.used) == (7, 7)
 
 
-async def test_account_gate_never_counts_for_uncapped_organizations(
+async def test_account_gate_never_counts_for_system_organizations_or_no_organization(
     monkeypatch: pytest.MonkeyPatch, tier: AsyncMock, locks: list[tuple[UUID, ...]]
 ):
     system = _Conn(is_system=True, accounts=500)
     await require_account_slot(system.db, uuid4())
-    tier.return_value = None
-    untiered = _Conn(accounts=500)
-    await require_account_slot(untiered.db, uuid4())
-    await require_account_slot(untiered.db, None)
+    await require_account_slot(system.db, None)
 
-    assert system.statements("FROM users") == [] == untiered.statements("FROM users")
+    assert system.statements("FROM users") == []
 
 
 async def test_reactivation_excludes_the_member_and_advisory_reads_skip_the_lock(
@@ -249,14 +245,11 @@ async def test_free_account_slots_are_the_cap_less_the_active_accounts_and_never
     assert conn.events[0][0] == "LOCK"
 
 
-async def test_free_account_slots_of_an_uncapped_organization_are_none(tier: AsyncMock, locks: list[tuple[UUID, ...]]):
+async def test_free_account_slots_of_a_system_organization_are_none(tier: AsyncMock, locks: list[tuple[UUID, ...]]):
     system = _Conn(is_system=True, accounts=500)
     assert await free_account_slots(system.db, uuid4()) is None
-    tier.return_value = None
-    untiered = _Conn(accounts=500)
-    assert await free_account_slots(untiered.db, uuid4()) is None
 
-    assert system.statements("FROM users") == [] == untiered.statements("FROM users")
+    assert system.statements("FROM users") == []
 
 
 # ── agent gate ──────────────────────────────────────────────────────────
@@ -280,7 +273,7 @@ async def test_agent_gate_refuses_only_a_net_increase_past_the_cap(
     assert error.value.message == AGENT_MESSAGE.format(limit=2)
 
 
-async def test_purchased_extra_agents_raise_the_agent_cap_but_not_for_uncapped_organizations(
+async def test_purchased_extra_agents_raise_the_agent_cap_but_not_for_system_organizations(
     monkeypatch: pytest.MonkeyPatch, tier: AsyncMock, locks: list[tuple[UUID, ...]]
 ):
     grant_extras(monkeypatch, agents=3)
@@ -355,7 +348,7 @@ async def test_creation_accepts_room_in_both_caps_and_skips_the_gate_without_a_c
 
 
 def _tenant() -> TenantRecord:
-    return TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    return TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
 
 
 def _smtp_config() -> SystemEmailConfig:

@@ -21,7 +21,7 @@ from capacity_fixtures import grant_extras
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from invitation_fixtures import pending_domain_transfer
 from test_company_transfer_postgres import submit_paid, transfer_scenario
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["admission_scenario", "transfer_scenario"]
 
@@ -88,7 +88,7 @@ async def test_exact_fit_of_ordinary_incoming_agents_migrates_everything(
     transfer_scenario: AdmissionScenario, revocations: list[UUID]
 ):
     scenario = transfer_scenario
-    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
     ordinary = [await _seed(scenario, f"Ordinary {n}") for n in range(2)]
     extras = [
         await _seed(scenario, "System", is_system=True),
@@ -106,7 +106,7 @@ async def test_one_agent_over_the_cap_refuses_the_whole_batch_before_any_write(
     transfer_scenario: AdmissionScenario, revocations: list[UUID], existing_in_destination: int
 ):
     scenario = transfer_scenario
-    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
     for index in range(existing_in_destination):
         _ = await _seed(scenario, f"Already there {index}", tenant=scenario.target_id)
     incoming = [await _seed(scenario, f"Ordinary {n}") for n in range(3 - existing_in_destination)]
@@ -122,7 +122,7 @@ async def test_one_agent_over_the_cap_refuses_the_whole_batch_before_any_write(
 
 async def _fill_destination_with_colleagues_agents(scenario: AdmissionScenario) -> UUID:
     """Two agents owned by the destination's administrator (the applicant's own count there stays 0), then one incoming."""
-    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # company cap: 2 agents
+    await set_tenant_tier(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # company cap: 2 agents
     for index in range(2):
         _ = await _seed(scenario, f"Colleague {index}", tenant=scenario.target_id, creator_id=scenario.genesis.id)
     return await _seed(scenario, "Incoming")
@@ -163,7 +163,7 @@ async def test_admission_into_a_company_with_no_free_account_is_refused_and_roll
     transfer_scenario: AdmissionScenario, revocations: list[UUID]
 ):
     scenario = transfer_scenario
-    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # 5 accounts included
+    await set_tenant_tier(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # 5 accounts included
     while (await company_usage(scenario.db, scenario.target_id))[0] < 5:
         _ = await user_dao.create(
             obj_in={"display_name": "Filler", "tenant_id": scenario.target_id, "role": "member", "is_active": True}
@@ -178,22 +178,11 @@ async def test_admission_into_a_company_with_no_free_account_is_refused_and_roll
     assert status == {"status": "pending"}
 
 
-async def test_untiered_destination_and_free_source_disposition_are_not_capped(
-    transfer_scenario: AdmissionScenario, revocations: list[UUID]
-):
-    scenario = transfer_scenario
-    agents = [await _seed(scenario, f"Many {n}") for n in range(4)]
-    response = await _approve(scenario, TransferChoice.PAID)
-    assert response.status_code == 200, response.text
-    assert {await _tenant_of(scenario, agent_id) for agent_id in agents} == {scenario.target_id}
-    assert set(revocations) == set(agents)
-
-
 async def test_free_disposition_into_a_tiered_destination_seals_instead_of_migrating(
     transfer_scenario: AdmissionScenario, revocations: list[UUID]
 ):
     scenario = transfer_scenario
-    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
     agents = [await _seed(scenario, f"Sealed {n}") for n in range(4)]
     response = await _approve(scenario, TransferChoice.FREE)
     assert response.status_code == 200, response.text

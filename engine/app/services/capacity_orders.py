@@ -65,7 +65,7 @@ class CapacityOrderView:
 class CapacityOverview:
     tenant_id: UUID
     capped: bool
-    tier: OrganizationPlanId | None
+    tier: OrganizationPlanId
     included_accounts: int | None
     included_agents: int | None
     extra_accounts: int
@@ -156,7 +156,8 @@ async def overview(user_id: UUID, tenant_id: UUID | None) -> CapacityOverview:
     async with connection_ctx() as db:
         user = await _principal(user_id)
         target = _reader_tenant(user, tenant_id)
-        if await tenant_dao.get(target) is None:
+        tenant = await tenant_dao.get(target)
+        if tenant is None:
             raise HTTPException(404, "Company not found")
         today = capacity_ledger.vn_today()
         caps = await company_caps(db, target)
@@ -166,7 +167,7 @@ async def overview(user_id: UUID, tenant_id: UUID | None) -> CapacityOverview:
         return CapacityOverview(
             tenant_id=target,
             capped=caps is not None,
-            tier=caps.tier if caps is not None else None,
+            tier=tenant.tier,
             included_accounts=plan.included_accounts if plan is not None else None,
             included_agents=int(plan.included_agents) if plan is not None else None,
             extra_accounts=caps.extras.accounts if caps is not None else 0,
@@ -198,7 +199,7 @@ async def create_order(
         _ = _require_org_admin(actor)
         tier = await eligible_tier(db, tenant_id)
         if tier is None:
-            raise conflict("not_eligible", "Only companies on a paid plan can buy extra accounts and agents")
+            raise conflict("not_eligible", "System organizations cannot buy extra accounts and agents")
         settings = await load_payment_settings()
         if settings is None:
             raise conflict("payments_not_configured", "Payments are not configured yet. Contact the platform admin.")

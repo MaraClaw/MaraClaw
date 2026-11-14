@@ -21,12 +21,12 @@ from app.db.connection import DbConnection
 from app.db.errors import CheckViolationError, ForeignKeyViolationError
 from app.db.session import transaction
 from app.records.organization_plan import OrganizationPlanId
-from app.services import agent_message_quota as quota
+from app.services import agent_message_quota as quota, organization_plans, quota_guard
 from app.services.channels.personal_burst_outcome import PersonalAccepted, PersonalRejected
 from app.services.channels.submissions import accept_channel_event
 from app.services.chat_submissions import ChatSubmission, accept_submission
 from app.services.quota_guard import QuotaExceeded
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["channel_db", "frozen_clock", "linked", "receipt_db", "writable_receipt_db"]
 
@@ -35,25 +35,23 @@ PRO_LIMIT = 100
 
 async def _govern(
     db: ReceiptDatabase,
-    tier: OrganizationPlanId | None = OrganizationPlanId.PRO,
+    tier: OrganizationPlanId = OrganizationPlanId.PRO,
     *,
     system: bool = False,
     timezone: str | None = None,
 ) -> UUID:
-    """Put the fixture agent in an organization (tier-governed when ``tier`` is given), maybe with a genesis admin."""
+    """Put the fixture agent in an organization of ``tier``, maybe with a genesis admin."""
     tenant_id = uuid4()
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Cap QA', %(slug)s)",
-            {"id": tenant_id, "slug": f"cap-{tenant_id.hex[:8]}"},
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Cap QA', %(slug)s, %(tier)s)",
+            {"id": tenant_id, "slug": f"cap-{tenant_id.hex[:8]}", "tier": tier.value},
         )
         await db.first.execute("UPDATE users SET tenant_id = %(tenant)s", {"tenant": tenant_id})
         await db.first.execute(
             "UPDATE agents SET tenant_id = %(tenant)s, is_system = %(system)s WHERE id = %(id)s",
             {"tenant": tenant_id, "system": system, "id": db.agent.id},
         )
-        if tier is not None:
-            _ = await approve_admission_for(db.first, tenant_id, tier)
         if timezone is not None:
             await db.first.execute(
                 "INSERT INTO users (id, display_name, tenant_id, role, is_genesis, timezone) "
@@ -63,9 +61,12 @@ async def _govern(
     return tenant_id
 
 
-async def _tier_channel_agent(f: ChannelDatabase) -> None:
+async def _tier_channel_agent(f: ChannelDatabase, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put the channel fixture's organization on the Pro tier and read tiers for real again: the sender's own
+    allowance no longer applies (``channel_db`` stubs the tier lookup to keep exercising it elsewhere)."""
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", organization_plans.tier_for_tenant)
     async with transaction(f.db.first):
-        _ = await approve_admission_for(f.db.first, f.tenant_id, OrganizationPlanId.PRO)
+        await set_tenant_tier(f.db.first, f.tenant_id, OrganizationPlanId.PRO)
 
 
 async def _set_usage(db: ReceiptDatabase, used: int, usage_date: date = TODAY) -> None:
@@ -87,7 +88,7 @@ async def _usage(db: ReceiptDatabase) -> tuple[date, int] | None:
     return None if row is None else (date_from_row(row["usage_date"]), int_from_row(row["messages_used"]))
 
 
-async def _charge(db: ReceiptDatabase, tenant_id: UUID, *, system: bool = False) -> None:
+async def _charge(db: ReceiptDatabase, tenant_id: UUID | None, *, system: bool = False) -> None:
     async with transaction(db.first):
         await quota.charge_agent_daily_message(replace(db.agent, tenant_id=tenant_id, is_system=system))
 
@@ -127,12 +128,11 @@ async def test_larger_tiers_admit_up_to_their_own_limit(
     assert await _usage(db) == (TODAY, limit)
 
 
-async def test_untiered_agent_is_never_refused_or_counted(receipt_db: ReceiptDatabase):
+async def test_agent_with_no_organization_is_never_refused_or_counted(receipt_db: ReceiptDatabase):
     db = receipt_db
-    tenant_id = await _govern(db, None)
 
     for _ in range(PRO_LIMIT + 1):
-        await _charge(db, tenant_id)
+        await _charge(db, None)
 
     assert await _usage(db) is None
 
@@ -266,15 +266,10 @@ async def test_accepted_web_message_charges_only_the_agent_once_and_replay_charg
     assert (charged, await _usage(db)) == (0, (TODAY, 1))
 
 
-@pytest.mark.parametrize(
-    ("tier", "admitted"), [(OrganizationPlanId.PRO, True), (None, False)], ids=["tiered-admits", "untiered-refuses"]
-)
-async def test_exhausted_per_user_quota_only_refuses_in_an_untiered_organization(
-    writable_receipt_db: ReceiptDatabase, tier: OrganizationPlanId | None, admitted: bool
-):
-    # Given a member whose stored permanent allowance is spent, in an organization with or without a tier.
+async def test_exhausted_per_user_quota_does_not_refuse_inside_an_organization(writable_receipt_db: ReceiptDatabase):
+    # Given a member whose stored permanent allowance is spent, in an organization.
     db = writable_receipt_db
-    tenant_id = await _govern(db, tier)
+    tenant_id = await _govern(db)
     async with transaction(db.first):
         await db.first.execute(
             "UPDATE users SET quota_message_limit = 50, quota_message_period = 'permanent', quota_messages_used = 50 "
@@ -282,35 +277,29 @@ async def test_exhausted_per_user_quota_only_refuses_in_an_untiered_organization
             {"id": db.user.id},
         )
 
-    async def submit() -> None:
-        async with transaction(db.first):
-            _ = await accept_submission(
-                ChatSubmission(client_submission_id=uuid4(), content="after the allowance"),
-                user=replace(db.user, tenant_id=tenant_id),
-                agent=replace(db.agent, tenant_id=tenant_id),
-                session_id=db.session_id,
-                history=[],
-            )
-
     # When the member sends another message.
-    if admitted:
-        await submit()
-    else:
-        with pytest.raises(QuotaExceeded) as refused:
-            await submit()
-        assert refused.value.quota_type == "conversation"
+    async with transaction(db.first):
+        _ = await accept_submission(
+            ChatSubmission(client_submission_id=uuid4(), content="after the allowance"),
+            user=replace(db.user, tenant_id=tenant_id),
+            agent=replace(db.agent, tenant_id=tenant_id),
+            session_id=db.session_id,
+            history=[],
+        )
 
-    # Then only the agent's daily counter moves in a tiered organization, and the stored allowance never does.
+    # Then only the agent's daily counter moves, and the stored allowance never does.
     async with transaction(db.first):
         charged = await db.first.fetchval("SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": db.user.id})
     assert charged == 50
-    assert await _usage(db) == ((TODAY, 1) if admitted else None)
+    assert await _usage(db) == (TODAY, 1)
 
 
-async def test_refused_channel_event_rolls_back_the_receipt(channel_db: ChannelDatabase):
+async def test_refused_channel_event_rolls_back_the_receipt(
+    channel_db: ChannelDatabase, monkeypatch: pytest.MonkeyPatch
+):
     # Given a channel agent at its daily limit.
     db = channel_db.db
-    await _tier_channel_agent(channel_db)
+    await _tier_channel_agent(channel_db, monkeypatch)
     await _set_usage(db, PRO_LIMIT)
 
     # When another native event arrives.
@@ -338,10 +327,12 @@ async def test_refused_channel_event_rolls_back_the_receipt(channel_db: ChannelD
     assert (charged, await _usage(db)) == (0, (TODAY, PRO_LIMIT))
 
 
-async def test_personal_original_over_the_agent_limit_is_a_quota_rejection_that_charges_nobody(linked: LinkedBurst):
+async def test_personal_original_over_the_agent_limit_is_a_quota_rejection_that_charges_nobody(
+    linked: LinkedBurst, monkeypatch: pytest.MonkeyPatch
+):
     # Given a Personal WhatsApp agent at its daily limit.
     db = linked.f.db
-    await _tier_channel_agent(linked.f)
+    await _tier_channel_agent(linked.f, monkeypatch)
     await _set_usage(db, PRO_LIMIT)
 
     # When its owner sends another self message.

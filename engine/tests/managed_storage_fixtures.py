@@ -16,7 +16,6 @@ from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 from s3_wire_server import S3Server
-from tier_limit_fixtures import approve_admission_for
 
 
 @dataclass
@@ -41,13 +40,18 @@ class StorageWorld:
         self.monkeypatch.setattr(quota_ledger, "plan_for", scaled)
         self.monkeypatch.setattr(quota_transfer, "plan_for", scaled)
 
-    async def tenant(self, tier: OrganizationPlanId | None) -> UUID:
-        created = await tenant_dao.create(obj_in={"name": f"T{uuid4().hex[:8]}", "slug": f"t{uuid4().hex[:10]}"})
-        if tier is not None:
-            _ = await approve_admission_for(self.scenario.db, created.id, tier)
+    async def tenant(self, tier: OrganizationPlanId) -> UUID:
+        created = await tenant_dao.create(
+            obj_in={"name": f"T{uuid4().hex[:8]}", "slug": f"t{uuid4().hex[:10]}", "tier": tier}
+        )
         return created.id
 
     async def agent(self, tier: OrganizationPlanId | None = OrganizationPlanId.PRO, owner: str = "owner") -> UUID:
+        """An agent of a new organization of ``tier``, or one that belongs to no organization when ``tier`` is None."""
+        if tier is None:
+            agent_id = await self.scenario.agent(owner)
+            await self.scenario.db.execute("UPDATE agents SET tenant_id = NULL WHERE id = %(id)s", {"id": agent_id})
+            return agent_id
         return await self.scenario.agent(owner, tenant_id=await self.tenant(tier))
 
     def key(self, agent_id: UUID, name: str = "workspace/uploads/report.bin") -> str:

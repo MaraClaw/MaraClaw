@@ -11,6 +11,7 @@ from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
 from app.core.security import get_current_user
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.tenant_email import TenantEmailUpdate
@@ -39,9 +40,9 @@ class SMTPAdmin:
 
 @pytest.fixture
 def smtp_admin(monkeypatch: pytest.MonkeyPatch) -> SMTPAdmin:
-    own = TenantRecord(uuid4(), "Company", "company")
-    mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=True)
-    kabers = TenantRecord(uuid4(), "KABERs", "kabers", is_system=True)
+    own = TenantRecord(uuid4(), "Company", "company", tier=OrganizationPlanId.PRO)
+    mara = TenantRecord(uuid4(), "MaraClaw", "maraclaw", is_system=True, tier=OrganizationPlanId.PRO)
+    kabers = TenantRecord(uuid4(), "KABERs", "kabers", is_system=True, tier=OrganizationPlanId.PRO)
     identity = IdentityRecord(id=uuid4(), email="admin@example.com")
     actor = UserRecord(id=uuid4(), tenant_id=own.id, role=UserRole.ORG_ADMIN, identity=identity, is_genesis=True)
     app = FastAPI()

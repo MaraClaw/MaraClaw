@@ -12,6 +12,7 @@ from app.api import tenants as tenants_api
 from app.core.domain.users import UserRole
 from app.dao.tenant_dao import TENANT_DELETE_CLEANUP_SQL, TenantDAO
 from app.db.connection import DbConnection
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -206,6 +207,7 @@ async def test_deletion_preview_rejects_delete_ineligible_company_before_countin
         slug="target",
         is_system=condition == "system",
         is_default_end_user_org=condition == "default",
+        tier=OrganizationPlanId.PRO,
     )
     actor = make_user(tenant_id, role="platform_admin")
     if condition == "identity":
@@ -228,7 +230,7 @@ async def test_delete_rechecks_protection_after_preview(monkeypatch: pytest.Monk
     # Given
     tenant_id = uuid.uuid4()
     actor = make_user(tenant_id, role="platform_admin")
-    tenant = TenantRecord(id=tenant_id, name="Target", slug="target")
+    tenant = TenantRecord(id=tenant_id, name="Target", slug="target", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(tenants_api.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(
         tenants_api.tenant_dao,

@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS tenants (
 	default_fallback_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
+	tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')), 
 	name_tsv tsvector GENERATED ALWAYS AS (
 		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
 	) STORED,
@@ -569,10 +570,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
     ON organization_admission_requests(email) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS ix_organization_admission_status
     ON organization_admission_requests(status,created_at DESC,id DESC);
--- The tier lookup runs on every accepted human message (per-agent daily cap).
-CREATE INDEX IF NOT EXISTS ix_organization_admission_provisioned_tenant
-    ON organization_admission_requests(provisioned_tenant_id, provisioned_at, id)
-    WHERE status='approved' AND provisioned_tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
@@ -847,7 +844,7 @@ CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
 
--- Human messages accepted per agent on one local calendar day (tier-governed organizations only); a row holding an
+-- Human messages accepted per agent on one local calendar day (agents of organizations only); a row holding an
 -- earlier usage_date counts as zero, so there is no reset job.
 CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -856,7 +853,7 @@ CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Last measured host workspace directory plus guest writable-layer bytes per agent (tier-governed organizations only).
+-- Last measured host workspace directory plus guest writable-layer bytes per agent (agents of organizations only).
 -- over_since is set while the measurement exceeds limit_bytes and blocks new human work; notified_at records the one
 -- in-app alert of that overage.
 CREATE TABLE IF NOT EXISTS agent_workspace_usage (

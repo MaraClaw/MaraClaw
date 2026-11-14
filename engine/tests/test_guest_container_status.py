@@ -24,7 +24,6 @@ from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager, agent_manager
-from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_container_status import get_guest_container_status
 from app.services.guest_limits import GuestLimits
 
@@ -321,13 +320,11 @@ def test_compatible_status_when_docker_is_unavailable(agent: AgentRecord, manage
     assert result == {"running": False, "status": "stopped"}
 
 
-@pytest.mark.parametrize("ambiguous", [False, True], ids=["tier", "ambiguous-tier"])
 async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnostics(
     agent: AgentRecord,
     manager: AgentManager,
     inspect_payload: JsonObject,
     monkeypatch: pytest.MonkeyPatch,
-    ambiguous: bool,
 ) -> None:
     # Given the existing metrics route with fake persistence and a real SDK parser.
     event_loop_thread = get_ident()
@@ -342,11 +339,7 @@ async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnost
     monkeypatch.setattr(agent_manager, "docker_client", manager.docker_client)
     monkeypatch.setattr(advanced, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(advanced.task_dao, "count_for_agent", AsyncMock(return_value=0))
-    resolution = (
-        AsyncMock(side_effect=GuestStartPreflightError("Organization tier is ambiguous"))
-        if ambiguous
-        else AsyncMock(return_value=MAX_TIER_LIMITS)
-    )
+    resolution = AsyncMock(return_value=MAX_TIER_LIMITS)
     monkeypatch.setattr(advanced, "resolve_guest_limits", resolution)
 
     class Connection:
@@ -372,17 +365,13 @@ async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnost
     assert container["ownership"] == {"agent_id": str(agent.id), "matches": True}
     assert container["created"] == "2026-01-02T03:04:05+00:00"
     assert "private" not in response.text
-    # And an unresolvable tier only blanks the expectation instead of failing the endpoint.
+    # And the resolved target is what the drift is judged against.
     resolution.assert_awaited_once_with(agent)
-    assert container["limits_drift"] is (None if ambiguous else True)
-    assert container["expected_limits"] == (
-        None
-        if ambiguous
-        else {
-            "memory_bytes": 3221225472,
-            "memory_swap_bytes": 3221225472,
-            "nano_cpus": 1500000000,
-            "cpu_shares": 1536,
-            "pids_limit": 768,
-        }
-    )
+    assert container["limits_drift"] is True
+    assert container["expected_limits"] == {
+        "memory_bytes": 3221225472,
+        "memory_swap_bytes": 3221225472,
+        "nano_cpus": 1500000000,
+        "cpu_shares": 1536,
+        "pids_limit": 768,
+    }

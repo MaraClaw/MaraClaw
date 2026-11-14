@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -10,10 +12,13 @@ from pydantic import ValidationError
 from app.api import organization_admissions as api
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
+from app.records.organization_admission import OrganizationAdmissionRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.organization_admission import OrganizationAdmissionDecisionRequest, OrganizationAdmissionRequest
+from app.services import organization_admissions
 from app.services.organization_admission_credentials import seal, unseal
+from app.services.organization_plans import plan_for
 
 CATALOG = {
     "plans": [
@@ -202,3 +207,37 @@ def test_credential_payload_is_bound_to_its_request():
         _ = unseal(other, sealed)
     with pytest.raises(InvalidTag):
         _ = unseal(request_id, sealed[:-1] + bytes([sealed[-1] ^ 1]))
+
+
+@pytest.mark.parametrize("tier", list(OrganizationPlanId))
+async def test_approval_creates_the_organization_in_the_tier_the_request_chose(
+    monkeypatch: pytest.MonkeyPatch, tier: OrganizationPlanId
+):
+    request = OrganizationAdmissionRecord(
+        id=uuid4(),
+        email="buyer@example.com",
+        tier=tier,
+        plan=plan_for(tier),
+        created_at=datetime.now(UTC),
+        organization_name="Acme Robotics",
+    )
+    identity = SimpleNamespace(id=uuid4(), password_hash="hash")
+    provisioned = SimpleNamespace(
+        tenant=SimpleNamespace(id=uuid4(), name="Acme Robotics"),
+        org_admin=SimpleNamespace(id=uuid4(), identity=identity),
+        admin_email="buyer@example.com",
+    )
+    create = AsyncMock(return_value=provisioned)
+    monkeypatch.setattr(organization_admissions, "create_tenant_with_org_admin", create)
+    monkeypatch.setattr(organization_admissions.emails, "enqueue", AsyncMock())
+    monkeypatch.setattr(organization_admissions.admissions, "update", AsyncMock(return_value=request))
+    monkeypatch.setattr(organization_admissions, "write_admin_audit", AsyncMock())
+    monkeypatch.setattr(organization_admissions, "seal", lambda _request_id, _password: b"sealed")
+    reviewer = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+
+    _ = await organization_admissions._approve(request, reviewer, None)
+
+    create.assert_awaited_once()
+    assert create.await_args is not None
+    assert create.await_args.kwargs["tier"] is tier
+    assert create.await_args.kwargs["name"] == "Acme Robotics"

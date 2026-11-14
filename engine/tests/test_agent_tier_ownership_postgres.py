@@ -7,7 +7,7 @@ import pytest
 
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app.records.organization_plan import OrganizationPlanId
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -41,7 +41,7 @@ async def test_transfer_fills_exactly_to_the_tier_cap_and_refuses_the_overflow_a
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.ULTRA)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.ULTRA)
     # The stored allowance (2) is stale: the recipient holds 3 and may take two more, not zero.
     for index in range(3):
         _ = await scenario.agent("target", f"Mine {index}")
@@ -59,7 +59,7 @@ async def test_only_ordinary_nonexpired_agents_count_and_expired_incoming_agents
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("target", "System", is_system=True)
     _ = await scenario.agent("target", "Expired", is_expired=True)
     _ = await scenario.agent("target", "Foreign", tenant_id=scenario.foreign_tenant_id)
@@ -74,7 +74,7 @@ async def test_an_account_already_over_its_cap_keeps_agents_but_takes_only_zero_
     scenario = deletion_scenario
     for index in range(3):
         _ = await scenario.agent("target", f"Legacy overflow {index}")
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     ordinary, expired = await scenario.agent("owner", "Live"), await scenario.agent("owner", "Gone", is_expired=True)
     assert (await _transfer(scenario, [ordinary])).json()["detail"]["code"] == "target_quota_exceeded"
     assert (await _transfer(scenario, [expired])).status_code == 200
@@ -89,7 +89,7 @@ async def test_handover_to_an_administrator_is_capped_in_a_tiered_organization(
     deletion_scenario: DeletionScenario, target: str
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent(target, "One")
     _ = await scenario.agent(target, "Two")
     agent_id = await scenario.agent("owner", "Handed")
@@ -109,7 +109,7 @@ async def test_handover_to_an_administrator_stays_exempt_without_a_tier_link(del
 
 async def test_concurrent_creation_and_transfer_cannot_both_take_the_last_slot(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("target", "First")
     incoming = await scenario.agent("owner", "Incoming")
     created, moved = await asyncio.gather(

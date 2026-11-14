@@ -12,7 +12,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
 from app.records.organization_plan import OrganizationPlanId
 from app.services.agent_message_quota import charge_agent_daily_message
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario", "frozen_clock"]
 
@@ -24,7 +24,7 @@ def _reset_path(scenario: DeletionScenario, owner: str, agent_id: UUID) -> str:
 
 
 async def _tiered_agent(scenario: DeletionScenario, used: int = 0, *, is_system: bool = False) -> UUID:
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     agent_id = await scenario.agent("owner", is_system=is_system)
     for _ in range(used):
         _ = await agent_daily_message_usage_dao.charge(agent_id, TODAY, LIMIT)
@@ -104,16 +104,6 @@ async def test_only_admins_of_the_same_company_may_reset(deletion_scenario: Dele
     assert await scenario.rows("SELECT 1 FROM admin_audit_logs") == []
 
 
-async def test_an_untiered_organization_has_no_limit_to_reset(deletion_scenario: DeletionScenario):
-    scenario = deletion_scenario
-    agent_id = await scenario.agent("owner")
-
-    response = await scenario.call("oa2", "POST", _reset_path(scenario, "owner", agent_id))
-
-    assert (response.status_code, response.json()["detail"]) == (409, "This agent has no daily message limit")
-    assert await scenario.rows("SELECT 1 FROM admin_audit_logs") == []
-
-
 async def test_a_system_agent_has_no_limit_to_reset(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
     agent_id = await _tiered_agent(scenario, is_system=True)
@@ -125,7 +115,7 @@ async def test_a_system_agent_has_no_limit_to_reset(deletion_scenario: DeletionS
 
 async def test_the_agent_must_be_one_the_user_created_in_the_users_company(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     others = await scenario.agent("other")
     abroad = await scenario.agent("owner", tenant_id=scenario.foreign_tenant_id)
 
@@ -162,15 +152,6 @@ async def test_user_detail_reports_each_capped_agents_usage_in_the_genesis_admin
         str(stale): {"used": 0, **window},
         str(system): None,
     }
-
-
-async def test_user_detail_has_no_daily_messages_in_an_untiered_organization(deletion_scenario: DeletionScenario):
-    scenario = deletion_scenario
-    _ = await scenario.agent("owner")
-
-    response = await scenario.call("oa2", "GET", f"/users/{scenario['owner'].id}")
-
-    assert [agent["daily_messages"] for agent in response.json()["agents"]] == [None]
 
 
 async def test_deleting_an_agent_or_its_company_removes_the_counter_rows(deletion_scenario: DeletionScenario):

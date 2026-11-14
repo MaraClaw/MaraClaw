@@ -21,6 +21,7 @@ from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.company_admission import RequestDetail
 
@@ -119,9 +120,16 @@ async def admission_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
             await db.execute(await Path("scripts/schema_baseline.sql").read_text())
             await init_pool(conninfo=make_conninfo(conninfo, options=f"-csearch_path={schema}"), min_size=1, max_size=4)
             source = await tenant_dao.create(
-                obj_in={"name": "KABERs", "slug": "kabers", "is_default_end_user_org": True}
+                obj_in={
+                    "name": "KABERs",
+                    "slug": "kabers",
+                    "is_default_end_user_org": True,
+                    "tier": OrganizationPlanId.ULTRA,
+                }
             )
-            target = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme", "default_max_agents": 9})
+            target = await tenant_dao.create(
+                obj_in={"name": "Acme", "slug": "acme", "default_max_agents": 9, "tier": OrganizationPlanId.ULTRA}
+            )
 
             async def member(name: str, tenant_id: UUID, role: str = "member", genesis: bool = False) -> UserRecord:
                 identity = await identity_dao.create(

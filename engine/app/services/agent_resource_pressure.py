@@ -22,6 +22,7 @@ from app.config import get_settings
 from app.core.logging import logger
 from app.dao.agent_resource_pressure_episode_dao import OpenEpisode, agent_resource_pressure_episode_dao
 from app.dao.agent_storage_dao import agent_storage_dao
+from app.dao.tenant_dao import tenant_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.agent_resource_pressure_episode import PressureResource
@@ -34,7 +35,7 @@ from app.services.agent_resource_pressure_docker import (
     guest_stats,
     inspect_guests,
 )
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for, tier_for_tenant
+from app.services.organization_plans import plan_for
 
 GUEST_RESOURCES: Final = (PressureResource.MEMORY, PressureResource.CPU)
 _MILLICPUS_PER_CPU_PERCENT: Final = 10
@@ -269,36 +270,20 @@ async def _sample_storage(
 async def sample_page(agents: Sequence[AgentRecord]) -> None:
     """Sample one page of candidate agents: guests (memory, CPU, OOM) and managed storage.
 
-    Untiered agents lose their open episodes; an ambiguous tier link skips the agent with a warning. Every agent and
-    every step is isolated, so one failure never stops the rest of the page.
+    System agents are not sampled (their guests use the global limits, not a tier's). The others are governed by their
+    organization's tier, read for the whole page in one batch; an organization deleted since the page was read has
+    no agents left to sample. Every agent and every step is isolated, so one failure never stops the rest of the page.
     """
-    tiers: dict[UUID, OrganizationPlanId | None] = {}
-    ambiguous: set[UUID] = set()
+    tiers = await tenant_dao.tiers_for(list({agent.tenant_id for agent in agents if agent.tenant_id is not None}))
     governed: list[tuple[AgentRecord, OrganizationPlanId]] = []
-    untiered: list[AgentRecord] = []
     for agent in agents:
-        tenant_id = agent.tenant_id
-        if agent.is_system or tenant_id is None:
-            untiered.append(agent)
+        if agent.is_system or agent.tenant_id is None:
             continue
-        if tenant_id not in tiers and tenant_id not in ambiguous:
-            try:
-                tiers[tenant_id] = await tier_for_tenant(tenant_id)
-            except AmbiguousOrganizationTierError:
-                ambiguous.add(tenant_id)
-        if tenant_id in ambiguous:
-            logger.warning("[ResourcePressure] ambiguous organization tier; agent={} skipped", agent.id)
-            continue
-        tier = tiers[tenant_id]
-        if tier is None:
-            untiered.append(agent)
-        else:
+        tier = tiers.get(agent.tenant_id)
+        if tier is not None:
             governed.append((agent, tier))
     open_by_agent: dict[UUID, list[OpenEpisode]] = defaultdict(list)
-    for episode in await agent_resource_pressure_episode_dao.open_for_agents([agent.id for agent in agents]):
+    for episode in await agent_resource_pressure_episode_dao.open_for_agents([agent.id for agent, _ in governed]):
         open_by_agent[episode.agent_id].append(episode)
-    released = [agent.id for agent in untiered if agent.id in open_by_agent]
-    if released:
-        _ = await agent_resource_pressure_episode_dao.close_open(released, tuple(PressureResource), reason="untiered")
     await _attempt("sample guests", _sample_guests(governed, open_by_agent))
     await _attempt("sample storage", _sample_storage(governed, open_by_agent))

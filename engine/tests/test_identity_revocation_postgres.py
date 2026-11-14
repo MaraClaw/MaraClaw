@@ -86,7 +86,7 @@ async def live_identity(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Revoca
                 await db.execute(statement)
             await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": live.identity_id})
             await db.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Revocation QA', %(slug)s)",
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Revocation QA', %(slug)s, 'ultra')",
                 {"id": live.tenant_id, "slug": uuid4().hex},
             )
             # The baseline permits one tenant-bound and additional tenantless memberships.

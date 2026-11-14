@@ -19,6 +19,7 @@ from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 
 
@@ -75,7 +76,7 @@ async def organization_scenario(monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
             await db.execute(f'SET search_path TO "{schema}"')
             await db.execute(await Path("scripts/schema_baseline.sql").read_text())
             await init_pool(conninfo=make_conninfo(conninfo, options=f"-csearch_path={schema}"), min_size=1, max_size=6)
-            tenant = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme"})
+            tenant = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme", "tier": OrganizationPlanId.ULTRA})
 
             async def member(
                 name: str, role: str, *, genesis: bool = False, tenant_id: UUID | None = None

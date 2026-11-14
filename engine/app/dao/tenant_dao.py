@@ -9,13 +9,14 @@ from datetime import datetime
 from typing import Any, ClassVar, TypedDict, final, override
 from uuid import UUID
 
-from app.core.json_types import int_from_row, str_findall, str_from_row_opt, uuid_from_row
+from app.core.json_types import int_from_row, str_findall, str_from_row, str_from_row_opt, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL
 from app.db.session import long_running_statement
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 
 __all__ = [
@@ -111,6 +112,7 @@ _TENANT_COLUMNS = (
     "default_fallback_model_id",
     "is_system",
     "is_default_end_user_org",
+    "tier",
 )
 
 
@@ -254,6 +256,18 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 params,
             )
             return [TenantRecord.from_row(row) for row in rows]
+
+    async def tiers_for(self, tenant_ids: Sequence[UUID]) -> dict[UUID, OrganizationPlanId]:
+        """Tiers of ``tenant_ids`` in one read inside the caller's transaction (never the tenant cache); ids that match no
+        organization are absent."""
+        if not tenant_ids:
+            return {}
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id, tier FROM tenants WHERE id = ANY(%(ids)s)",
+                {"ids": list(tenant_ids)},
+            )
+        return {uuid_from_row(row["id"]): OrganizationPlanId(str_from_row(row["tier"])) for row in rows}
 
     async def usage_stats(self, tenant_ids: Sequence[UUID]) -> dict[UUID, TenantUsageStats]:
         """Users, agents, tokens and first org admin for ``tenant_ids`` in one set-based query.

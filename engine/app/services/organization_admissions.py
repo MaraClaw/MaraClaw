@@ -93,7 +93,7 @@ async def _approve(
     password = new_password()
     try:
         provisioned = await create_tenant_with_org_admin(
-            name=request.organization_name, admin_email=request.email, admin_password=password
+            tier=request.tier, name=request.organization_name, admin_email=request.email, admin_password=password
         )
     except AdminEmailTakenError:
         raise HTTPException(409, "Admin email is already registered") from None

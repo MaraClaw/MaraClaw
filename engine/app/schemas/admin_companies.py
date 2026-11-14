@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, computed_field
 
+from app.records.organization_plan import OrganizationPlanId
 from app.services.tenant_lifecycle import tenant_can_be_disabled
 
 
@@ -36,6 +37,7 @@ class CompanyStats(CompanyOption):
     total_tokens: int = 0
     cache_read_tokens_total: int = 0
     org_admin_email: str | None = None
+    tier: OrganizationPlanId
 
 
 class CompanyPageOut(BaseModel):

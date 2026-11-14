@@ -18,6 +18,7 @@ from app.db.connection import DbConnection
 from app.records.company_admission import AdmissionMethod
 from app.records.identity import IdentityRecord
 from app.records.notification import NotificationRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.tenant_email_domain import TenantEmailDomainRecord
 from app.records.user import UserRecord
@@ -58,9 +59,11 @@ class DomainAdmissionFixture:
 
 @pytest.fixture
 async def domain_admission_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DomainAdmissionFixture]:
-    source = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
-    target = TenantRecord(id=uuid4(), name="Claimed Company", slug="claimed")
-    other = TenantRecord(id=uuid4(), name="Invited Company", slug="invited")
+    source = TenantRecord(
+        id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True, tier=OrganizationPlanId.PRO
+    )
+    target = TenantRecord(id=uuid4(), name="Claimed Company", slug="claimed", tier=OrganizationPlanId.PRO)
+    other = TenantRecord(id=uuid4(), name="Invited Company", slug="invited", tier=OrganizationPlanId.PRO)
     created_at = datetime(2026, 10, 24, tzinfo=UTC)
     identity = IdentityRecord(
         id=uuid4(),

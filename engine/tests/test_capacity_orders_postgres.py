@@ -98,12 +98,11 @@ async def test_a_purchase_needs_configured_payments(capacity_scenario: CapacityS
     assert await s.statuses() == []
 
 
-@pytest.mark.parametrize("who", ["legacy_oa", "system_oa"])
-async def test_only_tiered_non_system_companies_can_buy(capacity_scenario: CapacityScenario, who: str):
+async def test_a_system_company_cannot_buy(capacity_scenario: CapacityScenario):
     s = capacity_scenario
     await s.configure()
 
-    response = await s.order(who, accounts=1)
+    response = await s.order("system_oa", accounts=1)
 
     assert response.status_code == 409
     assert detail(response)["code"] == "not_eligible"
@@ -588,11 +587,10 @@ async def test_the_overview_is_read_only_for_platform_admins_and_uncapped_compan
     assert (await s.call("member", "GET", "/capacity/overview")).status_code == 403
     assert (await s.call("agent_admin", "GET", "/capacity/overview")).status_code == 403
     assert (await s.client.get("/api/capacity/overview")).status_code in (401, 403)
-    for who in ("legacy_oa", "system_oa"):
-        body = payload(await s.call(who, "GET", "/capacity/overview"))
-        assert body["capped"] is False
-        assert (body["tier"], body["account_limit"], body["agent_limit"]) == (None, None, None)
-        assert (body["extra_accounts"], body["extra_agents"]) == (0, 0)
+    body = payload(await s.call("system_oa", "GET", "/capacity/overview"))
+    assert body["capped"] is False
+    assert (body["tier"], body["account_limit"], body["agent_limit"]) == ("ultra", None, None)
+    assert (body["extra_accounts"], body["extra_agents"]) == (0, 0)
 
 
 # ── evidence download ───────────────────────────────────────────────────
@@ -716,7 +714,7 @@ async def test_the_generic_system_settings_endpoints_never_expose_or_change_the_
 async def test_deleting_a_company_removes_its_orders_and_their_renewals(capacity_scenario: CapacityScenario):
     s = capacity_scenario
     gone = await s.db.fetchval(
-        "INSERT INTO tenants (id, name, slug) VALUES (gen_random_uuid(), 'Gone', 'gone') RETURNING id"
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (gen_random_uuid(), 'Gone', 'gone', 'ultra') RETURNING id"
     )
     assert isinstance(gone, UUID)
     s.tenants["gone"] = gone

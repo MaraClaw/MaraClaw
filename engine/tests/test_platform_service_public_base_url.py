@@ -5,6 +5,7 @@ import pytest
 from fastapi import Request
 
 from app.config import Settings, get_settings
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import platform_service as platform_module
 from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
@@ -42,7 +43,7 @@ async def test_public_base_url_requires_settings_even_with_request(monkeypatch, 
 @pytest.mark.parametrize("redirect_enabled", [False, True])
 async def test_tenant_sso_base_url_propagates_missing_settings(monkeypatch, domain, redirect_enabled) -> None:
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain=domain)
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain=domain, tier=OrganizationPlanId.PRO)
 
     with pytest.raises(PublicBaseUrlNotConfiguredError):
         await platform_service.get_tenant_sso_base_url(tenant, sso_redirect_enabled=redirect_enabled)
@@ -59,7 +60,7 @@ async def test_tenant_sso_base_url_propagates_missing_settings(monkeypatch, doma
 )
 async def test_tenant_sso_base_url_uses_configured_host(monkeypatch, configured, expected) -> None:
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=configured))
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
 
     resolved = await platform_service.get_tenant_sso_base_url(tenant)
 

@@ -20,6 +20,7 @@ from app.db.connection import Params
 from app.db.pool import reset_pool_for_tests
 from app.db.session import bind_crud_connection, get_connection
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.llm.types import LLMMessage, LLMResponse
@@ -184,7 +185,7 @@ async def test_crud_progresses_while_remote_io_is_blocked(
     async def tenant_lookup(tenant_id: UUID) -> TenantRecord:
         assert get_connection() is not None
         assert pool.active == 1
-        return TenantRecord(id=tenant_id, name="Contention tenant", slug="contention")
+        return TenantRecord(id=tenant_id, name="Contention tenant", slug="contention", tier=OrganizationPlanId.PRO)
 
     async def wait_remote() -> None:
         remote_state.append((get_connection() is None, pool.active))

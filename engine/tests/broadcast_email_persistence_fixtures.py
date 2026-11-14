@@ -54,7 +54,7 @@ async def broadcast_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Persist
 async def tenant(db: PersistenceDB) -> UUID:
     tenant_id = uuid4()
     await db.admin.execute(
-        "INSERT INTO tenants (id, name, slug, is_active) VALUES (%(id)s, 'T', %(slug)s, true)",
+        "INSERT INTO tenants (id, name, slug, is_active, tier) VALUES (%(id)s, 'T', %(slug)s, true, 'ultra')",
         {"id": tenant_id, "slug": tenant_id.hex},
     )
     return tenant_id

@@ -25,7 +25,6 @@ from app.dao.agent_resource_pressure_episode_dao import (
     EpisodePosition,
     agent_resource_pressure_episode_dao,
 )
-from app.dao.organization_admission_dao import organization_admission_dao
 from app.records.agent_resource_pressure_episode import PressureResource
 from app.records.organization_plan import OrganizationPlan, OrganizationPlanId
 from app.schemas.agent_resource_pressure import (
@@ -115,31 +114,25 @@ async def tenant_summaries(filters: EpisodeFilters) -> list[ResourcePressureTena
     """One row per organization with episodes under ``filters``, most recently seen first.
 
     The suggestion reads only episodes recorded under the organization's current tier, so a tier change starts
-    from a clean slate; an organization without exactly one approved tier gets none.
+    from a clean slate.
     """
     aggregates = await agent_resource_pressure_episode_dao.tenant_aggregates(filters)
     if not aggregates:
         return []
     peaks = await agent_resource_pressure_episode_dao.tenant_resource_peaks(filters)
-    linked = await organization_admission_dao.approved_tiers_for_tenants([row.tenant_id for row in aggregates])
     threshold = get_settings().AGENT_RESOURCE_PRESSURE_THRESHOLD
     summaries: list[ResourcePressureTenantSummary] = []
     for row in aggregates:
-        tiers = linked.get(row.tenant_id, [])
-        current = tiers[0] if len(tiers) == 1 else None
-        suggested = None
-        if current is not None:
-            demands = [
-                ResourceDemand(peak.resource, peak.peak_value, peak.oom)
-                for peak in peaks
-                if peak.tenant_id == row.tenant_id and peak.tier is current
-            ]
-            suggested = suggest_tier(current, demands, threshold)
+        demands = [
+            ResourceDemand(peak.resource, peak.peak_value, peak.oom)
+            for peak in peaks
+            if peak.tenant_id == row.tenant_id and peak.tier is row.tier
+        ]
         summaries.append(
             ResourcePressureTenantSummary(
                 tenant_id=row.tenant_id,
                 tenant_name=row.tenant_name,
-                current_tier=current,
+                current_tier=row.tier,
                 episode_counts=ResourcePressureEpisodeCounts(
                     memory=row.episode_counts[PressureResource.MEMORY],
                     cpu=row.episode_counts[PressureResource.CPU],
@@ -151,7 +144,7 @@ async def tenant_summaries(filters: EpisodeFilters) -> list[ResourcePressureTena
                 max_peak_ratio=row.max_peak_ratio,
                 agents_affected=row.agents_affected,
                 last_seen_at=row.last_seen_at,
-                suggested_tier=suggested,
+                suggested_tier=suggest_tier(row.tier, demands, threshold),
             )
         )
     return summaries

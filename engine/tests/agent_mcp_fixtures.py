@@ -25,6 +25,7 @@ from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.main import app
 from app.records.agent import AgentRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.services.agent_manager import agent_manager
 
@@ -75,7 +76,7 @@ async def mcp_db() -> AsyncGenerator[DbConnection]:
 
 @pytest.fixture
 async def mcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mcp_db: DbConnection) -> MCPHarness:
-    tenant = await tenant_dao.create(obj_in={"name": "MCP", "slug": "mcp"})
+    tenant = await tenant_dao.create(obj_in={"name": "MCP", "slug": "mcp", "tier": OrganizationPlanId.ULTRA})
     identity = await identity_dao.create(obj_in={"email": "mcp@example.test", "password_hash": "not-used"})
     user = await user_dao.create(obj_in={"identity_id": identity.id, "tenant_id": tenant.id, "display_name": "MCP"})
     agent = await agent_dao.create(

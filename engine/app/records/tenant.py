@@ -17,6 +17,7 @@ from app.core.json_types import (
     uuid_from_row,
     uuid_from_row_opt,
 )
+from app.records.organization_plan import OrganizationPlanId
 
 
 @dataclass(slots=True)
@@ -26,6 +27,7 @@ class TenantRecord:
     id: UUID
     name: str
     slug: str
+    tier: OrganizationPlanId
     im_provider: str = "web_only"
     im_config: dict[str, Any] | None = None
     is_active: bool = True
@@ -56,6 +58,7 @@ class TenantRecord:
             id=uuid_from_row(row["id"]),
             name=str_from_row(row["name"]),
             slug=str_from_row(row["slug"]),
+            tier=OrganizationPlanId(str_from_row(row["tier"])),
             im_provider=str_from_row(row.get("im_provider"), "web_only") or "web_only",
             im_config=im_config,
             is_active=bool(row.get("is_active", True)),

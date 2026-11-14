@@ -26,7 +26,7 @@ from app.records.agent_resource_pressure_episode import (
 from app.records.organization_plan import OrganizationPlanId
 from app.services import agent_resource_pressure as pressure, agent_resource_pressure_report as report
 from app.services.agent_resource_pressure_docker import GuestInspection, GuestStats
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -560,14 +560,14 @@ async def test_the_summary_suggests_a_tier_from_episodes_recorded_under_the_curr
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
     _ = await _seed_report(scenario)
 
     summaries = await report.tenant_summaries(EpisodeFilters())
 
     by_name = {row.tenant_name: row for row in summaries}
     assert (by_name["Acme"].current_tier, by_name["Acme"].suggested_tier) == (PRO, MAX)
-    assert (by_name["Other"].current_tier, by_name["Other"].suggested_tier) == (None, None)
+    assert (by_name["Other"].current_tier, by_name["Other"].suggested_tier) == (OrganizationPlanId.ULTRA, None)
     assert by_name["Acme"].episode_counts.memory == 2
     assert by_name["Acme"].oom_count == 1
 
@@ -603,7 +603,7 @@ async def test_a_page_pass_opens_extends_and_closes_episodes_and_records_a_kill_
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
     agent_id = await scenario.agent("owner")
     container_id = uuid4().hex * 2
     await scenario.db.execute(

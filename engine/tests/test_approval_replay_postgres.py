@@ -93,7 +93,8 @@ async def world(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_World]:
             )
             tenant_id, user_id, agent_id = uuid4(), uuid4(), uuid4()
             await db.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Acme', 'acme')", {"tenant": tenant_id}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Acme', 'acme', 'ultra')",
+                {"tenant": tenant_id},
             )
             await db.execute(
                 "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Manager')",

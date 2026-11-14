@@ -2,27 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from app.config import get_settings
 from app.core.acl_locks import lock_tenants
 from app.core.logging import logger
-from app.dao.organization_admission_dao import organization_admission_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
-from app.services.organization_plans import plan_for
 
 MARACLAW_SLUG = "maraclaw"
 KABERS_SLUG = "kabers"
 KABERS_NAME = "KABERs"
 
-# The tier each system organization is governed by; bootstrap reconciles its approved admission to this at every start.
+# The tier each system organization is governed by; bootstrap reconciles ``tenants.tier`` to this at every start.
 SYSTEM_ORG_TIERS: dict[str, OrganizationPlanId] = {
     MARACLAW_SLUG: OrganizationPlanId.ULTRA,
     KABERS_SLUG: OrganizationPlanId.PRO,
@@ -46,8 +42,8 @@ async def ensure_system_orgs() -> tuple[TenantRecord, TenantRecord]:
     async with connection_ctx() as db:
         kabers = await _ensure_kabers()
         maraclaw = await _ensure_maraclaw()
-        for tenant in (maraclaw, kabers):
-            await _ensure_tier(db, tenant)
+        maraclaw = await _ensure_tier(db, maraclaw)
+        kabers = await _ensure_tier(db, kabers)
         await _ensure_default_org_admin(kabers)
     return maraclaw, kabers
 
@@ -68,6 +64,7 @@ async def _ensure_kabers() -> TenantRecord:
             obj_in={
                 "name": KABERS_NAME,
                 "slug": KABERS_SLUG,
+                "tier": SYSTEM_ORG_TIERS[KABERS_SLUG],
                 "im_provider": "web_only",
                 "is_system": True,
                 "is_active": True,
@@ -98,41 +95,17 @@ async def _ensure_kabers() -> TenantRecord:
     return resolved if flagged is None or flagged.id == existing.id else existing
 
 
-async def _ensure_tier(db: DbConnection, tenant: TenantRecord) -> None:
-    """Make the approved admission linked to a system organization carry its tier and the current catalog plan.
-
-    Tiers resolve only from approved admissions linked to the tenant, so this row is the tier. A missing row is
-    inserted with a reserved non-deliverable address, an outdated tier or plan snapshot is refreshed in place,
-    and an up-to-date row is left untouched. The reviewer and provisioned admin stay unset.
-    """
+async def _ensure_tier(db: DbConnection, tenant: TenantRecord) -> TenantRecord:
+    """Make ``tenants.tier`` of a system organization its ``SYSTEM_ORG_TIERS`` entry; an up-to-date row is left untouched."""
     tier = SYSTEM_ORG_TIERS[tenant.slug]
-    plan = plan_for(tier)
-    # Concurrent bootstraps queue on the tenant row, so the later one sees the first one's row instead of adding another.
+    # Concurrent bootstraps queue on the tenant row, so the later one compares against the first one's write.
     await lock_tenants(db, (tenant.id,))
-    linked = await organization_admission_dao.approved_plans_for_tenant(tenant.id)
-    if len(linked) > 1:
-        raise SystemOrgSeedError(f"Organization {tenant.slug!r} is linked to several approved admissions")
-
-    snapshot = plan.model_dump(mode="json")
-    if not linked:
-        now = datetime.now(UTC)
-        await organization_admission_dao.create(
-            obj_in={
-                "email": f"{tenant.slug}@system.invalid",
-                "tier": tier.value,
-                "plan": snapshot,
-                "status": "approved",
-                "organization_name": tenant.name,
-                "reviewed_at": now,
-                "review_note": "Approved automatically by system organization bootstrap.",
-                "provisioned_at": now,
-                "provisioned_tenant_id": tenant.id,
-            }
-        )
-        logger.info("[startup] Approved %s organization as %s", tenant.slug, tier.value)
-    elif linked[0].tier is not tier or linked[0].plan != snapshot:
-        await organization_admission_dao.refresh_tier_and_plan(linked[0].id, tier=tier, plan=plan)
-        logger.info("[startup] Refreshed %s organization admission to %s", tenant.slug, tier.value)
+    current = (await tenant_dao.tiers_for([tenant.id]))[tenant.id]
+    if current is tier:
+        return tenant
+    updated = await tenant_dao.update(db_obj=tenant, obj_in={"tier": tier})
+    logger.info("[startup] Set %s organization tier %s -> %s", tenant.slug, current.value, tier.value)
+    return updated
 
 
 async def _ensure_maraclaw() -> TenantRecord:
@@ -142,6 +115,7 @@ async def _ensure_maraclaw() -> TenantRecord:
             obj_in={
                 "name": "MaraClaw",
                 "slug": MARACLAW_SLUG,
+                "tier": SYSTEM_ORG_TIERS[MARACLAW_SLUG],
                 "im_provider": "web_only",
                 "is_system": True,
                 "is_active": True,

@@ -42,8 +42,9 @@ async def resume_operation(
     creator = await member(start_db, company)
     identifier = await agent(start_db, company, creator, status="stopped", container="same-owned-id")
     await start_db.execute(
-        "UPDATE agents SET container_port=18888,openclaw_image_id='pinned-image' WHERE id=%(id)s", {"id": identifier}
-    )
+        "UPDATE agents SET container_port=18888,openclaw_image_id='pinned-image',is_system=true WHERE id=%(id)s",
+        {"id": identifier},
+    )  # a system agent keeps the global guest limits this test sizes the aggregate budget for
     pending = await PostgresStartStore().begin(identifier)
     assert pending is not None
     docker, _probes = guest_surface

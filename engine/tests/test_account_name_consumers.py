@@ -8,6 +8,7 @@ import pytest
 from app.dao.company_admission_dao import company_admission_dao
 from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import channel_user_service as channel_users
@@ -39,7 +40,11 @@ async def test_channel_provisioning_uses_real_contact_without_manufactured_handl
     monkeypatch.setattr(
         company_admission_dao,
         "tenant",
-        AsyncMock(return_value=TenantRecord(id=tenant_id, name="KABERs", slug="kabers", is_default_end_user_org=True)),
+        AsyncMock(
+            return_value=TenantRecord(
+                id=tenant_id, name="KABERs", slug="kabers", is_default_end_user_org=True, tier=OrganizationPlanId.PRO
+            )
+        ),
     )
 
     result = await channel_users.ChannelUserService()._create_channel_user("feishu", "external-123", profile, tenant_id)

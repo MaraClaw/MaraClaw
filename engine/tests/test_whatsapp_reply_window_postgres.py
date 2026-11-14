@@ -64,7 +64,7 @@ async def test_lookup_requires_current_agent_tenant_and_config_account(channel_d
         else:
             tenant = uuid4()
             await fixture.db.first.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'new', 'new')", {"id": tenant}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'new', 'new', 'ultra')", {"id": tenant}
             )
             await fixture.db.first.execute("UPDATE agents SET tenant_id = %(id)s", {"id": tenant})
     assert await latest(fixture) is None

@@ -31,6 +31,7 @@ from app.dao.system_setting_dao import system_setting_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.dao.user_dao import user_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.admin_companies import (
@@ -87,6 +88,7 @@ router.include_router(transfer_policy_router)
 
 class CompanyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    tier: OrganizationPlanId
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=128)
     admin_display_name: str | None = Field(default=None, max_length=200)
@@ -204,13 +206,14 @@ async def create_company(
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
 ):
-    """Create a company and its genesis org admin (platform admin only).
+    """Create a company of the chosen tier and its genesis org admin (platform admin only).
 
     The org admin is provisioned with the given email + initial password and
     must change the password after the first successful login.
     """
     try:
         provisioned = await create_tenant_with_org_admin(
+            tier=data.tier,
             name=data.name,
             admin_email=str(data.admin_email),
             admin_password=data.admin_password,
@@ -230,6 +233,7 @@ async def create_company(
         tenant_id=tenant.id,
         changes={
             "name": field_change(None, tenant.name),
+            "tier": field_change(None, tenant.tier.value),
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},
@@ -248,6 +252,7 @@ async def create_company(
             active_user_count=1,
             inactive_user_count=0,
             org_admin_email=provisioned.admin_email,
+            tier=tenant.tier,
         ),
         org_admin_email=provisioned.admin_email,
         must_change_password=True,

@@ -8,8 +8,7 @@ from pywhales.components.container.models import ContainerHostConfig
 from app.config import get_settings
 from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
-from app.services.guest_admission import GuestStartPreflightError
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for, tier_for_tenant
+from app.services.organization_plans import plan_for, tier_for_tenant
 
 settings = get_settings()
 
@@ -46,24 +45,20 @@ class GuestLimits:
 
 
 async def resolve_guest_limits(agent: AgentRecord) -> GuestLimits:
-    """Tier limits of the agent's organization; system agents and untiered organizations use the global settings.
+    """Tier limits of the agent's organization; system agents and agents with no organization use the global settings.
 
     ``is_system`` is checked first: the system organizations are tier-governed, but their system agents are not.
     """
     if not agent.is_system and agent.tenant_id is not None:
-        try:
-            tier = await tier_for_tenant(agent.tenant_id)
-        except AmbiguousOrganizationTierError as exc:
-            raise GuestStartPreflightError("Organization tier is ambiguous", code="configuration_failed") from exc
-        if tier is not None:
-            plan = plan_for(tier)
-            return GuestLimits(
-                memory_bytes=int(plan.guest_memory_bytes),
-                cpus=int(plan.guest_millicpus) / 1000,
-                cpu_shares=int(plan.guest_cpu_shares),
-                pids_limit=int(plan.guest_pids_limit),
-                tier=tier,
-            )
+        tier = await tier_for_tenant(agent.tenant_id)
+        plan = plan_for(tier)
+        return GuestLimits(
+            memory_bytes=int(plan.guest_memory_bytes),
+            cpus=int(plan.guest_millicpus) / 1000,
+            cpu_shares=int(plan.guest_cpu_shares),
+            pids_limit=int(plan.guest_pids_limit),
+            tier=tier,
+        )
     return GuestLimits(
         memory_bytes=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
         cpus=settings.OPENCLAW_GUEST_CPUS,

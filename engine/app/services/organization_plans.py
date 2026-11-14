@@ -1,8 +1,9 @@
 """Public organization pricing catalog (whole USD; model charges are billed separately)."""
 
+from typing import overload
 from uuid import UUID
 
-from app.dao.organization_admission_dao import organization_admission_dao
+from app.dao.tenant_dao import tenant_dao
 from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationAdditionalAgentMonthlyUsd,
@@ -29,13 +30,6 @@ STORAGE_ADDON_BYTES = 10_737_418_240  # 10 GiB of managed storage
 STORAGE_ADDON_MONTHLY_USD = 5
 WORKSPACE_DISK_ADDON_BYTES = 5_368_709_120  # 5 GiB of agent workspace disk
 WORKSPACE_DISK_ADDON_MONTHLY_USD = 3
-
-
-class AmbiguousOrganizationTierError(RuntimeError):
-    """More than one approved admission claims to have provisioned the same organization."""
-
-    def __init__(self, tenant_id: UUID):
-        super().__init__(f"Organization {tenant_id} is linked to several approved admissions")
 
 
 ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
@@ -118,14 +112,21 @@ def plan_for(tier: OrganizationPlanId) -> OrganizationPlan:
     return next(plan for plan in ORGANIZATION_PLANS if plan.id is tier)
 
 
+@overload
+async def tier_for_tenant(tenant_id: UUID) -> OrganizationPlanId: ...
+@overload
+async def tier_for_tenant(tenant_id: None) -> None: ...
+@overload
+async def tier_for_tenant(tenant_id: UUID | None) -> OrganizationPlanId | None: ...
 async def tier_for_tenant(tenant_id: UUID | None) -> OrganizationPlanId | None:
-    """Tier of the approved admission that provisioned the organization, read inside the caller's transaction.
+    """``tenants.tier`` of the organization, read inside the caller's transaction (never the tenant cache).
 
-    ``None`` means the organization was not provisioned through an admission (legacy quota rules apply).
+    ``None`` is only for a user or agent that belongs to no organization. An id that matches no organization raises
+    ``LookupError``.
     """
     if tenant_id is None:
         return None
-    tiers = await organization_admission_dao.approved_tiers_for_tenant(tenant_id)
-    if len(tiers) > 1:
-        raise AmbiguousOrganizationTierError(tenant_id)
-    return tiers[0] if tiers else None
+    tier = (await tenant_dao.tiers_for([tenant_id])).get(tenant_id)
+    if tier is None:
+        raise LookupError(f"Organization {tenant_id} not found")
+    return tier

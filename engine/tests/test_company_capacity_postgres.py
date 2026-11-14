@@ -32,7 +32,7 @@ from app.services.auth_audience import AuthAudience
 from app.services.company_capacity import CompanyAccountLimitReachedError, company_usage
 from app.services.email_verification_service import email_verification_service
 from capacity_fixtures import grant_extras
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -116,7 +116,7 @@ async def test_the_account_after_the_last_free_one_is_refused_and_extras_raise_t
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)  # cap 7 == the seven accounts already there
 
     late = await _newcomer("late")
@@ -138,7 +138,7 @@ async def test_concurrent_joins_cannot_both_take_the_last_account(
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=3)  # cap 8, one free
     racers = [await _newcomer(f"racer{n}") for n in range(4)]
     company = await _company(scenario)
@@ -156,14 +156,12 @@ async def test_concurrent_joins_cannot_both_take_the_last_account(
     assert await _accounts(scenario) == ACCOUNTS + 1
 
 
-@pytest.mark.parametrize("uncapped", ["untiered", "system"])
-async def test_untiered_and_system_organizations_take_accounts_past_the_included_allocation(
-    deletion_scenario: DeletionScenario, uncapped: str
+async def test_a_system_organization_takes_accounts_past_the_included_allocation(
+    deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    if uncapped == "system":
-        _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
-        await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
     for n in range(3):
         joined = await _join(scenario, f"extra{n}")
         assert joined.tenant_id == scenario.tenant_id
@@ -174,7 +172,7 @@ async def test_reactivating_a_member_takes_an_account_and_the_member_is_not_coun
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)  # cap 7
     _ = await _set_active(scenario, "target", False)
     _ = await _join(scenario, "taker")
@@ -195,7 +193,7 @@ async def test_creating_or_reactivating_an_org_admin_takes_an_account(
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)  # cap 7 == used
 
     with pytest.raises(CompanyAccountLimitReachedError):
@@ -226,7 +224,7 @@ async def test_registration_into_a_full_company_creates_no_user(
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)
     identity = await identity_dao.create(
         obj_in={"email": "reg@new.test", "email_verified": True, "password_hash": "x", "is_platform_admin": False}
@@ -259,7 +257,7 @@ async def test_activating_a_member_of_a_full_company_answers_409_with_the_limit(
     deletion_scenario: DeletionScenario, http: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)
     _ = await _set_active(scenario, "target", False)
     _ = await _join(scenario, "taker")
@@ -289,11 +287,9 @@ async def _deactivated_unverified_target(
 ) -> UUID:
     """Deactivate the target (``ACCOUNTS - 1`` remain) and clear their email verification; return their identity.
 
-    ``full`` fills the Pro cap of seven again with a newcomer, ``room`` leaves a free slot, ``untiered`` and
-    ``system`` have no cap.
+    ``full`` fills the Pro cap of seven again with a newcomer, ``room`` leaves a free slot and ``system`` has no cap.
     """
-    if mode != "untiered":
-        _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     if mode == "system":
         await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
     grant_extras(monkeypatch, accounts=2 if mode == "full" else 3)
@@ -355,7 +351,7 @@ async def test_login_without_smtp_verifies_the_identity_but_leaves_a_deactivated
     assert await _accounts(scenario) == ACCOUNTS
 
 
-@pytest.mark.parametrize("mode", ["room", "untiered", "system"])
+@pytest.mark.parametrize("mode", ["room", "system"])
 async def test_the_verification_link_reactivates_a_deactivated_member_where_the_company_has_room_or_no_cap(
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch, mode: str
 ):
@@ -368,7 +364,7 @@ async def test_the_verification_link_reactivates_a_deactivated_member_where_the_
     assert await _accounts(scenario) == ACCOUNTS
 
 
-@pytest.mark.parametrize("mode", ["room", "untiered", "system"])
+@pytest.mark.parametrize("mode", ["room", "system"])
 async def test_login_without_smtp_reactivates_a_deactivated_member_where_the_company_has_room_or_no_cap(
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch, mode: str
 ):
@@ -397,7 +393,7 @@ async def test_re_enabling_a_capped_company_restores_organization_admins_first_u
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # five accounts, no extras
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # five accounts, no extras
     for who in ("owner", "other", "target"):
         await scenario.set_user(who, role="org_admin")  # six organization admins and one member
     await _set_company_active(scenario, False)
@@ -417,7 +413,7 @@ async def test_re_enabling_a_capped_company_restores_the_most_recently_updated_m
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # five accounts, no extras
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # five accounts, no extras
     await _set_company_active(scenario, False)
     now = datetime.now(UTC)
     for who, hours in (("helper", 0), ("target", 1), ("owner", 24), ("other", 48)):
@@ -429,16 +425,11 @@ async def test_re_enabling_a_capped_company_restores_the_most_recently_updated_m
     assert await _accounts(scenario) == 5
 
 
-@pytest.mark.parametrize("uncapped", ["untiered", "system"])
-async def test_re_enabling_an_untiered_or_system_company_restores_every_member(
-    deletion_scenario: DeletionScenario, uncapped: str
-):
+async def test_re_enabling_a_system_company_restores_every_member(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    if uncapped == "system":
-        _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     await _set_company_active(scenario, False)
-    if uncapped == "system":
-        await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
+    await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
 
     await _set_company_active(scenario, True)
 
@@ -449,7 +440,7 @@ async def test_repairing_the_genesis_admin_of_a_full_company_is_refused_until_it
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     grant_extras(monkeypatch, accounts=2)  # cap 7 == used
     await scenario.set_user("genesis", is_genesis=False)  # the company has no genesis admin any more
     repair = {"admin_email": "genesis2@example.test", "admin_password": "temp-password"}
@@ -468,14 +459,12 @@ async def test_repairing_the_genesis_admin_of_a_full_company_is_refused_until_it
     assert await _accounts(scenario) == ACCOUNTS + 1
 
 
-@pytest.mark.parametrize("uncapped", ["untiered", "system"])
-async def test_repairing_the_genesis_admin_of_an_untiered_or_system_company_takes_an_account_past_the_allocation(
-    deletion_scenario: DeletionScenario, uncapped: str
+async def test_repairing_the_genesis_admin_of_a_system_company_takes_an_account_past_the_allocation(
+    deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    if uncapped == "system":
-        _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
-        await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
     await scenario.set_user("genesis", is_genesis=False)
 
     repaired = await tenant_provisioning.attach_genesis_org_admin(
@@ -502,7 +491,7 @@ async def test_company_agent_cap_refuses_creation_while_the_per_account_cap_stil
     deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)  # 5 agents, 3 each
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)  # 5 agents, 3 each
     _ = await scenario.agent("target", "Expired", is_expired=True)
     _ = await scenario.agent("target", "System", is_system=True)
     await _seed(scenario, "owner", 3)
@@ -526,7 +515,7 @@ async def test_company_agent_cap_refuses_creation_while_the_per_account_cap_stil
 
 async def test_two_accounts_cannot_both_take_the_last_company_agent(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)
     await _seed(scenario, "owner", 2)
     await _seed(scenario, "other", 2)
 
@@ -540,7 +529,7 @@ async def test_renewing_an_expired_agent_at_the_company_cap_is_refused_until_a_s
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # 2 agents, 2 each
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # 2 agents, 2 each
     first = await scenario.agent("owner", "First")
     _ = await scenario.agent("other", "Second")
     gone = await scenario.agent("target", "Gone", is_expired=True, status="stopped")
@@ -555,14 +544,10 @@ async def test_renewing_an_expired_agent_at_the_company_cap_is_refused_until_a_s
     assert (await scenario.call("oa2", "PATCH", f"/agents/{gone}", json=renew)).status_code == 200
 
 
-@pytest.mark.parametrize("uncapped", ["untiered", "system"])
-async def test_untiered_and_system_organizations_have_no_company_agent_cap(
-    deletion_scenario: DeletionScenario, uncapped: str
-):
+async def test_a_system_organization_has_no_company_agent_cap(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
-    if uncapped == "system":
-        _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
-        await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
+    await scenario.db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": scenario.tenant_id})
     await _seed(scenario, "owner", 2)
     await _seed(scenario, "other", 2)
     await _seed(scenario, "target", 2)  # six agents, well past Pro's company cap of two

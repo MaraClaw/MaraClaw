@@ -14,7 +14,7 @@ from app.api import users as users_api
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
-from app.dao.organization_admission_dao import organization_admission_dao
+from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
@@ -48,11 +48,9 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
                 is_genesis boolean DEFAULT false
             );
             CREATE TEMP TABLE agents (creator_id uuid, tenant_id uuid, is_expired boolean, status text);
-            CREATE TEMP TABLE organization_admission_requests (
-                id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tier text NOT NULL, status text NOT NULL,
-                provisioned_tenant_id uuid, provisioned_at timestamptz DEFAULT now()
-            );
+            CREATE TEMP TABLE tenants (id uuid PRIMARY KEY, tier text NOT NULL);
         """)
+        await raw.execute("INSERT INTO tenants (id, tier) VALUES (%(tenant)s, 'pro')", {"tenant": TENANT})
         connection = DbConnection(raw)
 
         @asynccontextmanager
@@ -61,7 +59,7 @@ async def database(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[DbConnecti
 
         monkeypatch.setattr(user_dao, "session", session)
         monkeypatch.setattr(agent_dao, "session", session)
-        monkeypatch.setattr(organization_admission_dao, "session", session)
+        monkeypatch.setattr(tenant_dao, "session", session)
         yield connection
 
 
@@ -218,26 +216,22 @@ async def test_counts_nonexpired_agents_when_returned_page_has_creators_without_
     assert [(item.id.int, item.agents_count) for item in page.items] == [(10, 2), (11, 0)]
 
 
-async def test_reports_the_tier_cap_as_effective_limit_only_for_the_linked_tenant(
+async def test_reports_the_tier_cap_of_the_tenant_row_as_effective_limit_for_every_role(
     client: httpx.AsyncClient, database: DbConnection, directory: None
 ):
     before = await client.get("/api/users/page", params={"limit": 100})
     page = users_api.UsersPageOut.model_validate_json(before.content)
     assert {item.id.int: item.effective_max_agents for item in page.items} == {
-        10: None,
-        11: None,
-        12: None,
+        10: 2,
+        11: 2,
+        12: 2,
         20: 2,
         21: 2,
         22: 2,
         23: 2,
         24: 2,
     }
-    await database.execute(
-        "INSERT INTO organization_admission_requests (tier, status, provisioned_tenant_id) "
-        "VALUES ('ultra', 'approved', %(tenant)s), ('pro', 'approved', %(foreign)s)",
-        {"tenant": TENANT, "foreign": FOREIGN},
-    )
+    await database.execute("UPDATE tenants SET tier = 'ultra' WHERE id = %(tenant)s", {"tenant": TENANT})
     after = await client.get("/api/users/page", params={"limit": 100})
     page = users_api.UsersPageOut.model_validate_json(after.content)
     assert {item.effective_max_agents for item in page.items} == {5}

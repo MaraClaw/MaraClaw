@@ -61,6 +61,7 @@ class TenantSnapshot(TypedDict):
     id: str
     name: str
     slug: str
+    tier: str
     im_provider: str
     im_config: JsonObject | None
     is_active: bool

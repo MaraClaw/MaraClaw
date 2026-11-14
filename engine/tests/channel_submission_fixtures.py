@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,7 +20,7 @@ from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.channel_event_receipt import ChannelReplyScope
 from app.records.gateway_report_delivery import GatewayReportDeliveryRecord
-from app.services import openclaw_routing
+from app.services import openclaw_routing, quota_guard
 from app.services.channels import submissions
 from app.services.channels.submissions import ChannelEvent
 
@@ -39,7 +40,8 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
     tenant_id, provider_id, sender_id, config_id = (uuid4() for _ in range(4))
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Channel QA', 'channel-qa')", {"id": tenant_id}
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Channel QA', 'channel-qa', 'ultra')",
+            {"id": tenant_id},
         )
         await db.first.execute(
             "INSERT INTO identity_providers (id, provider_type, name, tenant_id) "
@@ -82,6 +84,9 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(access_cache, "read_acl_version", acl_version)
+    # These tests exercise the stored per-user allowance (``users.quota_*``). Inside an organization the per-agent daily
+    # cap replaces it; ``test_agent_daily_messages_postgres.py`` covers that path.
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(background_tasks, "schedule_background_task", lambda coroutine, _description: coroutine.close())
     event = ChannelEvent(
         config_id=config_id,

@@ -31,7 +31,6 @@ from app.services import capacity_ledger, capacity_orders, company_capacity
 from app.services.capacity_ledger import CapacityExtras
 from app.services.capacity_pricing import days_in_month
 from app.services.storage_runtime.local import LocalStorageBackend
-from tier_limit_fixtures import approve_admission_for
 
 BASELINE = Path(__file__).resolve().parents[1] / "scripts" / "schema_baseline.sql"
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -52,7 +51,6 @@ _PEOPLE = (
     ("member", "acme", "member", False),
     ("agent_admin", "acme", "agent_admin", False),
     ("other_oa", "other", "org_admin", True),
-    ("legacy_oa", "legacy", "org_admin", True),
     ("system_oa", "system", "org_admin", True),
 )
 
@@ -270,15 +268,13 @@ async def capacity_scenario(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
             await db.execute(f'SET search_path TO "{schema}"')
             await db.execute(BASELINE.read_text())
             await init_pool(conninfo=make_conninfo(dsn, options=f"-csearch_path={schema}"), min_size=1, max_size=10)
-            acme = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme"})
-            other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
-            legacy = await tenant_dao.create(obj_in={"name": "Legacy", "slug": "legacy"})
-            system = await tenant_dao.create(obj_in={"name": "System", "slug": "system"})
+            acme = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme", "tier": OrganizationPlanId.PRO})
+            other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.MAX})
+            system = await tenant_dao.create(
+                obj_in={"name": "System", "slug": "system", "tier": OrganizationPlanId.ULTRA}
+            )
             await db.execute("UPDATE tenants SET is_system = true WHERE id = %(id)s", {"id": system.id})
-            _ = await approve_admission_for(db, acme.id, OrganizationPlanId.PRO)
-            _ = await approve_admission_for(db, other.id, OrganizationPlanId.MAX)
-            _ = await approve_admission_for(db, system.id, OrganizationPlanId.ULTRA)
-            tenants = {"acme": acme.id, "other": other.id, "legacy": legacy.id, "system": system.id}
+            tenants = {"acme": acme.id, "other": other.id, "system": system.id}
 
             password_hash = await hash_password_async("qa-password")
 

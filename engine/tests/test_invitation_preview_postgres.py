@@ -1,6 +1,7 @@
 import pytest
 
 from app.dao.tenant_dao import tenant_dao
+from app.records.organization_plan import OrganizationPlanId
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from invitation_fixtures import GENERIC_REJECTION, new_member, put_code, used_count
 
@@ -71,7 +72,7 @@ async def test_preview_hides_why_a_code_is_unusable(admission_scenario: Admissio
 async def test_preview_is_closed_to_members_who_cannot_use_the_code(admission_scenario: AdmissionScenario, who: str):
     # Given a valid code and a caller who is not an eligible default/tenantless member.
     scenario = admission_scenario
-    other = (await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})).id
+    other = (await tenant_dao.create(obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.ULTRA})).id
     actors = {
         "genesis": scenario.genesis,
         "platform_admin": scenario.outsider,

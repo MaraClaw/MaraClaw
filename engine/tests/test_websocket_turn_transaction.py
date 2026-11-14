@@ -27,6 +27,7 @@ from app.services import (
     openclaw_enqueue,
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
+    quota_guard,
 )
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.llm.turn import ModelBundle
@@ -196,6 +197,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))  # the stored allowance applies
     monkeypatch.setattr(user_dao, "charge_message_quota", charge)
     monkeypatch.setattr(user_dao, "get", AsyncMock(return_value=UserRecord(id=uuid4(), quota_message_limit=0)))
     monkeypatch.setattr(ws_api, "try_begin_onboarding_greeting", claim)

@@ -213,7 +213,7 @@ async def test_dirty_duplicate_memberships_are_rejected(schema_db: DbConnection)
     await schema_db.execute("DROP INDEX ux_users_identity_single_tenant")
     await schema_db.execute("INSERT INTO identities (id) VALUES ('00000000-0000-0000-0000-000000000001')")
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES ('00000000-0000-0000-0000-000000000002', 'QA', 'qa')"
+        "INSERT INTO tenants (id, name, slug, tier) VALUES ('00000000-0000-0000-0000-000000000002', 'QA', 'qa', 'ultra')"
     )
     await schema_db.execute(
         "INSERT INTO users (id, identity_id, tenant_id, display_name) "
@@ -240,7 +240,7 @@ async def test_department_membership_pair_constraints(schema_db: DbConnection, c
     tenant_id, other_tenant_id, user_id = uuid4(), uuid4(), uuid4()
     first_id, second_id, foreign_id = uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(first)s, 'First', 'first'), (%(second)s, 'Second', 'second')",
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(first)s, 'First', 'first', 'ultra'), (%(second)s, 'Second', 'second', 'ultra')",
         {"first": tenant_id, "second": other_tenant_id},
     )
     await schema_db.execute(
@@ -288,7 +288,8 @@ async def test_legacy_tasks_without_lease_columns_are_upgraded_in_place(schema_d
     await bootstrap_db.main()
     tenant_id, user_id, agent_id, task_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -415,7 +416,8 @@ async def test_legacy_approvals_without_execution_args_are_upgraded_in_place(sch
     assert fresh_columns[-1]["column_name"] == "execution_args"
     tenant_id, user_id, agent_id, approval_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -471,7 +473,8 @@ async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_pla
     ]
     tenant_id, user_id, agent_id, session_id, legacy_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -563,7 +566,8 @@ async def test_legacy_chat_history_journal_gains_write_time_without_rewrite(
     assert "recorded_at" not in legacy_function
     tenant_id, user_id, agent_id, session_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -666,7 +670,8 @@ async def test_legacy_users_without_membership_generation_are_upgraded_in_place(
     # And a legacy users table, without the column, holding active and already-inactive memberships.
     tenant_id = uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     ids = {name: uuid4() for name in ("active-a", "active-b", "inactive-a", "inactive-b")}
     for name, user_id in ids.items():
@@ -715,7 +720,8 @@ async def test_deactivation_writers_revoke_earlier_sessions_and_activation_never
     tenant_id, identity_id = uuid4(), uuid4()
     member_id, elsewhere_id, peer_id = uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Revocation', 'revocation')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Revocation', 'revocation', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})
     for user_id, identity, tenant in (

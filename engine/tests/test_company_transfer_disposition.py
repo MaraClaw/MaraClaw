@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import asdict
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -76,6 +77,9 @@ async def test_final_disposition_stops_runtime_without_rewriting_history_ownersh
     monkeypatch.setattr(DbConnection, "fetchone", models)
     monkeypatch.setattr(DbConnection, "fetchval", foreign_model)
     monkeypatch.setattr(company_transfer_cleanup, "reconcile_transfer_cleanup", no_runtime)
+    # The destination tier's capacity and storage ceilings have their own PostgreSQL tests.
+    monkeypatch.setattr(disposition, "require_destination_capacity", AsyncMock())
+    monkeypatch.setattr(disposition, "require_destination_storage", AsyncMock())
     # When target approval applies that disposition in its transaction.
     async with connection_ctx():
         await disposition.apply_disposition(admission, fixture.applicant, frozenset({agent.id}))

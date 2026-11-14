@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import anyio
 import pytest
 
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import agent_provisioning, quota_guard
 from test_agent_create_departments import creation
@@ -93,6 +94,7 @@ async def test_regular_creation_preserves_tenant_resource_defaults(creation, mon
         min_poll_interval_floor=12,
         max_webhook_rate_ceiling=17,
         min_heartbeat_interval_minutes=heartbeat,
+        tier=OrganizationPlanId.PRO,
     )
     monkeypatch.setattr(agent_provisioning.tenant_dao, "get", AsyncMock(return_value=tenant))
     before = datetime.now(UTC)

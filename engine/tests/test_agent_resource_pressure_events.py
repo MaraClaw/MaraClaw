@@ -21,7 +21,7 @@ from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.services import agent_resource_pressure as pressure, agent_resource_pressure_events as events
 from app.services.agent_resource_pressure_docker import GuestInspection
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for
+from app.services.organization_plans import plan_for
 
 GIB = 1024**3
 PRO = OrganizationPlanId.PRO
@@ -270,9 +270,6 @@ class World:
     warnings: Warnings
     clock: Clock
     sleeps: list[float]
-    tiers: dict[UUID, OrganizationPlanId | Exception | None] = field(
-        default_factory=dict[UUID, OrganizationPlanId | Exception | None]
-    )
 
 
 @pytest.fixture
@@ -281,10 +278,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
 
     async def tier_for_tenant(tenant_id: UUID | None) -> OrganizationPlanId | None:
         assert tenant_id is not None
-        answer = state.tiers.get(tenant_id, PRO)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
+        return PRO
 
     async def sleep(seconds: float) -> None:
         state.sleeps.append(seconds)
@@ -391,12 +385,10 @@ async def test_the_same_event_twice_is_one_row(world: World):
     assert len(world.episodes.rows) == 1
 
 
-@pytest.mark.parametrize("reason", ["missing", "system", "tenantless", "untiered"])
+@pytest.mark.parametrize("reason", ["missing", "system", "tenantless"])
 async def test_a_kill_of_a_guest_that_is_not_tier_governed_is_not_stored(world: World, reason: str):
     if reason != "missing":
-        agent = _agent(world, system=reason == "system", tenant=reason != "tenantless")
-        if reason == "untiered" and agent.tenant_id is not None:
-            world.tiers[agent.tenant_id] = None
+        _agent(world, system=reason == "system", tenant=reason != "tenantless")
     _guest(world)
 
     await events.record_oom_event(_event())
@@ -404,19 +396,6 @@ async def test_a_kill_of_a_guest_that_is_not_tier_governed_is_not_stored(world: 
     assert world.episodes.calls == []
     assert world.docker.inspect_calls == []
     assert world.warnings.messages == []
-
-
-async def test_an_ambiguous_tier_skips_the_kill_with_a_warning_naming_only_the_agent(world: World):
-    agent = _agent(world)
-    assert agent.tenant_id is not None
-    world.tiers[agent.tenant_id] = AmbiguousOrganizationTierError(agent.tenant_id)
-
-    await events.record_oom_event(_event())
-
-    assert world.episodes.calls == []
-    assert world.warnings.messages == [
-        f"[ResourcePressure] ambiguous organization tier; agent={AGENT} OOM event skipped"
-    ]
 
 
 @pytest.mark.parametrize("answer", ["docker-down", "container-gone", "no-client"])
@@ -685,8 +664,8 @@ class PassEpisodes:
 def passes(monkeypatch: pytest.MonkeyPatch) -> Pass:
     state = Pass()
 
-    async def tier_for_tenant(_tenant_id: UUID | None) -> OrganizationPlanId | None:
-        return PRO
+    async def tiers_for(tenant_ids: Sequence[UUID]) -> dict[UUID, OrganizationPlanId]:
+        return dict.fromkeys(tenant_ids, PRO)
 
     async def charged_for_agents(_db: object, _agent_ids: Sequence[UUID]) -> dict[UUID, int]:
         return {}
@@ -696,7 +675,7 @@ def passes(monkeypatch: pytest.MonkeyPatch) -> Pass:
         yield
 
     monkeypatch.setattr(pressure, "agent_resource_pressure_episode_dao", PassEpisodes(state))
-    monkeypatch.setattr(pressure, "tier_for_tenant", tier_for_tenant)
+    monkeypatch.setattr(pressure.tenant_dao, "tiers_for", tiers_for)
     monkeypatch.setattr(
         pressure,
         "inspect_guests",

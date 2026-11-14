@@ -56,6 +56,7 @@ class OpenEpisode:
 class TenantPressureAggregate:
     tenant_id: UUID
     tenant_name: str
+    tier: OrganizationPlanId
     episode_counts: dict[PressureResource, int]
     oom_count: int
     pressure_seconds: int
@@ -355,7 +356,7 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
         async with self.session() as db:
             rows = await db.fetchall(
                 f"""
-                SELECT e.tenant_id, t.name AS tenant_name,
+                SELECT e.tenant_id, t.name AS tenant_name, t.tier AS tenant_tier,
                     {counts},
                     count(*) FILTER (WHERE e.kind = 'oom_kill') AS oom_count,
                     COALESCE(floor(sum(extract(epoch FROM e.last_seen_at - e.started_at))
@@ -365,7 +366,7 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
                     max(e.last_seen_at) AS last_seen_at
                 FROM {self.table} e JOIN tenants t ON t.id = e.tenant_id
                 WHERE {where}
-                GROUP BY e.tenant_id, t.name
+                GROUP BY e.tenant_id, t.name, t.tier
                 ORDER BY max(e.last_seen_at) DESC, e.tenant_id
                 """,
                 params,
@@ -379,6 +380,7 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
                 TenantPressureAggregate(
                     tenant_id=uuid_from_row(row["tenant_id"]),
                     tenant_name=str_from_row(row["tenant_name"]),
+                    tier=OrganizationPlanId(str_from_row(row["tenant_tier"])),
                     episode_counts={
                         resource: int_from_row(row[f"{resource.value}_count"]) for resource in PressureResource
                     },

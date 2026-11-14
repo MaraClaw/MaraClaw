@@ -26,6 +26,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.notification import NotificationRecord
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.org import OrgMemberRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.template import AgentTemplateRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -156,7 +157,7 @@ async def test_update_keeps_direct_clamps_but_existing_http_model_filters_them(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, clamped: bool
 ) -> None:
     assert actor.tenant_id is not None
-    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_poll_interval_floor=5)
+    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_poll_interval_floor=5, tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(agents.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(agents.agent_dao, "update", AsyncMock(return_value=agent))
     interval = 1 if clamped else 30

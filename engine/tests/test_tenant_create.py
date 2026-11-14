@@ -10,9 +10,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api import tenants as tenants_api
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
+from app.services import tenant_provisioning
 from app.services.tenant_provisioning import (
     AdminEmailTakenError,
     ProvisionedTenant,
@@ -29,7 +32,7 @@ def _member_user():
     return SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=uuid.uuid4(), identity=None)
 
 
-def _tenant_record(*, name="Acme", slug="acme-abc123"):
+def _tenant_record(*, name="Acme", slug="acme-abc123", tier=OrganizationPlanId.PRO):
     return TenantRecord(
         id=uuid.uuid4(),
         name=name,
@@ -37,6 +40,7 @@ def _tenant_record(*, name="Acme", slug="acme-abc123"):
         im_provider="web_only",
         is_active=True,
         created_at=datetime.now(UTC),
+        tier=tier,
     )
 
 
@@ -46,6 +50,7 @@ async def test_create_tenant_rejects_non_platform_admin():
         await tenants_api.create_tenant(
             tenants_api.TenantCreate(
                 name="Acme",
+                tier=OrganizationPlanId.PRO,
                 admin_email="orgadmin@acme.com",
                 admin_password="temp-password",
             ),
@@ -56,7 +61,7 @@ async def test_create_tenant_rejects_non_platform_admin():
 
 @pytest.mark.asyncio
 async def test_create_tenant_provisions_org_admin(monkeypatch):
-    tenant = _tenant_record()
+    tenant = _tenant_record(tier=OrganizationPlanId.ULTRA)
     org_admin: Any = SimpleNamespace(id=uuid.uuid4(), role="org_admin")
     provisioned = ProvisionedTenant(
         tenant=tenant,
@@ -64,29 +69,44 @@ async def test_create_tenant_provisions_org_admin(monkeypatch):
         admin_email="orgadmin@acme.com",
     )
     create = AsyncMock(return_value=provisioned)
+    audit = AsyncMock()
+    platform_user = _platform_user()
     monkeypatch.setattr("app.api.tenants.create_tenant_with_org_admin", create)
+    monkeypatch.setattr("app.api.tenants.write_admin_audit", audit)
 
     result = await tenants_api.create_tenant(
         tenants_api.TenantCreate(
             name="Acme",
+            tier=OrganizationPlanId.ULTRA,
             admin_email="orgadmin@acme.com",
             admin_password="temp-password",
             admin_display_name="Org Admin",
         ),
-        current_user=_platform_user(),
+        current_user=platform_user,
     )
 
     assert result.org_admin_email == "orgadmin@acme.com"
     assert result.must_change_password is True
     assert result.tenant.id == tenant.id
     assert result.tenant.name == "Acme"
-    create.assert_awaited_once()
-    assert create.await_args is not None
-    kwargs = create.await_args.kwargs
-    assert kwargs["name"] == "Acme"
-    assert kwargs["admin_email"] == "orgadmin@acme.com"
-    assert kwargs["admin_password"] == "temp-password"
-    assert kwargs["admin_display_name"] == "Org Admin"
+    create.assert_awaited_once_with(
+        tier=OrganizationPlanId.ULTRA,
+        name="Acme",
+        admin_email="orgadmin@acme.com",
+        admin_password="temp-password",
+        admin_display_name="Org Admin",
+    )
+    assert audit.await_args is not None
+    assert audit.await_args.kwargs["changes"]["tier"] == {"before": None, "after": "ultra"}
+
+
+@pytest.mark.parametrize("fields", [{}, {"tier": "enterprise"}, {"tier": None}])
+def test_tenant_create_requires_a_known_tier(fields):
+    with pytest.raises(ValidationError) as exc:
+        _ = tenants_api.TenantCreate.model_validate(
+            {"name": "Acme", "admin_email": "orgadmin@acme.com", "admin_password": "temp-password", **fields}
+        )
+    assert [error["loc"] for error in exc.value.errors()] == [("tier",)]
 
 
 @pytest.mark.asyncio
@@ -100,6 +120,7 @@ async def test_create_tenant_rejects_existing_admin_email(monkeypatch):
         await tenants_api.create_tenant(
             tenants_api.TenantCreate(
                 name="Acme",
+                tier=OrganizationPlanId.PRO,
                 admin_email="taken@example.com",
                 admin_password="temp-password",
             ),
@@ -164,6 +185,7 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         result = await create_tenant_with_org_admin(
+            tier=OrganizationPlanId.MAX,
             name="Acme",
             admin_email="OrgAdmin@acme.com",
             admin_password="temp-password",
@@ -172,6 +194,9 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
 
     assert result.admin_email == "orgadmin@acme.com"
     assert result.tenant is tenant
+    create_tenant = tenant_provisioning.tenant_dao.create
+    assert create_tenant.await_args is not None
+    assert create_tenant.await_args.kwargs["obj_in"]["tier"] is OrganizationPlanId.MAX
     kwargs = create_identity.await_args.kwargs
     assert kwargs["email"] == "orgadmin@acme.com"
     assert kwargs["must_change_password"] is True
@@ -218,6 +243,7 @@ async def test_create_tenant_rejects_claimed_admin_domain(monkeypatch):
         await tenants_api.create_tenant(
             tenants_api.TenantCreate(
                 name="Acme",
+                tier=OrganizationPlanId.PRO,
                 admin_email="techadmin@marathon.vn",
                 admin_password="temp-password",
             ),
@@ -236,6 +262,7 @@ async def test_create_tenant_with_org_admin_rejects_existing_email(monkeypatch):
 
     with pytest.raises(AdminEmailTakenError):
         await create_tenant_with_org_admin(
+            tier=OrganizationPlanId.PRO,
             name="Acme",
             admin_email="taken@example.com",
             admin_password="temp-password",

@@ -31,7 +31,6 @@ from app.services import agent_resource_pressure as pressure, agent_workspace_qu
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.channels import personal_burst_admission
 from app.services.channels.personal_burst_original import PersonalOriginal
-from app.services.organization_plans import AmbiguousOrganizationTierError
 from app.services.quota_guard import QuotaExceededError
 
 GIB = 1024**3
@@ -390,30 +389,6 @@ async def test_agents_without_an_allowance_lose_their_row_and_are_never_walked(w
     world.tier.assert_not_awaited()
 
 
-async def test_an_untiered_organization_loses_its_row_and_is_never_walked(world: World):
-    agent = _agent()
-    world.tier.return_value = None
-    world.rows[agent.id] = AgentWorkspaceUsageRecord(agent.id, 1, 1, 1, over_since=datetime.now(UTC))
-
-    await quota.measure_agent(agent)
-
-    assert world.rows == {}
-    assert world.walks == []
-    world.notify.assert_not_awaited()
-
-
-async def test_an_ambiguous_tier_link_is_skipped_and_leaves_the_row_alone(world: World):
-    agent = _agent()
-    world.tier.side_effect = AmbiguousOrganizationTierError(uuid4())
-    stored = AgentWorkspaceUsageRecord(agent.id, 1, 1, 1, over_since=datetime.now(UTC))
-    world.rows[agent.id] = stored
-
-    await quota.measure_agent(agent)
-
-    assert world.rows == {agent.id: stored}
-    assert world.walks == []
-
-
 async def test_an_unreadable_layer_with_nothing_stored_counts_as_zero(world: World):
     world.dir_bytes, world.layer_bytes = GIB, None
     agent = _agent()
@@ -584,9 +559,6 @@ async def test_each_stored_measurement_feeds_the_pressure_episodes(world: World)
 
 
 async def test_agents_without_an_allowance_never_reach_the_pressure_episodes(world: World):
-    world.tier.return_value = None
-
-    await quota.measure_agent(_agent())
     await quota.measure_agent(_agent(system=True))
     await quota.measure_agent(_agent(tenant=False))
 

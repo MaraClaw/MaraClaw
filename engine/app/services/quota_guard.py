@@ -47,8 +47,8 @@ AgentExpired = AgentExpiredError
 async def charge_conversation_quota(user: UserRecord) -> None:
     """Charge one accepted turn using the freshly authorized principal's exemption.
 
-    A tier-governed organization is limited only by its per-agent daily cap (``charge_agent_daily_message``), so the
-    stored per-user allowance is not applied there, just like the stored agent count.
+    A user in an organization is limited only by its per-agent daily cap (``charge_agent_daily_message``), so the
+    stored per-user allowance is applied only to a member with no organization, just like the stored agent count.
     """
     if user.role in ("platform_admin", "org_admin"):
         return
@@ -133,8 +133,8 @@ class AgentCapacity:
 
 
 def agent_limit_for_tier(user: UserRecord, tier: OrganizationPlanId | None) -> AgentLimit:
-    """An organization provisioned through an approved admission is capped by its tier for every role, replacing
-    the stored per-user allowance. Any other organization keeps the stored allowance, with admins exempt."""
+    """A user in an organization is capped by its tier for every role, replacing the stored per-user allowance.
+    A user with no organization keeps the stored allowance, with admins exempt."""
     if tier is not None:
         return AgentLimit(plan_for(tier).max_agents_per_account.value, tiered=True)
     if user.role in ("platform_admin", "org_admin"):
@@ -151,10 +151,10 @@ async def agent_limit(user: UserRecord, tenant_id: uuid.UUID | None) -> AgentLim
 async def agent_capacity(
     user: UserRecord, tenant_id: uuid.UUID | None, *, tiered_only: bool = False
 ) -> AgentCapacity | None:
-    """Usage against ``agent_limit``; ``None`` when uncapped (or, with ``tiered_only``, not tier-governed).
+    """Usage against ``agent_limit``; ``None`` when uncapped (or, with ``tiered_only``, in no organization).
 
     Tiered usage counts the account's non-expired, non-system agents in exactly ``tenant_id`` (any lifecycle
-    status). Legacy usage keeps the creator's agents in their own current organization.
+    status). Usage with no organization counts the creator's active agents.
     """
     governing = await agent_limit(user, tenant_id)
     if governing.limit is None or (tiered_only and not governing.tiered):
@@ -171,7 +171,7 @@ async def check_agent_creation_quota(
 ) -> None:
     """Check the freshly locked principal's allowance for one more agent in the destination organization.
 
-    The per-account cap is checked first, then the company-wide cap of a tiered, non-system organization."""
+    The per-account cap is checked first, then the company-wide cap of a non-system organization."""
     capacity = await agent_capacity(user, tenant_id, tiered_only=tiered_only)
     if capacity is not None and capacity.refuses(1):
         raise QuotaExceeded(
@@ -192,7 +192,7 @@ async def check_agent_renewal_quota(db: DbConnection, agent: AgentRecord) -> Non
 
     Renewal is a net increase for the *owner*, whoever acts. Locks follow creation (tenants, owner, agent) and the
     decision is made on the freshly locked rows, so a racing creation, transfer or renewal cannot spend the same slot.
-    Only tier-governed organizations are capped here; system agents never count."""
+    Only agents in an organization are capped here; system agents never count."""
     owner_tenant = uuid_from_row_opt(
         await db.fetchval("SELECT tenant_id FROM users WHERE id = %(id)s", {"id": agent.creator_id})
     )

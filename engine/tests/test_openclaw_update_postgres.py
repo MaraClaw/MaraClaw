@@ -64,7 +64,7 @@ async def db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DbConnection]:
 async def tenant(db: DbConnection, *, active: bool = True) -> UUID:
     tenant_id = uuid4()
     await db.execute(
-        "INSERT INTO tenants (id, name, slug, is_active) VALUES (%(id)s, 'T', %(slug)s, %(active)s)",
+        "INSERT INTO tenants (id, name, slug, is_active, tier) VALUES (%(id)s, 'T', %(slug)s, %(active)s, 'ultra')",
         {"id": tenant_id, "slug": f"t-{tenant_id.hex[:12]}", "active": active},
     )
     return tenant_id
