@@ -43,7 +43,7 @@ async function deferLifecycle(page: Page, action: 'start' | 'stop') {
   return { requested: requested.promise, release: (status = 200) => response.resolve(status) }
 }
 
-test('agent information and Back stay in Settings while focused chat and the section rail remain usable', async ({ page }) => {
+test('agent information stays in Settings while focused chat and the section rail remain usable', async ({ page }) => {
   const chat = await prepareChat(page)
   const agent = { ...originalAgent, is_expired: true }
   const api = await routeAgent(page, agent)
@@ -66,7 +66,7 @@ test('agent information and Back stay in Settings while focused chat and the sec
   await sections.getByRole('link', { name: 'Settings', exact: true }).click()
 
   await expect(page).toHaveURL(settingsPath)
-  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: agent.name, exact: true })).toHaveCount(1)
   for (const badge of [agent.status, 'Expired', 'manage']) {
     await expect(page.locator('[data-slot="badge"]').filter({ hasText: new RegExp(`^${badge}$`) })).toHaveCount(1)
@@ -77,8 +77,8 @@ test('agent information and Back stay in Settings while focused chat and the sec
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(1)
   expect(api.reads()).toBe(1)
   expect(api.metricsReads()).toBe(1)
-  await page.getByRole('button', { name: 'Back', exact: true }).click()
-  await expect(page).toHaveURL(chatPath())
+  await sections.getByRole('link', { name: 'Chat', exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/app/agents/${agent.id}/chat`))
   await expect(composer).toBeVisible()
   await expect(sections.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: agent.name, exact: true })).toHaveCount(0)

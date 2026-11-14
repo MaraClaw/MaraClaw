@@ -153,20 +153,20 @@ test(`initial loading and status errors never mount ${tab}, while Settings stays
   await page.goto(`${agentPath}/${tab}`)
   // Then
   await expect(page.getByRole('heading', { name: 'Agent work is paused' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(tab === 'chat' ? 0 : 1)
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Agent sections', exact: true })).toBeVisible()
   expect(state.fileReads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('loading-gate.png') })
   state.statusError = true
   statusReady.resolve()
   await expect(page.getByRole('alert')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(tab === 'chat' ? 0 : 1)
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
   expect(state.fileReads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('error-gate.png') })
   await page.getByRole('link', { name: 'Open agent Settings' }).click()
   await expect(page.getByRole('heading', { name: state.agent.name })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Retry status check' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
 })
 }
 

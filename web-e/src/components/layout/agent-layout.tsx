@@ -1,11 +1,10 @@
 import { useTranslation } from '@/hooks/use-translation'
-import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { ArrowLeft, Loader2 } from 'lucide-react'
-import { Link, matchPath, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useQuery } from '@/hooks/session-workspace'
+import { Loader2 } from 'lucide-react'
+import { Link, matchPath, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
-import { AgentAccessExplanation } from '@/components/agent-access-explanation'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { Button } from '@/components/ui/button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
@@ -34,27 +33,6 @@ const tabs = [
   { id: 'browser', to: 'playwright', label: 'Browser', icon: 'browser' },
   { id: 'settings', to: 'settings', label: 'Settings', icon: 'settings' },
 ] as const satisfies readonly SectionRailItem[]
-
-function AgentsListButton() {
-  const { t: translate } = useTranslation()
-  const scope = useWorkspaceSession()
-  const navigate = useNavigate()
-
-  function goBack() {
-    if (!scope.isCurrent()) return
-    if (typeof window !== 'undefined' && window.history.state?.idx > 0) {
-      navigate(-1)
-      return
-    }
-    navigate('/app/agents')
-  }
-
-  return (
-    <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={goBack}>
-      <ArrowLeft className="size-4" aria-hidden />
-      {translate("Back")}</Button>
-  )
-}
 
 export function AgentLayout() {
   const { t: translate } = useTranslation()
@@ -86,7 +64,6 @@ export function AgentLayout() {
       return (
         <div className={layoutClass}>
           <div className={cn('min-h-0 min-w-0 space-y-3 p-6 md:col-start-2', chat && 'row-start-2 md:row-start-1')}>
-            {!chat ? <AgentsListButton /> : null}
             <div className="flex h-32 items-center justify-center text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
             </div>
@@ -103,7 +80,7 @@ export function AgentLayout() {
       <div className={chat ? layoutClass : 'space-y-3 p-6'}>
         {chat ? <SectionRail items={visibleTabs} label={translate("Agent sections")} className={railClass} /> : null}
         <div className={chat ? 'min-w-0 space-y-3 p-6 md:col-start-2' : undefined}>
-          {chat ? <Button variant="outline" asChild><Link to="/app/agents">{translate("Agents")}</Link></Button> : <AgentsListButton />}
+          {chat ? <Button variant="outline" asChild><Link to="/app/agents">{translate("Agents")}</Link></Button> : null}
           <RequestErrorToast error={query.error} message={query.error instanceof ApiError && query.error.status !== 404
               ? userFacingRequestError(query.error, translate("Unable to load this agent. Try again."))
               : 'This agent is not available.'} />
@@ -119,10 +96,6 @@ export function AgentLayout() {
 
   return (
     <div className={layoutClass}>
-      {!chat ? <div className="min-w-0 space-y-2 bg-background px-5 pt-4 pb-2 md:col-start-2 md:row-start-1">
-        <AgentsListButton />
-        <AgentAccessExplanation reason={agent.access_reason} />
-      </div> : null}
       <SectionRail
         items={visibleTabs}
         label={translate("Agent sections")}
