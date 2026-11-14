@@ -189,14 +189,11 @@ image change is required for this transport retirement.
 
 [`resolve_guest_limits`](../app/services/guest_limits.py) picks one target per agent:
 
-- An ordinary agent in a tier-governed organization gets its tier's limits. An
-  organization is tier-governed when an approved admission request has
-  `provisioned_tenant_id` equal to it. The numbers live only in
+- An ordinary agent in an organization gets its tier's limits. Every organization has
+  a tier (`tenants.tier`, set when it is created). The numbers live only in
   [`organization_plan.py`](../app/records/organization_plan.py).
-- System agents, agents without an organization and organizations without a tier use
-  the global `OPENCLAW_GUEST_*` settings below. They set no CPU shares.
-- An organization linked to several approved requests is a configuration error: the
-  start fails with `configuration_failed` instead of falling back.
+- System agents and agents without an organization use the global `OPENCLAW_GUEST_*`
+  settings below. They set no CPU shares.
 
 | Tier | Memory (and memory+swap) | CPUs | CPU shares | PIDs | Workspace disk |
 |---|---:|---:|---:|---:|---:|
@@ -225,10 +222,10 @@ Limits also apply when a stopped guest resumes. For an `exited` or `created` gue
 engine resolves the target, passes
 [aggregate admission](#optional-aggregate-memory-admission) for the target memory, and
 then, before `docker start`, runs `docker update` with memory and swap together, CPUs
-and PIDs, plus CPU shares: the tier's, or Docker's default 1024 without a tier, so a
-guest whose organization left its tier drops the old weight. It updates only when an
-inspected value differs from the target; without a tier, any weight other than Docker's
-default (0, 1024 or absent) is a difference. An update failure is `runtime_failed` and
+and PIDs, plus CPU shares: the tier's, or Docker's default 1024 without a tier (system
+agents and agents without an organization), so a guest that left its tier drops the old
+weight. It updates only when an inspected value differs from the target; without a tier,
+any weight other than Docker's default (0, 1024 or absent) is a difference. An update failure is `runtime_failed` and
 the guest stays stopped.
 
 A running guest is reused unchanged and is never updated. A tier change, or a change to
@@ -322,13 +319,12 @@ reserves and unlimited-external-allocation refusal remain unchanged.
 
 ## Workspace Disk Quota
 
-Tier-governed organizations get a measured soft quota per agent: the workspace disk
+Every organization gets a measured soft quota per agent: the workspace disk
 allowance in the [tier table](#guest-limits). Usage is the agent's host directory
 (`<STORAGE_LOCAL_ROOT or AGENT_DATA_DIR>/<agent id>`, mounted at
 `/home/node/custom-state`) plus the guest container's writable layer. Neither Docker
 nor the filesystem enforces it: a guest can write past it and the engine notices at the
-next measurement. System agents, agents without an organization and organizations
-without a tier have no quota. The managed S3 quota is separate and unchanged
+next measurement. System agents and agents without an organization have no quota. The managed S3 quota is separate and unchanged
 ([managed-storage-quota.md](managed-storage-quota.md)).
 
 The required worker loop `agent_workspace_quota`
@@ -350,8 +346,8 @@ agent's failure is logged and the pass continues.
   example one that no longer exists) skips only that agent's read.
 - Each result is stored in `agent_workspace_usage` with the tier's limit. The agent is
   over quota while usage is greater than the limit. A tier change applies at the next
-  measurement. An ambiguous tier link skips the agent with a warning; an agent that is
-  no longer tier-governed loses its row.
+  measurement. An agent that no longer has an allowance (a system agent, or one without
+  an organization) loses its row.
 - Measurements are ordered by when they started, not when they land. A measurement
   whose start is older than the stored one is dropped (no write, no alert), so a slow
   pass cannot undo the re-measure that follows a file delete.
@@ -396,7 +392,7 @@ mount, is never recreated.
 
 Platform admins need evidence of which organizations outgrow their tier. The engine
 records it in `agent_resource_pressure_episodes`: one row per continuous stretch (an
-episode) in which a resource of a tier-governed, non-system agent stayed at or above
+episode) in which a resource of a non-system agent of an organization stayed at or above
 `AGENT_RESOURCE_PRESSURE_THRESHOLD` (default `0.9`, above 0 and at most 1) of its
 limit, per agent and resource, plus one row for each OOM kill of a guest. Units are
 bytes, except `cpu` in millicpus.
@@ -422,10 +418,10 @@ samples arrive at the quota pass's interval instead.
   (`last_seen_at`, `sample_count`, and the peak and its detail when the ratio is higher).
   `tier` and `threshold_ratio` keep their values from when it opened.
 - The first sample below the threshold closes it. An episode also closes when its
-  agent's guest stops or disappears (memory and CPU), when the agent stops being
-  tier-governed, is deleted or moves to another organization. `detail.closed_reason`
-  records why: `below_threshold`, `guest_not_running`, `untiered`, `agent_gone` or
-  `tenant_changed`.
+  agent's guest stops or disappears (memory and CPU), when the agent becomes a system
+  agent or loses its organization, is deleted or moves to another organization.
+  `detail.closed_reason` records why: `below_threshold`, `guest_not_running`,
+  `agent_gone` or `tenant_changed`.
 - An OOM-killed guest adds one `kind=oom_kill` row per kill (resource `memory`, peak at
   the limit, ratio 1, already ended). The worker keeps one long-lived
   `docker events --filter event=oom` reader for labelled guests
@@ -451,9 +447,8 @@ Platform admins read them through the three
 [`/api/admin/resource-pressure`](admin-apis.md) endpoints. In the summary,
 `suggested_tier` is a heuristic, not a quote:
 
-- It uses the organization's one approved tier (`current_tier`; none when it has no
-  approved tier or several) and only episodes recorded under that tier, so a tier
-  change starts from a clean slate.
+- It uses the organization's tier (`current_tier`, `tenants.tier`) and only episodes
+  recorded under that tier, so a tier change starts from a clean slate.
 - For each resource it takes the highest peak seen and picks the smallest higher tier
   whose limit keeps that peak below the threshold ratio. An OOM kill counts as a peak at
   the guest's memory limit when it was killed. The suggestion is the highest of the
@@ -461,7 +456,7 @@ Platform admins read them through the three
 - A peak that already fits under the threshold of the current tier's own limit suggests
   nothing. That is the case of a guest still running with an older, lower tier's
   limits after an upgrade: its next resume applies the current limits.
-- It is null at the top tier, when no higher tier fits and when `current_tier` is null.
+- It is null at the top tier and when no higher tier fits.
 
 ## Ports And Durable Failures
 
@@ -820,9 +815,7 @@ can differ from the canonical expected name without losing ownership.
 (`memory_bytes`, `memory_swap_bytes`, `nano_cpus`, `pids_limit`, and `cpu_shares`, null
 without a tier). `limits_drift` is true when the inspected hard limits differ from it:
 swap must equal memory, and without a tier's CPU shares only Docker's default weight
-matches. Both are
-null when the target cannot be resolved (an ambiguous tier), and `limits_drift` is also
-null without an observed HostConfig. A drifted stopped guest is corrected when it
+matches. `limits_drift` is null without an observed HostConfig. A drifted stopped guest is corrected when it
 resumes; a drifted running guest stays as it is until then.
 
 These fields supplement existing container status. Missing/error observations

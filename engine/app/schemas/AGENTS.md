@@ -27,4 +27,4 @@ Pydantic request/response models live here. `schemas.py` is the large shared gra
 
 - `TokenResponse`, `AuthUser`, and `IdentityOut` expose `must_change_password` for first-login force-change UX (web-a and other clients).
 - Do not put `password_hash` or env bootstrap secrets on any Out model.
-- Company create request/response for platform admin lives on `app/api/admin.py` (`POST /admin/companies`) and `app/api/tenants.py` (`POST /tenants`) models (`admin_email` / `admin_password` in, `org_admin_email` + `must_change_password` out). Shared write path is `app/services/tenant_provisioning.py`. Keep `docs/admin-apis.md` aligned when those change.
+- Company create request/response for platform admin lives on `app/api/admin.py` (`POST /admin/companies`) and `app/api/tenants.py` (`POST /tenants`) models (`tier` + `admin_email` / `admin_password` in, `org_admin_email` + `must_change_password` out; `tier` is a required `OrganizationPlanId` with no default; `CompanyStats.tier` and `TenantOut.tier` are required, read from `tenants.tier`). Shared write path is `app/services/tenant_provisioning.py`. Keep `docs/admin-apis.md` aligned when those change.
