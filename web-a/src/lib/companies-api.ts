@@ -41,6 +41,7 @@ export type CompanyStats = {
   inactive_user_count: number
   agent_count: number
   org_admin_email: string | null
+  phone: string | null
   tier: OrganizationPlanId
 }
 
@@ -63,6 +64,7 @@ const companyStatsSchema = companyOptionSchema.extend({
   inactive_user_count: z.number().int().nonnegative(),
   agent_count: z.number().int().nonnegative(),
   org_admin_email: z.string().nullable(),
+  phone: z.string().nullable(),
   tier: z.enum(OrganizationPlanIdValues),
 })
 
@@ -89,6 +91,7 @@ export type EmailDomain = {
 
 export type CreateCompanyInput = {
   name: string
+  phone: string
   tier: OrganizationPlanId
   admin_email: string
   admin_password: string
@@ -158,6 +161,7 @@ export async function getTenant(tenantId: string, signal?: AbortSignal): Promise
     inactive_user_count: 0,
     agent_count: 0,
     org_admin_email: null,
+    phone: null,
     tier: tenant.tier,
   }
 }

@@ -17,6 +17,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { toggleCompany } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
+import { formatPhone } from '@/lib/phone'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { useTranslation } from '@/hooks/use-translation'
 
@@ -111,6 +112,7 @@ export function CompaniesPage() {
                 <CardDescription>
                   {company.slug}
                   {company.org_admin_email ? ` · ${company.org_admin_email}` : ''}
+                  {company.phone ? ` · ${formatPhone(company.phone)}` : ''}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">

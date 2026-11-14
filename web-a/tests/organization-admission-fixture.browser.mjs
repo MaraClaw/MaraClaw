@@ -13,7 +13,7 @@ const reviewer = {
 export function makeFixture(receipt, name) {
   const row = (number, organizationName) => ({
     id: uuid(number), organization_name: organizationName, email: `founder-${number}@example.test`,
-    tier: 'max', plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 249, annual_price_usd: 2490,
+    phone: '+84912345678', tier: 'max', plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 249, annual_price_usd: 2490,
       included_accounts: 15, additional_account_monthly_usd: 4, max_agents_per_account: 3,
       included_agents: 5, additional_agent_monthly_usd: 49, storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800,
       daily_messages_per_agent: 200, guest_memory_bytes: 3221225472, guest_millicpus: 2000,

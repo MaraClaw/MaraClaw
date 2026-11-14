@@ -11,7 +11,7 @@ const row = {
   id: 'alpha', name: 'Zebra Company', slug: 'zebra', is_active: true,
   sso_enabled: false, sso_domain: null, is_system: false, is_default_end_user_org: false,
   can_disable: true, created_at: null, user_count: 7, active_user_count: 5,
-  inactive_user_count: 2, agent_count: 3, org_admin_email: null, tier: 'pro' as const,
+  inactive_user_count: 2, agent_count: 3, org_admin_email: null, phone: '+84912345678', tier: 'pro' as const,
 }
 
 test('company page encodes search and opaque cursor and forwards cancellation', async (t) => {
@@ -124,18 +124,20 @@ test('company detail reads one encoded stats endpoint while legacy listing remai
   assert.deepEqual(legacy, [row])
 })
 
-test('company creation sends the chosen plan', async (t) => {
+test('company creation sends the chosen plan and phone number', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) =>
     Response.json({ company: { ...row, tier: 'max' }, org_admin_email: 'admin@example.test', must_change_password: true }))
   // When
-  await createCompany({ name: 'Zebra Company', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1' })
+  await createCompany({
+    name: 'Zebra Company', phone: '+84912345678', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1',
+  })
   // Then
   const [url, init] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/admin/companies')
   assert.equal(init?.method, 'POST')
   assert.deepEqual(JSON.parse(String(init?.body)), {
-    name: 'Zebra Company', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1',
+    name: 'Zebra Company', phone: '+84912345678', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1',
   })
 })
 

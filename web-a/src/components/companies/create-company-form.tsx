@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useId } from 'react'
+import { useId, useMemo } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 
 import { capacityTierLabels } from '@/components/capacity/capacity-labels'
@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
+import { Select } from '@/components/ui/select'
 import { organizationPlansOptions } from '@/hooks/organization-plan-options'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { createCompany } from '@/lib/companies-api'
@@ -20,17 +21,19 @@ import { ApiError, formatApiDetail } from '@/lib/http'
 import { useTranslation } from '@/hooks/use-translation'
 import { useLocalizedMessage } from '@/hooks/use-localized-message'
 import { message } from '@/lib/i18n'
+import { DEFAULT_PHONE_COUNTRY, phoneCountryOptions, toE164 } from '@/lib/phone'
 
 type CreateCompanyFormProps = {
   onCreated: (name: string, adminEmail: string) => void
 }
 
 export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
-  const { t, owned, number } = useTranslation()
+  const { t, owned, number, locale } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
   const [formError, setFormError] = useLocalizedMessage()
   const plans = useQuery(organizationPlansOptions())
+  const countries = useMemo(() => phoneCountryOptions(locale), [locale])
   const {
     register,
     control,
@@ -42,6 +45,8 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
     mode: 'onTouched',
     defaultValues: {
       name: '',
+      phone_country: DEFAULT_PHONE_COUNTRY,
+      phone_number: '',
       admin_email: '',
       admin_display_name: '',
       admin_password: '',
@@ -50,10 +55,13 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
 
   async function onSubmit(values: CreateCompanyValues) {
     setFormError(null)
+    const phone = toE164(values.phone_country, values.phone_number)
+    if (phone === null) return
     const displayName = values.admin_display_name?.trim()
     try {
       const created = await createCompany({
         name: values.name.trim(),
+        phone,
         tier: values.tier,
         admin_email: values.admin_email.trim().toLowerCase(),
         admin_password: values.admin_password,
@@ -95,7 +103,7 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
       </CardHeader>
       <CardContent>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit(onSubmit)} noValidate>
-          <div className="space-y-2 sm:col-span-2">
+          <div className="space-y-2">
             <Label htmlFor={`${formId}-name`}>{t('Company name')}</Label>
             <Input
               id={`${formId}-name`}
@@ -106,6 +114,32 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
             {errors.name ? (
               <p className="text-xs text-destructive" role="alert">
                 {owned(errors.name.message)}
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${formId}-phone`}>{t('Phone number')}</Label>
+            <div className="flex gap-2">
+              <Select aria-label={t('Country code')} className="w-44 shrink-0" {...register('phone_country')}>
+                {countries.map(({ country, label }) => (
+                  <option key={country} value={country}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                id={`${formId}-phone`}
+                type="tel"
+                inputMode="tel"
+                autoComplete="off"
+                aria-invalid={errors.phone_number ? true : undefined}
+                aria-describedby={errors.phone_number ? `${formId}-phone-error` : undefined}
+                {...register('phone_number')}
+              />
+            </div>
+            {errors.phone_number ? (
+              <p id={`${formId}-phone-error`} className="text-xs text-destructive" role="alert">
+                {owned(errors.phone_number.message)}
               </p>
             ) : null}
           </div>
@@ -211,19 +245,10 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
             <ErrorToast message={formError} />
           ) : null}
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-            <Button
-              type="submit"
-              disabled={isSubmitting || !isValid}
-              aria-describedby={isValid ? undefined : `${formId}-submit-hint`}
-            >
+            <Button type="submit" disabled={isSubmitting || !isValid}>
               {isSubmitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
               {t('Create company')}
             </Button>
-            {isValid ? null : (
-              <p id={`${formId}-submit-hint`} className="text-xs text-muted-foreground">
-                {t('Fill in the company name, plan, admin email and password to continue.')}
-              </p>
-            )}
           </div>
         </form>
       </CardContent>

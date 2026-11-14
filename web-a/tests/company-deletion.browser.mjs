@@ -18,7 +18,7 @@ const company = (id, name, extra = {}) => ({
   id, name, slug: id, is_active: true, sso_enabled: false, sso_domain: null,
   is_system: false, is_default_end_user_org: false, can_disable: true, created_at: null,
   user_count: 20, active_user_count: 19, inactive_user_count: 1, agent_count: 8,
-  org_admin_email: null, tier: 'pro', ...extra,
+  org_admin_email: null, phone: null, tier: 'pro', ...extra,
 })
 const initial = [company('alpha', 'Alpha Labs'), company('beta', 'Beta Works'), company('system', 'MaraClaw', { is_system: true }), company('default', 'KABERs', { is_default_end_user_org: true })]
 const admin = {
