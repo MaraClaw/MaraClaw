@@ -2,18 +2,18 @@ import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import { CapacityEvidencePreview } from '@/components/capacity/capacity-evidence-preview'
 import { capacityActionClass, capacityStatusLabels } from '@/components/capacity/capacity-labels'
 import { CapacityOrderDetails } from '@/components/capacity/capacity-order-details'
 import { CapacityCancelOrder, CapacityEvidenceForm } from '@/components/capacity/capacity-payment-actions'
 import { CapacityStatusBadge } from '@/components/capacity/capacity-status-badge'
 import { CopyField } from '@/components/capacity/copy-field'
+import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
 import { useCapacityOrder } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
-import { capacityOrderIdSchema, type CapacityOrder } from '@/lib/capacity-api'
+import { capacityOrderIdSchema, fetchCapacityEvidence, type CapacityOrder } from '@/lib/capacity-api'
 import { formatBillingMonth, formatCalendarDate, formatUsdCents, formatVnd } from '@/lib/capacity-format'
 import { canCancelOrder, canSubmitEvidence, vietnamToday } from '@/lib/capacity-order-state'
 import { ApiError } from '@/lib/http'
@@ -100,7 +100,7 @@ function CapacityOrderView({ order, readOnly }: { readonly order: CapacityOrder;
     </> : <OutcomePanel order={order} focusOnMount={startedAwaiting} />}
     {order.evidence !== null && !canSubmitEvidence(order) ? <Card>
       <CardHeader><h2 className="font-display text-lg font-semibold">{t('Payment evidence')}</h2></CardHeader>
-      <CardContent><CapacityEvidencePreview orderId={order.id} evidence={order.evidence} /></CardContent>
+      <CardContent><PaymentEvidencePreview loadKey={order.id} load={(signal) => fetchCapacityEvidence(order.id, signal)} evidence={order.evidence} /></CardContent>
     </Card> : null}
     <Card>
       <CardHeader><h2 className="font-display text-lg font-semibold">{t('Order summary')}</h2></CardHeader>

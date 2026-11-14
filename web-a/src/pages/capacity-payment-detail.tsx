@@ -5,17 +5,17 @@ import { useForm } from 'react-hook-form'
 import { Link, useParams } from 'react-router-dom'
 import type { z } from 'zod'
 
-import { CapacityEvidencePreview } from '@/components/capacity/capacity-evidence-preview'
 import { capacityActionClass, capacityStatusLabels } from '@/components/capacity/capacity-labels'
 import { CapacityOrderDetails } from '@/components/capacity/capacity-order-details'
 import { CapacityStatusBadge } from '@/components/capacity/capacity-status-badge'
 import { ErrorToast } from '@/components/error-toast'
+import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { useCapacityDecision, useCapacityReviewOrder } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
-import { CAPACITY_DECISION_NOTE_LIMIT, capacityOrderIdSchema, type CapacityOrder } from '@/lib/capacity-api'
+import { CAPACITY_DECISION_NOTE_LIMIT, capacityOrderIdSchema, fetchCapacityEvidence, type CapacityOrder } from '@/lib/capacity-api'
 import { capacityGuardKey } from '@/lib/capacity-errors'
 import { capacityDecisionDraftSchema } from '@/lib/capacity-forms'
 import { formatVnd } from '@/lib/capacity-format'
@@ -77,7 +77,7 @@ function PaymentReview({ order, ready }: { readonly order: CapacityOrder; readon
       <CardHeader><h2 className="font-display text-lg font-semibold">{t('Payment evidence')}</h2></CardHeader>
       <CardContent>
         {order.evidence !== null
-          ? <CapacityEvidencePreview orderId={order.id} evidence={order.evidence} />
+          ? <PaymentEvidencePreview loadKey={order.id} load={(signal) => fetchCapacityEvidence(order.id, signal)} evidence={order.evidence} />
           : <p className="text-sm text-muted-foreground">{t('No payment evidence has been sent for this order.')}</p>}
       </CardContent>
     </Card>

@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 
+import { capacityActionClass } from '@/components/capacity/capacity-labels'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/hooks/use-translation'
-import { fetchCapacityEvidence, type CapacityOrder, type CapacityOrderId } from '@/lib/capacity-api'
 import { ApiError, BinaryLimitError } from '@/lib/http'
-import { capacityActionClass } from './capacity-labels'
 
-type Evidence = NonNullable<CapacityOrder['evidence']>
+type Evidence = { readonly filename: string; readonly content_type: string }
+type EvidenceLoader = (signal: AbortSignal) => Promise<Uint8Array<ArrayBuffer>>
 type Preview =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly url: string }
@@ -14,17 +14,18 @@ type Preview =
 
 const imageTypes: readonly string[] = ['image/png', 'image/jpeg', 'image/webp']
 
-function EvidenceViewer({ orderId, evidence, onRetry }: {
-  readonly orderId: CapacityOrderId; readonly evidence: Evidence; readonly onRetry: () => void
+function EvidenceViewer({ load, evidence, onRetry }: {
+  readonly load: EvidenceLoader; readonly evidence: Evidence; readonly onRetry: () => void
 }) {
   const { t } = useTranslation()
   const [preview, setPreview] = useState<Preview>({ status: 'loading' })
   const isImage = imageTypes.includes(evidence.content_type)
+  const loadBytes = useEffectEvent(load)
 
   useEffect(() => {
     const controller = new AbortController()
     let objectUrl: string | null = null
-    fetchCapacityEvidence(orderId, controller.signal).then((bytes) => {
+    loadBytes(controller.signal).then((bytes) => {
       if (controller.signal.aborted) return
       objectUrl = URL.createObjectURL(new Blob([bytes], { type: evidence.content_type }))
       setPreview({ status: 'ready', url: objectUrl })
@@ -35,7 +36,7 @@ function EvidenceViewer({ orderId, evidence, onRetry }: {
       controller.abort()
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
     }
-  }, [orderId, evidence.content_type])
+  }, [evidence.content_type])
 
   return <div className="flex flex-col items-start gap-3">
     {preview.status === 'loading' ? <p role="status" className="text-sm text-muted-foreground">{t('Loading payment evidence...')}</p> : null}
@@ -60,9 +61,12 @@ function EvidenceViewer({ orderId, evidence, onRetry }: {
   </div>
 }
 
-export function CapacityEvidencePreview({ orderId, evidence }: { readonly orderId: CapacityOrderId; readonly evidence: Evidence }) {
+/** `loadKey` identifies what `load` fetches: a new key remounts the viewer and fetches again, a new `load` function alone does not. */
+export function PaymentEvidencePreview({ loadKey, load, evidence }: {
+  readonly loadKey: string; readonly load: EvidenceLoader; readonly evidence: Evidence
+}) {
   const [attempt, setAttempt] = useState(0)
   const previewable = imageTypes.includes(evidence.content_type) || evidence.content_type === 'application/pdf'
   if (!previewable) return null
-  return <EvidenceViewer key={attempt} orderId={orderId} evidence={evidence} onRetry={() => setAttempt((value) => value + 1)} />
+  return <EvidenceViewer key={`${loadKey}/${attempt}`} load={load} evidence={evidence} onRetry={() => setAttempt((value) => value + 1)} />
 }
