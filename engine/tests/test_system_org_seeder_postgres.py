@@ -22,7 +22,7 @@ LEFTOVERS = (
     "SELECT (SELECT count(*) FROM tenants WHERE slug IN ('kabers','maraclaw')) AS tenants, "
     "(SELECT count(*) FROM identities WHERE email=%(email)s) AS identities"
 )
-SYSTEM_TENANTS = "SELECT slug, tier, xmin::text AS version FROM tenants WHERE is_system ORDER BY slug"
+SYSTEM_TENANTS = "SELECT slug, tier, phone, xmin::text AS version FROM tenants WHERE is_system ORDER BY slug"
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +64,7 @@ async def test_fresh_database_seeds_maraclaw_ultra_and_kabers_pro_and_a_rerun_wr
     assert await tier_for_tenant(kabers.id) is OrganizationPlanId.PRO
     rows = await _system_tenants(db)
     assert [(row["slug"], row["tier"]) for row in rows] == [("kabers", "pro"), ("maraclaw", "ultra")]
+    assert [row["phone"] for row in rows] == [None, None]
     assert await db.fetchval("SELECT count(*) FROM organization_admission_requests") == admissions_before
 
     again_maraclaw, again_kabers = await seeder.ensure_system_orgs()

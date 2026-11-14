@@ -1944,6 +1944,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "orjson" },
     { name = "passlib", extra = ["bcrypt"] },
+    { name = "phonenumbers" },
     { name = "pillow" },
     { name = "psycopg" },
     { name = "psycopg-binary" },
@@ -2028,6 +2029,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "orjson", specifier = ">=3.13.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
+    { name = "phonenumbers", specifier = ">=9.0.43" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "psycopg", specifier = ">=3.3.9" },
     { name = "psycopg-binary", specifier = ">=3.3.9" },
@@ -2045,7 +2047,7 @@ requires-dist = [
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.5.0" },
     { name = "python-multipart", specifier = ">=0.0.33" },
     { name = "python-pptx", specifier = ">=1.0.2" },
-    { name = "pywhales", specifier = ">=1.2.5" },
+    { name = "pywhales", specifier = ">=1.3.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", extras = ["hiredis"], specifier = ">=8.1.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.5" },
@@ -2485,6 +2487,15 @@ wheels = [
 [package.optional-dependencies]
 bcrypt = [
     { name = "bcrypt" },
+]
+
+[[package]]
+name = "phonenumbers"
+version = "9.0.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/d5/b3ad857b2cdd09c806436b48d2c9afcdde2673475b1a894f74da0db32e75/phonenumbers-9.0.43.tar.gz", hash = "sha256:d4e508ab800c3e5ce219b14be339deb3d55a0ab81af82fea44749fcabd01e908", size = 2314544, upload-time = "2026-11-06T11:43:26.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/4c/b33a2189464f0f67215e9c8401cb2931ad3ab3f7c8060929f84fe4970544/phonenumbers-9.0.43-py2.py3-none-any.whl", hash = "sha256:349bc799f15e010e35bd2c7d28149950ae74479cb1e11fb054ed9a95ecb4b437", size = 2596726, upload-time = "2026-11-06T11:43:23.63Z" },
 ]
 
 [[package]]
@@ -3081,7 +3092,7 @@ wheels = [
 
 [[package]]
 name = "pywhales"
-version = "1.2.5"
+version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -3090,9 +3101,9 @@ dependencies = [
     { name = "s3transfer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/34/3c42e79a7f2cfcda90a98aeac38dd10486595dc8e51a23399a639367be29/pywhales-1.2.5.tar.gz", hash = "sha256:7d7c522818f3076b6f40c8700a6bb0cd9d87171dd1af6f012c167bed0be7408c", size = 458169, upload-time = "2026-11-12T09:47:59.082Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/71/fc74c26c2fde3af44bb55987c17335e1c192bca550ac0a580dfc025dd1c3/pywhales-1.3.0.tar.gz", hash = "sha256:21e50900911305aa2355f93e6452da9ecdbb40044a0757c074db350c3615e198", size = 521421, upload-time = "2026-11-14T15:02:08.295Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/3e/73ba4f3b3e294c910f36ee85bf857e7f0c169359bc568a298fd194bc0cc7/pywhales-1.2.5-py3-none-any.whl", hash = "sha256:0b750e8359231cee6d4e89c23b6c9cd7e105a57c751c59d6bc35c43b3e8a4cdf", size = 361303, upload-time = "2026-11-12T09:47:57.431Z" },
+    { url = "https://files.pythonhosted.org/packages/99/a5/02e4b4033ab802f0843babf3b281df576e39849d9ac699af19646f49cbf8/pywhales-1.3.0-py3-none-any.whl", hash = "sha256:487f59c6ae75392fab097e884b0b23ac3413c1cce4d6960b2e6aa0ea84f37e32", size = 424630, upload-time = "2026-11-14T15:02:06.462Z" },
 ]
 
 [[package]]

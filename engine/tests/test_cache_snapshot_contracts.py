@@ -283,6 +283,7 @@ def test_tenant_producer_matches_serialized_contract(populated: bool) -> None:
             is_system=True,
             is_default_end_user_org=True,
             tier=OrganizationPlanId.PRO,
+            phone="+84912345678",
         )
         if populated
         else TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)

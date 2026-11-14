@@ -2045,7 +2045,11 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
     monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
     with pytest.raises(AdminEmailTakenError):
         await tp.create_tenant_with_org_admin(
-            tier=OrganizationPlanId.PRO, name="Acme", admin_email="oa@acme.com", admin_password="secret1"
+            tier=OrganizationPlanId.PRO,
+            name="Acme",
+            phone="+84912345678",
+            admin_email="oa@acme.com",
+            admin_password="secret1",
         )
 
     monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=None))
@@ -2056,7 +2060,11 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         with pytest.raises(RuntimeError):
             await tp.create_tenant_with_org_admin(
-                tier=OrganizationPlanId.PRO, name="Acme", admin_email="oa@acme.com", admin_password="secret1"
+                tier=OrganizationPlanId.PRO,
+                name="Acme",
+                phone="+84912345678",
+                admin_email="oa@acme.com",
+                admin_password="secret1",
             )
 
 

@@ -95,6 +95,7 @@ def _dump(tenant: TenantRecord, ver: str) -> TenantSnapshot:
         ),
         "is_system": tenant.is_system,
         "is_default_end_user_org": tenant.is_default_end_user_org,
+        "phone": tenant.phone,
     }
 
 
@@ -137,6 +138,7 @@ def _load(data: object) -> TenantRecord | None:
         default_fallback_model_id=_parse_uuid(payload.get("default_fallback_model_id")),
         is_system=json_as_bool(payload.get("is_system")),
         is_default_end_user_org=json_as_bool(payload.get("is_default_end_user_org")),
+        phone=json_as_str(payload.get("phone")),
     )
 
 

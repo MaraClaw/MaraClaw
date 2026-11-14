@@ -24,6 +24,7 @@ from app.records.user import UserRecord
 
 _BASE = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 _PAGE = "/api/admin/companies/page"
+_PHONE = "+84912345678"
 
 
 def _tenant(number: int, tier: OrganizationPlanId = OrganizationPlanId.PRO, **kwargs: Any) -> TenantRecord:
@@ -65,7 +66,7 @@ def principal(monkeypatch) -> UserRecord:
 @pytest.fixture
 def pages(monkeypatch) -> dict[str, AsyncMock]:
     tenants = [
-        _tenant(1, OrganizationPlanId.MAX),
+        _tenant(1, OrganizationPlanId.MAX, phone=_PHONE),
         _tenant(2, OrganizationPlanId.PRO),
         _tenant(3, OrganizationPlanId.ULTRA),
     ]
@@ -180,12 +181,27 @@ async def test_company_rows_carry_the_tier_of_their_tenant_row(client, principal
     assert [row["tier"] for row in unpaged] == ["max", "pro", "ultra"]
 
 
+async def test_company_rows_carry_the_contact_phone_of_their_tenant_row(client, principal, pages):
+    headers = {"Authorization": "Bearer t"}
+
+    # When a page, one company's stats and the unpaged list are read (the other tenants have no phone).
+    page = (await client.get(_PAGE, params={"limit": 3}, headers=headers)).json()
+    single = (await client.get(f"/api/admin/companies/{UUID(int=1)}/stats", headers=headers)).json()
+    unpaged = (await client.get("/api/admin/companies", headers=headers)).json()
+
+    # Then every row carries the phone stored on its tenant, or null.
+    assert [row["phone"] for row in page["items"]] == [_PHONE, None, None]
+    assert single["phone"] == _PHONE
+    assert [row["phone"] for row in unpaged] == [_PHONE, None, None]
+
+
 async def test_options_are_stats_free_and_stats_route_reports_404(client, principal, pages):
     headers = {"Authorization": "Bearer t"}
     options = (await client.get("/api/admin/companies/options", headers=headers)).json()
     assert [row["id"] for row in options] == [str(UUID(int=n)) for n in (1, 2, 3)]
     assert "user_count" not in options[0]
     assert "tier" not in options[0]
+    assert "phone" not in options[0]
     assert options[0]["can_disable"] is True
     pages["usage_stats"].assert_not_awaited()
 

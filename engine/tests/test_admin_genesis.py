@@ -30,6 +30,8 @@ from app.records.user import UserRecord
 from app.schemas.schemas import TokenResponse
 from app.services import system_org_seeder as org_seeder, tenant_provisioning
 
+PHONE = "+84912345678"
+
 
 def _dummy_request() -> Request:
     return Request(
@@ -308,6 +310,7 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
         name="Acme",
         slug="acme-abc",
         tier=OrganizationPlanId.MAX,
+        phone=PHONE,
         is_active=True,
         created_at=None,
     )
@@ -326,6 +329,7 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
         admin_api.CompanyCreateRequest(
             name="Acme",
             tier=OrganizationPlanId.MAX,
+            phone="+84 912 345 678",
             admin_email="orgadmin@acme.com",
             admin_password="temp-password",
             admin_display_name="Org Admin",
@@ -338,24 +342,48 @@ async def test_create_company_provisions_genesis_org_admin(monkeypatch):
     assert result.company.id == tenant_id
     assert result.company.user_count == 1
     assert result.company.tier is OrganizationPlanId.MAX
+    assert result.company.phone == PHONE
     create.assert_awaited_once_with(
         tier=OrganizationPlanId.MAX,
         name="Acme",
+        phone=PHONE,
         admin_email="orgadmin@acme.com",
         admin_password="temp-password",
         admin_display_name="Org Admin",
     )
     assert audit.await_args is not None
     assert audit.await_args.kwargs["changes"]["tier"] == {"before": None, "after": "max"}
+    assert audit.await_args.kwargs["changes"]["phone"] == {"before": None, "after": PHONE}
 
 
 @pytest.mark.parametrize("fields", [{}, {"tier": "enterprise"}, {"tier": None}, {"tier": ""}])
 def test_company_create_request_requires_a_known_tier(fields):
     with pytest.raises(ValidationError) as exc:
         _ = admin_api.CompanyCreateRequest.model_validate(
-            {"name": "Acme", "admin_email": "orgadmin@acme.com", "admin_password": "temp-password", **fields}
+            {
+                "name": "Acme",
+                "phone": PHONE,
+                "admin_email": "orgadmin@acme.com",
+                "admin_password": "temp-password",
+                **fields,
+            }
         )
     assert [error["loc"] for error in exc.value.errors()] == [("tier",)]
+
+
+@pytest.mark.parametrize("fields", [{}, {"phone": None}, {"phone": "+84123"}, {"phone": "0912345678"}])
+def test_company_create_request_requires_a_valid_phone(fields):
+    with pytest.raises(ValidationError) as exc:
+        _ = admin_api.CompanyCreateRequest.model_validate(
+            {
+                "name": "Acme",
+                "tier": "pro",
+                "admin_email": "orgadmin@acme.com",
+                "admin_password": "temp-password",
+                **fields,
+            }
+        )
+    assert [error["loc"] for error in exc.value.errors()] == [("phone",)]
 
 
 @pytest.mark.asyncio
@@ -373,6 +401,7 @@ async def test_create_company_rejects_claimed_admin_domain(monkeypatch):
             admin_api.CompanyCreateRequest(
                 name="Marathon",
                 tier=OrganizationPlanId.PRO,
+                phone=PHONE,
                 admin_email="techadmin@marathon.vn",
                 admin_password="temp-password",
             ),
@@ -397,6 +426,7 @@ async def test_create_company_rejects_existing_admin_email(monkeypatch):
             admin_api.CompanyCreateRequest(
                 name="Acme",
                 tier=OrganizationPlanId.PRO,
+                phone=PHONE,
                 admin_email="taken@example.com",
                 admin_password="temp-password",
             ),

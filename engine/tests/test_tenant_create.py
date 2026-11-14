@@ -23,6 +23,8 @@ from app.services.tenant_provisioning import (
     slugify_tenant_name,
 )
 
+PHONE = "+84912345678"
+
 
 def _platform_user():
     return SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None, identity=None)
@@ -41,6 +43,7 @@ def _tenant_record(*, name="Acme", slug="acme-abc123", tier=OrganizationPlanId.P
         is_active=True,
         created_at=datetime.now(UTC),
         tier=tier,
+        phone=PHONE,
     )
 
 
@@ -51,6 +54,7 @@ async def test_create_tenant_rejects_non_platform_admin():
             tenants_api.TenantCreate(
                 name="Acme",
                 tier=OrganizationPlanId.PRO,
+                phone=PHONE,
                 admin_email="orgadmin@acme.com",
                 admin_password="temp-password",
             ),
@@ -78,6 +82,7 @@ async def test_create_tenant_provisions_org_admin(monkeypatch):
         tenants_api.TenantCreate(
             name="Acme",
             tier=OrganizationPlanId.ULTRA,
+            phone="+84 912 345 678",
             admin_email="orgadmin@acme.com",
             admin_password="temp-password",
             admin_display_name="Org Admin",
@@ -92,21 +97,44 @@ async def test_create_tenant_provisions_org_admin(monkeypatch):
     create.assert_awaited_once_with(
         tier=OrganizationPlanId.ULTRA,
         name="Acme",
+        phone=PHONE,
         admin_email="orgadmin@acme.com",
         admin_password="temp-password",
         admin_display_name="Org Admin",
     )
     assert audit.await_args is not None
     assert audit.await_args.kwargs["changes"]["tier"] == {"before": None, "after": "ultra"}
+    assert audit.await_args.kwargs["changes"]["phone"] == {"before": None, "after": PHONE}
 
 
 @pytest.mark.parametrize("fields", [{}, {"tier": "enterprise"}, {"tier": None}])
 def test_tenant_create_requires_a_known_tier(fields):
     with pytest.raises(ValidationError) as exc:
         _ = tenants_api.TenantCreate.model_validate(
-            {"name": "Acme", "admin_email": "orgadmin@acme.com", "admin_password": "temp-password", **fields}
+            {
+                "name": "Acme",
+                "phone": PHONE,
+                "admin_email": "orgadmin@acme.com",
+                "admin_password": "temp-password",
+                **fields,
+            }
         )
     assert [error["loc"] for error in exc.value.errors()] == [("tier",)]
+
+
+@pytest.mark.parametrize("fields", [{}, {"phone": None}, {"phone": "+84123"}, {"phone": "0912345678"}])
+def test_tenant_create_requires_a_valid_phone(fields):
+    with pytest.raises(ValidationError) as exc:
+        _ = tenants_api.TenantCreate.model_validate(
+            {
+                "name": "Acme",
+                "tier": "pro",
+                "admin_email": "orgadmin@acme.com",
+                "admin_password": "temp-password",
+                **fields,
+            }
+        )
+    assert [error["loc"] for error in exc.value.errors()] == [("phone",)]
 
 
 @pytest.mark.asyncio
@@ -121,6 +149,7 @@ async def test_create_tenant_rejects_existing_admin_email(monkeypatch):
             tenants_api.TenantCreate(
                 name="Acme",
                 tier=OrganizationPlanId.PRO,
+                phone=PHONE,
                 admin_email="taken@example.com",
                 admin_password="temp-password",
             ),
@@ -187,6 +216,7 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
         result = await create_tenant_with_org_admin(
             tier=OrganizationPlanId.MAX,
             name="Acme",
+            phone=PHONE,
             admin_email="OrgAdmin@acme.com",
             admin_password="temp-password",
             admin_display_name="Org Admin",
@@ -197,6 +227,7 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     create_tenant = tenant_provisioning.tenant_dao.create
     assert create_tenant.await_args is not None
     assert create_tenant.await_args.kwargs["obj_in"]["tier"] is OrganizationPlanId.MAX
+    assert create_tenant.await_args.kwargs["obj_in"]["phone"] == PHONE
     kwargs = create_identity.await_args.kwargs
     assert kwargs["email"] == "orgadmin@acme.com"
     assert kwargs["must_change_password"] is True
@@ -244,6 +275,7 @@ async def test_create_tenant_rejects_claimed_admin_domain(monkeypatch):
             tenants_api.TenantCreate(
                 name="Acme",
                 tier=OrganizationPlanId.PRO,
+                phone=PHONE,
                 admin_email="techadmin@marathon.vn",
                 admin_password="temp-password",
             ),
@@ -264,6 +296,7 @@ async def test_create_tenant_with_org_admin_rejects_existing_email(monkeypatch):
         await create_tenant_with_org_admin(
             tier=OrganizationPlanId.PRO,
             name="Acme",
+            phone=PHONE,
             admin_email="taken@example.com",
             admin_password="temp-password",
         )

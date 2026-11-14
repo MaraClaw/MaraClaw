@@ -113,6 +113,7 @@ _TENANT_COLUMNS = (
     "is_system",
     "is_default_end_user_org",
     "tier",
+    "phone",
 )
 
 

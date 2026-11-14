@@ -38,6 +38,7 @@ class CompanyStats(CompanyOption):
     cache_read_tokens_total: int = 0
     org_admin_email: str | None = None
     tier: OrganizationPlanId
+    phone: str | None = None
 
 
 class CompanyPageOut(BaseModel):

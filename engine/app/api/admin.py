@@ -51,6 +51,7 @@ from app.schemas.admin_metrics import (
     AdminTimeseriesPoint,
     AdminToolCategoryEntry,
 )
+from app.schemas.phone import PhoneNumber
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_audit_pagination import AdminAuditScope, list_admin_audit_page, parse_admin_audit_bound
 from app.services.admin_companies import (
@@ -89,6 +90,7 @@ router.include_router(transfer_policy_router)
 class CompanyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     tier: OrganizationPlanId
+    phone: PhoneNumber
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=128)
     admin_display_name: str | None = Field(default=None, max_length=200)
@@ -215,6 +217,7 @@ async def create_company(
         provisioned = await create_tenant_with_org_admin(
             tier=data.tier,
             name=data.name,
+            phone=data.phone,
             admin_email=str(data.admin_email),
             admin_password=data.admin_password,
             admin_display_name=data.admin_display_name,
@@ -234,6 +237,7 @@ async def create_company(
         changes={
             "name": field_change(None, tenant.name),
             "tier": field_change(None, tenant.tier.value),
+            "phone": field_change(None, tenant.phone),
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},
@@ -253,6 +257,7 @@ async def create_company(
             inactive_user_count=0,
             org_admin_email=provisioned.admin_email,
             tier=tenant.tier,
+            phone=tenant.phone,
         ),
         org_admin_email=provisioned.admin_email,
         must_change_password=True,

@@ -100,11 +100,12 @@ async def create_tenant_with_org_admin(
     *,
     tier: OrganizationPlanId,
     name: str,
+    phone: str,
     admin_email: str,
     admin_password: str,
     admin_display_name: str | None = None,
 ) -> ProvisionedTenant:
-    """Create a tenant of ``tier`` and its genesis org admin in one transaction.
+    """Create a tenant of ``tier`` with contact ``phone`` (E.164) and its genesis org admin in one transaction.
 
     The org admin must change the initial password after first login.
     """
@@ -121,7 +122,7 @@ async def create_tenant_with_org_admin(
     try:
         async with connection_ctx():
             tenant = await tenant_dao.create(
-                obj_in={"name": name, "slug": slug, "tier": tier, "im_provider": "web_only"}
+                obj_in={"name": name, "slug": slug, "tier": tier, "phone": phone, "im_provider": "web_only"}
             )
 
             identity = await identity_dao.create_identity(

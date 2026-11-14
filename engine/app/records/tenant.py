@@ -14,6 +14,7 @@ from app.core.json_types import (
     int_from_row,
     mapping_from_row,
     str_from_row,
+    str_from_row_opt,
     uuid_from_row,
     uuid_from_row_opt,
 )
@@ -50,6 +51,7 @@ class TenantRecord:
     default_fallback_model_id: UUID | None = None
     is_system: bool = False
     is_default_end_user_org: bool = False
+    phone: str | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> TenantRecord:
@@ -81,6 +83,7 @@ class TenantRecord:
             default_fallback_model_id=uuid_from_row_opt(row.get("default_fallback_model_id")),
             is_system=bool(row.get("is_system", False)),
             is_default_end_user_org=bool(row.get("is_default_end_user_org", False)),
+            phone=str_from_row_opt(row.get("phone")),
         )
 
     @property

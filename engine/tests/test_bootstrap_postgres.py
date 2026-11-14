@@ -25,6 +25,7 @@ from app.db.pool import EnginePool, close_pool, durable_pool, get_pool, init_poo
 from app.db.session import connection_ctx
 from app.main import app
 from app.scripts import bootstrap_db
+from organization_admission_fixtures import insert_admission_row
 
 
 @pytest.fixture
@@ -356,6 +357,7 @@ async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: D
     fresh_columns = await schema_db.fetchall(_ADMISSION_COLUMNS)
     assert [row["conname"] for row in fresh_constraints] == [
         "ck_organization_admission_name",
+        "ck_organization_admission_phone",
         "ck_organization_admission_provisioned",
     ]
     await schema_db.execute(
@@ -367,11 +369,7 @@ async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: D
         ("pending@example.com", "pending", None),
         ("approved@example.com", "approved", datetime.now(UTC)),
     ):
-        await schema_db.execute(
-            "INSERT INTO organization_admission_requests (id,email,tier,plan,status,reviewed_at) "
-            "VALUES (gen_random_uuid(),%(email)s,'pro','{\"id\":\"pro\"}'::jsonb,%(status)s,%(reviewed_at)s)",
-            {"email": email, "status": status, "reviewed_at": reviewed_at},
-        )
+        await insert_admission_row(schema_db, email=email, status=status, reviewed_at=reviewed_at)
     # When bootstrap upgrades it and then reruns.
     await bootstrap_db.main()
     await bootstrap_db.main()

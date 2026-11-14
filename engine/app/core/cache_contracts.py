@@ -84,3 +84,4 @@ class TenantSnapshot(TypedDict):
     default_fallback_model_id: str | None
     is_system: bool
     is_default_end_user_org: bool
+    phone: str | None

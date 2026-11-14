@@ -38,6 +38,7 @@ from app.schemas.organization_response_tenant import (
     TenantTokenUsageResponse,
     TokenUsageBucket,
 )
+from app.schemas.phone import PhoneNumber
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminGuardError,
@@ -73,6 +74,7 @@ async def get_client_ip(request: Request) -> str | None:
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     tier: OrganizationPlanId
+    phone: PhoneNumber
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=128)
     admin_display_name: str | None = Field(default=None, max_length=200)
@@ -227,6 +229,7 @@ async def create_tenant(
         provisioned = await create_tenant_with_org_admin(
             tier=data.tier,
             name=data.name,
+            phone=data.phone,
             admin_email=str(data.admin_email),
             admin_password=data.admin_password,
             admin_display_name=data.admin_display_name,
@@ -245,6 +248,7 @@ async def create_tenant(
         changes={
             "name": field_change(None, provisioned.tenant.name),
             "tier": field_change(None, provisioned.tenant.tier.value),
+            "phone": field_change(None, provisioned.tenant.phone),
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},
