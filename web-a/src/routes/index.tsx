@@ -30,12 +30,11 @@ const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) =>
 const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
 const OrganizationAdmissionsPage = lazy(() => import('@/pages/organization-admissions').then((module) => ({ default: module.OrganizationAdmissionsPage })))
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
-const TransferPaymentsPage = lazy(() => import('@/pages/transfer-payments').then((module) => ({ default: module.TransferPaymentsPage })))
+const PaymentsPage = lazy(() => import('@/pages/payments').then((module) => ({ default: module.PaymentsPage })))
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
 const AgentDeletionRequestsPage = lazy(() => import('@/pages/agent-deletion-requests').then((module) => ({ default: module.AgentDeletionRequestsPage })))
 const AgentDeletionRequestDetailPage = lazy(() => import('@/pages/agent-deletion-request-detail').then((module) => ({ default: module.AgentDeletionRequestDetailPage })))
 const CapacityOrderPage = lazy(() => import('@/pages/capacity-order').then((module) => ({ default: module.CapacityOrderPage })))
-const CapacityPaymentsPage = lazy(() => import('@/pages/capacity-payments').then((module) => ({ default: module.CapacityPaymentsPage })))
 const CapacityPaymentDetailPage = lazy(() => import('@/pages/capacity-payment-detail').then((module) => ({ default: module.CapacityPaymentDetailPage })))
 
 function BroadcastRoute() {
@@ -94,11 +93,12 @@ export function AppRouter() {
                 <Route path="agent-deletion-requests/:id" element={<AgentDeletionRequestDetailPage />} />
               </Route>
               <Route element={<TransferReviewRoute />}>
-                <Route path="transfer-payments" element={<TransferPaymentsPage />} />
+                <Route path="payments" element={<PaymentsPage />} />
+                <Route path="transfer-payments" element={<Navigate to="/payments" replace />} />
                 <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
               </Route>
               <Route element={<CapacityReviewRoute />}>
-                <Route path="capacity-payments" element={<CapacityPaymentsPage />} />
+                <Route path="capacity-payments" element={<Navigate to="/payments?tab=capacity" replace />} />
                 <Route path="capacity-payments/:orderId" element={<CapacityPaymentDetailPage />} />
               </Route>
               <Route element={<CapacityOrderRoute />}>

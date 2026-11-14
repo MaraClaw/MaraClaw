@@ -70,7 +70,7 @@ export async function runPayments(exercise) {
       }` : ''
       const tokenSetup = state.anonymous ? '' : "localStorage.setItem('maraclaw-admin-token','synthetic-payment-token');"
       await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `${tokenSetup}localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});${pollClock}` }, session)
-      const go = async (path = '/transfer-payments') => {
+      const go = async (path = '/payments') => {
         await page.goto(`${server.resolvedUrls.local[0]}${path.slice(1)}`)
         await manager.repin(tab.targetId, viewport)
         if (state.width === 390) await omowright.emulate(page, 'iphone-14')

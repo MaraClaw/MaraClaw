@@ -100,7 +100,7 @@ export function TransferPaymentDetailPage() {
   const detail = useTransferDetail(parsedId.success ? parsedId.data : null)
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
     <header className="flex flex-col gap-3">
-      <Button asChild variant="outline" className={`self-start ${transferActionClass}`}><Link to="/transfer-payments"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to transfer payments')}</Link></Button>
+      <Button asChild variant="outline" className={`self-start ${transferActionClass}`}><Link to="/payments"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to transfer payments')}</Link></Button>
       <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Transfer payment')}</h1>
     </header>
     {!parsedId.success ? <p role="alert" className="text-sm text-destructive">{t('This transfer payment request link is invalid.')}</p> : <>

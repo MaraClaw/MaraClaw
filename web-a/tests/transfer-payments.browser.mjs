@@ -6,7 +6,7 @@ await runPayments(async ({ scenario, capture, verify }) => {
     await scenario({ ...view, name: `payment-${view.width}-${view.theme}`, role: 'platform_admin' }, async ({ page, state, go, hold }) => {
       await go(); await visible(page.locator('main a[href^="/transfer-payments/"]'))
       verify('pending queue excludes free requests', await page.locator('main ul li').count(), 1)
-      verify('payment nav visible', await page.locator('nav a[href="/transfer-payments"]').count() > 0)
+      verify('payment nav visible', await page.locator('nav a[href="/payments"]').count() > 0)
       await capture(page, state, 'queue')
       await page.snapshot(); await page.locator('main a[href^="/transfer-payments/"]').click()
       await visible(page.locator('main input[type="checkbox"]'))
@@ -93,21 +93,21 @@ await runPayments(async ({ scenario, capture, verify }) => {
     { name: 'canonical-platform-flag', role: 'org_admin', platformFlag: true },
   ]) {
     await scenario(options, async ({ page, state, go }) => {
-      for (const path of ['/transfer-payments', `/transfer-payments/${state.row.id}`]) {
+      for (const path of ['/payments', `/transfer-payments/${state.row.id}`]) {
         await go(path)
         if (state.platformFlag && state.user.is_active) {
-          await visible(page.locator(path === '/transfer-payments' ? 'main a[href^="/transfer-payments/"]' : 'main input[type="checkbox"]'))
-          verify('canonical PA flag retains payment navigation', await page.locator('nav a[href="/transfer-payments"]').count() > 0)
+          await visible(page.locator(path === '/payments' ? 'main a[href^="/transfer-payments/"]' : 'main input[type="checkbox"]'))
+          verify('canonical PA flag retains payment navigation', await page.locator('nav a[href="/payments"]').count() > 0)
         } else {
           if (state.anonymous) await visible(page.locator('main input[type="email"]'))
           else await visible(page.locator('main h1').filter({ hasText: state.forcePassword ? /^Settings$/u : /^Overview$/u }))
           verify('denied direct route redirects', await page.evaluate(() => location.pathname), state.anonymous ? '/login' : state.forcePassword ? '/settings' : '/')
-          verify('denied reviewer has no payment navigation', await page.locator('nav a[href="/transfer-payments"]').count(), 0)
+          verify('denied reviewer has no payment navigation', await page.locator('nav a[href="/payments"]').count(), 0)
           verify('denied reviewer sends no transfer API requests', state.calls.filter((call) => call.path.startsWith('/api/company-admissions/transfers')).length, 0)
           if (state.user.role === 'org_admin' && state.user.is_genesis && !state.forcePassword && !state.platformFlag) verify('genesis admissions navigation remains available', await page.locator('nav a[href="/admission-approvals"]').count() > 0)
         }
         verify('payment eligibility needs no tenant lookup', state.calls.filter((call) => call.path === '/api/tenants/me').length, 0)
-        await capture(page, state, path === '/transfer-payments' ? 'list-access' : 'detail-access')
+        await capture(page, state, path === '/payments' ? 'list-access' : 'detail-access')
       }
     })
   }

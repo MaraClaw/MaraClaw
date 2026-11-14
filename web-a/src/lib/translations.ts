@@ -1587,6 +1587,8 @@ export const vietnamese = {
   'Capacity payment review is not available for this account.': 'Tài khoản này không được xét duyệt thanh toán mua thêm.',
   'Capacity payment settings are available to the genesis platform admin only.': 'Chỉ quản trị viên nền tảng khởi tạo mới dùng được cài đặt thanh toán mua thêm.',
   'Download PDF': 'Tải xuống PDF',
+  'Organization transfers': 'Chuyển tổ chức',
+  'Payment sections': 'Các mục thanh toán',
 } as const
 
 export type MessageKey = keyof typeof vietnamese

@@ -17,7 +17,7 @@ import { formatVnd } from '@/lib/capacity-format'
 import { ApiError } from '@/lib/http'
 import { CapacityPaymentSettingsSection } from './capacity-payment-settings'
 
-export function CapacityPaymentsPage() {
+export function CapacityPaymentsPanel() {
   const { t, locale, date, distance, number } = useTranslation()
   const { canManageSettings } = useCapacityAccess()
   const filterId = useId()
@@ -28,10 +28,6 @@ export function CapacityPaymentsPage() {
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    <header>
-      <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Capacity payments')}</h1>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t('Check bank transfers for extra accounts and agents. Approving a payment raises that company’s limits.')}</p>
-    </header>
     {canManageSettings ? <CapacityPaymentSettingsSection /> : null}
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex flex-col gap-2">

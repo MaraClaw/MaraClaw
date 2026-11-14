@@ -36,23 +36,27 @@ for (const [label, user, expected] of cases) {
   })
 }
 
-test('the review nav entry is distinct from Payments and gated like its route', () => {
+test('one Payments nav entry covers both review queues and is gated like its route', () => {
   const shell = readFileSync(new URL('../src/components/layout/admin-shell.tsx', import.meta.url), 'utf8')
   const entries = [...(shell.match(/const navItems:[\s\S]*?=\s*\[([\s\S]*?)\n\]/)?.[1] ?? '').matchAll(/\{\s*to:\s*'([^']+)'([^{}]*)\}/g)]
-  const capacity = entries.find((entry) => entry[1] === '/capacity-payments')
+  const payments = entries.filter((entry) => entry[1] === '/payments')
   const labels = entries.map((entry) => /label:\s*'([^']+)'/.exec(entry[2] ?? '')?.[1])
-  assert.match(capacity?.[2] ?? '', /label:\s*'Capacity payments'/)
-  assert.match(capacity?.[2] ?? '', /capacityReviewOnly:\s*true/)
+  assert.equal(payments.length, 1)
+  assert.match(payments[0]?.[2] ?? '', /label:\s*'Payments'/)
+  assert.match(payments[0]?.[2] ?? '', /paymentReviewOnly:\s*true/)
+  assert.equal(entries.some((entry) => entry[1] === '/capacity-payments' || entry[1] === '/transfer-payments'), false)
   assert.equal(new Set(labels).size, labels.length)
   assert.equal(entries.some((entry) => entry[1] === '/capacity-orders'), false)
-  assert.match(shell, /capacityReviewOnly && !canReviewCapacityPayments\(user\)/)
+  assert.match(shell, /paymentReviewOnly && !paymentAccess\.canReview/)
+  assert.doesNotMatch(shell, /capacityReviewOnly/)
 })
 
 test('the routes use the same predicates as the nav and the order page stays out of the nav', () => {
   const routes = readFileSync(new URL('../src/routes/index.tsx', import.meta.url), 'utf8')
   assert.match(routes, /function CapacityReviewRoute\(\)[\s\S]*?canReviewCapacityPayments\(user\) \? <Outlet \/> : <Navigate to="\/" replace \/>/)
   assert.match(routes, /function CapacityOrderRoute\(\)[\s\S]*?canViewCapacityOrders\(user\) \? <Outlet \/> : <Navigate to="\/" replace \/>/)
-  assert.match(routes, /<Route element=\{<CapacityReviewRoute \/>\}>\s*<Route path="capacity-payments" element=\{<CapacityPaymentsPage \/>\} \/>\s*<Route path="capacity-payments\/:orderId" element=\{<CapacityPaymentDetailPage \/>\} \/>/)
+  assert.match(routes, /<Route element=\{<TransferReviewRoute \/>\}>\s*<Route path="payments" element=\{<PaymentsPage \/>\} \/>\s*<Route path="transfer-payments" element=\{<Navigate to="\/payments" replace \/>\} \/>\s*<Route path="transfer-payments\/:id" element=\{<TransferPaymentDetailPage \/>\} \/>/)
+  assert.match(routes, /<Route element=\{<CapacityReviewRoute \/>\}>\s*<Route path="capacity-payments" element=\{<Navigate to="\/payments\?tab=capacity" replace \/>\} \/>\s*<Route path="capacity-payments\/:orderId" element=\{<CapacityPaymentDetailPage \/>\} \/>/)
   assert.match(routes, /<Route element=\{<CapacityOrderRoute \/>\}>\s*<Route path="capacity-orders\/:orderId" element=\{<CapacityOrderPage \/>\} \/>/)
 })
 

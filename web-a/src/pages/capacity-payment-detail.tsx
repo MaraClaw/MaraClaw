@@ -122,7 +122,7 @@ export function CapacityPaymentDetailPage() {
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
     <header className="flex flex-col gap-3">
-      <Button asChild variant="outline" className={`self-start ${capacityActionClass}`}><Link to="/capacity-payments"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to capacity payments')}</Link></Button>
+      <Button asChild variant="outline" className={`self-start ${capacityActionClass}`}><Link to="/payments?tab=capacity"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to capacity payments')}</Link></Button>
       <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Capacity payment')}</h1>
     </header>
     {!parsedId.success ? <p role="alert" className="text-sm text-destructive">{t('This payment link is invalid.')}</p> : <>

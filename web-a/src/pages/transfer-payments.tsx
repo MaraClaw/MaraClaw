@@ -15,7 +15,7 @@ import { ApiError } from '@/lib/http'
 import { transferReviewViewSchema, type TransferReviewView } from '@/lib/transfer-reviews-api'
 import { transferActionClass, transferFeeLabel, transferStatusLabels, transferStatusVariants } from './transfer-payment-labels'
 
-export function TransferPaymentsPage() {
+export function TransferPaymentsPanel() {
   const { t, locale, date, distance, number } = useTranslation()
   const filterId = useId()
   const client = useQueryClient()
@@ -32,10 +32,6 @@ export function TransferPaymentsPage() {
   }
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    <header>
-      <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Transfer payments')}</h1>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t('Check payments for requests to leave the default organization. Approval creates a destination admission request; it does not move the member.')}</p>
-    </header>
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor={filterId}>{t('Payment requests')}</Label>
