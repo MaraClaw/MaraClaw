@@ -36,6 +36,28 @@ for (const detail of ['  <html>Bad Gateway</html>', 'Proxy failed: <h1>502</h1>'
   })
 }
 
+test('a 507 workspace disk quota refusal shows the engine message while other 5xx details stay hidden', async () => {
+  const detail = {
+    code: 'workspace_disk_quota_exceeded', used_bytes: 2_700_000_000, limit_bytes: 2_684_354_560,
+    message: "This agent's workspace is using 2.51 GiB of its 2.50 GiB disk allowance. Delete files to continue.",
+  }
+  const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
+  const refuse = (status: number) => createHttpClient(session, () => Promise.resolve(Response.json({ detail }, { status })),
+    (path) => `https://api.example${path}`).apiRequest('/resource')
+
+  await assert.rejects(refuse(507), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 507)
+    assert.deepEqual(error.detail, detail)
+    assert.equal(userFacingRequestError(error, 'Unable to run task'), detail.message)
+    return true
+  })
+  await assert.rejects(refuse(503), (error: unknown) => {
+    assert.equal(userFacingRequestError(error, 'Unable to run task'), 'Unable to run task')
+    return true
+  })
+})
+
 test('HTTP display formatting retains readable validation and domain details', () => {
   assert.equal(formatApiDetail({ detail: [{ msg: 'Email is required' }, { msg: 'Password is required' }] }), 'Email is required Password is required')
   const detail = { code: 'conflict', message: 'This name is already in use.' }

@@ -32,7 +32,8 @@ export class ApiError extends Error {
 
 export function userFacingRequestError(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback
-  if (error.status >= 500) return fallback
+  // 507 is the engine's storage and workspace-disk quota refusal; its detail names what to free up.
+  if (error.status >= 500 && error.status !== 507) return fallback
   const detail = formatApiDetail(error.detail)
   if (!detail) return fallback
   if (/^request failed \(\d+\)$/i.test(detail) || detail.startsWith('<') || detail.length > 180) {
