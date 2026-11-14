@@ -235,6 +235,9 @@ class Settings(BaseSettings):
     # storage against its limits and records episodes at or above the threshold ratio (tier-upsell evidence).
     AGENT_RESOURCE_PRESSURE_INTERVAL_SECONDS: float = Field(default=300.0, ge=30, le=86400, allow_inf_nan=False)
     AGENT_RESOURCE_PRESSURE_THRESHOLD: float = Field(default=0.9, gt=0, le=1, allow_inf_nan=False)
+    # Seconds between passes of the worker that expires stale capacity orders and creates each company's monthly
+    # renewal of paid extra accounts and agents (idempotent, so a shorter interval only retries sooner).
+    CAPACITY_RENEWAL_INTERVAL_SECONDS: float = Field(default=3600.0, ge=30, le=86400, allow_inf_nan=False)
     # Personal WhatsApp burst batching: originals join one turn after a quiet window, bounded by the max window.
     # Pending limits exclude the one in-flight batch; the body limit is the joined UTF-8 size of one batch.
     WHATSAPP_PERSONAL_BURST_QUIET_SECONDS: float = Field(default=2.0, gt=0, le=3600, allow_inf_nan=False)

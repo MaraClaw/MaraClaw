@@ -28,6 +28,7 @@ from app.records.org import OrgMemberRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.seed_registration_contracts import DuplicateIdentityConflict, DuplicateIdentityResult
+from app.services.company_capacity import require_account_slot
 from app.services.sso_service import sso_service
 from app.services.system_email_service import SystemEmailConfig, resolve_email_config_async
 
@@ -180,6 +181,7 @@ class RegistrationService:
         is_active = identity.email_verified
         if not email_config:
             is_active = True  # Auto-activate when no SMTP configured
+        is_active = is_active or identity.is_platform_admin
 
         quota: dict[str, Any] = {}
         if tenant_id is not None:
@@ -195,6 +197,8 @@ class RegistrationService:
         async with optional_connection_ctx() as db:
             if db is not None:
                 await lock_tenants(db, (tenant_id,))
+                if is_active and role != UserRole.PLATFORM_ADMIN:
+                    await require_account_slot(db, tenant_id)
             user = await user_dao.create(
                 obj_in={
                     "identity_id": identity.id,
@@ -202,7 +206,7 @@ class RegistrationService:
                     "display_name": name,
                     "role": role,
                     "registration_source": registration_source,
-                    "is_active": is_active or identity.is_platform_admin,
+                    "is_active": is_active,
                     **quota,
                 }
             )

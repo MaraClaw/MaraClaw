@@ -611,7 +611,7 @@ async def test_a_page_pass_opens_extends_and_closes_episodes_and_records_a_kill_
     )
     await scenario.db.execute(
         "INSERT INTO agent_storage_usage (agent_id, charged_bytes) VALUES (%(id)s, %(b)s)",
-        {"id": agent_id, "b": GIB * 99 // 100},
+        {"id": agent_id, "b": 2 * GIB * 99 // 100},
     )
     guest = _Guest(agent_id, container_id)
     monkeypatch.setattr(pressure, "inspect_guests", guest.inspect)

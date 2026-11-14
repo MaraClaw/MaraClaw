@@ -865,6 +865,7 @@ async def _seed_default_org_admin(monkeypatch: pytest.MonkeyPatch) -> _SeededAcc
     accounts.install(monkeypatch)
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
+    monkeypatch.setattr(tenant_provisioning, "require_account_slot", AsyncMock())
     monkeypatch.setattr(org_seeder, "get_settings", lambda: _default_admin_env("Owner@Example.com", "initial-secret"))
     await org_seeder._ensure_default_org_admin(accounts.tenant)
     return accounts

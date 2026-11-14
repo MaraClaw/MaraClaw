@@ -240,7 +240,7 @@ async def test_reports_the_tier_cap_as_effective_limit_only_for_the_linked_tenan
     )
     after = await client.get("/api/users/page", params={"limit": 100})
     page = users_api.UsersPageOut.model_validate_json(after.content)
-    assert {item.effective_max_agents for item in page.items} == {10}
+    assert {item.effective_max_agents for item in page.items} == {5}
 
 
 async def test_joins_identity_when_search_match_lies_beyond_first_page(

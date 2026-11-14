@@ -598,6 +598,80 @@ CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
 CREATE INDEX IF NOT EXISTS ix_organization_admission_emails_due
     ON organization_admission_credential_emails (available_at, request_id) WHERE status = 'pending';
 
+-- Paid extra accounts and agents: one row per purchase or monthly renewal of a tiered company (the ledger behind
+-- capacity_ledger.effective_extras). Prices, the VND rate and the bank recipient are snapshotted at creation.
+CREATE TABLE IF NOT EXISTS capacity_orders (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    reference VARCHAR(10) NOT NULL CHECK (reference ~ '^MC[A-Z2-7]{8}$'),
+    kind VARCHAR(16) NOT NULL CHECK (kind IN ('purchase','renewal')),
+    status VARCHAR(24) NOT NULL DEFAULT 'awaiting_payment'
+        CHECK (status IN ('awaiting_payment','submitted','approved','rejected','cancelled','expired')),
+    source_order_id UUID REFERENCES capacity_orders(id) ON DELETE CASCADE,
+    tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
+    billing_month DATE NOT NULL CHECK (EXTRACT(DAY FROM billing_month) = 1),
+    extra_accounts INTEGER NOT NULL CHECK (extra_accounts >= 0),
+    extra_agents INTEGER NOT NULL CHECK (extra_agents >= 0),
+    account_unit_usd INTEGER NOT NULL CHECK (account_unit_usd >= 0),
+    agent_unit_usd INTEGER NOT NULL CHECK (agent_unit_usd >= 0),
+    days_charged INTEGER NOT NULL,
+    days_in_month INTEGER NOT NULL,
+    amount_usd_cents BIGINT NOT NULL CHECK (amount_usd_cents >= 0),
+    usd_vnd_rate INTEGER NOT NULL CHECK (usd_vnd_rate > 0),
+    amount_vnd BIGINT NOT NULL CHECK (amount_vnd >= 0),
+    recipient JSONB NOT NULL CHECK (jsonb_typeof(recipient) = 'object'),
+    grace_until DATE,
+    evidence_storage_key TEXT,
+    evidence_content_type VARCHAR(100),
+    evidence_filename VARCHAR(255),
+    evidence_size_bytes BIGINT,
+    evidence_sha256 CHAR(64),
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    submitted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    submitted_at TIMESTAMPTZ,
+    reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ,
+    review_note TEXT,
+    CONSTRAINT ck_capacity_orders_quantities CHECK (extra_accounts + extra_agents > 0),
+    CONSTRAINT ck_capacity_orders_days CHECK (
+        days_in_month BETWEEN 28 AND 31 AND days_charged BETWEEN 1 AND days_in_month),
+    -- A purchase is prorated and has no grace; a renewal bills the whole month and always has one.
+    CONSTRAINT ck_capacity_orders_kind CHECK (
+        (kind = 'purchase' AND grace_until IS NULL AND source_order_id IS NULL)
+        OR (kind = 'renewal' AND grace_until IS NOT NULL AND days_charged = days_in_month)),
+    CONSTRAINT ck_capacity_orders_evidence CHECK (
+        (evidence_storage_key IS NULL AND evidence_content_type IS NULL AND evidence_filename IS NULL
+            AND evidence_size_bytes IS NULL AND evidence_sha256 IS NULL)
+        OR (evidence_storage_key IS NOT NULL AND evidence_content_type IS NOT NULL AND evidence_filename IS NOT NULL
+            AND evidence_size_bytes > 0 AND evidence_sha256 IS NOT NULL)),
+    CONSTRAINT ck_capacity_orders_status CHECK (
+        (status IN ('awaiting_payment','cancelled','expired')
+            AND evidence_storage_key IS NULL AND submitted_at IS NULL AND submitted_by IS NULL
+            AND reviewed_at IS NULL AND reviewed_by IS NULL AND review_note IS NULL)
+        OR (status = 'submitted'
+            AND evidence_storage_key IS NOT NULL AND submitted_at IS NOT NULL
+            AND reviewed_at IS NULL AND reviewed_by IS NULL AND review_note IS NULL)
+        OR (status IN ('approved','rejected')
+            AND evidence_storage_key IS NOT NULL AND submitted_at IS NOT NULL AND reviewed_at IS NOT NULL)),
+    CONSTRAINT ck_capacity_orders_rejection_note CHECK (status <> 'rejected' OR review_note IS NOT NULL),
+    CONSTRAINT ck_capacity_orders_cancelled_purchase CHECK (status <> 'cancelled' OR kind = 'purchase')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_reference ON capacity_orders(reference);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_source
+    ON capacity_orders(source_order_id) WHERE source_order_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_primary_renewal
+    ON capacity_orders(tenant_id, billing_month) WHERE kind = 'renewal' AND source_order_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_open_purchase
+    ON capacity_orders(tenant_id) WHERE kind = 'purchase' AND status = 'awaiting_payment';
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_month ON capacity_orders(tenant_id, billing_month, status);
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_created ON capacity_orders(tenant_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_status_created ON capacity_orders(status, created_at DESC, id DESC);
+-- The renewal worker scans approved orders of the previous month and expires awaiting orders of earlier months.
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_month_approved
+    ON capacity_orders(billing_month, tenant_id) WHERE status = 'approved';
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_expiry ON capacity_orders(billing_month) WHERE status = 'awaiting_payment';
+
 CREATE TABLE IF NOT EXISTS company_transfer_requests (
     id UUID PRIMARY KEY,
     applicant_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -72,6 +72,7 @@ from app.schemas.schemas import (
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.autonomy_service import autonomy_service
+from app.services.capacity_payment_settings import RESERVED_SETTING_KEYS
 from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ChatGPTSubscriptionRefreshOut,
@@ -87,6 +88,7 @@ from app.services.chatgpt_subscription_types import (
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
 )
+from app.services.company_capacity import require_account_slot
 from app.services.enterprise_llm import (
     assert_can_manage_model,
     assert_llm_pool_admin,
@@ -996,7 +998,7 @@ async def get_notification_bar_public() -> NotificationBarResponse:
 @router.get("/system-settings/{key}", response_model=None)
 async def get_system_setting(key: str, current_user: UserRecord = Depends(get_current_user)) -> SystemSettingResponse:
     """Get a system setting by key."""
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     _ = current_user
     setting = await system_setting_dao.get_by_key(key)
@@ -1013,7 +1015,7 @@ async def get_system_setting(key: str, current_user: UserRecord = Depends(get_cu
 async def update_system_setting(
     key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_user)
 ) -> SystemSettingResponse:
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     await get_current_admin(current_user)
     async with optional_connection_ctx():
@@ -1022,7 +1024,7 @@ async def update_system_setting(
 
 async def _update_system_setting(key: str, data: SettingUpdate, current_user: UserRecord) -> SystemSettingResponse:
     """Create or update a system setting."""
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
@@ -1546,6 +1548,13 @@ def _new_invitation_code() -> str:
     return new_invitation_code()
 
 
+async def _require_free_account(tenant_id: uuid.UUID) -> None:
+    """Advisory: refuse issuing invitations to a company with no free account; accepting one still enforces the cap."""
+    async with optional_connection_ctx() as db:
+        if db is not None:
+            await require_account_slot(db, tenant_id, lock=False)
+
+
 @router.post("/invitation-codes", response_model=None)
 async def create_invitation_codes(
     data: InvitationCodeCreate, current_user: UserRecord = Depends(get_current_user)
@@ -1559,6 +1568,7 @@ async def _create_invitation_codes(
 ) -> InvitationCodesCreatedResponse:
     """Batch-create invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
+    await _require_free_account(tenant_id)
     codes_created = []
     expires_at = invitation_expiry(data.ttl_hours)
     for _ in range(min(data.count, 100)):
@@ -1606,6 +1616,7 @@ async def _invite_users(
     await _ensure_invitation_email_enabled(tenant_id)
 
     base_url = await platform_service.get_public_base_url(request=request)
+    await _require_free_account(tenant_id)
 
     invited_count = 0
     expires_at = invitation_expiry(data.ttl_hours)

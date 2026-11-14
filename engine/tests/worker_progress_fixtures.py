@@ -33,6 +33,7 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
         "agent_workspace_quota",
         "agent_resource_pressure",
         "operational_log_retention",
+        "capacity_renewal",
     }
 )
 CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "transfer_cleanup"})

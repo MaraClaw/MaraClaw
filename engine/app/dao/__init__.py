@@ -17,6 +17,7 @@ from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.broadcast_history_dao import broadcast_history_dao
 from app.dao.broadcast_job_dao import broadcast_job_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
+from app.dao.capacity_order_dao import capacity_order_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -97,6 +98,7 @@ __all__ = [
     "broadcast_history_dao",
     "broadcast_job_dao",
     "broadcast_submission_dao",
+    "capacity_order_dao",
     "channel_config_dao",
     "channel_event_receipt_dao",
     "chat_message_dao",

@@ -22,7 +22,7 @@ __all__ = ["deletion_scenario", "quota_world"]
 LIMIT, CEILING = 1000, 400
 MIB, GIB = 1024 * 1024, 1024**3
 REAL_LIMITS = {
-    OrganizationPlanId.PRO: (1 * GIB, 25 * MIB),
+    OrganizationPlanId.PRO: (2 * GIB, 25 * MIB),
     OrganizationPlanId.MAX: (5 * GIB, 50 * MIB),
     OrganizationPlanId.ULTRA: (10 * GIB, 100 * MIB),
 }

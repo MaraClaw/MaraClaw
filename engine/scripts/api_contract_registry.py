@@ -30,11 +30,14 @@ from app.core.domain.users import UserRole
 from app.core.notification_kinds import NotificationKind
 from app.records.agent_deletion_request import CancelReason, DeletionStatus
 from app.records.agent_resource_pressure_episode import PressureKind, PressureResource
+from app.records.capacity_order import CapacityOrderKind, CapacityOrderStatus
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.company_transfer import TransferChoice, TransferStatus
 from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
+    OrganizationAnnualPriceUsd,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
@@ -42,7 +45,7 @@ from app.records.organization_plan import (
     OrganizationGuestMemoryBytes,
     OrganizationGuestMillicpus,
     OrganizationGuestPidsLimit,
-    OrganizationMaxAccounts,
+    OrganizationIncludedAgents,
     OrganizationPlanId,
     OrganizationPlanName,
     OrganizationStorageLimitBytes,
@@ -55,6 +58,7 @@ AUDITED_HTTP_MODULES = frozenset(
     f"app.api.{name}"
     for name in (
         "activity",
+        "admin_capacity",
         "admin_resource_pressure",
         "admin_search_analytics",
         "advanced",
@@ -68,6 +72,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "agentbay_control",
         "agents",
         "auth",
+        "capacity",
         "channel_catalog",
         "chat_sessions",
         "member_auth",
@@ -134,10 +139,12 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     TransferStatus,
     OrganizationPlanId,
     OrganizationPlanName,
+    OrganizationAnnualPriceUsd,
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationCurrency,
-    OrganizationMaxAccounts,
     OrganizationAgentLimit,
+    OrganizationIncludedAgents,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationStorageLimitBytes,
     OrganizationFileLimitBytes,
     OrganizationDailyAgentMessageLimit,
@@ -148,6 +155,8 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     OrganizationWorkspaceDiskBytes,
     PressureResource,
     PressureKind,
+    CapacityOrderKind,
+    CapacityOrderStatus,
     ChatRejectionReason,
     ChatEventType,
 )

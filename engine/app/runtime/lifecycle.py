@@ -140,6 +140,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as CACHE_INVALIDATION_BUDGET_SECONDS,
                 start_cache_invalidation_worker,
             )
+            from app.services.capacity_renewal_worker import (
+                progress_budget_seconds as capacity_renewal_budget_seconds,
+                start_capacity_renewal_worker,
+            )
             from app.services.chat_history_retention_worker import (
                 PROGRESS_BUDGET_SECONDS as CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
                 start_chat_history_retention_worker,
@@ -248,6 +252,12 @@ class Runtime:
                 start_agent_resource_pressure_worker(),
                 requirement="loop",
                 progress_budget_seconds=agent_resource_pressure_budget_seconds(),
+            )
+            self.tasks.start(
+                "capacity_renewal",
+                start_capacity_renewal_worker(),
+                requirement="loop",
+                progress_budget_seconds=capacity_renewal_budget_seconds(),
             )
             self.tasks.start(
                 "operational_log_retention",

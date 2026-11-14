@@ -40,11 +40,13 @@ async def test_submission_persists_normalized_snapshot_and_notifies_genesis_once
         "id": "max",
         "name": "Max",
         "currency": "USD",
-        "monthly_price_usd": 149,
+        "monthly_price_usd": 249,
+        "annual_price_usd": 2490,
         "included_accounts": 15,
-        "additional_account_monthly_usd": 5,
-        "max_accounts": 75,
-        "max_agents_per_account": 5,
+        "additional_account_monthly_usd": 4,
+        "max_agents_per_account": 3,
+        "included_agents": 5,
+        "additional_agent_monthly_usd": 49,
         "storage_limit_bytes": 5368709120,
         "max_file_size_bytes": 52428800,
         "daily_messages_per_agent": 200,
@@ -53,6 +55,10 @@ async def test_submission_persists_normalized_snapshot_and_notifies_genesis_once
         "guest_cpu_shares": 1536,
         "guest_pids_limit": 768,
         "workspace_disk_bytes": 5368709120,
+        "storage_addon_bytes": 10737418240,
+        "storage_addon_monthly_usd": 5,
+        "workspace_disk_addon_bytes": 5368709120,
+        "workspace_disk_addon_monthly_usd": 3,
     }
     notes = await scenario.db.fetchall("SELECT user_id,type,link,ref_id,body FROM notifications")
     assert notes == [
@@ -143,7 +149,7 @@ async def test_review_pages_by_status_and_snapshot_survives_catalog_change(
         "buyer1@example.com",
         "buyer0@example.com",
     ]
-    assert {item["plan"]["monthly_price_usd"] for item in first["items"] + second["items"]} == {49}
+    assert {item["plan"]["monthly_price_usd"] for item in first["items"] + second["items"]} == {79}
     assert (await scenario.review(scenario.genesis, status="approved")).json() == {"items": [], "has_more": False}
 
 

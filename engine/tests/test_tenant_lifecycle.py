@@ -65,7 +65,7 @@ async def test_set_tenant_active_disables_members_agents_and_services(monkeypatc
     reactivate.assert_not_awaited()
 
     await set_tenant_active(tenant, is_active=True)
-    reactivate.assert_awaited_once_with(tenant.id)
+    reactivate.assert_awaited_once_with(tenant.id, limit=None)
 
 
 @pytest.mark.asyncio

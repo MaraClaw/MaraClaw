@@ -24,7 +24,8 @@ from tier_limit_fixtures import approve_admission_for
 __all__ = ["admission_scenario", "revocations", "transfer_scenario"]
 
 MIB = 1024 * 1024
-PRO_FILE, PRO_TOTAL = 25 * MIB, 1024 * MIB
+PRO_FILE, PRO_TOTAL = 25 * MIB, 2048 * MIB
+FULL_FILES = PRO_TOTAL // PRO_FILE
 
 
 async def hold_in_ledger(scenario: AdmissionScenario, agent: UUID, sizes: list[int]) -> None:
@@ -48,7 +49,9 @@ def provider() -> Iterator[S3Server]:
 
 
 @pytest.mark.parametrize(
-    "sizes", [[PRO_FILE] * 40 + [PRO_FILE - MIB + 1], [PRO_FILE + 1]], ids=["total-over", "largest-file-over"]
+    "sizes",
+    [[PRO_FILE] * FULL_FILES + [PRO_TOTAL - FULL_FILES * PRO_FILE + 1], [PRO_FILE + 1]],
+    ids=["total-over", "largest-file-over"],
 )
 async def test_an_agent_holding_more_than_the_destination_allows_refuses_the_transfer_before_any_write(
     transfer_scenario: AdmissionScenario, revocations: list[UUID], sizes: list[int]
@@ -75,7 +78,7 @@ async def test_exact_fit_transfers_and_later_writes_obey_the_destination_tier(
     scenario = transfer_scenario
     _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)
     agent = await seed_agent(scenario, "Exact")
-    await hold_in_ledger(scenario, agent, [PRO_FILE] * 40 + [PRO_TOTAL - 40 * PRO_FILE])
+    await hold_in_ledger(scenario, agent, [PRO_FILE] * FULL_FILES + [PRO_TOTAL - FULL_FILES * PRO_FILE])
     response = await approve(scenario, TransferChoice.PAID)
     assert response.status_code == 200, response.text
     assert await tenant_of(scenario, agent) == scenario.target_id

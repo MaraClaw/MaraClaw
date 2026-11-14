@@ -5,17 +5,7 @@ from uuid import UUID
 
 from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import datetime_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_from_row_opt
-from app.records.organization_plan import (
-    OrganizationFileLimitBytes,
-    OrganizationGuestCpuShares,
-    OrganizationGuestMemoryBytes,
-    OrganizationGuestMillicpus,
-    OrganizationGuestPidsLimit,
-    OrganizationPlan,
-    OrganizationPlanId,
-    OrganizationStorageLimitBytes,
-    OrganizationWorkspaceDiskBytes,
-)
+from app.records.organization_plan import OrganizationPlan, OrganizationPlanId
 
 
 @dataclass(slots=True)
@@ -39,26 +29,11 @@ class OrganizationAdmissionRecord:
         created_at = datetime_from_row(row["created_at"])
         if created_at is None:
             raise ValueError("Organization admission creation timestamp is required")
-        plan = row["plan"]
-        if isinstance(plan, dict):
-            for tier in OrganizationPlanId:
-                if plan.get("id") == tier.value:
-                    plan = {
-                        "storage_limit_bytes": OrganizationStorageLimitBytes[tier.name],
-                        "max_file_size_bytes": OrganizationFileLimitBytes[tier.name],
-                        "guest_memory_bytes": OrganizationGuestMemoryBytes[tier.name],
-                        "guest_millicpus": OrganizationGuestMillicpus[tier.name],
-                        "guest_cpu_shares": OrganizationGuestCpuShares[tier.name],
-                        "guest_pids_limit": OrganizationGuestPidsLimit[tier.name],
-                        "workspace_disk_bytes": OrganizationWorkspaceDiskBytes[tier.name],
-                        **plan,
-                    }
-                    break
         return cls(
             id=uuid_from_row(row["id"]),
             email=str_from_row(row["email"]),
             tier=OrganizationPlanId(str_from_row(row["tier"])),
-            plan=OrganizationPlan.model_validate(plan),
+            plan=OrganizationPlan.model_validate(row["plan"]),
             created_at=created_at,
             status=ApprovalStatus(str_from_row(row["status"])),
             reviewed_at=datetime_from_row(row.get("reviewed_at")),

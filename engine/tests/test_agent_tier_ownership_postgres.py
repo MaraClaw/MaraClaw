@@ -41,7 +41,7 @@ async def test_transfer_fills_exactly_to_the_tier_cap_and_refuses_the_overflow_a
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)
+    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.ULTRA)
     # The stored allowance (2) is stale: the recipient holds 3 and may take two more, not zero.
     for index in range(3):
         _ = await scenario.agent("target", f"Mine {index}")

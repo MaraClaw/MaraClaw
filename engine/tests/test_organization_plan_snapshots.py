@@ -7,7 +7,9 @@ from pydantic import TypeAdapter, ValidationError
 from app.records.organization_admission import OrganizationAdmissionRecord
 from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
+    OrganizationAnnualPriceUsd,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
@@ -15,7 +17,7 @@ from app.records.organization_plan import (
     OrganizationGuestMemoryBytes,
     OrganizationGuestMillicpus,
     OrganizationGuestPidsLimit,
-    OrganizationMaxAccounts,
+    OrganizationIncludedAgents,
     OrganizationPlan,
     OrganizationPlanId,
     OrganizationPlanName,
@@ -31,15 +33,57 @@ _GUEST_RESOURCE_FIELDS = (
     "guest_pids_limit",
     "workspace_disk_bytes",
 )
+_QUOTED_ENUM_FIELDS = ("annual_price_usd", "included_agents", "additional_agent_monthly_usd")
+_ADDON_FIELDS = (
+    "storage_addon_bytes",
+    "storage_addon_monthly_usd",
+    "workspace_disk_addon_bytes",
+    "workspace_disk_addon_monthly_usd",
+)
 
 
-def test_catalog_grants_two_five_and_ten_agents_per_account():
+def test_catalog_grants_two_three_and_five_agents_per_account():
     assert [(plan.id, plan.max_agents_per_account) for plan in ORGANIZATION_PLANS] == [
         (OrganizationPlanId.PRO, 2),
-        (OrganizationPlanId.MAX, 5),
-        (OrganizationPlanId.ULTRA, 10),
+        (OrganizationPlanId.MAX, 3),
+        (OrganizationPlanId.ULTRA, 5),
     ]
     assert [plan.max_agents_per_account for plan in ORGANIZATION_PLANS] == list(OrganizationAgentLimit)
+
+
+def test_catalog_quotes_included_agents_and_additional_agent_prices():
+    assert [(plan.id, plan.included_agents, plan.additional_agent_monthly_usd) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 2, 35),
+        (OrganizationPlanId.MAX, 5, 49),
+        (OrganizationPlanId.ULTRA, 10, 79),
+    ]
+    assert [plan.included_agents for plan in ORGANIZATION_PLANS] == list(OrganizationIncludedAgents)
+    assert [plan.additional_agent_monthly_usd for plan in ORGANIZATION_PLANS] == list(
+        OrganizationAdditionalAgentMonthlyUsd
+    )
+
+
+def test_catalog_quotes_the_same_storage_and_workspace_disk_addons_for_every_tier():
+    assert {
+        (
+            plan.storage_addon_bytes,
+            plan.storage_addon_monthly_usd,
+            plan.workspace_disk_addon_bytes,
+            plan.workspace_disk_addon_monthly_usd,
+        )
+        for plan in ORGANIZATION_PLANS
+    } == {(10_737_418_240, 5, 5_368_709_120, 3)}
+
+
+def test_catalog_annual_price_is_ten_times_the_monthly_price():
+    assert [(plan.id, plan.annual_price_usd) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 790),
+        (OrganizationPlanId.MAX, 2490),
+        (OrganizationPlanId.ULTRA, 6990),
+    ]
+    assert [plan.annual_price_usd for plan in ORGANIZATION_PLANS] == list(OrganizationAnnualPriceUsd)
+    for plan in ORGANIZATION_PLANS:
+        assert plan.annual_price_usd == 10 * plan.monthly_price_usd
 
 
 def test_catalog_names_each_tier_from_the_plan_name_enum():
@@ -117,22 +161,22 @@ def test_catalog_grants_per_agent_workspace_disk():
 
 def test_catalog_prices_the_organization_fee_per_month():
     assert [(plan.id, plan.monthly_price_usd, plan.included_accounts) for plan in ORGANIZATION_PLANS] == [
-        (OrganizationPlanId.PRO, 49, 5),
-        (OrganizationPlanId.MAX, 149, 15),
-        (OrganizationPlanId.ULTRA, 399, 40),
+        (OrganizationPlanId.PRO, 79, 5),
+        (OrganizationPlanId.MAX, 249, 15),
+        (OrganizationPlanId.ULTRA, 699, 40),
     ]
 
 
-def test_catalog_quotes_additional_account_prices_and_account_caps():
-    assert [(plan.id, plan.additional_account_monthly_usd, plan.max_accounts) for plan in ORGANIZATION_PLANS] == [
-        (OrganizationPlanId.PRO, 6, 25),
-        (OrganizationPlanId.MAX, 5, 75),
-        (OrganizationPlanId.ULTRA, 4, 200),
+def test_catalog_quotes_additional_account_prices_without_an_account_ceiling():
+    assert [(plan.id, plan.additional_account_monthly_usd) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 5),
+        (OrganizationPlanId.MAX, 4),
+        (OrganizationPlanId.ULTRA, 3),
     ]
     assert [plan.additional_account_monthly_usd for plan in ORGANIZATION_PLANS] == list(
         OrganizationAdditionalAccountMonthlyUsd
     )
-    assert [plan.max_accounts for plan in ORGANIZATION_PLANS] == list(OrganizationMaxAccounts)
+    assert "max_accounts" not in OrganizationPlan.model_fields
 
 
 def test_current_snapshot_round_trips_as_current():
@@ -152,8 +196,13 @@ def test_current_snapshot_round_trips_as_current():
     assert stored.guest_pids_limit is OrganizationGuestPidsLimit.ULTRA
     assert stored.workspace_disk_bytes is OrganizationWorkspaceDiskBytes.ULTRA
     assert stored.additional_account_monthly_usd is OrganizationAdditionalAccountMonthlyUsd.ULTRA
-    assert stored.max_accounts is OrganizationMaxAccounts.ULTRA
-    assert (raw["monthly_price_usd"], raw["additional_account_monthly_usd"], raw["max_accounts"]) == (399, 4, 200)
+    assert (raw["monthly_price_usd"], raw["additional_account_monthly_usd"]) == (699, 3)
+    assert stored.annual_price_usd is OrganizationAnnualPriceUsd.ULTRA
+    assert stored.included_agents is OrganizationIncludedAgents.ULTRA
+    assert stored.additional_agent_monthly_usd is OrganizationAdditionalAgentMonthlyUsd.ULTRA
+    assert (raw["annual_price_usd"], raw["included_agents"], raw["additional_agent_monthly_usd"]) == (6990, 10, 79)
+    assert (raw["storage_addon_bytes"], raw["storage_addon_monthly_usd"]) == (10_737_418_240, 5)
+    assert (raw["workspace_disk_addon_bytes"], raw["workspace_disk_addon_monthly_usd"]) == (5_368_709_120, 3)
     assert raw["storage_limit_bytes"] == 10_737_418_240
     assert raw["max_file_size_bytes"] == 104_857_600
     assert raw["daily_messages_per_agent"] == 500
@@ -178,9 +227,13 @@ def _old_wire_format() -> dict[str, object]:
 
 
 _BAD_BYTES = (None, True, 0, 1024, 26_214_401, 1_073_741_825, 1_073_741_824.5)
-_BAD_PRICES = (None, True, 0, 3, 7, 12, 100, 12.5)
+_BAD_PRICES = (None, True, 0, 1, 2, 6, 7, 12, 100, 12.5)
+_BAD_CAPS = (None, True, 0, 1, 4, 6, 10, 11, 2.5)
+_BAD_ANNUAL = (None, True, 0, 1, 79, 1000, 7000, 2490.5)
+_BAD_INCLUDED = (None, True, 0, 1, 3, 4, 11, 5.5)
+_BAD_AGENT_PRICES = (None, True, 0, 1, 34, 50, 100, 49.5)
+_BAD_ADDONS = (None, 0, -1, 1.5, "ten")
 _BAD_DAILY = (None, True, 0, 1, 99, 101, 250, 501, 100.5)
-_BAD_ACCOUNTS = (None, True, 0, 24, 26, 30, 201, 25.5)
 _BAD_NAMES = (None, True, 0, "", "pro", "PRO", "Pro ", "Max quoted", "Enterprise")
 _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
 
@@ -192,8 +245,14 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         {**_old_wire_format(), "max_agents_per_account": 5},
         {**_current(), "max_digital_employees": 6},
         {key: value for key, value in _current().items() if key != "max_agents_per_account"},
-        *({**_current(), "max_agents_per_account": value} for value in (None, True, 0, 1, 3, 4, 11, 2.5)),
+        *({**_current(), "max_agents_per_account": value} for value in _BAD_CAPS),
         {**_current(), "unexpected": True},
+        *({key: value for key, value in _current().items() if key != field} for field in _QUOTED_ENUM_FIELDS),
+        *({key: value for key, value in _current().items() if key != field} for field in _ADDON_FIELDS),
+        *({**_current(), "annual_price_usd": value} for value in _BAD_ANNUAL),
+        *({**_current(), "included_agents": value} for value in _BAD_INCLUDED),
+        *({**_current(), "additional_agent_monthly_usd": value} for value in _BAD_AGENT_PRICES),
+        *({**_current(), field: value} for field in _ADDON_FIELDS for value in _BAD_ADDONS),
         {key: value for key, value in _current().items() if key != "storage_limit_bytes"},
         {key: value for key, value in _current().items() if key != "max_file_size_bytes"},
         {key: value for key, value in _current().items() if key != "daily_messages_per_agent"},
@@ -205,9 +264,8 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         {**_current(), "storage_limit_bytes": OrganizationFileLimitBytes.MAX},
         {**_current(), "max_file_size_bytes": OrganizationStorageLimitBytes.MAX},
         {key: value for key, value in _current().items() if key != "additional_account_monthly_usd"},
-        {key: value for key, value in _current().items() if key != "max_accounts"},
         *({**_current(), "additional_account_monthly_usd": value} for value in _BAD_PRICES),
-        *({**_current(), "max_accounts": value} for value in _BAD_ACCOUNTS),
+        {**_current(), "max_accounts": 75},
         {key: value for key, value in _current().items() if key != "name"},
         *({**_current(), "name": value} for value in _BAD_NAMES),
         {key: value for key, value in _current().items() if key != "currency"},
@@ -218,8 +276,14 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         "old-mixed",
         "current-with-old-field",
         "neither",
-        *(f"cap-{value!r}" for value in (None, True, 0, 1, 3, 4, 11, 2.5)),
+        *(f"cap-{value!r}" for value in _BAD_CAPS),
         "extra",
+        *(f"no-{field.replace('_', '-')}" for field in _QUOTED_ENUM_FIELDS),
+        *(f"no-{field.replace('_', '-')}" for field in _ADDON_FIELDS),
+        *(f"annual-price-{value!r}" for value in _BAD_ANNUAL),
+        *(f"included-agents-{value!r}" for value in _BAD_INCLUDED),
+        *(f"additional-agent-price-{value!r}" for value in _BAD_AGENT_PRICES),
+        *(f"{field.replace('_', '-')}-{value!r}" for field in _ADDON_FIELDS for value in _BAD_ADDONS),
         "no-storage",
         "no-file-size",
         "no-daily-messages",
@@ -231,9 +295,8 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         "storage-holds-file-limit",
         "file-holds-storage-limit",
         "no-additional-account-price",
-        "no-max-accounts",
         *(f"additional-price-{value!r}" for value in _BAD_PRICES),
-        *(f"max-accounts-{value!r}" for value in _BAD_ACCOUNTS),
+        "retired-max-accounts",
         "no-name",
         *(f"name-{value!r}" for value in _BAD_NAMES),
         "no-currency",
@@ -269,70 +332,43 @@ def test_admission_row_reads_the_current_shape_and_refuses_the_old_wire_format()
         _ = OrganizationAdmissionRecord.from_row({**row, "plan": without_daily})
 
 
-@pytest.mark.parametrize("tier", list(OrganizationPlanId))
-@pytest.mark.parametrize(
-    "missing", [("storage_limit_bytes", "max_file_size_bytes"), ("storage_limit_bytes",), ("max_file_size_bytes",), ()]
-)
-def test_admission_row_decodes_stored_storage_quotas(tier: OrganizationPlanId, missing: tuple[str, ...]):
-    raw = plan_for(tier).model_dump(mode="json")
-    raw["monthly_price_usd"] = 1234
-    snapshot = {key: value for key, value in raw.items() if key not in missing}
-    row = {
+def _admission_row(plan: object, tier: OrganizationPlanId = OrganizationPlanId.MAX) -> dict[str, object]:
+    return {
         "id": uuid4(),
         "email": "buyer@example.com",
         "tier": tier.value,
         "created_at": datetime(2026, 1, 1, tzinfo=UTC),
         "status": "approved",
-        "plan": snapshot,
+        "plan": plan,
     }
-
-    stored = OrganizationAdmissionRecord.from_row(row)
-
-    assert stored.plan.model_dump(mode="json") == raw
-    assert stored.plan.storage_limit_bytes is OrganizationStorageLimitBytes[tier.name]
-    assert stored.plan.max_file_size_bytes is OrganizationFileLimitBytes[tier.name]
 
 
 @pytest.mark.parametrize("tier", list(OrganizationPlanId))
-def test_admission_row_decodes_stored_snapshot_without_guest_resources(tier: OrganizationPlanId):
+def test_admission_row_decodes_a_complete_stored_snapshot_verbatim(tier: OrganizationPlanId):
     raw = plan_for(tier).model_dump(mode="json")
     raw["monthly_price_usd"] = 1234
-    snapshot = {key: value for key, value in raw.items() if key not in _GUEST_RESOURCE_FIELDS}
-    row = {
-        "id": uuid4(),
-        "email": "buyer@example.com",
-        "tier": tier.value,
-        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "status": "approved",
-        "plan": snapshot,
-    }
 
-    stored = OrganizationAdmissionRecord.from_row(row)
+    stored = OrganizationAdmissionRecord.from_row(_admission_row(raw, tier))
 
     assert stored.plan.model_dump(mode="json") == raw
-    assert stored.plan.guest_memory_bytes is OrganizationGuestMemoryBytes[tier.name]
-    assert stored.plan.guest_millicpus is OrganizationGuestMillicpus[tier.name]
-    assert stored.plan.guest_cpu_shares is OrganizationGuestCpuShares[tier.name]
-    assert stored.plan.guest_pids_limit is OrganizationGuestPidsLimit[tier.name]
-    assert stored.plan.workspace_disk_bytes is OrganizationWorkspaceDiskBytes[tier.name]
+
+
+@pytest.mark.parametrize("field", list(OrganizationPlan.model_fields))
+def test_admission_row_refuses_a_stored_snapshot_missing_any_field(field: str):
+    snapshot = {key: value for key, value in _current().items() if key != field}
+
+    with pytest.raises(ValidationError):
+        _ = OrganizationAdmissionRecord.from_row(_admission_row(snapshot))
 
 
 @pytest.mark.parametrize("field", _GUEST_RESOURCE_FIELDS)
 def test_admission_row_keeps_a_stored_guest_resource_over_the_tier_value(field: str):
     pro = plan_for(OrganizationPlanId.PRO).model_dump(mode="json")
     max_plan = plan_for(OrganizationPlanId.MAX).model_dump(mode="json")
-    snapshot = {key: value for key, value in max_plan.items() if key not in _GUEST_RESOURCE_FIELDS}
-    snapshot[field] = pro[field]
-    row = {
-        "id": uuid4(),
-        "email": "buyer@example.com",
-        "tier": "max",
-        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "status": "approved",
-        "plan": snapshot,
-    }
 
-    stored = OrganizationAdmissionRecord.from_row(row).plan.model_dump(mode="json")
+    stored = OrganizationAdmissionRecord.from_row(_admission_row({**max_plan, field: pro[field]})).plan.model_dump(
+        mode="json"
+    )
 
     assert stored[field] == pro[field] != max_plan[field]
     assert {key: stored[key] for key in _GUEST_RESOURCE_FIELDS if key != field} == {
@@ -343,17 +379,5 @@ def test_admission_row_keeps_a_stored_guest_resource_over_the_tier_value(field: 
 @pytest.mark.parametrize("field", ["storage_limit_bytes", "max_file_size_bytes"])
 @pytest.mark.parametrize("value", [None, 0, 12345])
 def test_admission_row_rejects_explicit_invalid_storage_quotas(field: str, value: int | None):
-    raw = _current()
-    raw[field] = value
-    other = "max_file_size_bytes" if field == "storage_limit_bytes" else "storage_limit_bytes"
-    del raw[other]
-    row = {
-        "id": uuid4(),
-        "email": "buyer@example.com",
-        "tier": "max",
-        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "status": "approved",
-        "plan": raw,
-    }
     with pytest.raises(ValidationError):
-        _ = OrganizationAdmissionRecord.from_row(row)
+        _ = OrganizationAdmissionRecord.from_row(_admission_row({**_current(), field: value}))

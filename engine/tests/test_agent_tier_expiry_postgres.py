@@ -4,10 +4,12 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
 from httpx import Response
 
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app.records.organization_plan import OrganizationPlanId
+from capacity_fixtures import grant_extras
 from tier_limit_fixtures import approve_admission_for
 
 __all__ = ["deletion_scenario"]
@@ -71,8 +73,11 @@ async def test_renewing_with_room_succeeds_and_consumes_the_slot(deletion_scenar
     assert created.status_code == 403
 
 
-async def test_the_owners_cap_governs_not_the_acting_administrators(deletion_scenario: DeletionScenario):
+async def test_the_owners_cap_governs_not_the_acting_administrators(
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
+):
     scenario = deletion_scenario
+    grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
     _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     for index in range(2):
         _ = await scenario.agent("owner", f"Full {index}")

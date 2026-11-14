@@ -8,11 +8,12 @@ import pytest
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app.records.organization_plan import OrganizationAgentLimit, OrganizationPlanId
 from app.services.organization_plans import AmbiguousOrganizationTierError
+from capacity_fixtures import grant_extras
 from tier_limit_fixtures import approve_admission_for
 
 __all__ = ["deletion_scenario"]
 
-TIERS = [(OrganizationPlanId.PRO, 2), (OrganizationPlanId.MAX, 5), (OrganizationPlanId.ULTRA, 10)]
+TIERS = [(OrganizationPlanId.PRO, 2), (OrganizationPlanId.MAX, 3), (OrganizationPlanId.ULTRA, 5)]
 
 
 async def _create(scenario: DeletionScenario, who: str, name: str = "Fresh", tenant_id: UUID | None = None):
@@ -32,9 +33,10 @@ async def _count(scenario: DeletionScenario, who: str) -> int:
 
 @pytest.mark.parametrize(("tier", "cap"), TIERS)
 async def test_account_gets_exactly_the_tier_cap_despite_a_stale_stored_quota(
-    deletion_scenario: DeletionScenario, tier: OrganizationPlanId, cap: int
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch, tier: OrganizationPlanId, cap: int
 ):
     scenario = deletion_scenario
+    grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
     _ = await approve_admission_for(scenario.db, scenario.tenant_id, tier)
     for index in range(cap - 1):
         _ = await scenario.agent("owner", f"Seed {index}")
@@ -49,8 +51,11 @@ async def test_account_gets_exactly_the_tier_cap_despite_a_stale_stored_quota(
     assert (await _create(scenario, "other")).status_code == 201
 
 
-async def test_stored_quota_neither_blocks_nor_raises_the_tier_cap(deletion_scenario: DeletionScenario):
+async def test_stored_quota_neither_blocks_nor_raises_the_tier_cap(
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
+):
     scenario = deletion_scenario
+    grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
     _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     await scenario.set_user("owner", quota_max_agents=0)
     await scenario.set_user("other", quota_max_agents=99)
@@ -83,7 +88,7 @@ async def test_only_ordinary_nonexpired_agents_count_whatever_their_lifecycle_st
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
-    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.MAX)
+    _ = await approve_admission_for(scenario.db, scenario.tenant_id, OrganizationPlanId.ULTRA)
     _ = await scenario.agent("owner", "System", is_system=True)
     _ = await scenario.agent("owner", "Expired", is_expired=True)
     _ = await scenario.agent("owner", "Foreign org", tenant_id=scenario.foreign_tenant_id)
@@ -113,7 +118,7 @@ async def test_stored_snapshot_does_not_change_the_current_tier_cap(deletion_sce
     before = await scenario.rows(
         "SELECT plan FROM organization_admission_requests WHERE id = %(id)s", {"id": request_id}
     )
-    for index in range(4):
+    for index in range(2):
         _ = await scenario.agent("owner", f"Seed {index}")
     assert [(await _create(scenario, "owner", f"New{n}")).status_code for n in range(2)] == [201, 403]
     after = await scenario.rows(
@@ -178,6 +183,6 @@ async def test_users_report_the_effective_cap_beside_the_unused_stored_quota(del
         "genesis", "PATCH", f"/users/{scenario['owner'].id}/quota", json={"quota_max_agents": 7}
     )
     assert edited.status_code == 200, edited.text
-    assert (edited.json()["quota_max_agents"], edited.json()["effective_max_agents"]) == (7, 10)
+    assert (edited.json()["quota_max_agents"], edited.json()["effective_max_agents"]) == (7, 5)
     admin = await scenario.call("genesis", "GET", f"/users/{scenario['oa2'].id}")
-    assert admin.json()["effective_max_agents"] == 10
+    assert admin.json()["effective_max_agents"] == 5

@@ -466,6 +466,8 @@ async def login_flow(
 
         if not email_config:
             # SMTP missing: auto-verify users (DAO commits each write)
+            from app.services.org_membership import activate_verified_memberships
+
             async with connection_ctx():
                 tx_identity = await identity_dao.get(identity.id)
                 if tx_identity:
@@ -475,9 +477,7 @@ async def login_flow(
                     )
                     identity.email_verified = True
                     identity.is_active = True
-                    users = await user_dao.get_by_identity_id(tx_identity.id)
-                    for u in users:
-                        _ = await user_dao.update(db_obj=u, obj_in={"is_active": True})
+                    await activate_verified_memberships(tx_identity.id)
         else:
             # Find any user record (just for the task)
             async with connection_ctx():
@@ -1264,6 +1264,7 @@ async def verify_email_flow(data: VerifyEmailRequest, audience: AuthAudience) ->
     On success, returns user info and access token to allow immediate login.
     """
     from app.services.email_verification_service import email_verification_service
+    from app.services.org_membership import activate_verified_memberships
 
     # Consume verification token outside transaction (Redis operation)
     token_data = await email_verification_service.consume_email_verification_token(data.token)
@@ -1288,9 +1289,7 @@ async def verify_email_flow(data: VerifyEmailRequest, audience: AuthAudience) ->
             db_obj=identity,
             obj_in={"email_verified": True, "is_active": True},
         )
-        users = await user_dao.get_by_identity_id(identity.id)
-        for u in users:
-            _ = await user_dao.update(db_obj=u, obj_in={"is_active": True})
+        await activate_verified_memberships(identity.id)
         user = await user_dao.get_representative_user_for_identity(identity.id)
         if audience is AuthAudience.MEMBER and user is not None:
             require_member_user(user)

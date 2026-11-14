@@ -13,6 +13,7 @@ from app.records.agent import AgentRecord
 from app.records.company_admission import CompanyAdmissionRecord
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice
 from app.records.user import UserRecord
+from app.services.company_capacity import CompanyAgentLimitReachedError, require_agent_slots
 from app.services.company_transfer_guards import require_admission_transfer, require_default_source
 from app.services.quota_guard import agent_capacity
 from app.services.storage_runtime.quota_errors import StorageTransferBlockedError
@@ -63,7 +64,9 @@ async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, f
 async def require_destination_capacity(
     user: UserRecord, transfer: CompanyTransferRecord, agents: Sequence[AgentRecord]
 ) -> None:
-    """A tiered destination takes the whole incoming ordinary batch or none of it, before any migration write."""
+    """A tiered destination takes the whole incoming ordinary batch or none of it, before any migration write.
+
+    The applicant's per-account cap is checked first, then the destination company's company-wide agent cap."""
     capacity = await agent_capacity(user, transfer.target_tenant_id, tiered_only=True)
     incoming = sum(1 for agent in agents if not agent.is_system and not agent.is_expired)
     if capacity is not None and capacity.refuses(incoming):
@@ -74,6 +77,20 @@ async def require_destination_capacity(
                 "message": f"Agent limit reached in the destination ({capacity.used}+{incoming}/{capacity.limit}).",
             },
         )
+    async with connection_ctx() as db:
+        try:
+            await require_agent_slots(db, transfer.target_tenant_id, incoming)
+        except CompanyAgentLimitReachedError as exc:
+            raise HTTPException(
+                409,
+                {
+                    "code": "transfer_destination_quota_exceeded",
+                    "message": (
+                        f"The destination company has used all {exc.limit} agents. "
+                        "Its org admin can buy extra agents on the Users page in the admin console."
+                    ),
+                },
+            ) from exc
 
 
 async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> None:

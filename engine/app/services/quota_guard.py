@@ -12,9 +12,11 @@ from app.dao.agent_dao import agent_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
+from app.services.company_capacity import CompanyAgentLimitReachedError, require_agent_slots
 from app.services.organization_plans import plan_for, tier_for_tenant
 
 
@@ -167,13 +169,22 @@ async def agent_capacity(
 async def check_agent_creation_quota(
     user: UserRecord, tenant_id: uuid.UUID | None, *, tiered_only: bool = False
 ) -> None:
-    """Check the freshly locked principal's allowance for one more agent in the destination organization."""
+    """Check the freshly locked principal's allowance for one more agent in the destination organization.
+
+    The per-account cap is checked first, then the company-wide cap of a tiered, non-system organization."""
     capacity = await agent_capacity(user, tenant_id, tiered_only=tiered_only)
     if capacity is not None and capacity.refuses(1):
         raise QuotaExceeded(
             f"Agent creation limit reached ({capacity.used}/{capacity.limit}).",
             quota_type="max_agents",
         )
+    async with optional_connection_ctx() as db:
+        if db is None:
+            return
+        try:
+            await require_agent_slots(db, tenant_id)
+        except CompanyAgentLimitReachedError as exc:
+            raise QuotaExceeded(exc.message, quota_type="company_max_agents") from exc
 
 
 async def check_agent_renewal_quota(db: DbConnection, agent: AgentRecord) -> None:

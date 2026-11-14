@@ -155,6 +155,7 @@ class _Move:
         monkeypatch.setattr(membership, "connection_ctx", _ctx)
         monkeypatch.setattr("app.core.acl_locks.lock_tenants", AsyncMock())
         monkeypatch.setattr("app.core.acl_locks.lock_user", AsyncMock())
+        monkeypatch.setattr("app.services.company_capacity.require_account_slot", AsyncMock())
         monkeypatch.setattr(membership.user_dao, "get", AsyncMock(return_value=fresh))
         monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(side_effect=self.tenants.get))
         monkeypatch.setattr("app.services.company_transfer_guards.has_owned_agents", AsyncMock(return_value=False))

@@ -49,7 +49,7 @@ async def _issued_password(scenario: OrganizationScenario, request_id: UUID) -> 
     return unseal(request_id, payload)
 
 
-@pytest.mark.parametrize(("tier", "cap"), [("pro", 2), ("max", 5), ("ultra", 10)])
+@pytest.mark.parametrize(("tier", "cap"), [("pro", 2), ("max", 3), ("ultra", 5)])
 async def test_approval_links_the_tenant_to_its_tier_and_replay_keeps_one_link(
     organization_scenario: OrganizationScenario, tier: str, cap: int
 ):

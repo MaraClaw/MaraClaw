@@ -7,6 +7,7 @@ import pytest
 
 import app.dao.whatsapp_personal_dao as whatsapp_dao
 from app.dao.agent_dao import agent_dao
+from app.dao.user_dao import user_dao
 from app.records.company_transfer import TransferChoice
 from app.records.organization_plan import OrganizationPlanId
 from app.services import (
@@ -15,6 +16,8 @@ from app.services import (
     company_transfer_guards as guards,
     company_transfer_requests as requests,
 )
+from app.services.company_capacity import CompanyAccountLimitReachedError, company_usage
+from capacity_fixtures import grant_extras
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from invitation_fixtures import pending_domain_transfer
 from test_company_transfer_postgres import submit_paid, transfer_scenario
@@ -113,6 +116,64 @@ async def test_one_agent_over_the_cap_refuses_the_whole_batch_before_any_write(
     assert {await _tenant_of(scenario, agent_id) for agent_id in incoming} == {scenario.source_id}
     assert (await scenario.current_applicant()).tenant_id == scenario.source_id
     assert revocations == []
+    status = await scenario.db.fetchone("SELECT status FROM company_admission_requests")
+    assert status == {"status": "pending"}
+
+
+async def _fill_destination_with_colleagues_agents(scenario: AdmissionScenario) -> UUID:
+    """Two agents owned by the destination's administrator (the applicant's own count there stays 0), then one incoming."""
+    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # company cap: 2 agents
+    for index in range(2):
+        _ = await _seed(scenario, f"Colleague {index}", tenant=scenario.target_id, creator_id=scenario.genesis.id)
+    return await _seed(scenario, "Incoming")
+
+
+async def test_destination_company_agent_cap_refuses_the_batch_although_the_applicants_own_cap_has_room(
+    transfer_scenario: AdmissionScenario, revocations: list[UUID]
+):
+    scenario = transfer_scenario
+    incoming = await _fill_destination_with_colleagues_agents(scenario)
+    response = await _approve(scenario, TransferChoice.PAID)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == {
+        "code": "transfer_destination_quota_exceeded",
+        "message": (
+            "The destination company has used all 2 agents. "
+            "Its org admin can buy extra agents on the Users page in the admin console."
+        ),
+    }
+    assert await _tenant_of(scenario, incoming) == scenario.source_id
+    assert (await scenario.current_applicant()).tenant_id == scenario.source_id
+    assert revocations == []
+
+
+async def test_purchased_extra_agents_let_the_destination_take_the_batch(
+    transfer_scenario: AdmissionScenario, revocations: list[UUID], monkeypatch: pytest.MonkeyPatch
+):
+    scenario = transfer_scenario
+    grant_extras(monkeypatch, agents=1)
+    incoming = await _fill_destination_with_colleagues_agents(scenario)
+    response = await _approve(scenario, TransferChoice.PAID)
+    assert response.status_code == 200, response.text
+    assert await _tenant_of(scenario, incoming) == scenario.target_id
+    assert (await scenario.current_applicant()).tenant_id == scenario.target_id
+
+
+async def test_admission_into_a_company_with_no_free_account_is_refused_and_rolls_everything_back(
+    transfer_scenario: AdmissionScenario, revocations: list[UUID]
+):
+    scenario = transfer_scenario
+    _ = await approve_admission_for(scenario.db, scenario.target_id, OrganizationPlanId.PRO)  # 5 accounts included
+    while (await company_usage(scenario.db, scenario.target_id))[0] < 5:
+        _ = await user_dao.create(
+            obj_in={"display_name": "Filler", "tenant_id": scenario.target_id, "role": "member", "is_active": True}
+        )
+    incoming = await _seed(scenario, "Incoming")
+    with pytest.raises(CompanyAccountLimitReachedError) as refused:
+        _ = await _approve(scenario, TransferChoice.PAID)
+    assert (refused.value.limit, refused.value.used) == (5, 5)
+    assert await _tenant_of(scenario, incoming) == scenario.source_id
+    assert (await scenario.current_applicant()).tenant_id == scenario.source_id
     status = await scenario.db.fetchone("SELECT status FROM company_admission_requests")
     assert status == {"status": "pending"}
 

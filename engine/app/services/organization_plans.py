@@ -1,11 +1,13 @@
-"""Public organization pricing catalog (whole USD per month; model charges are billed separately)."""
+"""Public organization pricing catalog (whole USD; model charges are billed separately)."""
 
 from uuid import UUID
 
 from app.dao.organization_admission_dao import organization_admission_dao
 from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
+    OrganizationAnnualPriceUsd,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
@@ -13,13 +15,20 @@ from app.records.organization_plan import (
     OrganizationGuestMemoryBytes,
     OrganizationGuestMillicpus,
     OrganizationGuestPidsLimit,
-    OrganizationMaxAccounts,
+    OrganizationIncludedAgents,
     OrganizationPlan,
     OrganizationPlanId,
     OrganizationPlanName,
     OrganizationStorageLimitBytes,
     OrganizationWorkspaceDiskBytes,
 )
+
+# Add-on terms are the same for every tier and quoted only (no purchase flow). Plain constants, not IntEnums: equal
+# values across tiers would alias enum members.
+STORAGE_ADDON_BYTES = 10_737_418_240  # 10 GiB of managed storage
+STORAGE_ADDON_MONTHLY_USD = 5
+WORKSPACE_DISK_ADDON_BYTES = 5_368_709_120  # 5 GiB of agent workspace disk
+WORKSPACE_DISK_ADDON_MONTHLY_USD = 3
 
 
 class AmbiguousOrganizationTierError(RuntimeError):
@@ -34,11 +43,13 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         id=OrganizationPlanId.PRO,
         name=OrganizationPlanName.PRO,
         currency=OrganizationCurrency.USD,
-        monthly_price_usd=49,
+        monthly_price_usd=79,
+        annual_price_usd=OrganizationAnnualPriceUsd.PRO,
         included_accounts=5,
         additional_account_monthly_usd=OrganizationAdditionalAccountMonthlyUsd.PRO,
-        max_accounts=OrganizationMaxAccounts.PRO,
         max_agents_per_account=OrganizationAgentLimit.PRO,
+        included_agents=OrganizationIncludedAgents.PRO,
+        additional_agent_monthly_usd=OrganizationAdditionalAgentMonthlyUsd.PRO,
         storage_limit_bytes=OrganizationStorageLimitBytes.PRO,
         max_file_size_bytes=OrganizationFileLimitBytes.PRO,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.PRO,
@@ -47,16 +58,22 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         guest_cpu_shares=OrganizationGuestCpuShares.PRO,
         guest_pids_limit=OrganizationGuestPidsLimit.PRO,
         workspace_disk_bytes=OrganizationWorkspaceDiskBytes.PRO,
+        storage_addon_bytes=STORAGE_ADDON_BYTES,
+        storage_addon_monthly_usd=STORAGE_ADDON_MONTHLY_USD,
+        workspace_disk_addon_bytes=WORKSPACE_DISK_ADDON_BYTES,
+        workspace_disk_addon_monthly_usd=WORKSPACE_DISK_ADDON_MONTHLY_USD,
     ),
     OrganizationPlan(
         id=OrganizationPlanId.MAX,
         name=OrganizationPlanName.MAX,
         currency=OrganizationCurrency.USD,
-        monthly_price_usd=149,
+        monthly_price_usd=249,
+        annual_price_usd=OrganizationAnnualPriceUsd.MAX,
         included_accounts=15,
         additional_account_monthly_usd=OrganizationAdditionalAccountMonthlyUsd.MAX,
-        max_accounts=OrganizationMaxAccounts.MAX,
         max_agents_per_account=OrganizationAgentLimit.MAX,
+        included_agents=OrganizationIncludedAgents.MAX,
+        additional_agent_monthly_usd=OrganizationAdditionalAgentMonthlyUsd.MAX,
         storage_limit_bytes=OrganizationStorageLimitBytes.MAX,
         max_file_size_bytes=OrganizationFileLimitBytes.MAX,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.MAX,
@@ -65,16 +82,22 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         guest_cpu_shares=OrganizationGuestCpuShares.MAX,
         guest_pids_limit=OrganizationGuestPidsLimit.MAX,
         workspace_disk_bytes=OrganizationWorkspaceDiskBytes.MAX,
+        storage_addon_bytes=STORAGE_ADDON_BYTES,
+        storage_addon_monthly_usd=STORAGE_ADDON_MONTHLY_USD,
+        workspace_disk_addon_bytes=WORKSPACE_DISK_ADDON_BYTES,
+        workspace_disk_addon_monthly_usd=WORKSPACE_DISK_ADDON_MONTHLY_USD,
     ),
     OrganizationPlan(
         id=OrganizationPlanId.ULTRA,
         name=OrganizationPlanName.ULTRA,
         currency=OrganizationCurrency.USD,
-        monthly_price_usd=399,
+        monthly_price_usd=699,
+        annual_price_usd=OrganizationAnnualPriceUsd.ULTRA,
         included_accounts=40,
         additional_account_monthly_usd=OrganizationAdditionalAccountMonthlyUsd.ULTRA,
-        max_accounts=OrganizationMaxAccounts.ULTRA,
         max_agents_per_account=OrganizationAgentLimit.ULTRA,
+        included_agents=OrganizationIncludedAgents.ULTRA,
+        additional_agent_monthly_usd=OrganizationAdditionalAgentMonthlyUsd.ULTRA,
         storage_limit_bytes=OrganizationStorageLimitBytes.ULTRA,
         max_file_size_bytes=OrganizationFileLimitBytes.ULTRA,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.ULTRA,
@@ -83,6 +106,10 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         guest_cpu_shares=OrganizationGuestCpuShares.ULTRA,
         guest_pids_limit=OrganizationGuestPidsLimit.ULTRA,
         workspace_disk_bytes=OrganizationWorkspaceDiskBytes.ULTRA,
+        storage_addon_bytes=STORAGE_ADDON_BYTES,
+        storage_addon_monthly_usd=STORAGE_ADDON_MONTHLY_USD,
+        workspace_disk_addon_bytes=WORKSPACE_DISK_ADDON_BYTES,
+        workspace_disk_addon_monthly_usd=WORKSPACE_DISK_ADDON_MONTHLY_USD,
     ),
 )
 

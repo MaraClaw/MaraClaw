@@ -26,28 +26,47 @@ class OrganizationCurrency(StrEnum):
     USD = "USD"
 
 
+class OrganizationAnnualPriceUsd(IntEnum):
+    """Whole USD per year when billed annually, per tier: ten times the monthly price ("two months free"); quoted only, the engine has no purchase flow; the only place the numbers live."""
+
+    PRO = 790
+    MAX = 2490
+    ULTRA = 6990
+
+
 class OrganizationAdditionalAccountMonthlyUsd(IntEnum):
     """Whole USD per month for each human account beyond the included allocation, per tier; the only place the numbers live."""
 
-    PRO = 6
-    MAX = 5
-    ULTRA = 4
-
-
-class OrganizationMaxAccounts(IntEnum):
-    """Most human accounts (organization admin included) a tier quotes, per tier; the only place the numbers live."""
-
-    PRO = 25
-    MAX = 75
-    ULTRA = 200
+    PRO = 5
+    MAX = 4
+    ULTRA = 3
 
 
 class OrganizationAgentLimit(IntEnum):
-    """Ordinary agents one account (organization admins included) may own, per tier; the only place the numbers live."""
+    """Ordinary agents one account (organization admins included) may own, per tier; the only place the numbers live.
+
+    This is the per-account limit; the company-wide agent cap is ``OrganizationIncludedAgents`` plus purchased extras.
+    """
+
+    PRO = 2
+    MAX = 3
+    ULTRA = 5
+
+
+class OrganizationIncludedAgents(IntEnum):
+    """Agents across the whole organization that the monthly price includes, per tier; the company-wide agent cap before purchased extras; the only place the numbers live."""
 
     PRO = 2
     MAX = 5
     ULTRA = 10
+
+
+class OrganizationAdditionalAgentMonthlyUsd(IntEnum):
+    """Whole USD per month for each agent beyond the included allocation, per tier; quoted only, the engine does not bill it; the only place the numbers live."""
+
+    PRO = 35
+    MAX = 49
+    ULTRA = 79
 
 
 class OrganizationStorageLimitBytes(IntEnum):
@@ -115,7 +134,12 @@ class OrganizationWorkspaceDiskBytes(IntEnum):
 
 
 class OrganizationPlan(BaseModel):
-    """Whole-USD monthly commercial terms. The human account count includes the org admin; model charges are separate."""
+    """Whole-USD commercial terms. The human account count includes the org admin; model charges are separate.
+
+    ``included_accounts`` and ``included_agents`` are the company-wide caps before purchased extras (there is no
+    account ceiling: a company buys any number of extra accounts), and ``max_agents_per_account`` is the per-account
+    agent cap. ``annual_price_usd`` and the four ``*_addon_*`` fields are quoted terms only.
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
@@ -123,10 +147,12 @@ class OrganizationPlan(BaseModel):
     name: OrganizationPlanName
     currency: OrganizationCurrency
     monthly_price_usd: int = Field(ge=0)
+    annual_price_usd: OrganizationAnnualPriceUsd
     included_accounts: int = Field(ge=1)
     additional_account_monthly_usd: OrganizationAdditionalAccountMonthlyUsd
-    max_accounts: OrganizationMaxAccounts
     max_agents_per_account: OrganizationAgentLimit
+    included_agents: OrganizationIncludedAgents
+    additional_agent_monthly_usd: OrganizationAdditionalAgentMonthlyUsd
     storage_limit_bytes: OrganizationStorageLimitBytes
     max_file_size_bytes: OrganizationFileLimitBytes
     daily_messages_per_agent: OrganizationDailyAgentMessageLimit
@@ -135,3 +161,7 @@ class OrganizationPlan(BaseModel):
     guest_cpu_shares: OrganizationGuestCpuShares
     guest_pids_limit: OrganizationGuestPidsLimit
     workspace_disk_bytes: OrganizationWorkspaceDiskBytes
+    storage_addon_bytes: int = Field(ge=1)
+    storage_addon_monthly_usd: int = Field(ge=1)
+    workspace_disk_addon_bytes: int = Field(ge=1)
+    workspace_disk_addon_monthly_usd: int = Field(ge=1)
