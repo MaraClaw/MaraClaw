@@ -1,8 +1,9 @@
 # Guest Container Operations
 
 This describes the implemented engine policy, not live-host validation or a
-capacity recommendation. It does not update existing guests automatically and
-does not restart arbitrary idle or stopped agents. Runtime recovery uses durable
+capacity recommendation. It never changes a running guest's limits (a stopped
+guest gets its current [limits](#guest-limits) when it resumes) and does not
+restart arbitrary idle or stopped agents. Runtime recovery uses durable
 start intent and deletion cleanup; setup has separate worker-owned queues described
 below. Deployment admission is not documented here.
 
@@ -25,7 +26,9 @@ merely by deploying the engine.
 An ordinary [start](../app/services/guest_start.py) means **ensure running**, not
 replace. A single owned running guest is reused without rewriting its workspace,
 configuration or credentials. An owned `exited` or `created` guest is started in
-place. Both paths require application readiness before publishing `running`:
+place, after its limits are brought to the current [target](#guest-limits), unless its
+container layer alone blocks the [workspace disk quota](#workspace-disk-quota) (then it
+is recreated). Both paths require application readiness before publishing `running`:
 two consecutive successful [bootstrap-aware probes](#bootstrap-handshake) within
 a 120-second bound. Conflicting ownership, multiple owned guests or an
 unresumable state fail rather than replacing a guest.
@@ -182,28 +185,57 @@ the Gateway token/API key, OAuth profiles, Tavily configuration and guest-owned
 MCP/skill/plugin resources keep their independent lifecycle. No sibling guest
 image change is required for this transport retirement.
 
-## Limits On New Or Replacement Guests
+## Guest Limits
 
-The [settings](../app/config.py) and [env template](../.env.example) define:
+[`resolve_guest_limits`](../app/services/guest_limits.py) picks one target per agent:
+
+- An ordinary agent in a tier-governed organization gets its tier's limits. An
+  organization is tier-governed when an approved admission request has
+  `provisioned_tenant_id` equal to it. The numbers live only in
+  [`organization_plan.py`](../app/records/organization_plan.py).
+- System agents, agents without an organization and organizations without a tier use
+  the global `OPENCLAW_GUEST_*` settings below. They set no CPU shares.
+- An organization linked to several approved requests is a configuration error: the
+  start fails with `configuration_failed` instead of falling back.
+
+| Tier | Memory (and memory+swap) | CPUs | CPU shares | PIDs | Workspace disk |
+|---|---:|---:|---:|---:|---:|
+| Pro | 2 GiB | 1.5 | 1024 | 512 | 2.5 GiB |
+| Max | 3 GiB | 2.0 | 1536 | 768 | 5 GiB |
+| Ultra | 4 GiB | 3.0 | 2048 | 1024 | 8 GiB |
+
+The workspace disk column is not a Docker limit; see
+[Workspace Disk Quota](#workspace-disk-quota). The global
+[settings](../app/config.py) and [env template](../.env.example) define:
 
 | Setting | Default | Constraint |
 |---|---:|---|
 | `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` | `2147483648` (2 GiB) | Positive bytes |
 | `OPENCLAW_GUEST_CPUS` | `1.0` (1 CPU) | Positive; fractional values allowed |
 | `OPENCLAW_GUEST_PIDS_LIMIT` | `512` | Positive PID limit |
-| `OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES` | `0` (disabled) | Nonnegative; if enabled, at least the per-guest memory limit |
+| `OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES` | `0` (disabled) | `0`, or at least the larger of `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` and the Ultra tier's 4 GiB; settings validation rejects anything lower |
 
-Docker creation sets both `memory` and `memory_swap` to the per-guest byte limit.
-Since `memory_swap` is the combined memory-plus-swap ceiling, equal values request
-no additional swap allowance. CPU and PID limits are also passed on creation.
-These defaults are trial limits, not measured workload sizing.
+Docker creation sets both `memory` and `memory_swap` to the target memory. Since
+`memory_swap` is the combined memory-plus-swap ceiling, equal values request no
+additional swap allowance. CPU and PID limits are also passed on creation, and so are
+CPU shares when the target has them. The global defaults are trial limits, not
+measured workload sizing.
 
-Changing engine settings or redeploying the engine does not live-update existing
-running or stopped containers. Their actual limits remain until an explicit
-replacement or operator-managed change. Inspect them and plan maintenance before
-replacement; do not assume older guests already have the defaults. Docker
-`unless-stopped` restart behavior is separate and does not reapply these settings
-or pass through engine admission.
+Limits also apply when a stopped guest resumes. For an `exited` or `created` guest the
+engine resolves the target, passes
+[aggregate admission](#optional-aggregate-memory-admission) for the target memory, and
+then, before `docker start`, runs `docker update` with memory and swap together, CPUs
+and PIDs, plus CPU shares: the tier's, or Docker's default 1024 without a tier, so a
+guest whose organization left its tier drops the old weight. It updates only when an
+inspected value differs from the target; without a tier, any weight other than Docker's
+default (0, 1024 or absent) is a difference. An update failure is `runtime_failed` and
+the guest stays stopped.
+
+A running guest is reused unchanged and is never updated. A tier change, or a change to
+the global settings, therefore reaches a guest at its next stop and resume or at
+replacement. Docker's `unless-stopped` restarts do not pass through the engine, so
+they neither reapply limits nor run admission. Compare the inspected and target limits
+with `expected_limits` and `limits_drift` in the [metrics](#reconciliation-and-safe-observations).
 
 ### Docker CLI And Image Pull Deadlines
 
@@ -251,19 +283,22 @@ When enabled, [admission](../app/services/guest_admission.py) sums actual Docker
 memory hard limits of other `maraclaw.agent_id`-labelled guests in `running` or
 `restarting` state on `DOCKER_NETWORK`. Guests with the same agent label are
 excluded for replacement; stopped guests are not charged. It then adds the
-prospective guest's configured memory limit for creation. Resuming an `exited` or
-`created` guest instead adds that target's **actual inspected Docker memory hard
-limit**, even when it differs from current settings. A refusal leaves the same
-container stopped, with its ID, image and configuration unchanged. Reusing an
-already-running guest does not perform a new capacity admission. This is
-hard-limit accounting, not RSS or free-memory measurement.
+prospective guest's **target** memory (its tier's, or the global setting; see
+[Guest Limits](#guest-limits)) for creation and for resuming an `exited` or `created`
+guest. A resumed guest's own inspected limit is not charged: admission runs before the
+limits update, so a refusal leaves the same container stopped, with its ID, image,
+configuration and limits unchanged. Reusing an already-running guest does not perform a
+new capacity admission. This is hard-limit accounting, not RSS or free-memory
+measurement.
 
-- A zero, missing or otherwise nonpositive peer or resumed-target memory limit
-  fails closed with HTTP 409 `guest_memory_unbounded`; an over-budget start returns HTTP 409
+- A zero, missing or otherwise nonpositive peer memory limit fails closed with HTTP 409
+  `guest_memory_unbounded`, as does a resumed guest whose inspection has no HostConfig
+  or memory value. An over-budget start returns HTTP 409
   `guest_memory_capacity_exceeded`. Neither refusal removes the existing guest.
 - `0` disables this guest inventory check and its global lock. A nonzero value
-  smaller than the per-guest limit is rejected by settings validation. Lowering
-  the budget does not evict or resize existing guests.
+  smaller than the larger of `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` and the Ultra tier's
+  4 GiB is rejected by settings validation, so it covers at least one guest of any
+  tier. Lowering the budget does not evict or resize existing guests.
 - Inventory is read in one batch: one `docker container list` plus one batch
   `docker container inspect` per 100 containers, not one or more inspects per guest.
   A guest that disappears between the listing and the inspect is left out and is not
@@ -284,6 +319,149 @@ all non-guest workloads or reserve host/CPU headroom. The operator must choose t
 aggregate budget against actual host capacity and other workloads. It is not
 derived from, or shared atomically with, deployment admission. Deployment host
 reserves and unlimited-external-allocation refusal remain unchanged.
+
+## Workspace Disk Quota
+
+Tier-governed organizations get a measured soft quota per agent: the workspace disk
+allowance in the [tier table](#guest-limits). Usage is the agent's host directory
+(`<STORAGE_LOCAL_ROOT or AGENT_DATA_DIR>/<agent id>`, mounted at
+`/home/node/custom-state`) plus the guest container's writable layer. Neither Docker
+nor the filesystem enforces it: a guest can write past it and the engine notices at the
+next measurement. System agents, agents without an organization and organizations
+without a tier have no quota. The managed S3 quota is separate and unchanged
+([managed-storage-quota.md](managed-storage-quota.md)).
+
+The required worker loop `agent_workspace_quota`
+([loop](../app/services/agent_workspace_quota_worker.py),
+[measurement](../app/services/agent_workspace_quota.py)) reads non-system agents that
+belong to an organization in id-ordered pages of 50, measures each, then sleeps
+`AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS` (default `600`, range `30` to `86400`). One
+agent's failure is logged and the pass continues.
+
+- The directory size sums regular files. Symlinks are neither followed nor counted, a
+  hard-linked file counts once, and unreadable or vanished entries are skipped.
+- The layer size is `docker container inspect --size` (`SizeRw`) for the recorded
+  container, run through the local CLI with a 60-second bound. When Docker cannot
+  answer, the previously stored layer size is kept (0 if none), so a failed read does
+  not flip the block. An agent without a container counts 0 for the layer. Once one
+  read in a pass times out or the CLI cannot start, the rest of that pass skips layer
+  reads and keeps the stored sizes (one warning per pass), so a stalled daemon costs a
+  pass one 60-second wait, not one per agent. A failed exit for a single container (for
+  example one that no longer exists) skips only that agent's read.
+- Each result is stored in `agent_workspace_usage` with the tier's limit. The agent is
+  over quota while usage is greater than the limit. A tier change applies at the next
+  measurement. An ambiguous tier link skips the agent with a warning; an agent that is
+  no longer tier-governed loses its row.
+- Measurements are ordered by when they started, not when they land. A measurement
+  whose start is older than the stored one is dropped (no write, no alert), so a slow
+  pass cannot undo the re-measure that follows a file delete.
+
+While an agent is over quota, only **new human work** is refused. The check runs in the
+accepting transaction, right before the per-agent daily message charge:
+
+| Entry | Outcome |
+|---|---|
+| Web chat | `turn_rejected` with reason `quota_exceeded` |
+| IM channel events | Refused like other quota refusals (see [daily messages](organization-pricing.md#per-agent-daily-messages)) |
+| Personal WhatsApp originals | The existing `quota_rejected` outcome; nothing is charged |
+| Any REST route the error escapes from | 507 with `detail` `{code: "workspace_disk_quota_exceeded", message, used_bytes, limit_bytes, dir_bytes, layer_bytes}` (`used_bytes` is `dir_bytes + layer_bytes`) |
+
+Triggers, work that was already accepted, report delivery, starting the guest and
+deleting files are not blocked. `GET /api/agents/{id}/lifecycle` lists
+`workspace_disk_exceeded` in `blocking_codes` while the block holds (see
+[Recorded Lifecycle State](#recorded-lifecycle-state)).
+
+The first measurement that finds an agent over quota sends one `system_alert`
+notification to the agent's creator, naming the split ("files X, container Y").
+`notified_at` is claimed with a conditional update, so one process sends it, and it
+clears when a measurement finds the agent back under quota, so the next overage alerts
+again.
+
+`DELETE /api/agents/{id}/files/content` re-measures an agent that is currently blocked,
+so deleting enough files lifts the block without waiting for the next pass. The
+re-measure never fails the delete.
+
+When the host files alone fit the allowance, the container's writable layer is the
+cause: the refusal message and the alert then say to stop and start the agent, and
+[Start](../app/services/guest_start.py) recreates the stopped owned guest through the
+replacement path (same ownership, flock, admission, readiness and start-intent rules,
+the tier's limits, the guest's own image) instead of resuming it, so caches, temporary
+files and in-container installs are dropped while the host directory carries over
+(see [what carries over](#lost-guest-recovery)), and the agent is re-measured at once to
+lift the block. When the files alone exceed the allowance the message says to delete
+files and Start resumes as before; a running guest, or a guest without the host state
+mount, is never recreated.
+
+## Resource Pressure Episodes
+
+Platform admins need evidence of which organizations outgrow their tier. The engine
+records it in `agent_resource_pressure_episodes`: one row per continuous stretch (an
+episode) in which a resource of a tier-governed, non-system agent stayed at or above
+`AGENT_RESOURCE_PRESSURE_THRESHOLD` (default `0.9`, above 0 and at most 1) of its
+limit, per agent and resource, plus one row for each OOM kill of a guest. Units are
+bytes, except `cpu` in millicpus.
+
+| Resource | Sample | Limit |
+|---|---|---|
+| `memory` | Guest memory usage from `docker stats` | The guest's inspected memory limit |
+| `cpu` | `docker stats` CPU percent, as millicpus | The guest's inspected CPU limit |
+| `workspace_disk` | Host directory plus writable layer, fed by the [quota pass](#workspace-disk-quota) | The tier's workspace disk allowance |
+| `managed_storage` | Managed S3 bytes charged to the agent (`agent_storage_usage`) | The tier's storage limit |
+
+The required worker loop `agent_resource_pressure`
+([loop](../app/services/agent_resource_pressure_worker.py),
+[episodes](../app/services/agent_resource_pressure.py)) first closes the episodes of
+agents that no longer exist, then reads agents in id-ordered pages of 50 and sleeps
+`AGENT_RESOURCE_PRESSURE_INTERVAL_SECONDS` (default `300`, range `30` to `86400`).
+Per page it runs one batched `docker container inspect` and one `docker stats` through
+the local CLI (60-second bound each); a failed Docker read skips guest sampling for
+that page with a warning, and a failing agent or step never stops the rest. Disk
+samples arrive at the quota pass's interval instead.
+
+- The first sample at or above the threshold opens an episode. Later samples extend it
+  (`last_seen_at`, `sample_count`, and the peak and its detail when the ratio is higher).
+  `tier` and `threshold_ratio` keep their values from when it opened.
+- The first sample below the threshold closes it. An episode also closes when its
+  agent's guest stops or disappears (memory and CPU), when the agent stops being
+  tier-governed, is deleted or moves to another organization. `detail.closed_reason`
+  records why: `below_threshold`, `guest_not_running`, `untiered`, `agent_gone` or
+  `tenant_changed`.
+- An OOM-killed guest adds one `kind=oom_kill` row per kill (resource `memory`, peak at
+  the limit, ratio 1, already ended). The worker keeps one long-lived
+  `docker events --filter event=oom` reader for labelled guests
+  ([reader](../app/services/agent_resource_pressure_events.py)), so a kill of the guest's
+  main process is recorded when it happens, although the `unless-stopped` restart clears
+  `OOMKilled` within seconds; a kill of a child process of a running guest is recorded
+  the same way. The key is the container ID plus Docker's event time in nanoseconds, so
+  a repeated line or several workers do not duplicate a row. When `docker events` exits
+  or cannot start the reader restarts it with a capped backoff (1 to 60 seconds); it
+  never delays a pass and never makes the worker unready. Each pass still reads
+  `OOMKilled` as a fallback for kills the reader missed, and skips a flag whose kill
+  the reader already stored since the guest's latest start.
+
+The data is sampled, so read it as a lower bound. Durations run from the first to the
+last sample at or above the threshold. A spike between two passes is missed. OOM kills
+are not sampled: only one that happens while the reader is down (Docker unreachable, or
+the restart backoff) and is no longer visible as an `OOMKilled` flag at the next pass
+can be missed.
+
+Rows have no foreign key to agents, so they survive agent deletion (`agent_id` stays,
+`agent_name` is the name when recorded), and they are deleted with their company.
+Platform admins read them through the three
+[`/api/admin/resource-pressure`](admin-apis.md) endpoints. In the summary,
+`suggested_tier` is a heuristic, not a quote:
+
+- It uses the organization's one approved tier (`current_tier`; none when it has no
+  approved tier or several) and only episodes recorded under that tier, so a tier
+  change starts from a clean slate.
+- For each resource it takes the highest peak seen and picks the smallest higher tier
+  whose limit keeps that peak below the threshold ratio. An OOM kill counts as a peak at
+  the guest's memory limit when it was killed. The suggestion is the highest of the
+  per-resource picks.
+- A peak that already fits under the threshold of the current tier's own limit suggests
+  nothing. That is the case of a guest still running with an older, lower tier's
+  limits after an upgrade: its next resume applies the current limits.
+- It is null at the top tier, when no higher tier fits and when `current_tier` is null.
 
 ## Ports And Durable Failures
 
@@ -505,7 +683,9 @@ only: no Docker probes, repair or readiness observations. The
 Policy blocking codes are `expired`, `owner_inactive`, `identity_inactive`,
 `tenant_inactive`, `owner_tenant_changed` and `transfer_pending`. Operational
 codes add `setup_pending`, `runtime_stopped`, `runtime_not_running`,
-`upgrade_in_progress` and `upgrade_required`. `policy_eligible` covers only the
+`upgrade_in_progress`, `upgrade_required` and `workspace_disk_exceeded` (the last
+measurement is over the [workspace disk quota](#workspace-disk-quota); informational,
+it does not change `can_start`). `policy_eligible` covers only the
 policy checks. `can_start` also requires completed setup and no active upgrade;
 it can be true for a stopped runtime or an outstanding mandatory notice.
 `can_retry_setup` requires retryable required setup, while `can_retry_mcp` requires
@@ -567,7 +747,12 @@ from [the schema baseline](../scripts/schema_baseline.sql), before deploying API
 and worker code that uses them. Include the associated constraints/indexes and
 `agent_start_retry_state_changed` trigger with its
 `sync_agent_start_retry_metadata` function; the table names alone are not the
-complete prerequisite. Upgrade notice/run tables and `agents.openclaw_image_id`
+complete prerequisite. The workspace quota (`agent_workspace_usage`, cascading from
+`agents`) and resource-pressure (`agent_resource_pressure_episodes`, cascading from
+`tenants`) tables are also fresh-baseline `CREATE TABLE IF NOT EXISTS` additions: no
+existing table is altered and no upgrade patch is supplied, so existing installations
+need operator-coordinated provisioning before the two worker loops can store results.
+Upgrade notice/run tables and `agents.openclaw_image_id`
 have [additional deployment requirements](openclaw-updates.md#existing-installations-deployment-warning).
 
 Schema initialization belongs to [bootstrap](../app/scripts/bootstrap_db.py), not
@@ -630,6 +815,15 @@ health status/failing streak, OOM-killed state, memory/swap/CPU/PID limits and
 persisted-versus-published gateway-port drift. Limits retain Docker units and
 unlimited sentinels; unavailable observations can be null. A legacy owned name
 can differ from the canonical expected name without losing ownership.
+
+`expected_limits` is the [target](#guest-limits) the next start or resume would apply
+(`memory_bytes`, `memory_swap_bytes`, `nano_cpus`, `pids_limit`, and `cpu_shares`, null
+without a tier). `limits_drift` is true when the inspected hard limits differ from it:
+swap must equal memory, and without a tier's CPU shares only Docker's default weight
+matches. Both are
+null when the target cannot be resolved (an ambiguous tier), and `limits_drift` is also
+null without an observed HostConfig. A drifted stopped guest is corrected when it
+resumes; a drifted running guest stays as it is until then.
 
 These fields supplement existing container status. Missing/error observations
 are reported safely without raw environment, logs or exception dumps. Health,

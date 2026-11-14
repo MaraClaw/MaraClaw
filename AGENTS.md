@@ -58,6 +58,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Landing copy / channels list | `web-e` | `web-e/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |
 | Tavily keys / search analytics | `web-a` + `engine` | `web-a` `/search-engine`; `engine/docs/web-search-analytics.md` |
+| Tier guest limits / workspace disk quota / resource-pressure evidence | `engine` + `web-a` | `engine/docs/guest-containers.md`, `engine/docs/admin-apis.md` (`/api/admin/resource-pressure/*`, platform admin only); numbers live only in `engine/app/records/organization_plan.py`; `web-a` `/upgrade-signals` |
 | Company LLM providers / keys | `web-a` + `engine` | `web-a` `/models`; `engine` `/api/enterprise/llm-*`. Members never write keys. |
 | Chat / member workspace | `web-e` | `web-e/AGENTS.md` — `/app` agents + `WS /ws/chat/{id}`, Clawbook, OKR, directory |
 | Org department directory | `engine` | `app/api/departments.py`. Org departments remain; provider organization sync is retired. Assign on `web-a` Users. Agent grants on `web-e` permissions (custom + `use` only) |
