@@ -48,6 +48,11 @@ async def test_submission_persists_normalized_snapshot_and_notifies_genesis_once
         "storage_limit_bytes": 5368709120,
         "max_file_size_bytes": 52428800,
         "daily_messages_per_agent": 200,
+        "guest_memory_bytes": 3221225472,
+        "guest_millicpus": 2000,
+        "guest_cpu_shares": 1536,
+        "guest_pids_limit": 768,
+        "workspace_disk_bytes": 5368709120,
     }
     notes = await scenario.db.fetchall("SELECT user_id,type,link,ref_id,body FROM notifications")
     assert notes == [

@@ -29,6 +29,11 @@ CATALOG = {
             "storage_limit_bytes": 1073741824,
             "max_file_size_bytes": 26214400,
             "daily_messages_per_agent": 100,
+            "guest_memory_bytes": 2147483648,
+            "guest_millicpus": 1500,
+            "guest_cpu_shares": 1024,
+            "guest_pids_limit": 512,
+            "workspace_disk_bytes": 2684354560,
         },
         {
             "id": "max",
@@ -42,6 +47,11 @@ CATALOG = {
             "storage_limit_bytes": 5368709120,
             "max_file_size_bytes": 52428800,
             "daily_messages_per_agent": 200,
+            "guest_memory_bytes": 3221225472,
+            "guest_millicpus": 2000,
+            "guest_cpu_shares": 1536,
+            "guest_pids_limit": 768,
+            "workspace_disk_bytes": 5368709120,
         },
         {
             "id": "ultra",
@@ -55,6 +65,11 @@ CATALOG = {
             "storage_limit_bytes": 10737418240,
             "max_file_size_bytes": 104857600,
             "daily_messages_per_agent": 500,
+            "guest_memory_bytes": 4294967296,
+            "guest_millicpus": 3000,
+            "guest_cpu_shares": 2048,
+            "guest_pids_limit": 1024,
+            "workspace_disk_bytes": 8589934592,
         },
     ]
 }

@@ -9,11 +9,16 @@ from app.records.organization_plan import (
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
+    OrganizationGuestCpuShares,
+    OrganizationGuestMemoryBytes,
+    OrganizationGuestMillicpus,
+    OrganizationGuestPidsLimit,
     OrganizationMaxAccounts,
     OrganizationPlan,
     OrganizationPlanId,
     OrganizationPlanName,
     OrganizationStorageLimitBytes,
+    OrganizationWorkspaceDiskBytes,
 )
 
 
@@ -37,6 +42,11 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         storage_limit_bytes=OrganizationStorageLimitBytes.PRO,
         max_file_size_bytes=OrganizationFileLimitBytes.PRO,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.PRO,
+        guest_memory_bytes=OrganizationGuestMemoryBytes.PRO,
+        guest_millicpus=OrganizationGuestMillicpus.PRO,
+        guest_cpu_shares=OrganizationGuestCpuShares.PRO,
+        guest_pids_limit=OrganizationGuestPidsLimit.PRO,
+        workspace_disk_bytes=OrganizationWorkspaceDiskBytes.PRO,
     ),
     OrganizationPlan(
         id=OrganizationPlanId.MAX,
@@ -50,6 +60,11 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         storage_limit_bytes=OrganizationStorageLimitBytes.MAX,
         max_file_size_bytes=OrganizationFileLimitBytes.MAX,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.MAX,
+        guest_memory_bytes=OrganizationGuestMemoryBytes.MAX,
+        guest_millicpus=OrganizationGuestMillicpus.MAX,
+        guest_cpu_shares=OrganizationGuestCpuShares.MAX,
+        guest_pids_limit=OrganizationGuestPidsLimit.MAX,
+        workspace_disk_bytes=OrganizationWorkspaceDiskBytes.MAX,
     ),
     OrganizationPlan(
         id=OrganizationPlanId.ULTRA,
@@ -63,6 +78,11 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
         storage_limit_bytes=OrganizationStorageLimitBytes.ULTRA,
         max_file_size_bytes=OrganizationFileLimitBytes.ULTRA,
         daily_messages_per_agent=OrganizationDailyAgentMessageLimit.ULTRA,
+        guest_memory_bytes=OrganizationGuestMemoryBytes.ULTRA,
+        guest_millicpus=OrganizationGuestMillicpus.ULTRA,
+        guest_cpu_shares=OrganizationGuestCpuShares.ULTRA,
+        guest_pids_limit=OrganizationGuestPidsLimit.ULTRA,
+        workspace_disk_bytes=OrganizationWorkspaceDiskBytes.ULTRA,
     ),
 )
 

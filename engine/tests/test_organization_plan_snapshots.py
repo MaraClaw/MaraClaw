@@ -11,13 +11,26 @@ from app.records.organization_plan import (
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
+    OrganizationGuestCpuShares,
+    OrganizationGuestMemoryBytes,
+    OrganizationGuestMillicpus,
+    OrganizationGuestPidsLimit,
     OrganizationMaxAccounts,
     OrganizationPlan,
     OrganizationPlanId,
     OrganizationPlanName,
     OrganizationStorageLimitBytes,
+    OrganizationWorkspaceDiskBytes,
 )
 from app.services.organization_plans import ORGANIZATION_PLANS, plan_for
+
+_GUEST_RESOURCE_FIELDS = (
+    "guest_memory_bytes",
+    "guest_millicpus",
+    "guest_cpu_shares",
+    "guest_pids_limit",
+    "workspace_disk_bytes",
+)
 
 
 def test_catalog_grants_two_five_and_ten_agents_per_account():
@@ -57,6 +70,51 @@ def test_catalog_grants_per_agent_daily_messages():
     assert [plan.daily_messages_per_agent for plan in ORGANIZATION_PLANS] == list(OrganizationDailyAgentMessageLimit)
 
 
+def test_catalog_grants_per_guest_memory():
+    assert [(plan.id, plan.guest_memory_bytes) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 2_147_483_648),
+        (OrganizationPlanId.MAX, 3_221_225_472),
+        (OrganizationPlanId.ULTRA, 4_294_967_296),
+    ]
+    assert [plan.guest_memory_bytes for plan in ORGANIZATION_PLANS] == list(OrganizationGuestMemoryBytes)
+
+
+def test_catalog_grants_per_guest_cpu_ceiling():
+    assert [(plan.id, plan.guest_millicpus) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 1500),
+        (OrganizationPlanId.MAX, 2000),
+        (OrganizationPlanId.ULTRA, 3000),
+    ]
+    assert [plan.guest_millicpus for plan in ORGANIZATION_PLANS] == list(OrganizationGuestMillicpus)
+
+
+def test_catalog_grants_per_guest_cpu_weight():
+    assert [(plan.id, plan.guest_cpu_shares) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 1024),
+        (OrganizationPlanId.MAX, 1536),
+        (OrganizationPlanId.ULTRA, 2048),
+    ]
+    assert [plan.guest_cpu_shares for plan in ORGANIZATION_PLANS] == list(OrganizationGuestCpuShares)
+
+
+def test_catalog_grants_per_guest_process_limit():
+    assert [(plan.id, plan.guest_pids_limit) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 512),
+        (OrganizationPlanId.MAX, 768),
+        (OrganizationPlanId.ULTRA, 1024),
+    ]
+    assert [plan.guest_pids_limit for plan in ORGANIZATION_PLANS] == list(OrganizationGuestPidsLimit)
+
+
+def test_catalog_grants_per_agent_workspace_disk():
+    assert [(plan.id, plan.workspace_disk_bytes) for plan in ORGANIZATION_PLANS] == [
+        (OrganizationPlanId.PRO, 2_684_354_560),
+        (OrganizationPlanId.MAX, 5_368_709_120),
+        (OrganizationPlanId.ULTRA, 8_589_934_592),
+    ]
+    assert [plan.workspace_disk_bytes for plan in ORGANIZATION_PLANS] == list(OrganizationWorkspaceDiskBytes)
+
+
 def test_catalog_prices_the_organization_fee_per_month():
     assert [(plan.id, plan.monthly_price_usd, plan.included_accounts) for plan in ORGANIZATION_PLANS] == [
         (OrganizationPlanId.PRO, 49, 5),
@@ -88,12 +146,22 @@ def test_current_snapshot_round_trips_as_current():
     assert stored.storage_limit_bytes is OrganizationStorageLimitBytes.ULTRA
     assert stored.max_file_size_bytes is OrganizationFileLimitBytes.ULTRA
     assert stored.daily_messages_per_agent is OrganizationDailyAgentMessageLimit.ULTRA
+    assert stored.guest_memory_bytes is OrganizationGuestMemoryBytes.ULTRA
+    assert stored.guest_millicpus is OrganizationGuestMillicpus.ULTRA
+    assert stored.guest_cpu_shares is OrganizationGuestCpuShares.ULTRA
+    assert stored.guest_pids_limit is OrganizationGuestPidsLimit.ULTRA
+    assert stored.workspace_disk_bytes is OrganizationWorkspaceDiskBytes.ULTRA
     assert stored.additional_account_monthly_usd is OrganizationAdditionalAccountMonthlyUsd.ULTRA
     assert stored.max_accounts is OrganizationMaxAccounts.ULTRA
     assert (raw["monthly_price_usd"], raw["additional_account_monthly_usd"], raw["max_accounts"]) == (399, 4, 200)
     assert raw["storage_limit_bytes"] == 10_737_418_240
     assert raw["max_file_size_bytes"] == 104_857_600
     assert raw["daily_messages_per_agent"] == 500
+    assert raw["guest_memory_bytes"] == 4_294_967_296
+    assert raw["guest_millicpus"] == 3000
+    assert raw["guest_cpu_shares"] == 2048
+    assert raw["guest_pids_limit"] == 1024
+    assert raw["workspace_disk_bytes"] == 8_589_934_592
     assert stored.model_dump(mode="json") == raw
 
 
@@ -131,6 +199,7 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         {key: value for key, value in _current().items() if key != "daily_messages_per_agent"},
         *({**_current(), "daily_messages_per_agent": value} for value in _BAD_DAILY),
         {**_current(), "daily_messages_per_agent": OrganizationAgentLimit.MAX},
+        *({key: value for key, value in _current().items() if key != field} for field in _GUEST_RESOURCE_FIELDS),
         *({**_current(), "storage_limit_bytes": value} for value in _BAD_BYTES),
         *({**_current(), "max_file_size_bytes": value} for value in _BAD_BYTES),
         {**_current(), "storage_limit_bytes": OrganizationFileLimitBytes.MAX},
@@ -156,6 +225,7 @@ _BAD_CURRENCIES = (None, True, 840, "usd", "EUR", "", " USD ")
         "no-daily-messages",
         *(f"daily-messages-{value!r}" for value in _BAD_DAILY),
         "daily-messages-holds-agent-limit",
+        *(f"no-{field.replace('_', '-')}" for field in _GUEST_RESOURCE_FIELDS),
         *(f"storage-{value!r}" for value in _BAD_BYTES),
         *(f"file-{value!r}" for value in _BAD_BYTES),
         "storage-holds-file-limit",
@@ -221,6 +291,53 @@ def test_admission_row_decodes_stored_storage_quotas(tier: OrganizationPlanId, m
     assert stored.plan.model_dump(mode="json") == raw
     assert stored.plan.storage_limit_bytes is OrganizationStorageLimitBytes[tier.name]
     assert stored.plan.max_file_size_bytes is OrganizationFileLimitBytes[tier.name]
+
+
+@pytest.mark.parametrize("tier", list(OrganizationPlanId))
+def test_admission_row_decodes_stored_snapshot_without_guest_resources(tier: OrganizationPlanId):
+    raw = plan_for(tier).model_dump(mode="json")
+    raw["monthly_price_usd"] = 1234
+    snapshot = {key: value for key, value in raw.items() if key not in _GUEST_RESOURCE_FIELDS}
+    row = {
+        "id": uuid4(),
+        "email": "buyer@example.com",
+        "tier": tier.value,
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "status": "approved",
+        "plan": snapshot,
+    }
+
+    stored = OrganizationAdmissionRecord.from_row(row)
+
+    assert stored.plan.model_dump(mode="json") == raw
+    assert stored.plan.guest_memory_bytes is OrganizationGuestMemoryBytes[tier.name]
+    assert stored.plan.guest_millicpus is OrganizationGuestMillicpus[tier.name]
+    assert stored.plan.guest_cpu_shares is OrganizationGuestCpuShares[tier.name]
+    assert stored.plan.guest_pids_limit is OrganizationGuestPidsLimit[tier.name]
+    assert stored.plan.workspace_disk_bytes is OrganizationWorkspaceDiskBytes[tier.name]
+
+
+@pytest.mark.parametrize("field", _GUEST_RESOURCE_FIELDS)
+def test_admission_row_keeps_a_stored_guest_resource_over_the_tier_value(field: str):
+    pro = plan_for(OrganizationPlanId.PRO).model_dump(mode="json")
+    max_plan = plan_for(OrganizationPlanId.MAX).model_dump(mode="json")
+    snapshot = {key: value for key, value in max_plan.items() if key not in _GUEST_RESOURCE_FIELDS}
+    snapshot[field] = pro[field]
+    row = {
+        "id": uuid4(),
+        "email": "buyer@example.com",
+        "tier": "max",
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "status": "approved",
+        "plan": snapshot,
+    }
+
+    stored = OrganizationAdmissionRecord.from_row(row).plan.model_dump(mode="json")
+
+    assert stored[field] == pro[field] != max_plan[field]
+    assert {key: stored[key] for key in _GUEST_RESOURCE_FIELDS if key != field} == {
+        key: max_plan[key] for key in _GUEST_RESOURCE_FIELDS if key != field
+    }
 
 
 @pytest.mark.parametrize("field", ["storage_limit_bytes", "max_file_size_bytes"])

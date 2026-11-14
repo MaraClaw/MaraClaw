@@ -7,9 +7,14 @@ from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import datetime_from_row, str_from_row, str_from_row_opt, uuid_from_row, uuid_from_row_opt
 from app.records.organization_plan import (
     OrganizationFileLimitBytes,
+    OrganizationGuestCpuShares,
+    OrganizationGuestMemoryBytes,
+    OrganizationGuestMillicpus,
+    OrganizationGuestPidsLimit,
     OrganizationPlan,
     OrganizationPlanId,
     OrganizationStorageLimitBytes,
+    OrganizationWorkspaceDiskBytes,
 )
 
 
@@ -41,6 +46,11 @@ class OrganizationAdmissionRecord:
                     plan = {
                         "storage_limit_bytes": OrganizationStorageLimitBytes[tier.name],
                         "max_file_size_bytes": OrganizationFileLimitBytes[tier.name],
+                        "guest_memory_bytes": OrganizationGuestMemoryBytes[tier.name],
+                        "guest_millicpus": OrganizationGuestMillicpus[tier.name],
+                        "guest_cpu_shares": OrganizationGuestCpuShares[tier.name],
+                        "guest_pids_limit": OrganizationGuestPidsLimit[tier.name],
+                        "workspace_disk_bytes": OrganizationWorkspaceDiskBytes[tier.name],
                         **plan,
                     }
                     break

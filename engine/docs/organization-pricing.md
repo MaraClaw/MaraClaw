@@ -81,4 +81,14 @@ Scope of these numbers:
 
 Like the rest of the plan, stored snapshots must carry both fields; a snapshot without them, or with a value outside the enum, is refused when read, and there is no default or compatibility parser.
 
+Each plan also carries per-agent guest limits and a workspace disk allowance, owned by `OrganizationGuestMemoryBytes`, `OrganizationGuestMillicpus`, `OrganizationGuestCpuShares`, `OrganizationGuestPidsLimit` and `OrganizationWorkspaceDiskBytes` (`app/records/organization_plan.py`) and exported to the frontends as numeric contract enums.
+
+| Tier | Guest memory (= swap) | vCPU | CPU shares | Processes | Workspace disk |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pro | 2 GiB | 1.5 | 1024 | 512 | 2.5 GiB |
+| Max | 3 GiB | 2.0 | 1536 | 768 | 5 GiB |
+| Ultra | 4 GiB | 3.0 | 2048 | 1024 | 8 GiB |
+
+Unlike the other plan fields, a stored snapshot without these five fields is filled from the current catalog for its tier when read (`OrganizationAdmissionRecord.from_row`), so plans stored before they existed keep loading. The guest limits apply when a guest is created and when a stopped guest resumes; workspace disk is a measured soft quota (host workspace directory plus the guest's writable layer) that refuses new human work while exceeded. It is separate from `storage_limit_bytes`, which counts managed S3 objects only. Enforcement details, system-agent and untiered fallbacks and the resource-pressure records used for upgrade suggestions: [guest-containers.md](guest-containers.md).
+
 The repository initializes database objects from `engine/scripts/schema_baseline.sql`. An existing `organization_admission_requests` table created before named provisioning is upgraded in place on the next bootstrap (rows kept, organization name empty, never provisioned retroactively); no other existing-database migration is provided.

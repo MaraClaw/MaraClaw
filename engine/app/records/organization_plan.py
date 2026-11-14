@@ -74,6 +74,46 @@ class OrganizationDailyAgentMessageLimit(IntEnum):
     ULTRA = 500
 
 
+class OrganizationGuestMemoryBytes(IntEnum):
+    """Hard memory limit, and memory+swap ceiling, of one agent's OpenClaw guest container, per tier; the only place the numbers live."""
+
+    PRO = 2_147_483_648
+    MAX = 3_221_225_472
+    ULTRA = 4_294_967_296
+
+
+class OrganizationGuestMillicpus(IntEnum):
+    """CPU ceiling of one agent's guest in thousandths of a vCPU, per tier; the only place the numbers live."""
+
+    PRO = 1500
+    MAX = 2000
+    ULTRA = 3000
+
+
+class OrganizationGuestCpuShares(IntEnum):
+    """Docker relative CPU weight of one agent's guest under host contention, per tier; the only place the numbers live."""
+
+    PRO = 1024
+    MAX = 1536
+    ULTRA = 2048
+
+
+class OrganizationGuestPidsLimit(IntEnum):
+    """Most processes one agent's guest may run, per tier; the only place the numbers live."""
+
+    PRO = 512
+    MAX = 768
+    ULTRA = 1024
+
+
+class OrganizationWorkspaceDiskBytes(IntEnum):
+    """Bytes one agent's host workspace directory plus its guest container writable layer may use before new work is refused (measured soft quota), per tier; the only place the numbers live."""
+
+    PRO = 2_684_354_560
+    MAX = 5_368_709_120
+    ULTRA = 8_589_934_592
+
+
 class OrganizationPlan(BaseModel):
     """Whole-USD monthly commercial terms. The human account count includes the org admin; model charges are separate."""
 
@@ -90,3 +130,8 @@ class OrganizationPlan(BaseModel):
     storage_limit_bytes: OrganizationStorageLimitBytes
     max_file_size_bytes: OrganizationFileLimitBytes
     daily_messages_per_agent: OrganizationDailyAgentMessageLimit
+    guest_memory_bytes: OrganizationGuestMemoryBytes
+    guest_millicpus: OrganizationGuestMillicpus
+    guest_cpu_shares: OrganizationGuestCpuShares
+    guest_pids_limit: OrganizationGuestPidsLimit
+    workspace_disk_bytes: OrganizationWorkspaceDiskBytes
