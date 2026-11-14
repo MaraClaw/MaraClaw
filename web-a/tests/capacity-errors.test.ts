@@ -5,12 +5,12 @@ import { CapacityGuardError, capacityCancelErrorKey, capacityEvidenceErrorKey, c
 import { ApiError } from '../src/lib/http.ts'
 
 const conflict = (code: string) => new ApiError(409, { code, message: 'English text from the engine' })
-const nginxPage = '<html><head><title>413 Request Entity Too Large</title></head><body></body></html>'
+const proxyPage = '<html><head><title>413 Request Entity Too Large</title></head><body></body></html>'
 
-test('an evidence 413 is recognised by status, from the engine JSON or from nginx HTML alike', () => {
-  const fromNginx = new ApiError(413, nginxPage)
-  assert.equal(fromNginx.message, 'Request failed (413)')
-  for (const error of [fromNginx, new ApiError(413, 'Payment evidence must be 10 MiB or smaller')]) {
+test('an evidence 413 is recognised by status, from the engine JSON or from a proxy HTML page alike', () => {
+  const fromProxy = new ApiError(413, proxyPage)
+  assert.equal(fromProxy.message, 'Request failed (413)')
+  for (const error of [fromProxy, new ApiError(413, 'Payment evidence must be 10 MiB or smaller')]) {
     assert.equal(capacityEvidenceErrorKey(error), 'This file is too large to upload. Choose a file up to 10 MiB.')
   }
 })
@@ -30,7 +30,7 @@ test('cancelling maps its own conflict code and the order access errors, nothing
   assert.equal(capacityCancelErrorKey(conflict('order_not_cancellable')), 'Only an order that is waiting for payment can be cancelled. Its latest status is being refreshed.')
   assert.equal(capacityCancelErrorKey(new ApiError(404, 'Capacity order not found')), 'This order does not exist, or it belongs to another company.')
   assert.equal(capacityCancelErrorKey(new ApiError(403, 'Organization admins may only read their own company')), 'Only an organization admin of this company can do this.')
-  for (const error of [conflict('order_not_awaiting_payment'), new ApiError(413, nginxPage), new ApiError(503, 'down'), new TypeError('offline')]) {
+  for (const error of [conflict('order_not_awaiting_payment'), new ApiError(413, proxyPage), new ApiError(503, 'down'), new TypeError('offline')]) {
     assert.equal(capacityCancelErrorKey(error), null)
   }
 })

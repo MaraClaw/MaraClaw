@@ -25,8 +25,8 @@ function orderAccessKey(error: ApiError): PlainMessageKey | null {
 
 /**
  * Client copy for a refused or failed evidence upload (`POST /api/capacity/orders/{id}/evidence`). A 413 can come from
- * the engine (JSON) or from nginx (an HTML page the client cannot show), so it is mapped by status alone. `null` keeps
- * the engine's own message.
+ * the engine (JSON) or from a proxy in front of it (an empty or HTML body the client cannot show), so it is mapped by
+ * status alone. `null` keeps the engine's own message.
  */
 export function capacityEvidenceErrorKey(error: unknown): PlainMessageKey | null {
   const guard = capacityGuardKey(error)
