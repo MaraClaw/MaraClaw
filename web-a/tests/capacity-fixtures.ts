@@ -32,7 +32,7 @@ export const cappedOverview = capacityOverviewSchema.parse({
 })
 
 export const uncappedOverview = capacityOverviewSchema.parse({
-  ...cappedOverview, capped: false, tier: null, included_accounts: null, included_agents: null,
+  ...cappedOverview, capped: false, tier: 'pro', included_accounts: null, included_agents: null,
   extra_accounts: 0, extra_agents: 0, account_limit: null, agent_limit: null, account_unit_usd: null,
   agent_unit_usd: null, payments_configured: false, usd_vnd_rate: null,
 })

@@ -69,7 +69,7 @@ export function summaryRowView(row: ResourcePressureSummary, { t, number, date }
   return {
     id: row.tenant_id,
     company: row.tenant_name,
-    currentTier: row.current_tier === null ? t('Not set') : tierName(row.current_tier),
+    currentTier: tierName(row.current_tier),
     suggestedTier: row.suggested_tier === null ? t('None') : tierName(row.suggested_tier),
     hasSuggestion: row.suggested_tier !== null,
     memory: number(row.episode_counts.memory),

@@ -16,7 +16,7 @@ export const summaryRow = {
   last_seen_at: '2026-11-12T08:30:00Z', suggested_tier: 'max',
 }
 export const quietSummaryRow = {
-  ...summaryRow, tenant_id: otherTenantId, tenant_name: 'Globex', current_tier: null, suggested_tier: null,
+  ...summaryRow, tenant_id: otherTenantId, tenant_name: 'Globex', current_tier: 'ultra', suggested_tier: null,
   episode_counts: { memory: 0, cpu: 0, workspace_disk: 1, managed_storage: 0 },
   oom_count: 0, pressure_seconds: 0, max_peak_ratio: 0.9, agents_affected: 1,
 }

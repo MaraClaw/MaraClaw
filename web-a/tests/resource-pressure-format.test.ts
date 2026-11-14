@@ -71,16 +71,15 @@ test('a summary row presents every column with a prominent suggestion', () => {
   assert.match(row.lastSeen, /^Nov 12, 2026, 8:30\s?AM$/)
 })
 
-test('a null suggestion reads None and a null current tier reads Not set', () => {
+test('a null suggestion reads None beside the current tier', () => {
   // When
   const row = summaryRowView(quietSummary, en)
   // Then
   assert.equal(row.suggestedTier, 'None')
   assert.equal(row.hasSuggestion, false)
-  assert.equal(row.currentTier, 'Not set')
+  assert.equal(row.currentTier, 'ULTRA')
   assert.equal(row.pressureTime, '0s')
   assert.equal(summaryRowView(quietSummary, vi).suggestedTier, vietnamese.None)
-  assert.equal(summaryRowView(quietSummary, vi).currentTier, vietnamese['Not set'])
 })
 
 test('an open memory episode shows bytes against its limit and a still-open end', () => {

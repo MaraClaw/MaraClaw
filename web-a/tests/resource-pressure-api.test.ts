@@ -37,7 +37,7 @@ test('summary sends only the summary filters with the admin bearer token and val
   assert.equal(options?.method, 'GET')
   assert.deepEqual(options?.headers, { Accept: 'application/json', Authorization: `Bearer ${pressureToken}` })
   assert.deepEqual(rows, [summaryRow, quietSummaryRow])
-  assert.equal(rows[1]?.current_tier, null)
+  assert.equal(rows[1]?.current_tier, 'ultra')
   assert.equal(rows[1]?.suggested_tier, null)
 })
 
