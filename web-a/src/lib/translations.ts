@@ -316,6 +316,10 @@ export const vietnamese = {
   'Admin display name (optional)': 'Tên hiển thị quản trị viên (không bắt buộc)',
   'Initial admin password': 'Mật khẩu quản trị ban đầu',
   'Create company': 'Tạo công ty',
+  'Fill in the company name, plan, admin email and password to continue.':
+    'Nhập tên công ty, chọn gói, email và mật khẩu quản trị viên để tiếp tục.',
+  'Choose a plan': 'Chọn một gói',
+  '{price}/month · {accounts} accounts · {agents} agents': '{price}/tháng · {accounts} tài khoản · {agents} trợ lý',
   'Could not add domain': 'Không thể thêm miền',
   'Could not update default': 'Không thể cập nhật giá trị mặc định',
   'Could not delete domain': 'Không thể xóa miền',
@@ -1375,7 +1379,6 @@ export const vietnamese = {
   'Peak usage': 'Mức dùng cao nhất',
   'Agents affected': 'Trợ lý bị ảnh hưởng',
   'Last seen': 'Ghi nhận gần nhất',
-  'Not set': 'Chưa đặt',
   'Still open': 'Đang diễn ra',
   'Agent removed': 'Trợ lý đã bị xóa',
   'Loading upgrade signals…': 'Đang tải tín hiệu nâng gói…',

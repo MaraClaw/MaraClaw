@@ -18,7 +18,7 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 | Shells | `layout/admin-shell.tsx`: protected nav + `Outlet`; `layout/auth-shell.tsx`: forgot/reset chrome (login has its own) |
 | Navigation | `layout/nav-icon.tsx`: active/inactive assets; `layout/section-rail.tsx`: route links or local selection |
 | Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
-| Company UI | `companies/create-company-form.tsx`: company + genesis OA; `companies/company-status-icon.tsx`: active/disabled state |
+| Company UI | `companies/create-company-form.tsx`: company + plan + genesis OA; `companies/company-plan-badge.tsx`: Pro/Max/Ultra badge (every company has a tier); `companies/company-status-icon.tsx`: active/disabled state |
 | User rows | `users/user-card.tsx`: linked row, toggle action and slots; page owns role/toggle policy |
 | Agent transfer | `users/transfer-agents.tsx`: `TransferAgents` dialog rendered in a `UserCard` slot by `pages/users-departments.tsx` |
 | Capacity | `capacity/`: shared by the payment page, the review detail and Users. `capacity-labels.ts` (status/kind/tier labels, `capacityActionClass`), `capacity-status-badge.tsx`, `capacity-order-details.tsx` (the order's quote, period, amounts and evidence summary), `copy-field.tsx` (value + Copy button + status text; `copyValue` for the raw amount), `capacity-payment-actions.tsx` (`CapacityEvidenceForm`: Finish with a client-checked file; `CapacityCancelOrder`: inline confirmation; both show translated copy for the evidence/cancel refusals through `lib/capacity-errors.ts`), `capacity-evidence-preview.tsx` (Bearer-fetched bytes to an object URL, revoked on unmount; images inline, PDF as "Open PDF" (new tab; the blob page inherits the production CSP, whose `object-src 'none'` can stop a PDF viewer in some browsers) plus "Download PDF" (same blob URL, `download` = evidence filename) so the file is always reachable; Retry remounts it) |
@@ -41,7 +41,8 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 
 ## DOMAIN FORMS AND ROWS
 
-- `CreateCompanyForm` uses RHF + Zod, `noValidate`, `useId()`, lowercase trimmed emails and minimum-six-character passwords; preserve its 409/403 error handling.
+- `CreateCompanyForm` uses RHF + `createCompanySchema` (`lib/company-form-schema.ts`), `noValidate`, `useId()`, lowercase trimmed emails and minimum-six-character passwords; preserve its 409/403 error handling. It validates `onTouched`, and Create company stays disabled until `formState.isValid` (name, plan, admin email, password), with a described-by hint while disabled.
+- Its required Plan is a fieldset of three native radios (`Controller`, no default, "Choose a plan" when missing) after Company name; ids come from `OrganizationPlanIdValues`, names from `capacityTierLabels`, and each shows price, included accounts and agents from the public catalog (`organizationPlansOptions`). If the catalog fails, the radios keep only their names and creation is not blocked. `createCompany` always sends `tier`.
 - Its requests go through `companies-api.ts`; retain the `useSessionCurrent()` post-await fence before errors, reset or `onCreated`. The caller owns query invalidation.
 - `UserCard` takes `canToggle`, pending state and callbacks; keep the overlay link `z-10` and actions `z-20`, plus the `web-a:users-scroll` handoff.
 - `TransferAgents` renders nothing unless `canTransferMemberAgents(user, source)` (active non-PA `org_admin`, same tenant, end-user source), no `mustChangePassword`, and `source.tenant_id`. Its dialog uses Radix Dialog directly, not a `ui/` primitive.

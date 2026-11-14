@@ -15,6 +15,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `invitation-options.ts`: tenant-keyed invitation history, send and revoke.
 - `broadcast-options.ts`: broadcast email-status polling.
 - `resource-pressure-options.ts`: parsed-filter summary and cursor-page episode reads (`['admin-resource-pressure', ...]`, `retry: false`).
+- `organization-plan-options.ts`: the public plan catalog read (`['organization-plans']`, `retry: false`) behind the create-company form's plan summaries.
 
 ### Providers
 - `use-auth.tsx`: auth context, session-scoped query provider and auth consumers.

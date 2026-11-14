@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyPlanBadge } from '@/components/companies/company-plan-badge'
 import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { CreateCompanyForm } from '@/components/companies/create-company-form'
 import { Badge } from '@/components/ui/badge'
@@ -115,6 +116,7 @@ export function CompaniesPage() {
               <div className="flex flex-wrap items-center gap-2">
               {company.is_system ? <Badge variant="secondary">{t('System')}</Badge> : null}
               {company.is_default_end_user_org ? <Badge>{t('Default for end users')}</Badge> : null}
+                <CompanyPlanBadge tier={company.tier} />
                 <Badge variant={company.is_active ? 'success' : 'destructive'}>
                 {t(company.is_active ? 'Active' : 'Disabled')}
                 </Badge>

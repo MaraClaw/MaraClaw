@@ -1,52 +1,45 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useId } from 'react'
-import { useForm } from 'react-hook-form'
-import { z } from 'zod'
+import { Controller, useForm } from 'react-hook-form'
 
+import { capacityTierLabels } from '@/components/capacity/capacity-labels'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
+import { organizationPlansOptions } from '@/hooks/organization-plan-options'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { createCompany } from '@/lib/companies-api'
+import { createCompanySchema, type CreateCompanyValues } from '@/lib/company-form-schema'
+import { OrganizationPlanIdValues } from '@/lib/engine-contracts.generated'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import { useTranslation } from '@/hooks/use-translation'
 import { useLocalizedMessage } from '@/hooks/use-localized-message'
 import { message } from '@/lib/i18n'
-
-const schema = z.object({
-  name: z.string().trim().min(1, 'Enter a company name').max(200, 'Name is too long'),
-  admin_email: z
-    .string()
-    .trim()
-    .min(1, 'Enter the org admin email')
-    .email('Enter a valid email address')
-    .max(254, 'Email is too long'),
-  admin_display_name: z.string().trim().max(200, 'Display name is too long').optional(),
-  admin_password: z.string().min(6, 'Use at least 6 characters').max(128, 'Password is too long'),
-})
-
-type FormValues = z.infer<typeof schema>
 
 type CreateCompanyFormProps = {
   onCreated: (name: string, adminEmail: string) => void
 }
 
 export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
-  const { t, owned } = useTranslation()
+  const { t, owned, number } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
   const [formError, setFormError] = useLocalizedMessage()
+  const plans = useQuery(organizationPlansOptions())
   const {
     register,
+    control,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    formState: { errors, isSubmitting, isValid },
+  } = useForm<CreateCompanyValues>({
+    resolver: zodResolver(createCompanySchema),
+    mode: 'onTouched',
     defaultValues: {
       name: '',
       admin_email: '',
@@ -55,12 +48,13 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
     },
   })
 
-  async function onSubmit(values: FormValues) {
+  async function onSubmit(values: CreateCompanyValues) {
     setFormError(null)
     const displayName = values.admin_display_name?.trim()
     try {
       const created = await createCompany({
         name: values.name.trim(),
+        tier: values.tier,
         admin_email: values.admin_email.trim().toLowerCase(),
         admin_password: values.admin_password,
         admin_display_name: displayName || undefined,
@@ -89,6 +83,8 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
     }
   }
 
+  const catalog = new Map((plans.data ?? []).map((plan) => [plan.id, plan]))
+
   return (
     <Card>
       <CardHeader>
@@ -113,6 +109,66 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
               </p>
             ) : null}
           </div>
+          <fieldset
+            className="min-w-0 space-y-2 sm:col-span-2"
+            aria-describedby={errors.tier ? `${formId}-plan-error` : undefined}
+          >
+            <legend className="mb-2 text-sm font-medium">{t('Plan')}</legend>
+            <Controller
+              name="tier"
+              control={control}
+              render={({ field }) => (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {OrganizationPlanIdValues.map((id, index) => {
+                    const plan = catalog.get(id)
+                    return (
+                      <label
+                        key={id}
+                        className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-sm has-checked:border-primary has-checked:bg-accent/50"
+                      >
+                        <input
+                          ref={index === 0 ? field.ref : undefined}
+                          type="radio"
+                          name={field.name}
+                          value={id}
+                          checked={field.value === id}
+                          onBlur={field.onBlur}
+                          onChange={() => field.onChange(id)}
+                          aria-describedby={plan ? `${formId}-plan-${id}-summary` : undefined}
+                          className="mt-0.5 size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                        />
+                        <span className="min-w-0">
+                          <span className="block font-medium">{capacityTierLabels[id]}</span>
+                          {plan ? (
+                            <span
+                              id={`${formId}-plan-${id}-summary`}
+                              className="mt-1 block text-xs text-muted-foreground"
+                            >
+                              {t('{price}/month · {accounts} accounts · {agents} agents', {
+                                price: number(plan.monthly_price_usd, {
+                                  style: 'currency',
+                                  currency: 'USD',
+                                  minimumFractionDigits: 0,
+                                  maximumFractionDigits: 0,
+                                }),
+                                accounts: number(plan.included_accounts),
+                                agents: number(plan.included_agents),
+                              })}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            />
+            {errors.tier ? (
+              <p id={`${formId}-plan-error`} className="text-xs text-destructive" role="alert">
+                {owned(errors.tier.message)}
+              </p>
+            ) : null}
+          </fieldset>
           <div className="space-y-2">
             <Label htmlFor={`${formId}-email`}>{t('Org admin email')}</Label>
             <Input
@@ -154,11 +210,20 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
           {formError ? (
             <ErrorToast message={formError} />
           ) : null}
-          <div className="sm:col-span-2">
-            <Button type="submit" disabled={isSubmitting}>
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+            <Button
+              type="submit"
+              disabled={isSubmitting || !isValid}
+              aria-describedby={isValid ? undefined : `${formId}-submit-hint`}
+            >
               {isSubmitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
               {t('Create company')}
             </Button>
+            {isValid ? null : (
+              <p id={`${formId}-submit-hint`} className="text-xs text-muted-foreground">
+                {t('Fill in the company name, plan, admin email and password to continue.')}
+              </p>
+            )}
           </div>
         </form>
       </CardContent>

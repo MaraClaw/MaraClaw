@@ -4,14 +4,14 @@ import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { companiesPageOptions, companyOptions, companyStatsOptions } from '../src/hooks/company-options.ts'
-import { getCompanyStats, listCompanies, listCompaniesPage, listCompanyOptions } from '../src/lib/companies-api.ts'
+import { createCompany, getCompanyStats, listCompanies, listCompaniesPage, listCompanyOptions } from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 
 const row = {
   id: 'alpha', name: 'Zebra Company', slug: 'zebra', is_active: true,
   sso_enabled: false, sso_domain: null, is_system: false, is_default_end_user_org: false,
   can_disable: true, created_at: null, user_count: 7, active_user_count: 5,
-  inactive_user_count: 2, agent_count: 3, org_admin_email: null,
+  inactive_user_count: 2, agent_count: 3, org_admin_email: null, tier: 'pro' as const,
 }
 
 test('company page encodes search and opaque cursor and forwards cancellation', async (t) => {
@@ -124,7 +124,43 @@ test('company detail reads one encoded stats endpoint while legacy listing remai
   assert.deepEqual(legacy, [row])
 })
 
-for (const body of [[], { items: [], next_cursor: 42 }, { items: [{ ...row, user_count: '7' }], next_cursor: null }]) {
+test('company creation sends the chosen plan', async (t) => {
+  // Given
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ company: { ...row, tier: 'max' }, org_admin_email: 'admin@example.test', must_change_password: true }))
+  // When
+  await createCompany({ name: 'Zebra Company', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1' })
+  // Then
+  const [url, init] = fetch.mock.calls[0]?.arguments ?? []
+  assert.equal(url, '/api/admin/companies')
+  assert.equal(init?.method, 'POST')
+  assert.deepEqual(JSON.parse(String(init?.body)), {
+    name: 'Zebra Company', tier: 'max', admin_email: 'admin@example.test', admin_password: 'secret-1',
+  })
+})
+
+test('company rows carry each plan', async (t) => {
+  // Given
+  const rows = ['pro', 'max', 'ultra'].map(tier => ({ ...row, id: tier, tier }))
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ items: rows, next_cursor: null }))
+  // When
+  const page = await listCompaniesPage({ search: '', cursor: null })
+  // Then
+  assert.deepEqual(page.items.map(item => item.tier), ['pro', 'max', 'ultra'])
+})
+
+test('company stats reject a missing plan', async (t) => {
+  // Given
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ ...row, tier: null }))
+  // When / Then
+  await assert.rejects(getCompanyStats('alpha'), z.ZodError)
+})
+
+const rowWithoutTier = Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'tier'))
+for (const body of [
+  [], { items: [], next_cursor: 42 }, { items: [{ ...row, user_count: '7' }], next_cursor: null },
+  { items: [{ ...row, tier: 'gold' }], next_cursor: null }, { items: [rowWithoutTier], next_cursor: null },
+]) {
   test(`company page rejects malformed responses: ${JSON.stringify(body)}`, async (t) => {
     // Given
     t.mock.method(globalThis, 'fetch', async () => Response.json(body))
