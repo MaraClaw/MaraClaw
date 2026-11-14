@@ -16,7 +16,6 @@ from fastapi import HTTPException
 from app.core.acl_locks import lock_tenants
 from app.core.domain.approvals import ApprovalAction
 from app.core.domain.users import UserRole
-from app.core.logging import logger
 from app.core.security import load_user_principal
 from app.dao.capacity_order_dao import capacity_order_dao as orders
 from app.dao.tenant_dao import tenant_dao
@@ -34,25 +33,22 @@ from app.services import capacity_ledger
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.capacity_evidence import (
     MAX_EVIDENCE_BYTES,
-    EvidenceKind,
+    EvidenceFile,
+    discard_evidence,
     safe_filename,
     sha256_hex,
     sniff_evidence,
     storage_key,
+    store_evidence,
 )
 from app.services.capacity_notifications import notify_decision, notify_platform_admins_submitted
 from app.services.capacity_payment_settings import load_payment_settings
 from app.services.capacity_pricing import days_in_month, month_start, quote_purchase, remaining_days
 from app.services.capacity_renewals import eligible_tier, supplement_late_approval
+from app.services.coded_errors import conflict
 from app.services.company_capacity import company_caps, company_usage
 from app.services.organization_plans import plan_for
 from app.services.storage_runtime.facade import get_storage_backend
-
-EVIDENCE_WRITE_ATTEMPTS = 3
-
-
-def conflict(code: str, message: str, **extra: str | int) -> HTTPException:
-    return HTTPException(409, detail={"code": code, "message": message, **extra})
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,13 +79,6 @@ class CapacityOverview:
     usd_vnd_rate: int | None
     open_orders: list[CapacityOrderRecord]
     current_renewal: CapacityOrderRecord | None
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceFile:
-    data: bytes
-    content_type: str
-    filename: str
 
 
 async def _principal(user_id: UUID) -> UserRecord:
@@ -280,23 +269,6 @@ async def get_order(user_id: UUID, order_id: UUID, *, platform_only: bool = Fals
         return await _view(_visible(user, await orders.get(order_id)))
 
 
-async def _store_evidence(tenant_id: UUID, order_id: UUID, kind: EvidenceKind, data: bytes) -> str:
-    storage = get_storage_backend()
-    for _ in range(EVIDENCE_WRITE_ATTEMPTS):
-        key = storage_key(tenant_id, order_id, kind)
-        written = await storage.create_bytes_if_absent(key, data, kind.content_type)
-        if written.ok:
-            return key
-    raise HTTPException(503, "Could not store the payment evidence; try again")
-
-
-async def _discard_evidence(key: str) -> None:
-    try:
-        await get_storage_backend().delete(key)
-    except Exception as exc:
-        logger.bind(exception_type=type(exc).__name__).warning("[capacity] could not remove unused evidence {}", key)
-
-
 async def submit_evidence(
     user_id: UUID, order_id: UUID, *, data: bytes, filename: str | None, client_ip: str | None = None
 ) -> CapacityOrderView:
@@ -312,7 +284,7 @@ async def submit_evidence(
         preview = _visible(user, await orders.get(order_id))
         if preview.status is not CapacityOrderStatus.AWAITING_PAYMENT:
             raise conflict("order_not_awaiting_payment", "This order no longer accepts payment evidence")
-    key = await _store_evidence(tenant_id, order_id, kind, data)
+    key = await store_evidence(get_storage_backend(), lambda: storage_key(tenant_id, order_id, kind), kind, data)
     evidence = CapacityEvidence(
         storage_key=key,
         content_type=kind.content_type,
@@ -342,7 +314,7 @@ async def submit_evidence(
             )
             return await _view(submitted)
     except BaseException:
-        await _discard_evidence(key)
+        await discard_evidence(get_storage_backend(), key)
         raise
 
 

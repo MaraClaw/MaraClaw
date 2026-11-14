@@ -38,6 +38,7 @@ from app.records.organization_plan import (
     OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
     OrganizationAnnualPriceUsd,
+    OrganizationBillingCycle,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
@@ -52,6 +53,7 @@ from app.records.organization_plan import (
     OrganizationWorkspaceDiskBytes,
 )
 from app.schemas.chat_wire import CHAT_SERVER_EVENT_ADAPTER, ChatEventType, ChatRejectionReason
+from app.schemas.organization_admission import OrganizationAdmissionAcknowledgment
 from app.schemas.schemas import ApprovalDecisionRequest
 
 AUDITED_HTTP_MODULES = frozenset(
@@ -139,6 +141,7 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     TransferStatus,
     OrganizationPlanId,
     OrganizationPlanName,
+    OrganizationBillingCycle,
     OrganizationAnnualPriceUsd,
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationCurrency,
@@ -186,4 +189,8 @@ def explicit_schemas() -> dict[str, JsonValue]:
         ref_template="#/components/schemas/{model}"
     )
     schemas["UploadPolicy"] = UploadPolicy.model_json_schema(ref_template="#/components/schemas/{model}")
+    # The submit route is unaudited (multipart body), so its acknowledgment is not reachable from an audited route.
+    schemas["OrganizationAdmissionAcknowledgment"] = OrganizationAdmissionAcknowledgment.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
     return schemas

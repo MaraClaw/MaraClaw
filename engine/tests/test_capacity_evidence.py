@@ -1,23 +1,33 @@
 """Magic-byte sniffing, safe names and storage keys of payment evidence."""
 
+from pathlib import Path
 from uuid import UUID
 
 import pytest
+from fastapi import HTTPException
 
 from app.services.capacity_evidence import (
+    ADMISSION_STORAGE_PREFIX,
+    EVIDENCE_WRITE_ATTEMPTS,
     JPEG,
     MAX_EVIDENCE_BYTES,
     PDF,
     PNG,
     STORAGE_PREFIX,
     WEBP,
+    EvidenceFile,
     EvidenceKind,
+    admission_storage_key,
     content_disposition,
+    discard_evidence,
+    evidence_response,
     safe_filename,
     sha256_hex,
     sniff_evidence,
     storage_key,
+    store_evidence,
 )
+from app.services.storage_runtime.local import LocalStorageBackend
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16
@@ -108,3 +118,62 @@ def test_the_storage_key_sits_outside_every_agent_prefix_and_is_unique_per_attem
 def test_the_limit_is_ten_mebibytes_and_the_digest_is_sha256():
     assert MAX_EVIDENCE_BYTES == 10 * 1024 * 1024
     assert sha256_hex(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+
+def test_an_admission_key_sits_under_its_own_prefix_outside_every_agent_prefix():
+    request = UUID(int=3)
+    first, second = admission_storage_key(request, PNG), admission_storage_key(request, PNG)
+    assert first != second
+    assert first.startswith(f"{ADMISSION_STORAGE_PREFIX}/{request}/")
+    assert first.endswith(".png")
+    assert ADMISSION_STORAGE_PREFIX.startswith("_")
+    assert ADMISSION_STORAGE_PREFIX != STORAGE_PREFIX
+
+
+async def test_a_taken_key_is_retried_under_a_fresh_one_and_the_data_is_stored(tmp_path: Path):
+    storage = LocalStorageBackend(str(tmp_path))
+    assert (await storage.create_bytes_if_absent("taken.png", b"other", "image/png")).ok
+    keys = iter(["taken.png", "fresh.png"])
+
+    key = await store_evidence(storage, lambda: next(keys), PNG, PNG_BYTES)
+
+    assert key == "fresh.png"
+    assert await storage.read_bytes_bounded("taken.png", 1024) == b"other"
+    assert await storage.read_bytes_bounded("fresh.png", 1024) == PNG_BYTES
+
+
+async def test_storing_gives_up_with_503_after_the_attempt_budget(tmp_path: Path):
+    storage = LocalStorageBackend(str(tmp_path))
+    assert (await storage.create_bytes_if_absent("taken.png", b"other", "image/png")).ok
+    attempts: list[str] = []
+
+    def always_taken() -> str:
+        attempts.append("taken.png")
+        return "taken.png"
+
+    with pytest.raises(HTTPException) as refused:
+        _ = await store_evidence(storage, always_taken, PNG, PNG_BYTES)
+
+    assert refused.value.status_code == 503
+    assert len(attempts) == EVIDENCE_WRITE_ATTEMPTS
+
+
+async def test_discarded_evidence_is_gone_and_discarding_a_missing_file_is_quiet(tmp_path: Path):
+    storage = LocalStorageBackend(str(tmp_path))
+    key = await store_evidence(storage, lambda: "gone.png", PNG, PNG_BYTES)
+
+    await discard_evidence(storage, key)
+    await discard_evidence(storage, key)
+
+    assert not await storage.exists(key)
+
+
+def test_a_download_is_sandboxed_uncached_and_typed_by_the_sniffed_kind():
+    response = evidence_response(EvidenceFile(data=PDF_BYTES, content_type=PDF.content_type, filename="slip.pdf"))
+
+    assert response.body == PDF_BYTES
+    assert response.headers["content-type"] == PDF.content_type
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-security-policy"] == "sandbox"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-disposition"] == content_disposition("slip.pdf")

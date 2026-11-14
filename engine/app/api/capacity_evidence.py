@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, 
 from app.core.security import get_current_user
 from app.records.user import UserRecord
 from app.schemas.capacity import CapacityOrderOut
-from app.services.capacity_evidence import MAX_EVIDENCE_BYTES, content_disposition
+from app.services.capacity_evidence import MAX_EVIDENCE_BYTES, evidence_response
 from app.services.capacity_orders import read_evidence, submit_evidence
 from app.services.document_parser.errors import DocumentTooLargeError
 from app.services.document_parser.service import read_bytes_limited
@@ -40,14 +40,4 @@ async def upload_capacity_evidence(
 @router.get("/orders/{order_id}/evidence")
 async def download_capacity_evidence(order_id: UUID, user: UserRecord = Depends(get_current_user)) -> Response:
     """The stored evidence with its sniffed type; sandboxed and never sniffed again by the browser."""
-    evidence = await read_evidence(user.id, order_id)
-    return Response(
-        evidence.data,
-        media_type=evidence.content_type,
-        headers={
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "sandbox",
-            "Content-Disposition": content_disposition(evidence.filename),
-            "Cache-Control": "private, no-store",
-        },
-    )
+    return evidence_response(await read_evidence(user.id, order_id))

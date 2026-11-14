@@ -1,6 +1,6 @@
 """Public organization pricing catalog (whole USD; model charges are billed separately)."""
 
-from typing import overload
+from typing import assert_never, overload
 from uuid import UUID
 
 from app.dao.tenant_dao import tenant_dao
@@ -9,6 +9,7 @@ from app.records.organization_plan import (
     OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
     OrganizationAnnualPriceUsd,
+    OrganizationBillingCycle,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
@@ -110,6 +111,20 @@ ORGANIZATION_PLANS: tuple[OrganizationPlan, ...] = (
 
 def plan_for(tier: OrganizationPlanId) -> OrganizationPlan:
     return next(plan for plan in ORGANIZATION_PLANS if plan.id is tier)
+
+
+def first_period_price_usd(plan: OrganizationPlan, billing: OrganizationBillingCycle) -> int:
+    """Whole USD an admission request pays once: the monthly price, or the annual price for the first year.
+
+    There is no proration (the plan starts on approval) and no recurring base-fee billing after this payment.
+    """
+    match billing:
+        case OrganizationBillingCycle.MONTHLY:
+            return plan.monthly_price_usd
+        case OrganizationBillingCycle.ANNUAL:
+            return int(plan.annual_price_usd)
+        case unreachable:
+            assert_never(unreachable)
 
 
 @overload

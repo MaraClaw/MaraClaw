@@ -148,6 +148,7 @@ from app.api.okr import regeneration_router as okr_regeneration_router, router a
 from app.api.onboarding import router as onboarding_router
 from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
+from app.api.organization_admission_evidence import router as organization_admission_evidence_router
 from app.api.organization_admissions import router as organization_admissions_router
 from app.api.pages import public_router as pages_public_router, router as pages_router
 from app.api.relationships import router as relationships_router
@@ -199,6 +200,7 @@ app.include_router(messages_router, prefix=settings.API_PREFIX, dependencies=_CR
 app.include_router(tenants_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(company_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(organization_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(organization_admission_evidence_router, prefix=settings.API_PREFIX)
 app.include_router(capacity_router, prefix=settings.API_PREFIX)
 app.include_router(capacity_evidence_router, prefix=settings.API_PREFIX)
 app.include_router(schedules_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

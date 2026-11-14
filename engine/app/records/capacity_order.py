@@ -44,9 +44,9 @@ class CapacityOrderStatus(StrEnum):
     EXPIRED = "expired"
 
 
-def new_reference() -> str:
-    """A fresh transfer-note code: ``MC`` plus eight uppercase base32 characters."""
-    return REFERENCE_PREFIX + "".join(secrets.choice(_BASE32_ALPHABET) for _ in range(REFERENCE_LENGTH))
+def new_reference(prefix: str = REFERENCE_PREFIX) -> str:
+    """A fresh transfer-note code: ``prefix`` (``MC`` for capacity orders) plus eight uppercase base32 characters."""
+    return prefix + "".join(secrets.choice(_BASE32_ALPHABET) for _ in range(REFERENCE_LENGTH))
 
 
 @dataclass(frozen=True, slots=True)

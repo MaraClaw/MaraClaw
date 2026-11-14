@@ -1,6 +1,6 @@
 # Offline API contracts
 
-The checked `api-contract.json` contains the complete real `app.main.app.openapi()` document and an `x-maraclaw-contract` registry. The registry selects HTTP request/response/parameter schemas by concrete route-owner metadata in `scripts/api_contract_registry.py`, adds canonical engine enums and the explicit `ChatServerEvent` adapter, then records their reference closure. Unrelated HTTP operations remain in the artifact, not in generated validators. This is not an HTTP SDK.
+The checked `api-contract.json` contains the complete real `app.main.app.openapi()` document and an `x-maraclaw-contract` registry. The registry selects HTTP request/response/parameter schemas by concrete route-owner metadata in `scripts/api_contract_registry.py`, adds canonical engine enums, the explicit `ChatServerEvent` adapter and the explicit `OrganizationAdmissionAcknowledgment` (its route is multipart and unaudited), then records their reference closure. Unrelated HTTP operations remain in the artifact, not in generated validators. This is not an HTTP SDK.
 
 From `engine/`:
 

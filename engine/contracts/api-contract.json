@@ -3993,6 +3993,25 @@
         "title": "AuthUser",
         "type": "object"
       },
+      "Body_submit_organization_admission_api_organization_admissions_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "quote_token": {
+            "title": "Quote Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quote_token",
+          "file"
+        ],
+        "title": "Body_submit_organization_admission_api_organization_admissions_post",
+        "type": "object"
+      },
       "Body_upload_capacity_evidence_api_capacity_orders__order_id__evidence_post": {
         "properties": {
           "file": {
@@ -6099,6 +6118,12 @@
             "title": "Name",
             "type": "string"
           },
+          "phone": {
+            "maxLength": 16,
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "title": "Phone",
+            "type": "string"
+          },
           "tier": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           }
@@ -6106,6 +6131,7 @@
         "required": [
           "name",
           "tier",
+          "phone",
           "admin_email",
           "admin_password"
         ],
@@ -6394,6 +6420,17 @@
               }
             ],
             "title": "Org Admin Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
           },
           "slug": {
             "title": "Slug",
@@ -12881,7 +12918,7 @@
         ]
       },
       "OrganizationAdditionalAgentMonthlyUsd": {
-        "description": "Whole USD per month for each agent beyond the included allocation, per tier; quoted only, the engine does not bill it; the only place the numbers live.",
+        "description": "Whole USD per month for each agent beyond the included allocation, per tier; capacity orders price extra agents with it; the only place the numbers live.",
         "enum": [
           35,
           49,
@@ -12896,15 +12933,22 @@
         ]
       },
       "OrganizationAdmissionAcknowledgment": {
-        "description": "Generic acknowledgment: identical for new and repeated requests, so it never discloses request state.",
+        "description": "The request is pending review; ``reference`` is the transfer note its payment was quoted under.",
         "properties": {
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
           "status": {
             "const": "pending",
-            "default": "pending",
             "title": "Status",
             "type": "string"
           }
         },
+        "required": [
+          "status",
+          "reference"
+        ],
         "title": "OrganizationAdmissionAcknowledgment",
         "type": "object"
       },
@@ -12933,8 +12977,43 @@
         "title": "OrganizationAdmissionDecisionRequest",
         "type": "object"
       },
+      "OrganizationAdmissionEvidenceOut": {
+        "description": "The uploaded payment evidence as the reviewer sees it; the bytes come from the evidence download.",
+        "properties": {
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filename",
+          "content_type",
+          "size_bytes"
+        ],
+        "title": "OrganizationAdmissionEvidenceOut",
+        "type": "object"
+      },
       "OrganizationAdmissionItem": {
         "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "integer"
+          },
+          "amount_vnd": {
+            "title": "Amount Vnd",
+            "type": "integer"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/OrganizationBillingCycle"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -12965,6 +13044,9 @@
             "title": "Email",
             "type": "string"
           },
+          "evidence": {
+            "$ref": "#/components/schemas/OrganizationAdmissionEvidenceOut"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -12981,8 +13063,19 @@
             ],
             "title": "Organization Name"
           },
+          "payment_reference": {
+            "title": "Payment Reference",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          },
           "plan": {
             "$ref": "#/components/schemas/OrganizationPlan"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/CapacityRecipientOut"
           },
           "review_note": {
             "anyOf": [
@@ -13024,14 +13117,26 @@
           },
           "tier": {
             "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "usd_vnd_rate": {
+            "title": "Usd Vnd Rate",
+            "type": "integer"
           }
         },
         "required": [
           "id",
           "organization_name",
           "email",
+          "phone",
           "tier",
           "plan",
+          "billing",
+          "amount_usd",
+          "usd_vnd_rate",
+          "amount_vnd",
+          "recipient",
+          "payment_reference",
+          "evidence",
           "status",
           "created_at",
           "reviewed_at",
@@ -13064,9 +13169,84 @@
         "title": "OrganizationAdmissionPage",
         "type": "object"
       },
-      "OrganizationAdmissionRequest": {
+      "OrganizationAdmissionQuote": {
+        "additionalProperties": false,
+        "description": "What the visitor pays and where, plus the plan snapshot and the token that submits the request.",
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "integer"
+          },
+          "amount_vnd": {
+            "title": "Amount Vnd",
+            "type": "integer"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/OrganizationBillingCycle"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "organization_name": {
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/OrganizationPlan"
+          },
+          "quote_token": {
+            "title": "Quote Token",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/CapacityRecipientOut"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "usd_vnd_rate": {
+            "title": "Usd Vnd Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "organization_name",
+          "email",
+          "phone",
+          "tier",
+          "billing",
+          "amount_usd",
+          "usd_vnd_rate",
+          "amount_vnd",
+          "recipient",
+          "reference",
+          "expires_at",
+          "plan",
+          "quote_token"
+        ],
+        "title": "OrganizationAdmissionQuote",
+        "type": "object"
+      },
+      "OrganizationAdmissionQuoteRequest": {
         "additionalProperties": false,
         "properties": {
+          "billing": {
+            "$ref": "#/components/schemas/OrganizationBillingCycle"
+          },
           "email": {
             "format": "email",
             "title": "Email",
@@ -13078,6 +13258,12 @@
             "title": "Organization Name",
             "type": "string"
           },
+          "phone": {
+            "maxLength": 16,
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "title": "Phone",
+            "type": "string"
+          },
           "tier": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           }
@@ -13085,9 +13271,11 @@
         "required": [
           "organization_name",
           "email",
-          "tier"
+          "phone",
+          "tier",
+          "billing"
         ],
-        "title": "OrganizationAdmissionRequest",
+        "title": "OrganizationAdmissionQuoteRequest",
         "type": "object"
       },
       "OrganizationAgentLimit": {
@@ -13106,7 +13294,7 @@
         ]
       },
       "OrganizationAnnualPriceUsd": {
-        "description": "Whole USD per year when billed annually, per tier: ten times the monthly price (\"two months free\"); quoted only, the engine has no purchase flow; the only place the numbers live.",
+        "description": "Whole USD per year when billed annually, per tier: ten times the monthly price (\"two months free\"); the amount an annual admission quote collects once for the first year (the engine has no recurring base-fee billing); the only place the numbers live.",
         "enum": [
           790,
           2490,
@@ -13118,6 +13306,19 @@
           "PRO",
           "MAX",
           "ULTRA"
+        ]
+      },
+      "OrganizationBillingCycle": {
+        "description": "What the one payment of an admission request covers: the first month or the first year of the plan.\n\nOnly this first period is collected. There is no recurring base-fee billing after it.",
+        "enum": [
+          "monthly",
+          "annual"
+        ],
+        "title": "OrganizationBillingCycle",
+        "type": "string",
+        "x-enum-varnames": [
+          "MONTHLY",
+          "ANNUAL"
         ]
       },
       "OrganizationCurrency": {
@@ -13238,7 +13439,7 @@
       },
       "OrganizationPlan": {
         "additionalProperties": false,
-        "description": "Whole-USD commercial terms. The human account count includes the org admin; model charges are separate.\n\n``included_accounts`` and ``included_agents`` are the company-wide caps before purchased extras (there is no\naccount ceiling: a company buys any number of extra accounts), and ``max_agents_per_account`` is the per-account\nagent cap. ``annual_price_usd`` and the four ``*_addon_*`` fields are quoted terms only.",
+        "description": "Whole-USD commercial terms. The human account count includes the org admin; model charges are separate.\n\n``included_accounts`` and ``included_agents`` are the company-wide caps before purchased extras (there is no\naccount ceiling: a company buys any number of extra accounts), and ``max_agents_per_account`` is the per-account\nagent cap. ``monthly_price_usd`` and ``annual_price_usd`` are what an admission request pays once, for its first\nmonth or year; the four ``*_addon_*`` fields are quoted terms only.",
         "properties": {
           "additional_account_monthly_usd": {
             "$ref": "#/components/schemas/OrganizationAdditionalAccountMonthlyUsd"
@@ -17299,6 +17500,12 @@
             "title": "Name",
             "type": "string"
           },
+          "phone": {
+            "maxLength": 16,
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "title": "Phone",
+            "type": "string"
+          },
           "tier": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           }
@@ -17306,6 +17513,7 @@
         "required": [
           "name",
           "tier",
+          "phone",
           "admin_email",
           "admin_password"
         ],
@@ -21434,6 +21642,53 @@
           }
         ],
         "summary": "Decide Admission",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
+    "/api/admin/organization-admissions/{request_id}/evidence": {
+      "get": {
+        "description": "The stored evidence with its sniffed type; genesis platform admin only, sandboxed and never sniffed again.",
+        "operationId": "get_2f6170692f61646d696e2f6f7267616e697a6174696f6e2d61646d697373696f6e732f7b726571756573745f69647d2f65766964656e6365",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Organization Admission Evidence",
         "tags": [
           "organization-admissions"
         ]
@@ -41895,12 +42150,13 @@
     },
     "/api/organization-admissions": {
       "post": {
+        "description": "Submit the request a quote priced, with the bank-transfer evidence (image or PDF, at most 10 MiB).",
         "operationId": "post_2f6170692f6f7267616e697a6174696f6e2d61646d697373696f6e73",
         "requestBody": {
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/OrganizationAdmissionRequest"
+                "$ref": "#/components/schemas/Body_submit_organization_admission_api_organization_admissions_post"
               }
             }
           },
@@ -41928,7 +42184,49 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Request Admission",
+        "summary": "Submit Organization Admission",
+        "tags": [
+          "organization-admissions"
+        ]
+      }
+    },
+    "/api/organization-admissions/quote": {
+      "post": {
+        "description": "Price a request on the server: the amount to transfer, the bank recipient, the transfer reference and a signed token.\n\nThe request itself is submitted, with the payment evidence, by the multipart ``POST /organization-admissions``.",
+        "operationId": "post_2f6170692f6f7267616e697a6174696f6e2d61646d697373696f6e732f71756f7465",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationAdmissionQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAdmissionQuote"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quote Admission",
         "tags": [
           "organization-admissions"
         ]
@@ -47545,9 +47843,11 @@
       "OrganizationAdmissionDecisionRequest",
       "OrganizationAdmissionItem",
       "OrganizationAdmissionPage",
-      "OrganizationAdmissionRequest",
+      "OrganizationAdmissionQuote",
+      "OrganizationAdmissionQuoteRequest",
       "OrganizationAgentLimit",
       "OrganizationAnnualPriceUsd",
+      "OrganizationBillingCycle",
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
@@ -47904,11 +48204,14 @@
       "OrganizationAdditionalAgentMonthlyUsd",
       "OrganizationAdmissionAcknowledgment",
       "OrganizationAdmissionDecisionRequest",
+      "OrganizationAdmissionEvidenceOut",
       "OrganizationAdmissionItem",
       "OrganizationAdmissionPage",
-      "OrganizationAdmissionRequest",
+      "OrganizationAdmissionQuote",
+      "OrganizationAdmissionQuoteRequest",
       "OrganizationAgentLimit",
       "OrganizationAnnualPriceUsd",
+      "OrganizationBillingCycle",
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",

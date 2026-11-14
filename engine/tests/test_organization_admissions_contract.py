@@ -12,14 +12,22 @@ from pydantic import ValidationError
 from app.api import organization_admissions as api
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
+from app.records.capacity_order import CapacityEvidence, CapacityRecipient
 from app.records.organization_admission import OrganizationAdmissionRecord
-from app.records.organization_plan import OrganizationPlanId
+from app.records.organization_plan import OrganizationBillingCycle, OrganizationPlanId
 from app.records.user import UserRecord
-from app.schemas.organization_admission import OrganizationAdmissionDecisionRequest, OrganizationAdmissionRequest
+from app.schemas.capacity import CapacityRecipientOut
+from app.schemas.organization_admission import (
+    OrganizationAdmissionDecisionRequest,
+    OrganizationAdmissionQuote,
+    OrganizationAdmissionQuoteRequest,
+)
 from app.services import organization_admissions
 from app.services.organization_admission_credentials import seal, unseal
+from app.services.organization_admissions import OrganizationAdmissionView
 from app.services.organization_plans import plan_for
 
+PHONE = "+84912345678"
 CATALOG = {
     "plans": [
         {
@@ -98,6 +106,55 @@ CATALOG = {
 }
 
 
+RECIPIENT = CapacityRecipient("Vietcombank", "0011 0022 3344", "Sai Gon")
+REFERENCE = "MOABCDEFGH"
+
+
+def _record(tier: OrganizationPlanId = OrganizationPlanId.PRO) -> OrganizationAdmissionRecord:
+    return OrganizationAdmissionRecord(
+        id=uuid4(),
+        email="buyer@example.com",
+        phone=PHONE,
+        tier=tier,
+        plan=plan_for(tier),
+        billing=OrganizationBillingCycle.ANNUAL,
+        amount_usd=int(plan_for(tier).annual_price_usd),
+        usd_vnd_rate=25000,
+        amount_vnd=int(plan_for(tier).annual_price_usd) * 25000,
+        recipient=RECIPIENT,
+        payment_reference=REFERENCE,
+        evidence=CapacityEvidence(
+            storage_key="_organization_admissions/x/y.pdf",
+            content_type="application/pdf",
+            filename="proof.pdf",
+            size_bytes=72,
+            sha256="a" * 64,
+        ),
+        created_at=datetime.now(UTC),
+        organization_name="Acme Robotics",
+    )
+
+
+def _quote() -> OrganizationAdmissionQuote:
+    return OrganizationAdmissionQuote(
+        organization_name="Ops  Co.",
+        email="ops@example.com",
+        phone=PHONE,
+        tier=OrganizationPlanId.ULTRA,
+        billing=OrganizationBillingCycle.MONTHLY,
+        plan=plan_for(OrganizationPlanId.ULTRA),
+        amount_usd=699,
+        usd_vnd_rate=25000,
+        amount_vnd=17_475_000,
+        recipient=CapacityRecipientOut(
+            bank_name=RECIPIENT.bank_name, account_number=RECIPIENT.account_number, branch_name=RECIPIENT.branch_name
+        ),
+        reference=REFERENCE,
+        expires_at=datetime(2030, 1, 8, tzinfo=UTC),
+        quote_token="token",
+    )
+
+
 @pytest.fixture
 async def client():
     app = FastAPI()
@@ -112,44 +169,93 @@ async def test_catalog_is_public_and_exact(client: tuple[AsyncClient, FastAPI]):
     assert (response.status_code, response.json()) == (200, CATALOG)
 
 
-async def test_submission_passes_normalized_email_and_tier_and_returns_generic_ack(
+async def test_quote_passes_the_normalized_request_to_the_service_and_returns_its_quote(
     client: tuple[AsyncClient, FastAPI], monkeypatch: pytest.MonkeyPatch
 ):
     http, _ = client
-    submit = AsyncMock()
-    monkeypatch.setattr(api, "submit_request", submit)
+    quote = AsyncMock(return_value=_quote())
+    monkeypatch.setattr(api, "quote_request", quote)
     response = await http.post(
-        "/api/organization-admissions",
-        json={"organization_name": "  Ops  Co. ", "email": "  Ops@Example.COM ", "tier": "ultra"},
+        "/api/organization-admissions/quote",
+        json={
+            "organization_name": "  Ops  Co. ",
+            "email": "  Ops@Example.COM ",
+            "phone": " +84 912 345 678 ",
+            "tier": "ultra",
+            "billing": "monthly",
+        },
     )
-    assert (response.status_code, response.json()) == (202, {"status": "pending"})
-    submit.assert_awaited_once_with("ops@example.com", "Ops  Co.", OrganizationPlanId.ULTRA)
+    assert response.status_code == 200
+    assert response.json() == _quote().model_dump(mode="json")
+    quote.assert_awaited_once_with(
+        OrganizationAdmissionQuoteRequest(
+            organization_name="Ops  Co.",
+            email="ops@example.com",
+            phone=PHONE,
+            tier=OrganizationPlanId.ULTRA,
+            billing=OrganizationBillingCycle.MONTHLY,
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"organization_name": "Acme", "email": "not-an-email", "tier": "pro"},
-        {"organization_name": "Acme", "email": "", "tier": "pro"},
-        {"organization_name": "Acme", "email": "a@example.com", "tier": "Pro"},
-        {"organization_name": "Acme", "email": "a@example.com", "tier": "enterprise"},
-        {"organization_name": "Acme", "email": "a@example.com"},
-        {"organization_name": "Acme", "email": "a@example.com", "tier": "pro", "status": "approved"},
-        {"email": "a@example.com", "tier": "pro"},
-        {"organization_name": "", "email": "a@example.com", "tier": "pro"},
-        {"organization_name": "   ", "email": "a@example.com", "tier": "pro"},
-        {"organization_name": "x" * 201, "email": "a@example.com", "tier": "pro"},
-        {"organization_name": "Acme\nBcc: x@example.com", "email": "a@example.com", "tier": "pro"},
+        {"organization_name": "Acme", "email": "not-an-email", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "Acme", "email": "", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "tier": "Pro", "billing": "monthly"},
+        {
+            "organization_name": "Acme",
+            "email": "a@example.com",
+            "phone": PHONE,
+            "tier": "enterprise",
+            "billing": "monthly",
+        },
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "billing": "monthly"},
+        {
+            "organization_name": "Acme",
+            "email": "a@example.com",
+            "phone": PHONE,
+            "tier": "pro",
+            "billing": "monthly",
+            "status": "approved",
+        },
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "tier": "pro"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "weekly"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "Annual"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": None},
+        {"email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "", "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "   ", "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "x" * 201, "email": "a@example.com", "phone": PHONE, "tier": "pro", "billing": "monthly"},
+        {
+            "organization_name": "Acme\nBcc: x@example.com",
+            "email": "a@example.com",
+            "phone": PHONE,
+            "tier": "pro",
+            "billing": "monthly",
+        },
+        {"organization_name": "Acme", "email": "a@example.com", "tier": "pro", "billing": "monthly"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": None, "tier": "pro", "billing": "monthly"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": "", "tier": "pro", "billing": "monthly"},
+        {"organization_name": "Acme", "email": "a@example.com", "phone": "+84123", "tier": "pro", "billing": "monthly"},
+        {
+            "organization_name": "Acme",
+            "email": "a@example.com",
+            "phone": "0912345678",
+            "tier": "pro",
+            "billing": "monthly",
+        },
     ],
 )
-async def test_invalid_submission_is_rejected_before_the_service(
+async def test_invalid_quote_request_is_rejected_before_the_service(
     client: tuple[AsyncClient, FastAPI], monkeypatch: pytest.MonkeyPatch, payload: dict[str, str]
 ):
     http, _ = client
-    submit = AsyncMock()
-    monkeypatch.setattr(api, "submit_request", submit)
-    assert (await http.post("/api/organization-admissions", json=payload)).status_code == 422
-    submit.assert_not_awaited()
+    quote = AsyncMock()
+    monkeypatch.setattr(api, "quote_request", quote)
+    assert (await http.post("/api/organization-admissions/quote", json=payload)).status_code == 422
+    quote.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -192,8 +298,14 @@ def test_decision_note_is_trimmed_bounded_and_blank_is_absent():
 
 def test_request_email_is_lowercased_and_trimmed():
     assert (
-        OrganizationAdmissionRequest.model_validate(
-            {"organization_name": "Acme", "email": " A.B@Example.Com\n", "tier": "pro"}
+        OrganizationAdmissionQuoteRequest.model_validate(
+            {
+                "organization_name": "Acme",
+                "email": " A.B@Example.Com\n",
+                "phone": PHONE,
+                "tier": "pro",
+                "billing": "annual",
+            }
         ).email
         == "a.b@example.com"
     )
@@ -209,29 +321,47 @@ def test_credential_payload_is_bound_to_its_request():
         _ = unseal(request_id, sealed[:-1] + bytes([sealed[-1] ^ 1]))
 
 
+def test_review_item_exposes_the_request_phone():
+    assert api._item(OrganizationAdmissionView(_record(), None)).phone == PHONE
+
+
+def test_review_item_exposes_the_payment_snapshot_and_evidence_metadata_but_not_the_storage_key():
+    item = api._item(OrganizationAdmissionView(_record(OrganizationPlanId.MAX), None))
+    body = item.model_dump(mode="json")
+
+    assert (body["billing"], body["amount_usd"], body["usd_vnd_rate"], body["amount_vnd"]) == (
+        "annual",
+        2490,
+        25000,
+        2490 * 25000,
+    )
+    assert body["recipient"] == {
+        "bank_name": "Vietcombank",
+        "account_number": "0011 0022 3344",
+        "branch_name": "Sai Gon",
+    }
+    assert body["payment_reference"] == REFERENCE
+    assert body["evidence"] == {"filename": "proof.pdf", "content_type": "application/pdf", "size_bytes": 72}
+    assert "storage_key" not in str(body)
+
+
 @pytest.mark.parametrize("tier", list(OrganizationPlanId))
-async def test_approval_creates_the_organization_in_the_tier_the_request_chose(
+async def test_approval_creates_the_organization_with_the_tier_and_phone_the_request_chose(
     monkeypatch: pytest.MonkeyPatch, tier: OrganizationPlanId
 ):
-    request = OrganizationAdmissionRecord(
-        id=uuid4(),
-        email="buyer@example.com",
-        tier=tier,
-        plan=plan_for(tier),
-        created_at=datetime.now(UTC),
-        organization_name="Acme Robotics",
-    )
+    request = _record(tier)
     identity = SimpleNamespace(id=uuid4(), password_hash="hash")
     provisioned = SimpleNamespace(
-        tenant=SimpleNamespace(id=uuid4(), name="Acme Robotics"),
+        tenant=SimpleNamespace(id=uuid4(), name="Acme Robotics", phone=PHONE),
         org_admin=SimpleNamespace(id=uuid4(), identity=identity),
         admin_email="buyer@example.com",
     )
     create = AsyncMock(return_value=provisioned)
+    audit = AsyncMock()
     monkeypatch.setattr(organization_admissions, "create_tenant_with_org_admin", create)
     monkeypatch.setattr(organization_admissions.emails, "enqueue", AsyncMock())
     monkeypatch.setattr(organization_admissions.admissions, "update", AsyncMock(return_value=request))
-    monkeypatch.setattr(organization_admissions, "write_admin_audit", AsyncMock())
+    monkeypatch.setattr(organization_admissions, "write_admin_audit", audit)
     monkeypatch.setattr(organization_admissions, "seal", lambda _request_id, _password: b"sealed")
     reviewer = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
 
@@ -241,3 +371,7 @@ async def test_approval_creates_the_organization_in_the_tier_the_request_chose(
     assert create.await_args is not None
     assert create.await_args.kwargs["tier"] is tier
     assert create.await_args.kwargs["name"] == "Acme Robotics"
+    assert create.await_args.kwargs["phone"] == PHONE
+    assert audit.await_args is not None
+    assert audit.await_args.kwargs["changes"]["phone"] == {"before": None, "after": PHONE}
+    assert audit.await_args.kwargs["details"]["payment_reference"] == REFERENCE

@@ -32,6 +32,11 @@ def remaining_days(today: date) -> int:
     return days_in_month(today) - today.day + 1
 
 
+def round_up_vnd(usd: Fraction | int, usd_vnd_rate: int) -> int:
+    """``usd`` converted at ``usd_vnd_rate``, rounded up to the next ``VND_STEP`` (never a float)."""
+    return math.ceil(Fraction(usd) * usd_vnd_rate / VND_STEP) * VND_STEP
+
+
 @dataclass(frozen=True, slots=True)
 class CapacityQuote:
     billing_month: date
@@ -65,7 +70,7 @@ def _quote(
     monthly_usd = extra_accounts * account_unit_usd + extra_agents * agent_unit_usd
     usd_exact = Fraction(monthly_usd * days_charged, total_days)
     amount_usd_cents = math.floor(usd_exact * 100 + Fraction(1, 2))
-    amount_vnd = math.ceil(usd_exact * usd_vnd_rate / VND_STEP) * VND_STEP
+    amount_vnd = round_up_vnd(usd_exact, usd_vnd_rate)
     return CapacityQuote(
         billing_month=month_start(billing_month),
         days_in_month=total_days,

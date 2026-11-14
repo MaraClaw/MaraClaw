@@ -138,6 +138,26 @@ def test_real_application_when_exported_never_connects_or_enters_lifespan(monkey
     assert len(mapping(document["paths"])) > 300
 
 
+def test_real_export_names_the_admission_wire_schemas_although_the_submit_route_is_unaudited() -> None:
+    # Given the multipart submit lives in an unaudited module, so only the explicit registry can export its answer.
+    from app.main import app
+
+    # When
+    document = export_contract(app)
+    # Then the frontends still get a validator for every payload of the quote, submit and review flow.
+    schemas = mapping(mapping(document["components"])["schemas"])
+    for name in (
+        "OrganizationAdmissionQuoteRequest",
+        "OrganizationAdmissionQuote",
+        "OrganizationAdmissionAcknowledgment",
+        "OrganizationAdmissionItem",
+        "OrganizationBillingCycle",
+    ):
+        assert name in schemas
+    assert mapping(schemas["OrganizationBillingCycle"])["enum"] == ["monthly", "annual"]
+    assert mapping(schemas["OrganizationAdmissionAcknowledgment"])["required"] == ["status", "reference"]
+
+
 def test_real_export_when_json_aliases_collide_names_each_definition_without_changing_source() -> None:
     # Given
     from app.main import app

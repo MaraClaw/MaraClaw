@@ -308,13 +308,30 @@ def test_only_the_current_shape_with_a_defined_cap_is_accepted(malformed: dict[s
         _ = OrganizationPlan.model_validate(malformed)
 
 
+_PAYMENT_COLUMNS: dict[str, object] = {
+    "billing": "monthly",
+    "amount_usd": 249,
+    "usd_vnd_rate": 25000,
+    "amount_vnd": 6_225_000,
+    "recipient": {"bank_name": "Vietcombank", "account_number": "0011 0022 3344", "branch_name": "Sai Gon"},
+    "payment_reference": "MOABCDEFGH",
+    "evidence_storage_key": "_organization_admissions/request/evidence.png",
+    "evidence_content_type": "image/png",
+    "evidence_filename": "proof.png",
+    "evidence_size_bytes": 72,
+    "evidence_sha256": "0" * 64,
+}
+
+
 def test_admission_row_reads_the_current_shape_and_refuses_the_old_wire_format():
     row = {
         "id": uuid4(),
         "email": "buyer@example.com",
+        "phone": "+84912345678",
         "tier": "max",
         "created_at": datetime.now(UTC),
         "status": "approved",
+        **_PAYMENT_COLUMNS,
     }
     current = OrganizationAdmissionRecord.from_row({**row, "plan": _current()})
     assert current.plan == plan_for(OrganizationPlanId.MAX)
@@ -336,10 +353,12 @@ def _admission_row(plan: object, tier: OrganizationPlanId = OrganizationPlanId.M
     return {
         "id": uuid4(),
         "email": "buyer@example.com",
+        "phone": "+84912345678",
         "tier": tier.value,
         "created_at": datetime(2026, 1, 1, tzinfo=UTC),
         "status": "approved",
         "plan": plan,
+        **_PAYMENT_COLUMNS,
     }
 
 

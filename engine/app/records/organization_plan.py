@@ -20,6 +20,16 @@ class OrganizationPlanName(StrEnum):
     ULTRA = "Ultra"
 
 
+class OrganizationBillingCycle(StrEnum):
+    """What the one payment of an admission request covers: the first month or the first year of the plan.
+
+    Only this first period is collected. There is no recurring base-fee billing after it.
+    """
+
+    MONTHLY = "monthly"
+    ANNUAL = "annual"
+
+
 class OrganizationCurrency(StrEnum):
     """ISO currency codes supported by organization pricing plans."""
 
@@ -27,7 +37,7 @@ class OrganizationCurrency(StrEnum):
 
 
 class OrganizationAnnualPriceUsd(IntEnum):
-    """Whole USD per year when billed annually, per tier: ten times the monthly price ("two months free"); quoted only, the engine has no purchase flow; the only place the numbers live."""
+    """Whole USD per year when billed annually, per tier: ten times the monthly price ("two months free"); the amount an annual admission quote collects once for the first year (the engine has no recurring base-fee billing); the only place the numbers live."""
 
     PRO = 790
     MAX = 2490
@@ -62,7 +72,7 @@ class OrganizationIncludedAgents(IntEnum):
 
 
 class OrganizationAdditionalAgentMonthlyUsd(IntEnum):
-    """Whole USD per month for each agent beyond the included allocation, per tier; quoted only, the engine does not bill it; the only place the numbers live."""
+    """Whole USD per month for each agent beyond the included allocation, per tier; capacity orders price extra agents with it; the only place the numbers live."""
 
     PRO = 35
     MAX = 49
@@ -138,7 +148,8 @@ class OrganizationPlan(BaseModel):
 
     ``included_accounts`` and ``included_agents`` are the company-wide caps before purchased extras (there is no
     account ceiling: a company buys any number of extra accounts), and ``max_agents_per_account`` is the per-account
-    agent cap. ``annual_price_usd`` and the four ``*_addon_*`` fields are quoted terms only.
+    agent cap. ``monthly_price_usd`` and ``annual_price_usd`` are what an admission request pays once, for its first
+    month or year; the four ``*_addon_*`` fields are quoted terms only.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")

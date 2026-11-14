@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS tenants (
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
 	tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')), 
+	phone VARCHAR(16) CONSTRAINT ck_tenants_phone CHECK (phone ~ '^\+[1-9][0-9]{6,14}$'), 
 	name_tsv tsvector GENERATED ALWAYS AS (
 		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
 	) STORED,
@@ -525,8 +526,22 @@ CREATE TABLE IF NOT EXISTS organization_admission_requests (
     organization_name VARCHAR(200) CONSTRAINT ck_organization_admission_name
         CHECK (organization_name = btrim(organization_name) AND organization_name <> ''),
     email VARCHAR(320) NOT NULL CHECK (email = lower(btrim(email)) AND email <> ''),
+    phone VARCHAR(16) NOT NULL CONSTRAINT ck_organization_admission_phone CHECK (phone ~ '^\+[1-9][0-9]{6,14}$'),
     tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
     plan JSONB NOT NULL,
+    -- The paid first period: the quote (billing cycle, whole USD, rate, VND, bank recipient, transfer reference) and
+    -- the uploaded transfer evidence, all snapshotted when the request is submitted.
+    billing VARCHAR(8) NOT NULL CHECK (billing IN ('monthly','annual')),
+    amount_usd INTEGER NOT NULL CHECK (amount_usd >= 0),
+    usd_vnd_rate INTEGER NOT NULL CHECK (usd_vnd_rate > 0),
+    amount_vnd BIGINT NOT NULL CHECK (amount_vnd >= 0),
+    recipient JSONB NOT NULL CHECK (jsonb_typeof(recipient) = 'object'),
+    payment_reference VARCHAR(10) NOT NULL UNIQUE CHECK (payment_reference ~ '^MO[A-Z2-7]{8}$'),
+    evidence_storage_key TEXT NOT NULL,
+    evidence_content_type VARCHAR(100) NOT NULL,
+    evidence_filename VARCHAR(255) NOT NULL,
+    evidence_size_bytes BIGINT NOT NULL CHECK (evidence_size_bytes > 0),
+    evidence_sha256 CHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at TIMESTAMPTZ,
