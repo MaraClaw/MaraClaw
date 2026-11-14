@@ -25,7 +25,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 | Admission access gating | `src/lib/admission-access.ts`, `src/hooks/use-admission-access.ts`, `src/components/layout/admission-access-gate.tsx` |
 | Node and browser checks | [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md) |
 | Theme and shared styles | `index.html`, `src/hooks/theme-provider.tsx`, `src/index.css` |
-| Production / verification | `Dockerfile`, `docker/nginx.conf`, `package.json`, `../.github/workflows/frontend-ci.yml` |
+| Production / verification | `Dockerfile`, `docker/Caddyfile`, `package.json`, `../.github/workflows/frontend-ci.yml` |
 
 ## RUNTIME CONTRACTS
 
@@ -54,8 +54,8 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 ## ENVIRONMENT AND SERVING
 
 - Public `VITE_*` only, never secrets. Empty `VITE_API_BASE_URL` means same-origin; never use `http://0.0.0.0:8000`.
-- Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 51m (50 MiB file plus multipart framing).
-- Docker builds with Node 26.13.1 and serves via non-root `nginxinc/nginx-unprivileged` on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
+- Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 51MiB (50 MiB file plus multipart framing), and rewrites root WeCom domain-verification files (`/WW_verify_<token>.txt`) to `/api/wecom-verify/<filename>`; keep that Caddyfile pattern in step with the engine's `_VERIFY_FILENAME_RE`.
+- Docker builds with Node 26.13.1 and serves via Caddy (`caddy:2.11.9-alpine`) running as non-root uid 101 on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
 - CSP `font-src 'self' data:` blocks index.html's Google Fonts in the image; external APIs require `connect-src` edits. Local Office parsing uses only `script-src 'wasm-unsafe-eval'` and `worker-src 'self' blob:`; never add JavaScript `unsafe-eval`, data workers or remote viewer/font hosts. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
 
 ## COMMANDS AND CHECKS

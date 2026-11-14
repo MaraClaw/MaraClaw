@@ -175,7 +175,8 @@ def _parse_wecom_xml(xml: bytes | str) -> WeComXmlFields:
 # Instead, tenants paste their verification token into the enterprise settings,
 # and this endpoint serves the correct file content for any known token.
 #
-# Nginx must proxy root WW_verify_<token>.txt requests to /api/wecom-verify/<filename>.
+# The front proxy must route root WW_verify_<token>.txt requests to /api/wecom-verify/<filename>; the web-e image
+# does this in web-e/docker/Caddyfile (@wecom_verify). Keep its filename pattern in step with _VERIFY_FILENAME_RE.
 
 _VERIFY_FILENAME_RE = re.compile(r"^WW_verify_[A-Za-z0-9_]{1,64}\.txt$")
 

@@ -1,0 +1,170 @@
+# MaraClaw web-e - production SPA for the end-user UI (landing + members)
+# - Plain HTTP on non-privileged port 8080 (TLS is terminated in front of this container)
+# - Long-cache hashed assets, no-cache HTML
+# - SPA fallback to index.html
+# - Basic security headers + compression
+# - Access log without request targets, queries or headers
+#
+# Engine traffic: same-origin /api/, /ws/ (WebSocket) and /p/ proxy to maraclaw-engine:8000. The name is resolved per
+# connection, so the engine may start before or after this container; requests answer 502 until it is reachable.
+{
+	admin off
+	persist_config off
+	auto_https off
+
+	# Caddy's own messages (startup, proxy errors). Error entries carry the request, so drop the same private fields as
+	# the access log below.
+	log {
+		output stderr
+		format filter {
+			request>uri delete
+			request>headers delete
+			request>host delete
+			request>tls delete
+		}
+	}
+
+	servers {
+		# Plain HTTP/1.1 only; HTTP/2 and HTTP/3 need TLS, which is terminated in front of this container.
+		protocols h1
+		# Keep the X-Forwarded-* chain from a load balancer on a private network instead of overwriting it.
+		trusted_proxies static private_ranges
+		timeouts {
+			read_header 10s
+			read_body_idle 10s
+			write_idle 10s
+			idle 65s
+		}
+	}
+}
+
+# Usage: import engine_proxy <route label> <upstream read timeout>
+(engine_proxy) {
+	log_append route {args[0]}
+	# Host, X-Forwarded-For and X-Forwarded-Proto are forwarded by default; the original URI is passed unchanged.
+	# WebSocket upgrades are proxied as-is; the read timeout also bounds an idle upgraded connection.
+	reverse_proxy maraclaw-engine:8000 {
+		transport http {
+			read_timeout {args[1]}
+		}
+	}
+	log_append upstream_status {rp.status_code}
+	log_append upstream_ms {rp.upstream.duration_ms}
+}
+
+http://:8080 {
+	root * /srv
+
+	# Hide the server name on every response, including proxied ones and errors (handle_errors below).
+	header -Server
+
+	# Access records carry client address, time, method, status, size, timing and the upstream outcome. The URI, query
+	# string, Referer, User-Agent, credential headers and bodies are never logged: webhook tokens and callback secrets
+	# travel in paths and queries. "route" is a static label set per handler below.
+	log {
+		output stdout
+		format filter {
+			request>uri delete
+			request>headers delete
+			request>host delete
+			request>tls delete
+			resp_headers delete
+		}
+	}
+
+	encode zstd gzip {
+		minimum_length 256
+		match {
+			header Content-Type text/html*
+			header Content-Type text/plain*
+			header Content-Type text/css*
+			header Content-Type text/javascript*
+			header Content-Type application/javascript*
+			header Content-Type application/json*
+			header Content-Type application/xml*
+			header Content-Type image/svg+xml*
+			header Content-Type font/woff2*
+			header Content-Type application/wasm*
+		}
+	}
+
+	# Allow supported single-file 50 MiB uploads plus multipart framing, with a finite ceiling.
+	request_body {
+		max_size 51MiB
+	}
+
+	@hidden path_regexp /\.
+	@static path_regexp (?i)\.(svg|ico|png|jpe?g|gif|webp|woff2?)$
+
+	# Health probe for container orchestrators.
+	handle /healthz {
+		log_skip
+		respond "ok" 200
+	}
+
+	# Deny hidden files.
+	handle @hidden {
+		log_skip
+		respond 403
+	}
+
+	# Same-origin engine proxy (docker DNS). Override the host via extra_hosts if needed.
+	handle /api/* {
+		import engine_proxy api 120s
+	}
+
+	handle /ws/* {
+		import engine_proxy ws 3600s
+	}
+
+	handle /p/* {
+		import engine_proxy page 60s
+	}
+
+	# WeCom domain verification: WeCom fetches https://<domain>/WW_verify_<token>.txt from the site root, and the engine
+	# serves the tenant's token at /api/wecom-verify/<filename>. Same filename rule as the engine (app/api/wecom.py).
+	@wecom_verify path_regexp ^/WW_verify_[A-Za-z0-9_]{1,64}\.txt$
+	handle @wecom_verify {
+		rewrite * /api/wecom-verify{path}
+		import engine_proxy api 120s
+	}
+
+	# Immutable hashed build assets (Vite: /assets/*).
+	handle /assets/* {
+		log_skip
+		header Cache-Control "public, max-age=31536000, immutable"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+
+	# Public static files (favicon, brand marks).
+	handle @static {
+		log_skip
+		header Cache-Control "public, max-age=604800"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+
+	# HTML entry + client routes: never long-cache index.html.
+	handle {
+		log_append route spa
+		header {
+			Cache-Control "no-cache, no-store, must-revalidate"
+			Pragma no-cache
+			X-Content-Type-Options nosniff
+			X-Frame-Options SAMEORIGIN
+			Referrer-Policy strict-origin-when-cross-origin
+			Permissions-Policy "camera=(), microphone=(), geolocation=()"
+			Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' ws: wss:"
+		}
+		try_files {path} {path}/ /index.html
+		file_server
+	}
+
+	# Errors Caddy raises itself (missing file, body too large, engine unreachable) answer with the bare status, without
+	# the default Server header.
+	handle_errors {
+		header -Server
+		respond "" {err.status_code}
+	}
+}
