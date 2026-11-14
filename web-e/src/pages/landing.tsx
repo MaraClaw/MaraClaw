@@ -8,6 +8,7 @@ import { Faq } from '@/components/sections/faq'
 import { Features } from '@/components/sections/features'
 import { Hero } from '@/components/sections/hero'
 import { HowItWorks } from '@/components/sections/how-it-works'
+import { Individuals } from '@/components/sections/individuals'
 import { Integrations } from '@/components/sections/integrations'
 import { Pricing } from '@/components/sections/pricing'
 
@@ -29,6 +30,7 @@ export function LandingPage() {
         <Integrations />
         <Enterprise />
         <Pricing />
+        <Individuals />
         <Faq />
         <Cta />
       </main>

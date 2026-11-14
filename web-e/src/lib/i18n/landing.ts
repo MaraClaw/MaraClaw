@@ -215,5 +215,14 @@ export const landing = {
   "Atlassian": "Atlassian",
   "Webhooks": "Webhook",
   "SSO": "SSO",
-  "MCP servers": "máy chủ MCP"
+  "MCP servers": "máy chủ MCP",
+  "For individuals": "Dành cho cá nhân",
+  "Join the KABERs community": "Tham gia cộng đồng KABERs",
+  "Not part of a company? Create your own account and work with OpenClaw agents as a Pro tier member of KABERs, the MaraClaw community for individuals.": "Bạn không thuộc công ty nào? Hãy tạo tài khoản riêng và làm việc với các trợ lý OpenClaw với tư cách thành viên gói Pro của KABERs, cộng đồng MaraClaw dành cho cá nhân.",
+  "Create your account": "Tạo tài khoản của bạn",
+  "Sign up with a personal email. An email domain claimed by a company sends a join request to that company instead.": "Hãy đăng ký bằng email cá nhân. Nếu miền email đã được một công ty đăng ký, yêu cầu tham gia sẽ được gửi đến công ty đó.",
+  "A Pro tier account in the KABERs community": "Tài khoản gói Pro trong cộng đồng KABERs",
+  "Up to {count} agents of your own": "Tối đa {count} trợ lý của riêng bạn",
+  "{size} GiB of managed storage per agent": "{size} GiB dung lượng lưu trữ được quản lý cho mỗi trợ lý",
+  "Chat with your agents in the web workspace": "Trò chuyện với trợ lý trong không gian làm việc trên web"
 } as const
