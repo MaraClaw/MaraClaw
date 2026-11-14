@@ -1,5 +1,6 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
+import { Play, Square } from 'lucide-react'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
@@ -14,6 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { IconTooltip } from '@/components/ui/tooltip'
 import { useAuth } from '@/hooks/use-auth'
 import { useAgentSetup } from '@/hooks/use-agent-setup'
 import { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
@@ -106,12 +108,19 @@ export function AgentSettingsPage() {
       <div className="flex flex-wrap items-start gap-2">
         {canManage ? (
           <>
-            {agent.status !== 'running' && !agent.runtime_loss ? (
-              <Button size="sm" variant="outline" disabled={start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start} onClick={() => start.mutate()}>
-                {translate("Start")}</Button>
+            {!agent.runtime_loss ? (
+              <IconTooltip label={translate("Start")}>
+                <Button size="icon" variant="outline" className="size-11" aria-label={translate("Start")}
+                  disabled={agent.status === 'running' || start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start}
+                  onClick={() => start.mutate()}>
+                  <Play aria-hidden="true" /></Button>
+              </IconTooltip>
             ) : null}
-            <Button size="sm" variant="outline" disabled={stop.isPending || upgrading} onClick={() => stop.mutate()}>
-              {translate("Stop")}</Button>
+            <IconTooltip label={translate("Stop")}>
+              <Button size="icon" variant="outline" className="size-11" aria-label={translate("Stop")}
+                disabled={agent.status === 'stopped' || stop.isPending || upgrading} onClick={() => stop.mutate()}>
+                <Square aria-hidden="true" /></Button>
+            </IconTooltip>
           </>
         ) : null}
         {canRequestAgentDeletion(agent, user) ? (

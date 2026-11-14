@@ -101,8 +101,9 @@ for (const lifecycle of lifecycleCases) {
     request.release()
     await expect(page.locator('[data-slot="badge"]').filter({ hasText: lifecycle.finalStatus })).toBeVisible()
     expect(api.reads()).toBe(2)
-    await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(lifecycle.action === 'start' ? 0 : 1)
-    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled()
+    const [settled, opposite] = lifecycle.action === 'start' ? ['Start', 'Stop'] : ['Stop', 'Start']
+    await expect(page.getByRole('button', { name: settled, exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: opposite, exact: true })).toBeEnabled()
     await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0)
   })
 
@@ -181,8 +182,8 @@ for (const rights of [
     for (const label of ['Name', 'Bio', 'Welcome message', 'Heartbeat enabled', 'Heartbeat interval (minutes)', 'Timezone']) {
       await expect(page.getByLabel(label, { exact: true })).toHaveCount(0)
     }
-    await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByLabel('Active hours', { exact: true })).toHaveJSProperty('disabled', !rights.creator)
+    await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(rights.creator || rights.admin ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Request deletion', exact: true })).toHaveCount(rights.creator && !rights.system ? 1 : 0)

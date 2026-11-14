@@ -16,6 +16,7 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 | `accordion.tsx` | `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent` | Faq |
 | `separator.tsx` | `Separator` | SiteFooter |
 | `sheet.tsx` | `Sheet`, `SheetTrigger`, `SheetClose`, `SheetContent`, `SheetHeader`, `SheetTitle`, `SheetDescription` | Mobile nav (Dialog-based) |
+| `tooltip.tsx` | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider`, `IconTooltip` | Agent Settings icon actions (`IconTooltip` wraps the control in a span so disabled buttons still show it; the button keeps its own `aria-label`) |
 | `input.tsx` | `Input` | Auth + workspace forms |
 | `label.tsx` | `Label` | Auth + workspace forms |
 | `textarea.tsx` | `Textarea` | Chat composer, clawbook, OKR, files, agent settings and forms |

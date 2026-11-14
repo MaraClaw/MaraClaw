@@ -106,11 +106,29 @@ test('mounted timestamp expiry updates the badge and disables start and optional
   expect(api.reads()).toBeGreaterThan(reads)
 })
 
+for (const { status, disabled, enabled } of [
+  { status: 'stopped', disabled: 'Stop', enabled: 'Start' },
+  { status: 'running', disabled: 'Start', enabled: 'Stop' },
+] as const) {
+  test(`a ${status} container disables ${disabled} and the icon control still names itself on hover`, async ({ page }) => {
+    // Given
+    await prepareLifecycle(page, lifecycleReady, { ...originalAgent, status })
+    // When
+    await page.goto(settingsPath)
+    const control = page.getByRole('button', { name: disabled, exact: true })
+    await expect(control).toBeDisabled()
+    await expect(page.getByRole('button', { name: enabled, exact: true })).toBeEnabled()
+    await page.locator('[data-slot="icon-tooltip"]').filter({ has: control }).hover()
+    // Then
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(disabled)
+  })
+}
+
 test('policy ineligibility blocks new starts and retries without changing manual Stop', async ({ page }) => {
   // Given
   await prepareLifecycle(page, { ...warningLifecycle, availability: {
     policy_eligible: false, blocking_codes: ['owner_inactive'], can_start: false, can_retry_setup: false, can_retry_mcp: false,
-  } })
+  } }, { ...originalAgent, status: 'idle' })
   // When
   await page.goto(settingsPath)
   // Then
