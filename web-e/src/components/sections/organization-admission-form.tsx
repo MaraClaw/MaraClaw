@@ -51,14 +51,24 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
                 <span className="font-display text-4xl font-semibold tracking-tight">${formatNumber(plan.monthly_price_usd)}</span>
                 <span className="text-muted-foreground">{translate("USD / month")}</span>
               </span>
+              <span className="mt-1 text-muted-foreground">${formatNumber(plan.annual_price_usd)} {translate("USD / year, billed annually")}</span>
               <span className="mt-5 space-y-2 text-[17px] leading-relaxed sm:text-base">
                 <span className="block">{translate('{count} human accounts included', { count: formatNumber(plan.included_accounts) })}</span>
                 <span className="block text-muted-foreground">${formatNumber(plan.additional_account_monthly_usd)} {translate("USD / additional account / month")}</span>
-                <span className="block">{translate('Up to {count} human accounts', { count: formatNumber(plan.max_accounts) })}</span>
+                <span className="block">{translate('{count} agents included', { count: formatNumber(plan.included_agents) })}</span>
+                <span className="block text-muted-foreground">${formatNumber(plan.additional_agent_monthly_usd)} {translate("USD / additional agent / month")}</span>
+              </span>
+              <span className="mt-5 space-y-2 border-t border-border pt-5 text-[17px] leading-relaxed sm:text-base">
                 <span className="block">{translate('Up to {count} agents per account', { count: formatNumber(plan.max_agents_per_account) })}</span>
                 <span className="block">{translate('Up to {count} messages per agent per day', { count: formatNumber(plan.daily_messages_per_agent) })}</span>
                 <span className="block">{translate('{size} GiB managed S3 storage per agent', { size: formatNumber(plan.storage_limit_bytes / (1024 ** 3)) })}</span>
                 <span className="block">{translate('{size} MiB per managed S3 file', { size: formatNumber(plan.max_file_size_bytes / (1024 ** 2)) })}</span>
+              </span>
+              <span className="mt-5 space-y-2 border-t border-border pt-5 text-[17px] leading-relaxed sm:text-base">
+                <span className="block">{translate('Add-on: +{size} GiB managed S3 storage', { size: formatNumber(plan.storage_addon_bytes / (1024 ** 3)) })}</span>
+                <span className="block text-muted-foreground">${formatNumber(plan.storage_addon_monthly_usd)} {translate("USD / month")}</span>
+                <span className="block">{translate('Add-on: +{size} GiB workspace disk', { size: formatNumber(plan.workspace_disk_addon_bytes / (1024 ** 3)) })}</span>
+                <span className="block text-muted-foreground">${formatNumber(plan.workspace_disk_addon_monthly_usd)} {translate("USD / month")}</span>
               </span>
             </label>
           ))}
@@ -66,7 +76,7 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
       </fieldset>
 
       <p id="pricing-terms" className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
-        {translate("Human accounts include your organization admin. Each account, including additional accounts and organization admins, has its own agent allowance; agents are not pooled. Agent creation caps and daily message caps per agent are enforced for approved tiered organizations; an agent's daily count resets at midnight in your organization admin's timezone (UTC if none is set). Existing quotas remain for organizations without a tier. Human account allocations and monthly USD prices remain proposals subject to approval, not enforced quotas or paid activation. Your organization pays its own model and tool providers.")}</p>
+        {translate("Human accounts include your organization admin. Each account, including additional accounts and organization admins, has its own agent cap; per-account caps are not pooled. The organization price covers the included accounts and agents for the whole company, and there is no account limit: after your organization is created, its organization admin buys extra accounts and agents month by month in the admin console at the additional prices shown, paid by bank transfer. Company account and agent limits, agent creation caps and daily message caps per agent are enforced for approved tiered organizations; an agent's daily count resets at midnight in your organization admin's timezone (UTC if none is set). Existing quotas remain for organizations without a tier. Monthly and annual organization prices and the storage and workspace-disk add-ons are quoted proposals subject to approval, not purchase options or paid activation. Your organization pays its own model and tool providers.")}</p>
 
       <p className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
         {translate("Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.")}</p>

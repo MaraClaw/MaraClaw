@@ -58,7 +58,7 @@ export function Pricing() {
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-semibold uppercase tracking-wider text-primary">{translate("Organization plans")}</p>
           <h2 id="pricing-heading" className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">{translate("Choose a plan for your team")}</h2>
-          <p className="mt-4 text-[17px] leading-relaxed text-muted-foreground sm:text-lg">{translate("Proposed monthly pricing for human teams and their digital employees. Select a plan and request approval to get started.")}</p>
+          <p className="mt-4 text-[17px] leading-relaxed text-muted-foreground sm:text-lg">{translate("Proposed monthly and annual pricing for human teams and their digital employees. Select a plan and request approval to get started.")}</p>
         </div>
         <PricingCatalog key={attempt} retry={() => setAttempt((value) => value + 1)} />
       </div>

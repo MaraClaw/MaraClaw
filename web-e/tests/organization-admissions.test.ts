@@ -8,9 +8,9 @@ import { fetchOrganizationPlans, organizationAdmissionSchema, requestOrganizatio
 import { ownAccountSession } from './auth-account-fixture.ts'
 
 const plans = [
-  { id: 'pro', name: 'Pro', currency: 'USD', monthly_price_usd: 49, included_accounts: 5, additional_account_monthly_usd: 6, max_accounts: 25, max_agents_per_account: 2, storage_limit_bytes: 2147483648, max_file_size_bytes: 26214400, daily_messages_per_agent: 100, guest_memory_bytes: 2147483648, guest_millicpus: 1500, guest_cpu_shares: 1024, guest_pids_limit: 512, workspace_disk_bytes: 3221225472 },
-  { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 149, included_accounts: 15, additional_account_monthly_usd: 5, max_accounts: 75, max_agents_per_account: 5, storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800, daily_messages_per_agent: 200, guest_memory_bytes: 3221225472, guest_millicpus: 2000, guest_cpu_shares: 1536, guest_pids_limit: 768, workspace_disk_bytes: 5368709120 },
-  { id: 'ultra', name: 'Ultra', currency: 'USD', monthly_price_usd: 399, included_accounts: 40, additional_account_monthly_usd: 4, max_accounts: 200, max_agents_per_account: 10, storage_limit_bytes: 10737418240, max_file_size_bytes: 104857600, daily_messages_per_agent: 500, guest_memory_bytes: 5368709120, guest_millicpus: 3000, guest_cpu_shares: 2048, guest_pids_limit: 1024, workspace_disk_bytes: 8589934592 },
+  { id: 'pro', name: 'Pro', currency: 'USD', monthly_price_usd: 79, annual_price_usd: 790, included_accounts: 5, additional_account_monthly_usd: 5, max_agents_per_account: 2, included_agents: 2, additional_agent_monthly_usd: 35, storage_limit_bytes: 2147483648, max_file_size_bytes: 26214400, daily_messages_per_agent: 100, guest_memory_bytes: 2147483648, guest_millicpus: 1500, guest_cpu_shares: 1024, guest_pids_limit: 512, workspace_disk_bytes: 3221225472, storage_addon_bytes: 10737418240, storage_addon_monthly_usd: 5, workspace_disk_addon_bytes: 5368709120, workspace_disk_addon_monthly_usd: 3 },
+  { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 249, annual_price_usd: 2490, included_accounts: 15, additional_account_monthly_usd: 4, max_agents_per_account: 3, included_agents: 5, additional_agent_monthly_usd: 49, storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800, daily_messages_per_agent: 200, guest_memory_bytes: 3221225472, guest_millicpus: 2000, guest_cpu_shares: 1536, guest_pids_limit: 768, workspace_disk_bytes: 5368709120, storage_addon_bytes: 10737418240, storage_addon_monthly_usd: 5, workspace_disk_addon_bytes: 5368709120, workspace_disk_addon_monthly_usd: 3 },
+  { id: 'ultra', name: 'Ultra', currency: 'USD', monthly_price_usd: 699, annual_price_usd: 6990, included_accounts: 40, additional_account_monthly_usd: 3, max_agents_per_account: 5, included_agents: 10, additional_agent_monthly_usd: 79, storage_limit_bytes: 10737418240, max_file_size_bytes: 104857600, daily_messages_per_agent: 500, guest_memory_bytes: 5368709120, guest_millicpus: 3000, guest_cpu_shares: 2048, guest_pids_limit: 1024, workspace_disk_bytes: 8589934592, storage_addon_bytes: 10737418240, storage_addon_monthly_usd: 5, workspace_disk_addon_bytes: 5368709120, workspace_disk_addon_monthly_usd: 3 },
 ]
 
 test('catalog and admission are public even with a member session, and preserve that session', async (context) => {
@@ -42,13 +42,20 @@ for (const body of [
   { plans: [] },
   { plans: [plans[0], plans[0], plans[0]] },
   { plans: plans.map((plan) => ({ ...plan, currency: 'EUR' })) },
-  { plans: plans.map((plan) => ({ ...plan, max_accounts: '25' })) },
+  { plans: plans.map((plan) => ({ ...plan, included_accounts: '5' })) },
+  { plans: plans.map((plan) => ({ ...plan, max_accounts: 25 })) },
   { plans: plans.map((plan) => ({ ...plan, max_agents_per_account: undefined })) },
   { plans: plans.map((plan) => ({ ...plan, max_agents_per_account: '5' })) },
   { plans: plans.map((plan) => ({ ...plan, storage_limit_bytes: undefined })) },
   { plans: plans.map((plan) => ({ ...plan, storage_limit_bytes: '1073741824' })) },
   { plans: plans.map((plan) => ({ ...plan, max_file_size_bytes: undefined })) },
   { plans: plans.map((plan) => ({ ...plan, max_file_size_bytes: '26214400' })) },
+  { plans: plans.map((plan) => ({ ...plan, annual_price_usd: undefined })) },
+  { plans: plans.map((plan) => ({ ...plan, annual_price_usd: 588 })) },
+  { plans: plans.map((plan) => ({ ...plan, included_agents: undefined })) },
+  { plans: plans.map((plan) => ({ ...plan, additional_agent_monthly_usd: '35' })) },
+  { plans: plans.map((plan) => ({ ...plan, storage_addon_bytes: undefined })) },
+  { plans: plans.map((plan) => ({ ...plan, workspace_disk_addon_monthly_usd: '3' })) },
   { plans: plans.map(({ max_agents_per_account, ...plan }) => ({ ...plan, max_digital_employees: max_agents_per_account })) },
 ]) {
   test(`catalog rejects malformed allocations: ${JSON.stringify(body)}`, async (context) => {
