@@ -108,6 +108,10 @@ class Runtime:
             report_exception(exc, source="runtime", operation="startup-audit")
             logger.warning("[startup] Startup audit failed: {}", exc)
         if role_enabled(roles, "worker"):
+            from app.services.agent_resource_pressure_worker import (
+                progress_budget_seconds as agent_resource_pressure_budget_seconds,
+                start_agent_resource_pressure_worker,
+            )
             from app.services.agent_setup import (
                 PROGRESS_BUDGET_SECONDS as AGENT_SETUP_BUDGET_SECONDS,
                 start_agent_setup_worker,
@@ -115,6 +119,10 @@ class Runtime:
             from app.services.agent_start_reconciler import (
                 PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
                 agent_start_reconciler_loop,
+            )
+            from app.services.agent_workspace_quota_worker import (
+                progress_budget_seconds as agent_workspace_quota_budget_seconds,
+                start_agent_workspace_quota_worker,
             )
             from app.services.auth_email_worker import (
                 PROGRESS_BUDGET_SECONDS as AUTH_EMAIL_BUDGET_SECONDS,
@@ -228,6 +236,18 @@ class Runtime:
                 start_chat_history_retention_worker(),
                 requirement="loop",
                 progress_budget_seconds=CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
+            )
+            self.tasks.start(
+                "agent_workspace_quota",
+                start_agent_workspace_quota_worker(),
+                requirement="loop",
+                progress_budget_seconds=agent_workspace_quota_budget_seconds(),
+            )
+            self.tasks.start(
+                "agent_resource_pressure",
+                start_agent_resource_pressure_worker(),
+                requirement="loop",
+                progress_budget_seconds=agent_resource_pressure_budget_seconds(),
             )
             self.tasks.start(
                 "operational_log_retention",

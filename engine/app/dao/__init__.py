@@ -7,7 +7,9 @@ from app.dao.agent_dao import agent_dao, agent_permission_dao
 from app.dao.agent_deletion_request_dao import agent_deletion_request_dao
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
+from app.dao.agent_resource_pressure_episode_dao import agent_resource_pressure_episode_dao
 from app.dao.agent_setup_dao import agent_setup_dao
+from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.auth_email_dao import auth_email_dao
@@ -81,11 +83,13 @@ __all__ = [
     "agent_mcp_server_dao",
     "agent_permission_dao",
     "agent_relationship_dao",
+    "agent_resource_pressure_episode_dao",
     "agent_schedule_dao",
     "agent_setup_dao",
     "agent_template_dao",
     "agent_tool_dao",
     "agent_trigger_dao",
+    "agent_workspace_usage_dao",
     "approval_request_dao",
     "audit_log_dao",
     "auth_email_dao",

@@ -13,7 +13,12 @@ from app.schemas.openclaw_updates import AgentUpdateOut
 from app.services.agent_work_eligibility import AgentWorkBlockCode
 
 type LifecycleOperationalBlockCode = Literal[
-    "setup_pending", "runtime_stopped", "runtime_not_running", "upgrade_in_progress", "upgrade_required"
+    "setup_pending",
+    "runtime_stopped",
+    "runtime_not_running",
+    "upgrade_in_progress",
+    "upgrade_required",
+    "workspace_disk_exceeded",
 ]
 type LifecycleBlockCode = AgentWorkBlockCode | LifecycleOperationalBlockCode
 

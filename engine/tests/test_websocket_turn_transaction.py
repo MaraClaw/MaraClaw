@@ -28,6 +28,7 @@ from app.services import (
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
 )
+from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired, QuotaExceeded
@@ -465,6 +466,27 @@ async def test_agent_daily_limit_rejection_rolls_back_the_user_charge_and_keeps_
 
     handler = await drive_turn(monkeypatch, state)
 
+    assert not state.committed
+    assert not state.pending
+    assert raw.rollbacks == 1
+    assert state.frames[0]["reason"] == "quota_exceeded"
+    assert state.frames[0]["content"] == refusal.message
+    assert len(state.frames) == 1
+    assert len(handler.conversation) == 1
+
+
+async def test_workspace_disk_rejection_rolls_back_the_turn_and_keeps_socket_open(monkeypatch, turn):
+    state, raw = turn
+    refusal = WorkspaceDiskQuotaExceeded(2 * 1024**3, 1024**3, 2 * 1024**3)
+    ensure = AsyncMock(side_effect=refusal)
+    daily_charge = AsyncMock()
+    monkeypatch.setattr(chat_submissions, "ensure_workspace_within_quota", ensure)
+    monkeypatch.setattr(chat_submissions, "charge_agent_daily_message", daily_charge)
+
+    handler = await drive_turn(monkeypatch, state)
+
+    ensure.assert_awaited_once_with(state.agent)
+    daily_charge.assert_not_awaited()
     assert not state.committed
     assert not state.pending
     assert raw.rollbacks == 1

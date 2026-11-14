@@ -523,6 +523,17 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return [AgentRecord.from_row(row) for row in rows]
 
+    async def list_workspace_quota_page(self, after_id: UUID | None, limit: int) -> Sequence[AgentRecord]:
+        """Keyset page, by id, of the non-system agents that belong to an organization."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents "
+                "WHERE tenant_id IS NOT NULL AND is_system IS NOT TRUE "
+                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
+                {"after_id": after_id, "limit": limit},
+            )
+            return [AgentRecord.from_row(row) for row in rows]
+
     async def claim_heartbeat(
         self,
         agent_id: UUID,

@@ -176,8 +176,10 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     from app.process_roles import parse_process_roles, role_enabled
     from app.runtime import readiness
     from app.services import (
+        agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
         broadcast_email_worker,
@@ -310,6 +312,8 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
+    monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(gateway_report_relay, "start_gateway_report_relay", loop)
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
@@ -415,6 +419,8 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("web_search_export" in names) == role_enabled(roles, "worker")
     assert ("openclaw_delayed_replies" in names) == role_enabled(roles, "worker")
     assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
+    assert ("agent_workspace_quota" in names) == role_enabled(roles, "worker")
+    assert ("agent_resource_pressure" in names) == role_enabled(roles, "worker")
     assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("whatsapp_personal" in names) == role_enabled(roles, "connector")
     assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
@@ -731,8 +737,10 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
     from app.process_roles import parse_process_roles
     from app.runtime.tasks import loop_progress
     from app.services import (
+        agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
         broadcast_email_worker,
@@ -785,6 +793,8 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (openclaw_delayed_replies, "openclaw_delayed_reply_loop", "openclaw_delayed_replies"),
         (task_lease, "task_lease_recovery_loop", "task_lease_recovery"),
         (chat_history_retention_worker, "start_chat_history_retention_worker", "chat_history_retention"),
+        (agent_workspace_quota_worker, "start_agent_workspace_quota_worker", "agent_workspace_quota"),
+        (agent_resource_pressure_worker, "start_agent_resource_pressure_worker", "agent_resource_pressure"),
         (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
     ):
         monkeypatch.setattr(module, attribute, budgeted(name))
@@ -824,7 +834,14 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert set(runtime.tasks.progress) == WORKER_BUDGETED_LOOPS
         assert await runtime.readiness.check()
         now = budget_seconds
-        slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout"}
+        # The workspace quota loop sleeps its whole interval between beats, so its budget is that interval plus an hour.
+        assert runtime.tasks.progress["agent_workspace_quota"].budget_seconds == (
+            agent_workspace_quota_worker.progress_budget_seconds()
+        )
+        assert runtime.tasks.progress["agent_resource_pressure"].budget_seconds == (
+            agent_resource_pressure_worker.progress_budget_seconds()
+        )
+        slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout", "agent_workspace_quota", "agent_resource_pressure"}
         boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
         now += 1
@@ -834,6 +851,8 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert all(runtime.tasks.progress[name].stale() for name in expected_stale)
         if budget_seconds == 90:
             assert all(not runtime.tasks.progress[name].stale() for name in slow)
+        assert not runtime.tasks.progress["agent_workspace_quota"].stale()
+        assert not runtime.tasks.progress["agent_resource_pressure"].stale()
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())

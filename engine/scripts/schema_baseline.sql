@@ -782,6 +782,63 @@ CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Last measured host workspace directory plus guest writable-layer bytes per agent (tier-governed organizations only).
+-- over_since is set while the measurement exceeds limit_bytes and blocks new human work; notified_at records the one
+-- in-app alert of that overage.
+CREATE TABLE IF NOT EXISTS agent_workspace_usage (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    dir_bytes BIGINT NOT NULL CHECK (dir_bytes >= 0),
+    layer_bytes BIGINT NOT NULL CHECK (layer_bytes >= 0),
+    limit_bytes BIGINT NOT NULL CHECK (limit_bytes > 0),
+    measured_at TIMESTAMPTZ NOT NULL,
+    over_since TIMESTAMPTZ,
+    notified_at TIMESTAMPTZ
+);
+
+-- Tier-upsell evidence: one 'threshold' row per continuous stretch an agent's resource stayed at or above the pressure
+-- threshold of its limit (memory, workspace_disk, managed_storage: bytes; cpu: millicpus), one 'oom_kill' row per guest
+-- OOM kill. No foreign key to agents so rows outlive the agent (agent_name is a snapshot); they belong to the tenant
+-- and leave with it. At most one threshold episode is open per agent and resource; an OOM kill is keyed by its event.
+CREATE TABLE IF NOT EXISTS agent_resource_pressure_episodes (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    agent_id UUID,
+    agent_name TEXT NOT NULL,
+    tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
+    resource VARCHAR(20) NOT NULL CHECK (resource IN ('memory','cpu','workspace_disk','managed_storage')),
+    kind VARCHAR(16) NOT NULL DEFAULT 'threshold' CHECK (kind IN ('threshold','oom_kill')),
+    limit_value BIGINT NOT NULL CHECK (limit_value > 0),
+    peak_value BIGINT NOT NULL CHECK (peak_value >= 0),
+    peak_ratio DOUBLE PRECISION NOT NULL CHECK (peak_ratio >= 0),
+    threshold_ratio DOUBLE PRECISION NOT NULL CHECK (threshold_ratio > 0 AND threshold_ratio <= 1),
+    started_at TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ,
+    sample_count INTEGER NOT NULL DEFAULT 1 CHECK (sample_count >= 1),
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    event_key TEXT,
+    CHECK (last_seen_at >= started_at),
+    CHECK (ended_at IS NULL OR ended_at >= started_at),
+    CHECK ((kind = 'oom_kill') = (event_key IS NOT NULL)),
+    CHECK (kind <> 'oom_kill' OR (resource = 'memory' AND ended_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_open
+ON agent_resource_pressure_episodes (tenant_id, (COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid)), resource)
+WHERE ended_at IS NULL AND kind = 'threshold';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_oom_event
+ON agent_resource_pressure_episodes (agent_id, event_key) WHERE kind = 'oom_kill';
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_open_agent
+ON agent_resource_pressure_episodes (agent_id) WHERE ended_at IS NULL AND kind = 'threshold';
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_started
+ON agent_resource_pressure_episodes (started_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_tenant_started
+ON agent_resource_pressure_episodes (tenant_id, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) = 32)

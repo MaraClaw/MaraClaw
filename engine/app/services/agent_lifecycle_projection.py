@@ -13,6 +13,7 @@ from app.dao.agent_lifecycle_projection_dao import agent_lifecycle_projection_da
 from app.dao.agent_runtime_loss_dao import agent_runtime_loss_dao
 from app.dao.agent_setup_dao import agent_setup_dao
 from app.dao.agent_setup_mcp_dao import agent_setup_mcp_dao
+from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.db.session import connection_ctx
 from app.schemas.agent_lifecycle import (
     AgentLifecycleAvailabilityOut,
@@ -58,6 +59,9 @@ async def get_agent_lifecycle(agent_id: UUID, user_id: UUID) -> AgentLifecycleOu
             blockers.append("upgrade_in_progress")
         if upgrade.required:
             blockers.append("upgrade_required")
+        workspace_usage = await agent_workspace_usage_dao.get(agent_id)
+        if workspace_usage is not None and workspace_usage.over_since is not None:
+            blockers.append("workspace_disk_exceeded")
         policy_eligible = not policy_codes
         return AgentLifecycleOut(
             as_of=TypeAdapter(datetime).validate_python(await db.fetchval("SELECT clock_timestamp()")).astimezone(UTC),
