@@ -82,14 +82,9 @@ export function SiteHeader() {
                 {translate("Sign out")}</Button>
             </>
           ) : (
-            <>
-              <Button variant="ghost" size="sm" asChild>
-                <Link to="/login">{translate("Sign in")}</Link>
-              </Button>
-              <Button size="sm" asChild>
-                <a href="#pricing">{translate("View plans")}</a>
-              </Button>
-            </>
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/login">{translate("Sign in")}</Link>
+            </Button>
           )}
         </div>
 
@@ -133,18 +128,11 @@ export function SiteHeader() {
                       </SheetClose>
                     </>
                   ) : (
-                    <>
-                      <SheetClose asChild>
-                        <Button variant="outline" asChild>
-                          <Link to="/login">{translate("Sign in")}</Link>
-                        </Button>
-                      </SheetClose>
-                      <SheetClose asChild>
-                        <Button asChild>
-                          <a href="#pricing">{translate("View plans")}</a>
-                        </Button>
-                      </SheetClose>
-                    </>
+                    <SheetClose asChild>
+                      <Button variant="outline" asChild>
+                        <Link to="/login">{translate("Sign in")}</Link>
+                      </Button>
+                    </SheetClose>
                   )}
                 </div>
               </nav>
