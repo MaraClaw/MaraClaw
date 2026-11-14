@@ -2,7 +2,7 @@ import { useTranslation } from '@/hooks/use-translation'
 import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
@@ -16,14 +16,33 @@ import {
 } from '@/lib/organization-admissions-api'
 import type { OrganizationAdmission, OrganizationPlan } from '@/lib/organization-admissions-api'
 
+type BillingPeriod = 'monthly' | 'annual'
+
+const GIB = 1024 ** 3
+
+function annualSavingPercent(plan: OrganizationPlan): number {
+  return Math.round((1 - plan.annual_price_usd / (plan.monthly_price_usd * 12)) * 100)
+}
+
 export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly OrganizationPlan[] }) {
   const { t: translate, formatNumber } = useTranslation()
+  const [billing, setBilling] = useState<BillingPeriod>('monthly')
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<OrganizationAdmission>({
+  const { register, handleSubmit, control, formState: { errors, isSubmitting } } = useForm<OrganizationAdmission>({
     resolver: zodResolver(organizationAdmissionSchema),
     defaultValues: { organization_name: '', email: '', tier: 'pro' },
   })
+  const selectedTier = useWatch({ control, name: 'tier' })
+  const savingPercents = plans.map(annualSavingPercent)
+  const bestSaving = Math.max(0, ...savingPercents)
+  const savingLabel = savingPercents.every((percent) => percent === bestSaving)
+    ? translate('Save {percent}%', { percent: formatNumber(bestSaving) })
+    : translate('Save up to {percent}%', { percent: formatNumber(bestSaving) })
+  const billingOptions = [
+    { period: 'monthly', label: translate("Pay monthly") },
+    { period: 'annual', label: translate("Pay annually") },
+  ] as const
 
   const submit = handleSubmit(async (values) => {
     const owner = authSession.capture()
@@ -38,48 +57,89 @@ export function OrganizationAdmissionForm({ plans }: { readonly plans: readonly 
 
   return (
     <form onSubmit={submit} noValidate aria-label={translate("Organization creation request")} className="mt-10 space-y-6">
+      <fieldset className="flex justify-center">
+        <legend className="sr-only">{translate("Billing period")}</legend>
+        <span className="inline-flex gap-1 rounded-full border border-border bg-card p-1 shadow-card">
+          {billingOptions.map(({ period, label }) => (
+            <label key={period} className="relative flex min-h-11 cursor-pointer items-center gap-2 rounded-full px-5 text-[17px] font-medium text-muted-foreground transition-[background-color,color] duration-150 hover:text-foreground has-checked:bg-primary has-checked:text-primary-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring has-focus-visible:ring-offset-2 has-focus-visible:ring-offset-background sm:text-base">
+              <input type="radio" name="billing-period" value={period} checked={billing === period} onChange={() => setBilling(period)} className="sr-only" />
+              {label}
+              {period === 'annual' && bestSaving > 0 && (
+                <span className="rounded-full bg-accent px-2 py-0.5 text-sm font-semibold text-accent-foreground">{savingLabel}</span>
+              )}
+            </label>
+          ))}
+        </span>
+      </fieldset>
+
       <fieldset disabled={isSubmitting || success} className="space-y-4">
         <legend className="mb-4 text-[17px] font-medium sm:text-base">{translate("Choose your proposed plan")}</legend>
         <div className="grid gap-4 lg:grid-cols-3">
-          {plans.map((plan) => (
-            <label key={plan.id} className="relative flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-6 shadow-card transition-colors has-checked:bg-accent/50 has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:cursor-default">
-              <span className="flex items-center justify-between gap-4">
-                <span className="font-display text-2xl font-semibold">{plan.name}</span>
-                <input {...register('tier')} type="radio" value={plan.id} aria-label={plan.name} className="size-5 accent-primary" />
-              </span>
-              <span className="mt-5 flex items-baseline gap-2">
-                <span className="font-display text-4xl font-semibold tracking-tight">${formatNumber(plan.monthly_price_usd)}</span>
-                <span className="text-muted-foreground">{translate("USD / month")}</span>
-              </span>
-              <span className="mt-1 text-muted-foreground">${formatNumber(plan.annual_price_usd)} {translate("USD / year, billed annually")}</span>
-              <span className="mt-5 space-y-2 text-[17px] leading-relaxed sm:text-base">
-                <span className="block">{translate('{count} human accounts included', { count: formatNumber(plan.included_accounts) })}</span>
-                <span className="block text-muted-foreground">${formatNumber(plan.additional_account_monthly_usd)} {translate("USD / additional account / month")}</span>
-                <span className="block">{translate('{count} agents included', { count: formatNumber(plan.included_agents) })}</span>
-                <span className="block text-muted-foreground">${formatNumber(plan.additional_agent_monthly_usd)} {translate("USD / additional agent / month")}</span>
-              </span>
-              <span className="mt-5 space-y-2 border-t border-border pt-5 text-[17px] leading-relaxed sm:text-base">
-                <span className="block">{translate('Up to {count} agents per account', { count: formatNumber(plan.max_agents_per_account) })}</span>
-                <span className="block">{translate('Up to {count} messages per agent per day', { count: formatNumber(plan.daily_messages_per_agent) })}</span>
-                <span className="block">{translate('{size} GiB managed S3 storage per agent', { size: formatNumber(plan.storage_limit_bytes / (1024 ** 3)) })}</span>
-                <span className="block">{translate('{size} MiB per managed S3 file', { size: formatNumber(plan.max_file_size_bytes / (1024 ** 2)) })}</span>
-              </span>
-              <span className="mt-5 space-y-2 border-t border-border pt-5 text-[17px] leading-relaxed sm:text-base">
-                <span className="block">{translate('Add-on: +{size} GiB managed S3 storage', { size: formatNumber(plan.storage_addon_bytes / (1024 ** 3)) })}</span>
-                <span className="block text-muted-foreground">${formatNumber(plan.storage_addon_monthly_usd)} {translate("USD / month")}</span>
-                <span className="block">{translate('Add-on: +{size} GiB workspace disk', { size: formatNumber(plan.workspace_disk_addon_bytes / (1024 ** 3)) })}</span>
-                <span className="block text-muted-foreground">${formatNumber(plan.workspace_disk_addon_monthly_usd)} {translate("USD / month")}</span>
-              </span>
-            </label>
-          ))}
+          {plans.map((plan) => {
+            const annualSaving = plan.monthly_price_usd * 12 - plan.annual_price_usd
+            return (
+              <label key={plan.id} className="relative flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-6 shadow-card transition-colors has-checked:bg-accent/50 has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:cursor-default">
+                <span className="flex items-center justify-between gap-4">
+                  <span className="font-display text-2xl font-semibold">{plan.name}</span>
+                  <input {...register('tier')} type="radio" value={plan.id} aria-label={plan.name} className="size-5 accent-primary" />
+                </span>
+                <span className="mt-5 flex items-baseline gap-2">
+                  <span className="font-display text-4xl font-semibold tracking-tight tabular-nums">
+                    ${formatNumber(billing === 'annual' ? plan.annual_price_usd : plan.monthly_price_usd)}
+                  </span>
+                  <span className="text-muted-foreground">{billing === 'annual' ? translate("USD / year") : translate("USD / month")}</span>
+                </span>
+                <span className="mt-1 text-muted-foreground">
+                  {billing === 'monthly'
+                    ? translate("Billed monthly")
+                    : annualSaving > 0
+                      ? translate('Billed annually, save ${amount} USD', { amount: formatNumber(annualSaving) })
+                      : translate("Billed annually")}
+                </span>
+                <span className="mt-5 space-y-2 text-[17px] leading-relaxed sm:text-base">
+                  <span className="block">{translate('{count} human accounts included', { count: formatNumber(plan.included_accounts) })}</span>
+                  <span className="block text-muted-foreground">${formatNumber(plan.additional_account_monthly_usd)} {translate("USD / additional account / month")}</span>
+                  <span className="block">{translate('{count} agents included', { count: formatNumber(plan.included_agents) })}</span>
+                  <span className="block text-muted-foreground">${formatNumber(plan.additional_agent_monthly_usd)} {translate("USD / additional agent / month")}</span>
+                </span>
+              </label>
+            )
+          })}
         </div>
       </fieldset>
 
-      <p id="pricing-terms" className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
-        {translate("Human accounts include your organization admin. Each account, including additional accounts and organization admins, has its own agent cap; per-account caps are not pooled. The organization price covers the included accounts and agents for the whole company, and there is no account limit: after your organization is created, its organization admin buys extra accounts and agents month by month in the admin console at the additional prices shown, paid by bank transfer. Company account and agent limits, agent creation caps and daily message caps per agent are enforced for approved tiered organizations; an agent's daily count resets at midnight in your organization admin's timezone (UTC if none is set). Existing quotas remain for organizations without a tier. Monthly and annual organization prices and the storage and workspace-disk add-ons are quoted proposals subject to approval, not purchase options or paid activation. Your organization pays its own model and tool providers.")}</p>
+      <div className="mx-auto max-w-3xl">
+        <table className="w-full text-left text-[17px] leading-relaxed sm:text-base">
+          <caption className="mb-3 text-left font-medium">{translate("Resources by plan")}</caption>
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th scope="col" className="py-2 pr-3 font-medium">{translate("Plan")}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{translate("vCPU per agent")}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{translate("Memory per agent")}</th>
+              <th scope="col" className="py-2 pl-3 font-medium">{translate("Managed S3 storage")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plans.map((plan) => (
+              <tr key={plan.id} className={`border-b border-border last:border-b-0 ${plan.id === selectedTier ? 'bg-accent/50' : ''}`}>
+                <th scope="row" className="py-3 pr-3 font-semibold">{plan.name}</th>
+                <td className="px-3 py-3 tabular-nums">{translate('{count} vCPU', { count: formatNumber(plan.guest_millicpus / 1000) })}</td>
+                <td className="px-3 py-3 tabular-nums">{translate('{size} GiB', { size: formatNumber(plan.guest_memory_bytes / GIB) })}</td>
+                <td className="py-3 pl-3 tabular-nums">
+                  <span className="block">{translate('{size} GiB total', { size: formatNumber(plan.storage_limit_bytes * plan.included_agents / GIB) })}</span>
+                  <span className="block text-muted-foreground">{translate('{size} GiB per agent', { size: formatNumber(plan.storage_limit_bytes / GIB) })}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      <p className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
-        {translate("Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.")}</p>
+      <p id="pricing-models" className="mx-auto max-w-3xl text-center text-[17px] font-medium leading-relaxed sm:text-base">
+        {translate("Bring your own AI: connect your existing Grok, ChatGPT or Claude subscription, or bring your own API key (BYOK) for Claude, GPT, Gemini, DeepSeek and more. AI model usage isn't included in plan prices; your provider bills you directly.")}</p>
+
+      <p id="pricing-terms" className="mx-auto max-w-3xl text-center text-[17px] leading-relaxed text-muted-foreground sm:text-base">
+        {translate("Plans cover your whole company, including your organization admin. Your organization admin can add accounts and agents any time in the admin console, billed monthly by bank transfer. Prices are proposals confirmed when your request is approved.")}</p>
 
       <div className="rounded-2xl border border-border bg-card p-6 shadow-card">
         <h3 className="font-display text-xl font-semibold">{translate("Create a new organization")}</h3>
