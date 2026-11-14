@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { markOnboardingSkipped } from '@/lib/workspace-api'
 import { userFacingRequestError } from '@/lib/http'
 
-const assistantDefaults: AgentCreateFormDefaults = { name: 'My assistant', personality: 'warm', work_style: 'concise', visibility: 'private' }
+const assistantDefaults: AgentCreateFormDefaults = { name: 'My assistant', visibility: 'private' }
 
 export function OnboardingPage() {
   const { t: translate } = useTranslation()

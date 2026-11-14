@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 
@@ -12,23 +12,20 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { ValidationMessage } from '@/components/validation-message'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
+import { composeSoul, draftSoul, editSoul, fillCreationDetails, renameSoul, soulFields, type SoulDraft } from '@/lib/agent-soul'
 import type { AgentCreate } from '@/lib/engine-contracts.generated'
 import { listOrgDepartments } from '@/lib/org-departments-api'
-import { replaceSoulSection, soulSection } from '@/lib/soul-sections'
 import { getDefaultSoul, listTemplates } from '@/lib/workspace-api'
 
 const schema = z.object({
   name: z.string().trim().min(2, 'Use 2-100 characters for the name.').max(100, 'Use 2-100 characters for the name.'),
   template_id: z.string().optional(),
   role_description: z.string().max(500, 'Keep the role to 500 characters or fewer.').optional(),
-  personality: z.string().max(64, 'Use 64 characters or fewer').optional(),
-  work_style: z.string().max(64, 'Use 64 characters or fewer').optional(),
-  boundaries: z.string().max(1000, 'Use 1000 characters or fewer').optional(),
   soul: z.string().max(20000, 'Keep the soul to 20000 characters or fewer.'),
   visibility: z.enum(['private', 'company', 'department']),
   department_id: z.string().optional(),
-  gogcli_enabled: z.boolean(),
 }).refine((values) => values.visibility !== 'department' || Boolean(values.department_id), {
   path: ['department_id'],
   message: 'Choose a department.',
@@ -36,7 +33,7 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-export type AgentCreateFormDefaults = Partial<Pick<FormValues, 'name' | 'visibility' | 'personality' | 'work_style' | 'boundaries'>>
+export type AgentCreateFormDefaults = Partial<Pick<FormValues, 'name' | 'visibility'>>
 
 type AgentCreateFormProps = {
   /** Initial field values; omitted fields start empty (visibility starts Private). */
@@ -53,31 +50,13 @@ type AgentCreateFormProps = {
   readonly actions?: ReactNode
 }
 
-function composePersonality(values: FormValues): string {
-  const parts: string[] = []
-  const personality = values.personality?.trim()
-  const workStyle = values.work_style?.trim()
-  if (personality) parts.push(`Personality: ${personality}.`)
-  if (workStyle) parts.push(`Work style: ${workStyle}.`)
-  return parts.join(' ')
-}
-
-type ShortcutHeading = 'Personality' | 'Boundaries'
-
-function shortcutBody(heading: ShortcutHeading, values: FormValues): string {
-  return heading === 'Personality' ? composePersonality(values) : (values.boundaries?.trim() ?? '')
-}
-
-/** Writes a shortcut's text into its soul section; an empty shortcut restores that section from the loaded template. */
-function withShortcut(soul: string, template: string, heading: ShortcutHeading, values: FormValues): string {
-  const body = shortcutBody(heading, values) || soulSection(template, heading)
-  return body === null ? soul : replaceSoulSection(soul, heading, body)
+function templateStartSoul(defaultSoul: string, templateSoul: string | undefined, creatorName: string): string {
+  const soul = templateSoul === undefined ? defaultSoul : composeSoul(defaultSoul, soulFields(templateSoul))
+  return fillCreationDetails(soul, creatorName, new Date())
 }
 
 function toAgentCreate(values: FormValues, soulLoaded: boolean): AgentCreate {
   const sendSoul = soulLoaded && values.soul.trim() !== ''
-  const personality = sendSoul ? '' : composePersonality(values)
-  const boundaries = sendSoul ? undefined : values.boundaries?.trim()
   return {
     name: values.name,
     template_id: values.template_id || undefined,
@@ -85,16 +64,15 @@ function toAgentCreate(values: FormValues, soulLoaded: boolean): AgentCreate {
     permission_scope_type: ({ private: 'user', company: 'company', department: 'custom' } as const)[values.visibility],
     ...(values.visibility === 'department' && values.department_id ? { department_ids: [values.department_id] } : {}),
     permission_access_level: 'use',
-    gogcli_enabled: values.gogcli_enabled,
+    gogcli_enabled: true,
     ...(sendSoul ? { soul: values.soul } : {}),
-    ...(personality ? { personality } : {}),
-    ...(boundaries ? { boundaries } : {}),
   }
 }
 
 export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pending, onSubmit, actions }: AgentCreateFormProps) {
   const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
+  const creatorName = useAuth().user?.display_name ?? ''
   const templates = useQuery({ queryKey: ['agent-templates'], queryFn: listTemplates })
   const defaultSoul = useQuery({ queryKey: ['agent-default-soul'], queryFn: getDefaultSoul })
   const form = useForm<FormValues>({
@@ -103,13 +81,9 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
       name: '',
       template_id: '',
       role_description: '',
-      personality: '',
-      work_style: '',
-      boundaries: '',
       soul: '',
       visibility: 'private',
       department_id: '',
-      gogcli_enabled: false,
       ...defaults,
     },
   })
@@ -124,14 +98,36 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
   const departmentUnavailable = departments.isPending || departments.isError || departments.data?.length === 0
   const departmentError = form.formState.errors.department_id?.message
   const [retryButton, setRetryButton] = useState<HTMLButtonElement | null>(null)
-  const [templateTouched, setTemplateTouched] = useState(false)
-  const [soulTouched, setSoulTouched] = useState(false)
+  const soulSeeded = useRef(false)
+  const [soulDraft, setSoulDraft] = useState<SoulDraft | null>(null)
   const soulTemplate = defaultSoul.data
   const soulUnavailable = defaultSoul.isError && soulTemplate === undefined
+  const soulLoading = defaultSoul.isPending || Boolean(defaultTemplateName && templates.isPending)
 
-  function applyShortcut(heading: ShortcutHeading) {
+  function writeSoul(draft: SoulDraft) {
+    setSoulDraft(draft)
+    form.setValue('soul', draft.text, { shouldValidate: form.formState.isSubmitted })
+  }
+
+  function seedSoul(base: string, templateSoul: string | undefined) {
+    const role = templateSoul === undefined ? '' : soulFields(templateSoul).role
+    form.setValue('role_description', role, { shouldValidate: form.formState.isSubmitted })
+    writeSoul(draftSoul(templateStartSoul(base, templateSoul, creatorName), { name: form.getValues('name'), role }))
+  }
+
+  function selectTemplate(event: { target: { value: string } }) {
     if (soulTemplate === undefined) return
-    form.setValue('soul', withShortcut(form.getValues('soul'), soulTemplate, heading, form.getValues()))
+    const templateId = event.target.value
+    seedSoul(soulTemplate, templateId ? templates.data?.find((template) => template.id === templateId)?.soul_template : undefined)
+  }
+
+  function syncSoulIdentity() {
+    if (soulDraft === null) return
+    writeSoul(renameSoul(soulDraft, { name: form.getValues('name'), role: form.getValues('role_description') ?? '' }))
+  }
+
+  function trackSoulEdit(event: { target: { value: string } }) {
+    if (soulDraft !== null) setSoulDraft(editSoul(soulDraft, event.target.value))
   }
 
   useLayoutEffect(() => {
@@ -142,22 +138,17 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
   }, [departmentUnavailable, departments.isFetching, form, retryButton, scope, visibility])
 
   useEffect(() => {
-    if (!defaultTemplateName || templateTouched || !templates.data) return
-    const preferred = templates.data.find((template) => template.name === defaultTemplateName)
+    if (soulSeeded.current || soulTemplate === undefined || (defaultTemplateName && templates.isPending)) return
+    soulSeeded.current = true
+    const preferred = defaultTemplateName ? templates.data?.find((template) => template.name === defaultTemplateName) : undefined
     if (preferred) form.setValue('template_id', preferred.id)
-  }, [defaultTemplateName, form, templateTouched, templates.data])
+    seedSoul(soulTemplate, preferred?.soul_template)
+  })
 
-  useEffect(() => {
-    if (soulTemplate === undefined || soulTouched) return
-    const values = form.getValues()
-    const withPersonality = withShortcut(soulTemplate, soulTemplate, 'Personality', values)
-    form.setValue('soul', withShortcut(withPersonality, soulTemplate, 'Boundaries', values))
-  }, [form, soulTemplate, soulTouched])
-
-  const canCreate = readiness.success && !pending && !defaultSoul.isPending && (visibility !== 'department' || !departmentUnavailable)
+  const canCreate = readiness.success && !pending && !soulLoading && (visibility !== 'department' || !departmentUnavailable)
   const disabledReason = pending
     ? 'Creation is in progress.'
-    : defaultSoul.isPending
+    : soulLoading
       ? 'Wait for the default soul to load.'
       : visibility === 'department' && departmentUnavailable
         ? departments.isPending
@@ -177,12 +168,12 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
       })}>
         <div className="space-y-2">
           <Label htmlFor="name">{translate("Name")}</Label>
-          <Input id="name" {...form.register('name')} />
+          <Input id="name" {...form.register('name', { onChange: syncSoulIdentity })} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="template">{translate("Template")}</Label>
-          <Select id="template" {...form.register('template_id', { onChange: () => setTemplateTouched(true) })}>
-            <option value="">{translate("None")}</option>
+          <Select id="template" {...form.register('template_id', { onChange: selectTemplate })}>
+            <option value="">{translate("Default")}</option>
             {(templates.data ?? []).map((template) => (
               <option key={template.id} value={template.id}>
                 {template.name}
@@ -192,34 +183,22 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
         </div>
         <div className="space-y-2">
           <Label htmlFor="role">{translate("Role")}</Label>
-          <Textarea id="role" {...form.register('role_description')} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="personality">{translate("Personality")}</Label>
-          <Input id="personality" {...form.register('personality', { onChange: () => applyShortcut('Personality') })} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="work-style">{translate("Work style")}</Label>
-          <Input id="work-style" {...form.register('work_style', { onChange: () => applyShortcut('Personality') })} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="boundaries">{translate("Boundaries")}</Label>
-          <Textarea id="boundaries" {...form.register('boundaries', { onChange: () => applyShortcut('Boundaries') })} />
+          <Textarea id="role" {...form.register('role_description', { onChange: syncSoulIdentity })} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="soul">{translate("Soul")}</Label>
           <Textarea
             id="soul"
-            rows={14}
+            rows={20}
             spellCheck={false}
             className="font-mono"
-            disabled={soulTemplate === undefined}
+            disabled={soulTemplate === undefined || soulLoading}
             aria-describedby="soul-hint"
-            {...form.register('soul', { onChange: () => setSoulTouched(true) })}
+            {...form.register('soul', { onChange: trackSoulEdit })}
           />
           {soulTemplate !== undefined ? (
             <p id="soul-hint" className="text-sm text-muted-foreground">
-              {translate("This becomes the agent's soul.md. Placeholders like {placeholder} are filled in when the agent is created.", { placeholder: '{{agent_name}}' })}</p>
+              {translate("Name and Role update this text, and choosing a template replaces it. It becomes the agent's soul.md; placeholders like {placeholder} are filled in when the agent is created.", { placeholder: '{{agent_name}}' })}</p>
           ) : defaultSoul.isPending ? (
             <p id="soul-hint" role="status" className="text-sm text-muted-foreground">{translate("Loading the default soul...")}</p>
           ) : (
@@ -284,19 +263,6 @@ export function AgentCreateForm({ defaults, defaultTemplateName, submitLabel, pe
             {departmentError ? <p id="department-error" className="text-sm text-destructive">{departmentError}</p> : null}
           </div>
         ) : null}
-        <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-border bg-card p-4 text-sm hover:bg-muted/50 has-[:checked]:border-primary/50 has-[:checked]:bg-accent has-[:focus-visible]:border-ring has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background">
-          <input
-            type="checkbox"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
-            aria-labelledby="gogcli-label"
-            aria-describedby="gogcli-description"
-            {...form.register('gogcli_enabled')}
-          />
-          <span className="min-w-0 space-y-1">
-            <span id="gogcli-label" className="block font-medium">{translate("Enable Google CLI (gogcli)")}</span>
-            <span id="gogcli-description" className="block text-muted-foreground">{translate("Adds Google CLI to the agent container.")}</span>
-          </span>
-        </label>
         <div className="space-y-2">
           <div className="flex gap-2">
             <Button type="submit" disabled={!canCreate} aria-busy={pending} aria-describedby={disabledReason ? 'create-disabled-reason' : undefined}>

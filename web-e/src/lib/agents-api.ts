@@ -11,6 +11,7 @@ export type AgentTemplate = {
   icon?: string | null
   category?: string | null
   capability_bullets?: string[]
+  soul_template?: string
 }
 
 const memberAgentSchema = AgentOutSchema.extend({
