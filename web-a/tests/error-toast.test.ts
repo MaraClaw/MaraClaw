@@ -28,8 +28,8 @@ test('stale and aborted requests do not create error notifications', () => {
 })
 
 test('presentation never sends markup to Sonner and keeps domain-safe copy', () => {
-  const failure = new ApiError(502, '<html>nginx</html>')
-  showErrorToast('<html>nginx</html>', failure)
+  const failure = new ApiError(502, '<html>load-balancer</html>')
+  showErrorToast('<html>load-balancer</html>', failure)
   showErrorToast('Check SMTP settings before sending invitations.', new Error('smtp_password=secret'))
   const titles = toast.getHistory().flatMap((item) => 'title' in item ? [item.title] : [])
   assert.ok(titles.includes('The server is temporarily unavailable. Please try again shortly.'))

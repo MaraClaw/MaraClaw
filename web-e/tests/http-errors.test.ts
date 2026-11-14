@@ -5,7 +5,7 @@ import { ApiError, createHttpClient, formatApiDetail, userFacingRequestError } f
 
 for (const kind of ['JSON', 'multipart', 'binary'] as const) {
   test(`${kind} HTTP failures never expose upstream HTML in display messages`, async () => {
-    const html = '<html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>'
+    const html = '<html><head><title>502 Bad Gateway</title></head><body>load-balancer</body></html>'
     const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
     const client = createHttpClient(session, () => Promise.resolve(new Response(html, {
       status: 502, headers: { 'Content-Type': 'text/html' },
@@ -19,7 +19,7 @@ for (const kind of ['JSON', 'multipart', 'binary'] as const) {
       assert.ok(error instanceof ApiError)
       assert.equal(error.status, 502)
       assert.equal(error.detail, html)
-      assert.doesNotMatch(error.message, /<|nginx/i)
+      assert.doesNotMatch(error.message, /<|load-balancer/i)
       assert.equal(formatApiDetail(error.detail), null)
       assert.equal(userFacingRequestError(error, 'Please try again.'), 'Please try again.')
       return true
@@ -27,11 +27,11 @@ for (const kind of ['JSON', 'multipart', 'binary'] as const) {
   })
 }
 
-for (const detail of ['  <html>Bad Gateway</html>', 'Proxy failed: <h1>502</h1>', '&lt;html&gt;nginx&lt;/html&gt;', 'x'.repeat(501)]) {
+for (const detail of ['  <html>Bad Gateway</html>', 'Proxy failed: <h1>502</h1>', '&lt;html&gt;load-balancer&lt;/html&gt;', 'x'.repeat(501)]) {
   test(`HTTP display formatting rejects unsafe detail ${JSON.stringify(detail.slice(0, 30))}`, () => {
     for (const body of [detail, { message: detail }, { detail }, { detail: [{ msg: detail }] }]) {
       assert.equal(formatApiDetail(body), null)
-      assert.doesNotMatch(new ApiError(400, body).message, /<|nginx|x{100}/)
+      assert.doesNotMatch(new ApiError(400, body).message, /<|load-balancer|x{100}/)
     }
   })
 }

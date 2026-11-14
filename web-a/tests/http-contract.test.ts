@@ -7,7 +7,7 @@ import { ApiError, createApiRequest, formatApiDetail } from '../src/lib/http.ts'
 import { adminUser, createFixture, tokenResponse } from './helpers.ts'
 
 for (const body of [
-  '<html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>',
+  '<html><head><title>502 Bad Gateway</title></head><body>load-balancer</body></html>',
   JSON.stringify({ detail: '<!DOCTYPE html><html>502 Bad Gateway</html>' }),
 ] as const) {
   test(`an HTML gateway response has a human-readable error (${body.startsWith('{') ? 'JSON' : 'HTML'})`, async () => {
