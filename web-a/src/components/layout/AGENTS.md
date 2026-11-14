@@ -23,10 +23,10 @@ Scope: console navigation, notification entry point and shared screen chrome.
 5. `admissionReviewOnly` (`/admission-approvals`) uses `canReviewAdmissions`: role `org_admin` and `is_genesis === true`.
    `agentDeletionReviewOnly` (`/agent-deletion-requests`) uses `canReviewAgentDeletions`:
    active `org_admin`, not a platform admin, with a `tenant_id`.
-6. `paymentReviewOnly` (`/transfer-payments`) uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
+6. `paymentReviewOnly` (`/payments`, label "Payments") uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
    Only active platform admins pass, using the canonical platform flag or role, without a tenant lookup.
-   `capacityReviewOnly` (`/capacity-payments`, label "Capacity payments", distinct from "Payments") uses `canReviewCapacityPayments`
-   (active platform admin). The org-admin payment page `/capacity-orders/:orderId` has no nav entry.
+   It is the only payment nav entry: the page holds the transfers queue and the capacity queue (`?tab=capacity`),
+   whose `canReviewCapacityPayments` gate is the same predicate. The org-admin payment page `/capacity-orders/:orderId` has no nav entry.
 7. Under `mustChangePassword`, surviving nav entries other than `/settings`
    render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.
@@ -41,6 +41,7 @@ Scope: console navigation, notification entry point and shared screen chrome.
 
 ## Gotchas
 
-- `/search-engine` pathname prefixes remove the main area's usual padding.
+- `/search-engine` pathname prefixes and `/payments` remove the main area's usual padding.
+- `aliases` on a nav item (Payments: `/transfer-payments`, `/capacity-payments`) lets detail routes outside its prefix highlight the entry and set the document title through `matchesNavItem`.
 - Mobile nav scrolls the active link into view on pathname changes, not query changes.
 - `AuthShell.className` styles the centered content wrapper, not the page root.

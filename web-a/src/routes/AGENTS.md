@@ -19,8 +19,10 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/activity` | admin (PA + OA) | bounded recent administrator activity; platform filters vs own organization |
 | `/invitations` | `InvitationsRoute`: `canManageInvitations` (`org_admin`, not PA, has tenant) | invitations form + history |
 | `/agent-deletion-requests` `/agent-deletion-requests/:id` | `AgentDeletionReviewRoute`: `canReviewAgentDeletions` (active `org_admin`, not PA, has tenant) | deletion queue, detail + approval |
-| `/transfer-payments` `/transfer-payments/:id` | `TransferReviewRoute`: active PA only | payment queue, detail + decision |
-| `/capacity-payments` `/capacity-payments/:orderId` | `CapacityReviewRoute`: `canReviewCapacityPayments` (active PA); nav "Capacity payments" (`capacityReviewOnly`) | extra-accounts payment queue + detail with evidence and decision; genesis PA also sees the payment settings section |
+| `/payments` | `TransferReviewRoute`: active PA only; the one payment nav entry "Payments" (`paymentReviewOnly`) | `payments.tsx`: `?tab=` rail with organization transfers (default) and `?tab=capacity` for extra accounts and agents; genesis PA also sees the payment settings section on the capacity tab |
+| `/transfer-payments` `/capacity-payments` | same gates as their details | redirect (replace) to `/payments` and `/payments?tab=capacity` |
+| `/transfer-payments/:id` | `TransferReviewRoute`: active PA only | payment detail + decision |
+| `/capacity-payments/:orderId` | `CapacityReviewRoute`: `canReviewCapacityPayments` (active PA); no nav entry | extra-accounts payment detail with evidence and decision; engine notifications link here |
 | `/capacity-orders/:orderId` | `CapacityOrderRoute`: `canViewCapacityOrders` (active non-PA org admin with a tenant, or active PA read-only); no nav entry | payment page: amount, bank recipient with copy buttons, evidence upload, cancel, status views |
 | `/admission-approvals` `/admission-approvals/:id` | `AdmissionReviewRoute`: `canReviewAdmissions` (`org_admin` + `is_genesis`) | admission queue, detail + decision |
 | `/broadcast` | `BroadcastRoute`: `canSendBroadcast` (`org_admin`, not PA) | broadcast |
@@ -31,7 +33,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `*` (inside shell) | none | `Navigate` → `/` |
 
 Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
-Analytics is `?tab=analytics` on `/search-engine`, not a route.
+Analytics is `?tab=analytics` on `/search-engine`, and capacity payments are `?tab=capacity` on `/payments`; neither is a route.
 
 **Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
 

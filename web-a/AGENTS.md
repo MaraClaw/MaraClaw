@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates, Upgrade signals (PA resource-pressure summary, episodes, CSV), extra accounts and agents (Users capacity section, `/capacity-orders/:orderId` payment page, PA `/capacity-payments` review, genesis payment settings).
+Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates, Upgrade signals (PA resource-pressure summary, episodes, CSV), extra accounts and agents (Users capacity section, `/capacity-orders/:orderId` payment page, PA Payments `/payments?tab=capacity` review, genesis payment settings).
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -34,7 +34,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - Only an authenticated 401 expires the session (see `src/lib/AGENTS.md`). A 403, including `must_change_password`, is a plain `ApiError` and keeps the token.
 - Companies + Search + OpenClaw updates + Upgrade signals (`/upgrade-signals`) require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
 - Narrower gates (non-PA org admin for Broadcast and Invitations, genesis for Admissions, active own-org admin for Agent deletions, active PA only for Payments) live in `src/lib/types/auth.ts` and `transfer-review-access.ts`; route guard and nav entry must use the same predicate.
-- Capacity gates (`canBuyCapacity`: active non-PA org admin with a tenant; `canViewCapacityOrders`: that or an active PA; `canReviewCapacityPayments`: active PA; `canManageCapacityPaymentSettings`: active genesis PA) live in `src/lib/types/auth.ts`; the nav entry, the route guard and the `use-capacity.ts` query gates share them. PAs read a company's capacity with `?tenant_id=` and never buy.
+- Capacity gates (`canBuyCapacity`: active non-PA org admin with a tenant; `canViewCapacityOrders`: that or an active PA; `canReviewCapacityPayments`: active PA; `canManageCapacityPaymentSettings`: active genesis PA) live in `src/lib/types/auth.ts`; the route guard and the `use-capacity.ts` query gates share them (the Payments nav entry uses the equivalent `canReviewTransferPayments`). PAs read a company's capacity with `?tenant_id=` and never buy.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 
