@@ -42,6 +42,7 @@ from app.schemas.schemas import AgentOut, AgentUpdate
 from app.services import heartbeat, okr_daily_collection, onboarding
 from app.services.agent_manager import agent_manager
 from app.services.autonomy_service import autonomy_service
+from app.services.guest_limits import GuestLimits
 from openclaw_update_gate_fixtures import open_guest_write_gate
 
 ROUTES = tuple(
@@ -417,6 +418,8 @@ async def test_metrics_preserve_nested_counts_open_ports_and_container_omissions
 ) -> None:
     agent.tokens_used_today, agent.cache_read_tokens_today = 7, 2
     monkeypatch.setattr(advanced.task_dao, "count_for_agent", AsyncMock(side_effect=[3, 2, 1]))
+    limits = GuestLimits(memory_bytes=2 * 1024**3, cpus=1.0, cpu_shares=None, pids_limit=512, tier=None)
+    monkeypatch.setattr(advanced, "resolve_guest_limits", AsyncMock(return_value=limits))
     connection = Mock(fetchval=AsyncMock(side_effect=[8, 2, 5]))
 
     @asynccontextmanager

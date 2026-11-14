@@ -3,6 +3,7 @@
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import get_ident
 from unittest.mock import AsyncMock
@@ -20,9 +21,16 @@ from app.api import advanced
 from app.core.domain.agents import AgentStatus
 from app.core.json_types import JsonObject, json_object_from
 from app.records.agent import AgentRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager, agent_manager
+from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_container_status import get_guest_container_status
+from app.services.guest_limits import GuestLimits
+
+MAX_TIER_LIMITS = GuestLimits(
+    memory_bytes=3_221_225_472, cpus=1.5, cpu_shares=1536, pids_limit=768, tier=OrganizationPlanId.MAX
+)
 
 
 @pytest.fixture
@@ -89,10 +97,10 @@ def manager(monkeypatch: pytest.MonkeyPatch, inspect_payload: JsonObject) -> Age
 
 
 def test_observed_status_when_legacy_name_has_full_ownership(agent: AgentRecord, manager: AgentManager) -> None:
-    # Given a legacy-named guest whose full ownership label matches.
+    # Given a legacy-named guest whose full ownership label matches, and a tier whose limits it does not carry.
     # When diagnostics inspect the guest.
-    result = get_guest_container_status(manager, agent)
-    # Then observations, not persisted status or desired settings, are reported.
+    result = get_guest_container_status(manager, agent, MAX_TIER_LIMITS)
+    # Then observations, not persisted status or desired settings, are reported beside the expected limits.
     assert result == {
         "running": True,
         "status": "running",
@@ -119,8 +127,71 @@ def test_observed_status_when_legacy_name_has_full_ownership(agent: AgentRecord,
             "cpuset_cpus": "0-1",
             "pids_limit": 256,
         },
+        "expected_limits": {
+            "memory_bytes": 3221225472,
+            "memory_swap_bytes": 3221225472,
+            "nano_cpus": 1500000000,
+            "cpu_shares": 1536,
+            "pids_limit": 768,
+        },
+        "limits_drift": True,
         "port_drift": {"persisted_port": 19876, "published_ports": [19876], "drifted": False},
     }
+
+
+def test_limits_drift_is_unknown_without_expected_limits(agent: AgentRecord, manager: AgentManager) -> None:
+    # Given an inspected guest and no resolvable tier.
+    # When diagnostics observe it.
+    result = get_guest_container_status(manager, agent)
+    # Then nothing is claimed about drift.
+    assert result.get("expected_limits") is None
+    assert result.get("limits_drift") is None
+
+
+@pytest.mark.parametrize(
+    ("host_config", "expected", "drift"),
+    [
+        pytest.param({}, MAX_TIER_LIMITS, False, id="match"),
+        pytest.param({"CpuShares": 1024}, MAX_TIER_LIMITS, True, id="shares-differ"),
+        pytest.param({"MemorySwap": 4294967296}, MAX_TIER_LIMITS, True, id="swap-differs"),
+        pytest.param({"Memory": 0, "MemorySwap": 0}, MAX_TIER_LIMITS, True, id="unlimited"),
+        pytest.param({"CpuShares": 0}, replace(MAX_TIER_LIMITS, cpu_shares=None), False, id="default-not-targeted"),
+        pytest.param({"CpuShares": 512}, replace(MAX_TIER_LIMITS, cpu_shares=None), True, id="leftover-not-targeted"),
+    ],
+)
+def test_limits_drift_compares_observed_to_expected(
+    agent: AgentRecord,
+    manager: AgentManager,
+    inspect_payload: JsonObject,
+    host_config: JsonObject,
+    expected: GuestLimits,
+    drift: bool,
+) -> None:
+    # Given a guest created with the tier's limits, then changed in one respect.
+    inspect_payload["HostConfig"] = {
+        "Memory": 3221225472,
+        "MemorySwap": 3221225472,
+        "NanoCpus": 1500000000,
+        "PidsLimit": 768,
+        "CpuShares": 1536,
+        **host_config,
+    }
+    # When diagnostics compare it with the expected limits.
+    result = get_guest_container_status(manager, agent, expected)
+    # Then only a differing hard limit is drift; without a targeted weight only Docker's default is not drift.
+    assert result.get("limits_drift") is drift
+
+
+def test_limits_drift_is_unknown_without_observed_host_config(
+    agent: AgentRecord, manager: AgentManager, inspect_payload: JsonObject
+) -> None:
+    # Given an inspection that reports no HostConfig.
+    inspect_payload["HostConfig"] = None
+    # When diagnostics observe it against known expected limits.
+    result = get_guest_container_status(manager, agent, MAX_TIER_LIMITS)
+    # Then the expectation is reported and the drift stays unknown.
+    assert result.get("expected_limits") is not None
+    assert result.get("limits_drift") is None
 
 
 @pytest.mark.parametrize("owner", [None, "12345678", "12345678-1234-4321-8765-000000000000"])
@@ -250,8 +321,13 @@ def test_compatible_status_when_docker_is_unavailable(agent: AgentRecord, manage
     assert result == {"running": False, "status": "stopped"}
 
 
+@pytest.mark.parametrize("ambiguous", [False, True], ids=["tier", "ambiguous-tier"])
 async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnostics(
-    agent: AgentRecord, manager: AgentManager, inspect_payload: JsonObject, monkeypatch: pytest.MonkeyPatch
+    agent: AgentRecord,
+    manager: AgentManager,
+    inspect_payload: JsonObject,
+    monkeypatch: pytest.MonkeyPatch,
+    ambiguous: bool,
 ) -> None:
     # Given the existing metrics route with fake persistence and a real SDK parser.
     event_loop_thread = get_ident()
@@ -266,6 +342,12 @@ async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnost
     monkeypatch.setattr(agent_manager, "docker_client", manager.docker_client)
     monkeypatch.setattr(advanced, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(advanced.task_dao, "count_for_agent", AsyncMock(return_value=0))
+    resolution = (
+        AsyncMock(side_effect=GuestStartPreflightError("Organization tier is ambiguous"))
+        if ambiguous
+        else AsyncMock(return_value=MAX_TIER_LIMITS)
+    )
+    monkeypatch.setattr(advanced, "resolve_guest_limits", resolution)
 
     class Connection:
         async def fetchval(self, _sql: str, _params: JsonObject) -> int:
@@ -290,3 +372,17 @@ async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnost
     assert container["ownership"] == {"agent_id": str(agent.id), "matches": True}
     assert container["created"] == "2026-01-02T03:04:05+00:00"
     assert "private" not in response.text
+    # And an unresolvable tier only blanks the expectation instead of failing the endpoint.
+    resolution.assert_awaited_once_with(agent)
+    assert container["limits_drift"] is (None if ambiguous else True)
+    assert container["expected_limits"] == (
+        None
+        if ambiguous
+        else {
+            "memory_bytes": 3221225472,
+            "memory_swap_bytes": 3221225472,
+            "nano_cpus": 1500000000,
+            "cpu_shares": 1536,
+            "pids_limit": 768,
+        }
+    )

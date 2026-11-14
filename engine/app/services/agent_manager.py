@@ -47,6 +47,7 @@ from app.services.guest_identity import (
     stop_guest_containers,
 )
 from app.services.guest_image import ensure_guest_image
+from app.services.guest_limits import resolve_guest_limits
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.llm import get_model_api_key
@@ -664,7 +665,7 @@ class AgentManager:
             from app.services.enterprise_llm import ensure_agent_company_models, owned_model_or_none
 
             agent = await ensure_agent_company_models(agent)
-            secondary_id = _uuid_or_none(getattr(agent, "secondary_model_id", None))
+            limits = await resolve_guest_limits(agent)
             fallback_id = _uuid_or_none(getattr(agent, "fallback_model_id", None))
             model_ids = [mid for mid in (agent.primary_model_id, fallback_id) if mid]
             loaded = {row.id: row for row in await llm_model_dao.get_many(model_ids)} if model_ids else {}
@@ -687,7 +688,7 @@ class AgentManager:
             raise GuestStartPreflightError("Guest start preparation failed") from exc
 
         await ensure_guest_image(client, guest_image)
-        async with guest_admission(client, agent, self._agent_dir(agent.id).parent):
+        async with guest_admission(client, agent, self._agent_dir(agent.id).parent, memory_limit=limits.memory_bytes):
             try:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
             except (ClientNotFoundError, DockerException) as exc:
@@ -729,10 +730,11 @@ class AgentManager:
                         volumes=[(str(agent_dir), "/home/node/custom-state", "rw"), *gogcli_volumes],
                         envs=container_envs,
                         restart="unless-stopped",
-                        memory=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
-                        memory_swap=settings.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES,
-                        cpus=settings.OPENCLAW_GUEST_CPUS,
-                        pids_limit=settings.OPENCLAW_GUEST_PIDS_LIMIT,
+                        memory=limits.memory_bytes,
+                        memory_swap=limits.memory_bytes,
+                        cpus=limits.cpus,
+                        pids_limit=limits.pids_limit,
+                        **limits.cpu_shares_option(),
                         labels={
                             "maraclaw.agent_id": str(agent.id),
                             "maraclaw.agent_name": agent.name,

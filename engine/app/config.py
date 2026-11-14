@@ -203,7 +203,8 @@ class Settings(BaseSettings):
     OPENCLAW_PROCESS_MAX_PARALLEL_TURNS: int = Field(default=16, ge=1, le=256)
     # Per-worker cap on concurrently running scheduled executions (periodic and manual share it).
     SCHEDULE_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1, le=256)
-    # Trial limits for newly created/replacement guests; never auto-update existing guests.
+    # Trial limits for guests of system agents and untiered organizations (tiers carry their own). They apply on
+    # creation and when a stopped guest is resumed, never to running guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
@@ -215,13 +216,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_guest_memory_capacity(self) -> Settings:
+        from app.records.organization_plan import OrganizationGuestMemoryBytes
+
         capacity = self.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES
-        if capacity and capacity < self.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES:
-            raise ValueError("Guest aggregate memory limit must cover at least one per-guest memory limit")
+        largest = max(self.OPENCLAW_GUEST_MEMORY_LIMIT_BYTES, *OrganizationGuestMemoryBytes)
+        if capacity and capacity < largest:
+            raise ValueError(
+                "Guest aggregate memory limit must cover the largest per-guest memory limit "
+                "(the configured default or the largest tier)"
+            )
         return self
 
     # How OpenClaw guests reach this engine on the Docker network.
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
+    # Seconds between passes of the worker that measures each tier-governed agent's workspace disk usage.
+    AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS: float = Field(default=600.0, ge=30, le=86400, allow_inf_nan=False)
+    # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed
+    # storage against its limits and records episodes at or above the threshold ratio (tier-upsell evidence).
+    AGENT_RESOURCE_PRESSURE_INTERVAL_SECONDS: float = Field(default=300.0, ge=30, le=86400, allow_inf_nan=False)
+    AGENT_RESOURCE_PRESSURE_THRESHOLD: float = Field(default=0.9, gt=0, le=1, allow_inf_nan=False)
     # Personal WhatsApp burst batching: originals join one turn after a quiet window, bounded by the max window.
     # Pending limits exclude the one in-flight batch; the body limit is the joined UTF-8 size of one batch.
     WHATSAPP_PERSONAL_BURST_QUIET_SECONDS: float = Field(default=2.0, gt=0, le=3600, allow_inf_nan=False)

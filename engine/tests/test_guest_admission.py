@@ -145,6 +145,33 @@ def test_settings_reject_invalid_aggregate_boundary(aggregate):
     # Then settings never reach the manager with an impossible budget.
 
 
+TIER_MAX_MEMORY = 4 * 1024**3
+
+
+@pytest.mark.parametrize(
+    ("memory", "aggregate", "valid"),
+    [
+        pytest.param(2 * 1024**3, TIER_MAX_MEMORY - 1, False, id="below-largest-tier"),
+        pytest.param(2 * 1024**3, TIER_MAX_MEMORY, True, id="exactly-largest-tier"),
+        pytest.param(2 * 1024**3, 0, True, id="disabled"),
+        pytest.param(8 * 1024**3, TIER_MAX_MEMORY, False, id="default-above-largest-tier"),
+        pytest.param(8 * 1024**3, 8 * 1024**3, True, id="exactly-the-default"),
+    ],
+)
+def test_settings_aggregate_must_cover_the_largest_guest_limit(memory, aggregate, valid):
+    # Given a configured per-guest default and a budget around the largest tier (Ultra, 4 GiB).
+    # When the aggregate budget is built from them.
+    if valid:
+        settings = Settings(
+            OPENCLAW_GUEST_MEMORY_LIMIT_BYTES=memory, OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES=aggregate
+        )
+        assert aggregate == settings.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES
+    else:
+        with pytest.raises(ValidationError):
+            Settings(OPENCLAW_GUEST_MEMORY_LIMIT_BYTES=memory, OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES=aggregate)
+    # Then any guest, whichever tier or default it gets, can be admitted on an otherwise empty host.
+
+
 @pytest.mark.parametrize("boundary", ["lock", "inventory"])
 async def test_admission_preflight_errors_preserve_old_runtime(env, monkeypatch, boundary):
     # Given an unavailable admission lock or Docker inventory.

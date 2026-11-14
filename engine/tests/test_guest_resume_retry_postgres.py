@@ -52,10 +52,15 @@ async def resume_operation(
         name=guest_container_name(identifier),
         state=ContainerState(status="exited"),
         config=ContainerConfig(labels={AGENT_LABEL: str(identifier)}),
-        host_config=ContainerHostConfig(memory=20, port_bindings={}),
+        host_config=ContainerHostConfig(
+            memory=20, memory_swap=20, nano_cpus=1_000_000_000, pids_limit=512, port_bindings={}
+        ),
         mounts=[SimpleNamespace(destination="/home/node/custom-state")],
     )
     docker.guests["same-owned-id"] = guest
+    monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 20)
+    monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_CPUS", 1.0)
+    monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_PIDS_LIMIT", 512)
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)
     return *pending, guest
 

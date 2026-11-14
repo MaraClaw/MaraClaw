@@ -70,6 +70,8 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
     directory = tmp_path / str(agent.id)
     directory.mkdir()

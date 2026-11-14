@@ -479,6 +479,8 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When
@@ -562,6 +564,8 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When
@@ -602,6 +606,8 @@ async def test_start_container_returns_none_when_pywhales_client_is_missing(monk
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When

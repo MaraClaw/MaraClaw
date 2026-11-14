@@ -1,4 +1,4 @@
-"""Resumes reserve actual inspected limits without replacing the existing guest."""
+"""Resumes reserve the target limits, then raise or lower the stopped guest to them, without replacing it."""
 
 import fcntl
 import threading
@@ -20,48 +20,61 @@ __all__ = ["env", "ready_guest"]
 @pytest.mark.parametrize(
     ("actual", "aggregate", "code"),
     [
-        (512, 640, "guest_memory_capacity_exceeded"),
-        (0, 1024, "guest_memory_unbounded"),
+        (256, 640, "guest_memory_capacity_exceeded"),
+        (128, 640, "guest_memory_capacity_exceeded"),
         (None, 1024, "guest_memory_unbounded"),
     ],
 )
-async def test_resume_refuses_actual_limit_without_mutating_guest(env, monkeypatch, state, actual, aggregate, code):
-    # Given a default of 256 but a stopped guest needing 512 and only 384 remaining, or an unlimited guest.
+async def test_resume_refuses_target_limit_without_mutating_guest(env, monkeypatch, state, actual, aggregate, code):
+    # Given a target of 512 but only 384 remaining, or a stopped guest with no recorded memory limit.
     manager, docker, agent = env
     guest = docker.guests["old"]
     guest.state.status = state
     guest.host_config.memory = actual
     agent.status = "stopped"
     docker.add(replace(agent, id=uuid4(), container_id="other"), memory=256)
-    monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 256)
+    monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 512)
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", aggregate)
     config = manager._agent_dir(agent.id) / "openclaw.json"
     config.write_text("retained config", encoding="utf-8")
     # When Start tries to resume the existing guest.
     with pytest.raises(GuestAdmissionError) as refused:
         await manager.start_container(agent)
-    # Then admission refuses before start/replacement/publication or any configuration write.
+    # Then admission refuses on the target (never the smaller inspected limit) before any update, start or write.
     assert refused.value.code == code
     assert (agent.container_id, agent.status, agent.container_port) == ("old", "stopped", 18888)
     assert (guest.state.status, guest.host_config.memory) == (state, actual)
-    assert docker.starts == docker.runs == docker.removed == []
+    assert docker.updates == docker.starts == docker.runs == docker.removed == []
     assert config.read_text(encoding="utf-8") == "retained config"
 
 
 @pytest.mark.parametrize("state", ["exited", "created"])
-async def test_resume_uses_actual_limit_at_exact_capacity(env, monkeypatch, state):
-    # Given a guest smaller than the current default, with exactly enough capacity for its real limit.
+@pytest.mark.parametrize("actual", [256, 1024, 0], ids=["raised", "lowered", "unlimited"])
+async def test_resume_updates_guest_to_target_at_exact_capacity_before_start(env, monkeypatch, state, actual):
+    # Given a stopped guest whose limit differs from the 512 target, and exactly enough capacity for the target.
     manager, docker, agent = env
-    docker.guests["old"].state.status = state
-    docker.guests["old"].host_config.memory = 256
-    docker.add(replace(agent, id=uuid4(), container_id="other"), memory=512)
+    guest = docker.guests["old"]
+    guest.state.status = state
+    guest.host_config.memory = guest.host_config.memory_swap = actual
+    docker.add(replace(agent, id=uuid4(), container_id="other"), memory=256)
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_MEMORY_LIMIT_BYTES", 512)
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 768)
+    start = docker.start
+
+    def ordered_start(reference):
+        docker.events.append("start")
+        start(reference)
+
+    monkeypatch.setattr(docker, "start", ordered_start)
     # When Start resumes it.
     result = await manager.start_container(agent)
-    # Then the same guest starts and its hard limit is not silently changed to the configured default.
+    # Then admission inventories first, memory and swap move together to the target, and only then the same guest starts.
     assert result == "old"
-    assert docker.guests["old"].host_config.memory == 256
+    assert docker.events == ["list", "update", "start"]
+    assert docker.updates == [
+        ("old", {"memory": 512, "memory_swap": 512, "cpus": 1.0, "pids_limit": 512, "cpu_shares": 1024})
+    ]
+    assert (guest.host_config.memory, guest.host_config.memory_swap) == (512, 512)
     assert docker.starts == ["old"]
     assert docker.runs == docker.removed == []
 
