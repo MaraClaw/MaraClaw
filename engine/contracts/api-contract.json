@@ -630,7 +630,7 @@
                 "type": "null"
               }
             ],
-            "description": "Agents this account may own in its organization: the organization tier's cap when the organization was provisioned through an approved admission (quota_max_agents is then not applied), otherwise quota_max_agents, or null for an uncapped administrator.",
+            "description": "Agents this account may own: the organization tier's cap (quota_max_agents is then not applied), or, for an account with no organization, quota_max_agents, or null for an uncapped administrator.",
             "title": "Effective Max Agents"
           },
           "email": {
@@ -4634,14 +4634,7 @@
             "type": "string"
           },
           "tier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OrganizationPlanId"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/OrganizationPlanId"
           },
           "today": {
             "format": "date",
@@ -6105,10 +6098,14 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
           }
         },
         "required": [
           "name",
+          "tier",
           "admin_email",
           "admin_password"
         ],
@@ -6418,6 +6415,9 @@
             "title": "Sso Enabled",
             "type": "boolean"
           },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
           "total_tokens": {
             "default": 0,
             "title": "Total Tokens",
@@ -6434,6 +6434,7 @@
           "name",
           "slug",
           "is_active",
+          "tier",
           "can_disable"
         ],
         "title": "CompanyStats",
@@ -15071,14 +15072,7 @@
             "type": "integer"
           },
           "current_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OrganizationPlanId"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/OrganizationPlanId"
           },
           "episode_counts": {
             "$ref": "#/components/schemas/ResourcePressureEpisodeCounts"
@@ -17304,10 +17298,14 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
           }
         },
         "required": [
           "name",
+          "tier",
           "admin_email",
           "admin_password"
         ],
@@ -17627,6 +17625,9 @@
             "title": "Sso Enabled",
             "type": "boolean"
           },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
           "timezone": {
             "default": "UTC",
             "title": "Timezone",
@@ -17637,6 +17638,7 @@
           "id",
           "name",
           "slug",
+          "tier",
           "im_provider",
           "is_active",
           "can_disable"
@@ -19385,7 +19387,7 @@
                 "type": "null"
               }
             ],
-            "description": "Today's message usage; null for system agents and organizations without a tier."
+            "description": "Today's message usage; null for system agents and agents with no organization."
           },
           "id": {
             "format": "uuid",
@@ -19486,7 +19488,7 @@
                 "type": "null"
               }
             ],
-            "description": "Agents this account may own in its organization: the organization tier's cap when the organization was provisioned through an approved admission (quota_max_agents is then not applied), otherwise quota_max_agents, or null for an uncapped administrator.",
+            "description": "Agents this account may own: the organization tier's cap (quota_max_agents is then not applied), or, for an account with no organization, quota_max_agents, or null for an uncapped administrator.",
             "title": "Effective Max Agents"
           },
           "email": {
@@ -20786,7 +20788,7 @@
         ]
       },
       "post": {
-        "description": "Create a company and its genesis org admin (platform admin only).\n\nThe org admin is provisioned with the given email + initial password and\nmust change the password after the first successful login.",
+        "description": "Create a company of the chosen tier and its genesis org admin (platform admin only).\n\nThe org admin is provisioned with the given email + initial password and\nmust change the password after the first successful login.",
         "operationId": "post_2f6170692f61646d696e2f636f6d70616e696573",
         "requestBody": {
           "content": {
@@ -43570,7 +43572,7 @@
         ]
       },
       "post": {
-        "description": "Create a company and its genesis org admin (platform admin only).\n\nThe org admin is provisioned with the given email + initial password and\nmust change the password after the first successful login.",
+        "description": "Create a company of the chosen tier and its genesis org admin (platform admin only).\n\nThe org admin is provisioned with the given email + initial password and\nmust change the password after the first successful login.",
         "operationId": "post_2f6170692f74656e616e74732f",
         "requestBody": {
           "content": {
