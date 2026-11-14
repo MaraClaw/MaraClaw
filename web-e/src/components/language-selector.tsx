@@ -1,22 +1,42 @@
+import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/hooks/use-translation'
+import type { Locale } from '@/lib/i18n/translation'
+import { cn } from '@/lib/utils'
 
-export function LanguageSelector() {
+const locales = ['en', 'vi'] as const satisfies readonly Locale[]
+const flags = { en: '/flags/us.svg', vi: '/flags/vn.svg' } as const satisfies Record<Locale, string>
+
+/** Icon button matching ThemeToggle; the flag shows the active language. */
+export function LanguageSelector({ className }: { className?: string }) {
   const { locale, setLocale, t } = useTranslation()
   const label = locale === 'en'
     ? t('Language: English. Switch to Tiếng Việt')
     : t('Language: Tiếng Việt. Switch to English')
+
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="icon"
+      className={className}
+      onClick={() => setLocale(locale === 'en' ? 'vi' : 'en')}
       aria-label={label}
       title={label}
-      onClick={() => setLocale(locale === 'en' ? 'vi' : 'en')}
-      className="relative flex h-10 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-transparent outline-1 -outline-offset-1 outline-black/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-safe:transition-[scale] motion-safe:duration-150 motion-safe:ease-out motion-safe:active:scale-[0.96] dark:outline-white/10"
     >
-      <img src={locale === 'en' ? '/flags/us.svg' : '/flags/vn.svg'} alt="" className="absolute inset-0 size-full object-cover" />
-      <span className="relative rounded bg-black/75 px-1 text-xs font-bold leading-5 text-white" lang={locale}>
-        {locale === 'en' ? 'EN' : 'VI'}
-      </span>
-    </button>
+      {locales.map((code) => (
+        <img
+          key={code}
+          src={flags[code]}
+          alt=""
+          width={20}
+          height={14}
+          draggable={false}
+          className={cn(
+            'absolute h-3.5 w-5 rounded-[3px] object-cover outline-1 -outline-offset-1 outline-black/10 transition-[transform,opacity] duration-200 dark:outline-white/15',
+            code === locale ? 'scale-100 rotate-0 opacity-100' : 'scale-0 rotate-90 opacity-0',
+          )}
+        />
+      ))}
+    </Button>
   )
 }
