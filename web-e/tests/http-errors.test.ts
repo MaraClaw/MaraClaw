@@ -58,6 +58,33 @@ test('a 507 workspace disk quota refusal shows the engine message while other 5x
   })
 })
 
+test('company cap refusals show the engine message: a 409 account-limit dict and a 403 agent-limit string', async () => {
+  const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
+  const refuse = (status: number, detail: unknown) => createHttpClient(session, () => Promise.resolve(Response.json({ detail }, { status })),
+    (path) => `https://api.example${path}`).apiRequest('/resource')
+  const accounts = {
+    code: 'company_account_limit_reached', limit: 40, used: 40,
+    message: 'Your company has used all 40 accounts. An org admin can buy extra accounts on the Users page in the admin console.',
+  }
+  const agents = 'Your company has used all 10 agents. An org admin can buy extra agents on the Users page in the admin console.'
+
+  await assert.rejects(refuse(409, accounts), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 409)
+    assert.deepEqual(error.detail, accounts)
+    assert.equal(error.message, accounts.message)
+    assert.equal(userFacingRequestError(error, 'Unable to join'), accounts.message)
+    return true
+  })
+  await assert.rejects(refuse(403, agents), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 403)
+    assert.equal(error.isMemberAudienceRejection, false)
+    assert.equal(userFacingRequestError(error, 'Unable to create agent'), agents)
+    return true
+  })
+})
+
 test('HTTP display formatting retains readable validation and domain details', () => {
   assert.equal(formatApiDetail({ detail: [{ msg: 'Email is required' }, { msg: 'Password is required' }] }), 'Email is required Password is required')
   const detail = { code: 'conflict', message: 'This name is already in use.' }
