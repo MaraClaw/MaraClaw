@@ -12,7 +12,7 @@
 | [Deployment](c4-deployment.md) | Topology encoded by the three package launchers, not provisioned infrastructure |
 | [Chat flow](c4-dynamic-chat.md) | Ticket authorization, durable acceptance, native guest execution, and reply delivery |
 
-Start with context and containers. Use deployment to distinguish a browser application from its nginx server, and the chat view to distinguish committed work from best-effort notifications.
+Start with context and containers. Use deployment to distinguish a browser application from its Caddy server, and the chat view to distinguish committed work from best-effort notifications.
 
 ## Reading conventions
 
@@ -44,4 +44,4 @@ Use a Puppeteer configuration like this, adjusting `executablePath` for your ins
 
 After changing a diagram, regenerate its matching SVG and inspect the result before publishing.
 
-Sources are linked relative to this directory (`../../` reaches the repository root); line fragments locate the reviewed ranges and can drift as code changes. The source review used the best-effort code graph plus direct reads, including nginx files that the graph could not parse and changed source where graph metadata was stale. No application services, application builds, application tests, or live integrations were exercised for this documentation-only change.
+Sources are linked relative to this directory (`../../` reaches the repository root); line fragments locate the reviewed ranges and can drift as code changes. The source review used the best-effort code graph plus direct reads, including server config files that the graph could not parse and changed source where graph metadata was stale. No application services, application builds, application tests, or live integrations were exercised for this documentation-only change.

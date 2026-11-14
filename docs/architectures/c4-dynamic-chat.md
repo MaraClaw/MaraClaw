@@ -2,7 +2,7 @@
 
 [Architecture index](README.md) | Source snapshot: **2026-11-12**
 
-This view follows a normal member submission through ticket authorization, durable gateway work, native guest execution, and reply settlement. It omits attachment handling, onboarding triggers, and best-effort web delta streaming. Nginx transport is collapsed into the client-to-engine arrow; see the [deployment view](c4-deployment.md) for the actual proxy hop.
+This view follows a normal member submission through ticket authorization, durable gateway work, native guest execution, and reply settlement. It omits attachment handling, onboarding triggers, and best-effort web delta streaming. Caddy proxy transport is collapsed into the client-to-engine arrow; see the [deployment view](c4-deployment.md) for the actual proxy hop.
 
 ![MaraClaw durable member chat flow](c4-dynamic-chat.svg)
 
