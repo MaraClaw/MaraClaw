@@ -14,7 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/hooks/use-auth'
 import { useAgentSetup } from '@/hooks/use-agent-setup'
 import { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
@@ -39,14 +38,7 @@ export function AgentSettingsPage() {
   const setup = useAgentSetup(agent.id, canManage)
   const lifecycle = useAgentLifecycle(agent.id, canManage)
   const expired = useAgentExpiry(agent)
-  const [name, setName] = useState(agent.name)
-  const [bio, setBio] = useState(agent.bio ?? '')
-  const [welcome, setWelcome] = useState(agent.welcome_message ?? '')
-  const [heartbeatEnabled, setHeartbeatEnabled] = useState(agent.heartbeat_enabled ?? true)
-  const [heartbeatMinutes, setHeartbeatMinutes] = useState(String(agent.heartbeat_interval_minutes ?? 240))
   const [activeHours, setActiveHours] = useState(agent.heartbeat_active_hours ?? '09:00-18:00')
-  const [timezone, setTimezone] = useState(agent.timezone ?? '')
-  const [clamped, setClamped] = useState<Array<{ field: string; requested?: number; applied?: number; reason?: string }>>([])
 
   const metrics = useQuery({
     queryKey: ['metrics', agent.id],
@@ -75,19 +67,9 @@ export function AgentSettingsPage() {
   })
   const save = useMutation({
     mutationFn: () =>
-      updateAgent(agent.id, {
-        name,
-        bio,
-        welcome_message: welcome,
-        heartbeat_enabled: heartbeatEnabled,
-        heartbeat_interval_minutes: Number(heartbeatMinutes) || 240,
-        heartbeat_active_hours: activeHours,
-        timezone: timezone || null,
-      }),
-    onSuccess(updated) {
-      const extra = (updated as AgentOut & { _clamped_fields?: typeof clamped })._clamped_fields
-      setClamped(extra ?? [])
-      toast.success(extra?.length ? translate("Saved with company limits applied") : translate("Agent updated"))
+      updateAgent(agent.id, { heartbeat_active_hours: activeHours }),
+    onSuccess() {
+      toast.success(translate("Agent updated"))
       void queryClient.invalidateQueries({ queryKey: ['agent', agent.id] })
     },
     onError() {
@@ -138,33 +120,6 @@ export function AgentSettingsPage() {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-name">{translate("Name")}</Label>
-          <Input id="agent-name" value={name} onChange={scope.effect((event) => setName(event.target.value))} disabled={!isCreator} />
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="agent-bio">{translate("Bio")}</Label>
-          <Textarea id="agent-bio" value={bio} onChange={scope.effect((event) => setBio(event.target.value))} disabled={!isCreator} />
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="agent-welcome">{translate("Welcome message")}</Label>
-          <Textarea id="agent-welcome" value={welcome} onChange={scope.effect((event) => setWelcome(event.target.value))} disabled={!isCreator} />
-      </div>
-      <div className="space-y-2">
-        <Label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={heartbeatEnabled}
-            onChange={scope.effect((event) => setHeartbeatEnabled(event.target.checked))}
-            disabled={!isCreator}
-          />
-          {translate("Heartbeat enabled")}</Label>
-        <Label htmlFor="hb-min">{translate("Heartbeat interval (minutes)")}</Label>
-        <Input
-          id="hb-min"
-          value={heartbeatMinutes}
-            onChange={scope.effect((event) => setHeartbeatMinutes(event.target.value))}
-          disabled={!isCreator}
-        />
         <Label htmlFor="hb-hours">{translate("Active hours")}</Label>
         <Input
           id="hb-hours"
@@ -172,15 +127,7 @@ export function AgentSettingsPage() {
             onChange={scope.effect((event) => setActiveHours(event.target.value))}
           disabled={!isCreator}
         />
-        <Label htmlFor="tz">{translate("Timezone")}</Label>
-          <Input id="tz" value={timezone} onChange={scope.effect((event) => setTimezone(event.target.value))} disabled={!isCreator} />
       </div>
-      {clamped.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {translate("Company limits applied:")}{' '}
-          {clamped.map((item) => `${owned(item.field)} ${item.requested === undefined ? '' : formatNumber(item.requested)} → ${item.applied === undefined ? '' : formatNumber(item.applied)}`).join(', ')}
-        </p>
-      ) : null}
       {isCreator || isOrgAdmin ? (
         <Button onClick={() => save.mutate()} disabled={save.isPending || upgrading}>
           {translate("Save")}</Button>

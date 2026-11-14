@@ -73,7 +73,6 @@ test('agent information and Back stay in Settings while focused chat and the sec
   }
   await expect(page.getByText(agent.role_description, { exact: true })).toBeVisible()
   await expect(page.getByText('Tokens today 123 / 1000 · Tasks 2/5 · 3 approvals', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('Name', { exact: true })).toHaveValue(agent.name)
   await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(1)
   expect(api.reads()).toBe(1)
@@ -178,11 +177,12 @@ for (const rights of [
 
     await page.goto(settingsPath)
 
-    await expect(page.getByLabel('Name', { exact: true })).toBeVisible()
-    for (const label of ['Name', 'Bio', 'Welcome message', 'Heartbeat enabled', 'Heartbeat interval (minutes)', 'Active hours', 'Timezone']) {
-      await expect(page.getByLabel(label, { exact: true })).toHaveJSProperty('disabled', !rights.creator)
+    await expect(page.getByLabel('Active hours', { exact: true })).toBeVisible()
+    for (const label of ['Name', 'Bio', 'Welcome message', 'Heartbeat enabled', 'Heartbeat interval (minutes)', 'Timezone']) {
+      await expect(page.getByLabel(label, { exact: true })).toHaveCount(0)
     }
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(rights.manage ? 1 : 0)
+    await expect(page.getByLabel('Active hours', { exact: true })).toHaveJSProperty('disabled', !rights.creator)
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(rights.creator || rights.admin ? 1 : 0)
     await expect(page.getByRole('button', { name: 'Request deletion', exact: true })).toHaveCount(rights.creator && !rights.system ? 1 : 0)

@@ -131,7 +131,7 @@ for (const width of [390, 1440, 1920]) {
       state.update = { ...state.update, required: false, run: { id: runId, state: 'succeeded', failure_code: null } }
       await expect(page.getByRole('button', { name: 'Upgraded', exact: true })).toBeDisabled()
       await page.screenshot({ path: testInfo.outputPath('completed-settings.png') })
-      await page.getByLabel('Timezone', { exact: true }).scrollIntoViewIfNeeded()
+      await page.getByLabel('Active hours', { exact: true }).scrollIntoViewIfNeeded()
       await page.screenshot({ path: testInfo.outputPath('settings-end.png') })
       await page.getByRole('link', { name: 'Files', exact: true }).click()
       await expect(page.getByRole('button', { name: 'Root', exact: true })).toBeVisible()

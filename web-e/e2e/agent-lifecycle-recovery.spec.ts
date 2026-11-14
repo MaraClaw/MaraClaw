@@ -16,7 +16,7 @@ for (const width of [390, 1440]) {
     await expect(button).toBeEnabled()
     const geometry = () => page.evaluate(() => {
       const scroller = document.querySelector('section[aria-label="Agent lifecycle"]')?.closest('.overflow-y-auto')
-      return [document.querySelector('input#agent-name'), [...document.querySelectorAll('button')].find((item) => item.textContent === 'Start')]
+      return [document.querySelector('input#hb-hours'), [...document.querySelectorAll('button')].find((item) => item.textContent === 'Start')]
         .map((item) => item ? item.getBoundingClientRect().top + (scroller?.scrollTop ?? 0) : null)
     })
     const before = await geometry()

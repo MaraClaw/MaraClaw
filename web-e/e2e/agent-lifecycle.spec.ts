@@ -212,7 +212,7 @@ for (const rights of [
     // When
     await page.goto(settingsPath)
     // Then
-    await expect(page.getByLabel('Name', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('Active hours', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Request deletion', exact: true })).toHaveCount(rights.allowed ? 1 : 0)
     await expect(page.getByRole('region', { name: 'Agent lifecycle', exact: true })).toHaveCount(rights.manage ? 1 : 0)
     expect(api.reads()).toBe(rights.manage ? 1 : 0)

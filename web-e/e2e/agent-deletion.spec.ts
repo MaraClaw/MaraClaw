@@ -55,7 +55,7 @@ test('valid reason submits a request, stays in Settings and prevents duplicate r
   await expect(trigger).toBeDisabled()
   await expect(page.getByRole('status').filter({ hasText: 'Deletion request pending' })).toContainText('1 of 2')
   await expect(page).toHaveURL(settingsPath)
-  await expect(page.getByLabel('Name', { exact: true })).toHaveValue(originalAgent.name)
+  await expect(page.getByLabel('Active hours', { exact: true })).toBeVisible()
   expect(api.posts).toEqual([{ agent_id: originalAgent.id, reason: 'x' }])
 })
 
