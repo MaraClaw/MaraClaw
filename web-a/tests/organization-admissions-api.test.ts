@@ -4,7 +4,9 @@ import { z } from 'zod'
 
 import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
-import { decideOrganizationAdmission, fetchOrganizationAdmissions, retryOrganizationAdmissionEmail } from '../src/lib/organization-admissions-api.ts'
+import {
+  decideOrganizationAdmission, fetchOrganizationAdmissionEvidence, fetchOrganizationAdmissions, retryOrganizationAdmissionEmail,
+} from '../src/lib/organization-admissions-api.ts'
 import { canReviewAdmissions, canReviewOrganizationAdmissions } from '../src/lib/types/auth.ts'
 import { adminUser } from './helpers.ts'
 import { approvedOrganizationAdmission, organizationAdmission } from './organization-admission-fixtures.ts'
@@ -84,6 +86,11 @@ for (const invalid of [
   { items: [{ ...organizationAdmission, credential_email_status: 'delivered' }], has_more: false },
   { items: [{ ...organizationAdmission, credential_email_error: undefined }], has_more: false },
   { items: [{ ...organizationAdmission, credential_email_error: 17 }], has_more: false },
+  { items: [{ ...organizationAdmission, billing: 'weekly' }], has_more: false },
+  { items: [{ ...organizationAdmission, amount_vnd: '6225000' }], has_more: false },
+  { items: [{ ...organizationAdmission, recipient: undefined }], has_more: false },
+  { items: [{ ...organizationAdmission, payment_reference: undefined }], has_more: false },
+  { items: [{ ...organizationAdmission, evidence: undefined }], has_more: false },
 ]) {
   test('organization listing rejects malformed responses at the transport boundary', async (t) => {
     t.mock.method(globalThis, 'fetch', async () => Response.json(invalid))
@@ -123,6 +130,23 @@ test('organization decisions preserve typed conflicts', async (t) => {
 test('organization decision responses must contain a complete quoted snapshot', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => Response.json({ ...approvedOrganizationAdmission, plan: null }))
   await assert.rejects(decideOrganizationAdmission(organizationAdmission.id, { decision: 'approve' }), z.ZodError)
+})
+
+test('the organization evidence download is uncached and redirect-free', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } }))
+  const controller = new AbortController()
+  const bytes = await fetchOrganizationAdmissionEvidence(organizationAdmission.id, controller.signal)
+  const init = fetch.mock.calls[0]?.arguments[1]
+  assert.equal(fetch.mock.calls[0]?.arguments[0], `/api/admin/organization-admissions/${organizationAdmission.id}/evidence`)
+  assert.equal(init?.method, 'GET')
+  assert.equal(init?.cache, 'no-store')
+  assert.equal(init?.redirect, 'error')
+  assert.deepEqual([...bytes], [1, 2, 3])
+})
+
+test('a missing organization evidence file is a typed 404', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Payment evidence not found' }, { status: 404 }))
+  await assert.rejects(fetchOrganizationAdmissionEvidence(organizationAdmission.id), (error) => error instanceof ApiError && error.status === 404)
 })
 
 test('organization notifications open only the dedicated local queue', () => {
