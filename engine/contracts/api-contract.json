@@ -1209,18 +1209,6 @@
             "title": "Role Description",
             "type": "string"
           },
-          "secondary_model_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secondary Model Id"
-          },
           "skill_ids": {
             "default": [],
             "items": {
@@ -1831,18 +1819,6 @@
               }
             ],
             "description": "Recorded loss of the agent's guest container; populated only by GET /api/agents/{agent_id}."
-          },
-          "secondary_model_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secondary Model Id"
           },
           "status": {
             "$ref": "#/components/schemas/AgentStatus"
@@ -2525,18 +2501,6 @@
               }
             ],
             "description": "Recorded loss of the agent's guest container; populated only by GET /api/agents/{agent_id}."
-          },
-          "secondary_model_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secondary Model Id"
           },
           "status": {
             "$ref": "#/components/schemas/AgentStatus"
@@ -3398,18 +3362,6 @@
               }
             ],
             "title": "Role Description"
-          },
-          "secondary_model_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secondary Model Id"
           },
           "timezone": {
             "anyOf": [
@@ -9292,11 +9244,6 @@
             "title": "Is Fallback",
             "type": "boolean"
           },
-          "is_secondary": {
-            "default": false,
-            "title": "Is Secondary",
-            "type": "boolean"
-          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -9601,7 +9548,8 @@
           "runtime_stopped",
           "runtime_not_running",
           "upgrade_in_progress",
-          "upgrade_required"
+          "upgrade_required",
+          "workspace_disk_exceeded"
         ],
         "type": "string"
       },
@@ -12534,6 +12482,66 @@
           "ULTRA"
         ]
       },
+      "OrganizationGuestCpuShares": {
+        "description": "Docker relative CPU weight of one agent's guest under host contention, per tier; the only place the numbers live.",
+        "enum": [
+          1024,
+          1536,
+          2048
+        ],
+        "title": "OrganizationGuestCpuShares",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationGuestMemoryBytes": {
+        "description": "Hard memory limit, and memory+swap ceiling, of one agent's OpenClaw guest container, per tier; the only place the numbers live.",
+        "enum": [
+          2147483648,
+          3221225472,
+          4294967296
+        ],
+        "title": "OrganizationGuestMemoryBytes",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationGuestMillicpus": {
+        "description": "CPU ceiling of one agent's guest in thousandths of a vCPU, per tier; the only place the numbers live.",
+        "enum": [
+          1500,
+          2000,
+          3000
+        ],
+        "title": "OrganizationGuestMillicpus",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationGuestPidsLimit": {
+        "description": "Most processes one agent's guest may run, per tier; the only place the numbers live.",
+        "enum": [
+          512,
+          768,
+          1024
+        ],
+        "title": "OrganizationGuestPidsLimit",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
       "OrganizationMaxAccounts": {
         "description": "Most human accounts (organization admin included) a tier quotes, per tier; the only place the numbers live.",
         "enum": [
@@ -12562,6 +12570,18 @@
           "daily_messages_per_agent": {
             "$ref": "#/components/schemas/OrganizationDailyAgentMessageLimit"
           },
+          "guest_cpu_shares": {
+            "$ref": "#/components/schemas/OrganizationGuestCpuShares"
+          },
+          "guest_memory_bytes": {
+            "$ref": "#/components/schemas/OrganizationGuestMemoryBytes"
+          },
+          "guest_millicpus": {
+            "$ref": "#/components/schemas/OrganizationGuestMillicpus"
+          },
+          "guest_pids_limit": {
+            "$ref": "#/components/schemas/OrganizationGuestPidsLimit"
+          },
           "id": {
             "$ref": "#/components/schemas/OrganizationPlanId"
           },
@@ -12589,6 +12609,9 @@
           },
           "storage_limit_bytes": {
             "$ref": "#/components/schemas/OrganizationStorageLimitBytes"
+          },
+          "workspace_disk_bytes": {
+            "$ref": "#/components/schemas/OrganizationWorkspaceDiskBytes"
           }
         },
         "required": [
@@ -12602,7 +12625,12 @@
           "max_agents_per_account",
           "storage_limit_bytes",
           "max_file_size_bytes",
-          "daily_messages_per_agent"
+          "daily_messages_per_agent",
+          "guest_memory_bytes",
+          "guest_millicpus",
+          "guest_cpu_shares",
+          "guest_pids_limit",
+          "workspace_disk_bytes"
         ],
         "title": "OrganizationPlan",
         "type": "object"
@@ -12660,6 +12688,21 @@
           10737418240
         ],
         "title": "OrganizationStorageLimitBytes",
+        "type": "integer",
+        "x-enum-varnames": [
+          "PRO",
+          "MAX",
+          "ULTRA"
+        ]
+      },
+      "OrganizationWorkspaceDiskBytes": {
+        "description": "Bytes one agent's host workspace directory plus its guest container writable layer may use before new work is refused (measured soft quota), per tier; the only place the numbers live.",
+        "enum": [
+          2684354560,
+          5368709120,
+          8589934592
+        ],
+        "title": "OrganizationWorkspaceDiskBytes",
         "type": "integer",
         "x-enum-varnames": [
           "PRO",
@@ -13449,6 +13492,35 @@
         "title": "PressKeysRequest",
         "type": "object"
       },
+      "PressureKind": {
+        "enum": [
+          "threshold",
+          "oom_kill"
+        ],
+        "title": "PressureKind",
+        "type": "string",
+        "x-enum-varnames": [
+          "THRESHOLD",
+          "OOM_KILL"
+        ]
+      },
+      "PressureResource": {
+        "description": "Measured resource; units are bytes except ``cpu`` (millicpus).",
+        "enum": [
+          "memory",
+          "cpu",
+          "workspace_disk",
+          "managed_storage"
+        ],
+        "title": "PressureResource",
+        "type": "string",
+        "x-enum-varnames": [
+          "MEMORY",
+          "CPU",
+          "WORKSPACE_DISK",
+          "MANAGED_STORAGE"
+        ]
+      },
       "PreviewMetadata": {
         "properties": {
           "content_type": {
@@ -14113,6 +14185,245 @@
           "ok"
         ],
         "title": "ResetPasswordResponse",
+        "type": "object"
+      },
+      "ResourcePressureEpisodeCounts": {
+        "description": "Threshold episodes per resource; OOM kills are counted separately.",
+        "properties": {
+          "cpu": {
+            "title": "Cpu",
+            "type": "integer"
+          },
+          "managed_storage": {
+            "title": "Managed Storage",
+            "type": "integer"
+          },
+          "memory": {
+            "title": "Memory",
+            "type": "integer"
+          },
+          "workspace_disk": {
+            "title": "Workspace Disk",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "memory",
+          "cpu",
+          "workspace_disk",
+          "managed_storage"
+        ],
+        "title": "ResourcePressureEpisodeCounts",
+        "type": "object"
+      },
+      "ResourcePressureEpisodeOut": {
+        "description": "Units: bytes for memory, workspace_disk and managed_storage; millicpus for cpu.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/JsonObject-Output"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PressureKind"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "limit_value": {
+            "title": "Limit Value",
+            "type": "integer"
+          },
+          "peak_ratio": {
+            "title": "Peak Ratio",
+            "type": "number"
+          },
+          "peak_value": {
+            "title": "Peak Value",
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/PressureResource"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "tenant_name": {
+            "title": "Tenant Name",
+            "type": "string"
+          },
+          "threshold_ratio": {
+            "title": "Threshold Ratio",
+            "type": "number"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "tenant_name",
+          "agent_id",
+          "agent_name",
+          "tier",
+          "resource",
+          "kind",
+          "limit_value",
+          "peak_value",
+          "peak_ratio",
+          "threshold_ratio",
+          "started_at",
+          "last_seen_at",
+          "ended_at",
+          "sample_count",
+          "detail"
+        ],
+        "title": "ResourcePressureEpisodeOut",
+        "type": "object"
+      },
+      "ResourcePressureEpisodePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResourcePressureEpisodeOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ResourcePressureEpisodePage",
+        "type": "object"
+      },
+      "ResourcePressureTenantSummary": {
+        "properties": {
+          "agents_affected": {
+            "title": "Agents Affected",
+            "type": "integer"
+          },
+          "current_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationPlanId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "episode_counts": {
+            "$ref": "#/components/schemas/ResourcePressureEpisodeCounts"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "max_peak_ratio": {
+            "title": "Max Peak Ratio",
+            "type": "number"
+          },
+          "oom_count": {
+            "title": "Oom Count",
+            "type": "integer"
+          },
+          "pressure_seconds": {
+            "description": "Sum of each threshold episode's first-to-last sample span, in seconds.",
+            "title": "Pressure Seconds",
+            "type": "integer"
+          },
+          "suggested_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationPlanId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "tenant_name": {
+            "title": "Tenant Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "tenant_name",
+          "current_tier",
+          "episode_counts",
+          "oom_count",
+          "pressure_seconds",
+          "max_peak_ratio",
+          "agents_affected",
+          "last_seen_at",
+          "suggested_tier"
+        ],
+        "title": "ResourcePressureTenantSummary",
         "type": "object"
       },
       "RestoreRevisionBody": {
@@ -16539,18 +16850,6 @@
               }
             ],
             "title": "Default Model Id"
-          },
-          "default_secondary_model_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Secondary Model Id"
           },
           "hidden_agent_sections": {
             "default": [],
@@ -20432,6 +20731,505 @@
           }
         ],
         "summary": "Update Platform Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/resource-pressure/episodes": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f7265736f757263652d70726573737572652f657069736f646573",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Episodes that started at or after this instant.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started at or after this instant.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Episodes that started before this instant.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started before this instant.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Tier recorded when the episode opened.",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrganizationPlanId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Tier recorded when the episode opened.",
+              "title": "Tier"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PressureResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PressureKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "open_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Open Only",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourcePressureEpisodePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Resource Pressure Episodes",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/resource-pressure/export.csv": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f7265736f757263652d70726573737572652f6578706f72742e637376",
+        "parameters": [
+          {
+            "description": "Episodes that started at or after this instant.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started at or after this instant.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Episodes that started before this instant.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started before this instant.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Tier recorded when the episode opened.",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrganizationPlanId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Tier recorded when the episode opened.",
+              "title": "Tier"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PressureResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PressureKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "open_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Open Only",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "CSV of the matching episodes, newest first."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Resource Pressure Episodes",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/resource-pressure/summary": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f7265736f757263652d70726573737572652f73756d6d617279",
+        "parameters": [
+          {
+            "description": "Episodes that started at or after this instant.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started at or after this instant.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Episodes that started before this instant.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Episodes that started before this instant.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Tier recorded when the episode opened.",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrganizationPlanId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Tier recorded when the episode opened.",
+              "title": "Tier"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PressureResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourcePressureTenantSummary"
+                  },
+                  "title": "Response Get Resource Pressure Summary Api Admin Resource Pressure Summary Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Resource Pressure Summary",
         "tags": [
           "admin"
         ]
@@ -36163,47 +36961,6 @@
         ]
       }
     },
-    "/api/enterprise/llm-models/{model_id}/set-secondary": {
-      "post": {
-        "operationId": "post_2f6170692f656e74657270726973652f6c6c6d2d6d6f64656c732f7b6d6f64656c5f69647d2f7365742d7365636f6e64617279",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "model_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Model Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Set Secondary Llm Model",
-        "tags": [
-          "enterprise"
-        ]
-      }
-    },
     "/api/enterprise/llm-providers": {
       "get": {
         "description": "List supported LLM providers and capabilities (org/platform admin).",
@@ -45448,11 +46205,16 @@
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
+      "OrganizationGuestCpuShares",
+      "OrganizationGuestMemoryBytes",
+      "OrganizationGuestMillicpus",
+      "OrganizationGuestPidsLimit",
       "OrganizationMaxAccounts",
       "OrganizationPlanId",
       "OrganizationPlanName",
       "OrganizationPlansResponse",
       "OrganizationStorageLimitBytes",
+      "OrganizationWorkspaceDiskBytes",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PatchSessionIn",
@@ -45463,6 +46225,8 @@
       "PersonalStart",
       "PersonalStatus",
       "PressKeysRequest",
+      "PressureKind",
+      "PressureResource",
       "ProgressUpdate",
       "ReadSelectedRequest",
       "RegisterInitRequest",
@@ -45475,6 +46239,8 @@
       "ResendVerificationRequest",
       "ResetPasswordRequest",
       "ResetPasswordResponse",
+      "ResourcePressureEpisodePage",
+      "ResourcePressureTenantSummary",
       "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",
@@ -45787,12 +46553,17 @@
       "OrganizationCurrency",
       "OrganizationDailyAgentMessageLimit",
       "OrganizationFileLimitBytes",
+      "OrganizationGuestCpuShares",
+      "OrganizationGuestMemoryBytes",
+      "OrganizationGuestMillicpus",
+      "OrganizationGuestPidsLimit",
       "OrganizationMaxAccounts",
       "OrganizationPlan",
       "OrganizationPlanId",
       "OrganizationPlanName",
       "OrganizationPlansResponse",
       "OrganizationStorageLimitBytes",
+      "OrganizationWorkspaceDiskBytes",
       "OwnershipTransferRequest",
       "OwnershipTransferResponse",
       "PatchSessionIn",
@@ -45808,6 +46579,8 @@
       "PersonalState",
       "PersonalStatus",
       "PressKeysRequest",
+      "PressureKind",
+      "PressureResource",
       "ProgressUpdate",
       "ReadSelectedRequest",
       "RegisterInitRequest",
@@ -45821,6 +46594,10 @@
       "ResendVerificationRequest",
       "ResetPasswordRequest",
       "ResetPasswordResponse",
+      "ResourcePressureEpisodeCounts",
+      "ResourcePressureEpisodeOut",
+      "ResourcePressureEpisodePage",
+      "ResourcePressureTenantSummary",
       "RestoreSelectedRequest",
       "ReviewPage",
       "RoleUpdate",

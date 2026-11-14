@@ -20,6 +20,7 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
 from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
+from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 from app.services.storage_runtime.quota_errors import StorageQuotaError
@@ -51,6 +52,11 @@ async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) 
 
 @app.exception_handler(StorageQuotaError)
 async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(WorkspaceDiskQuotaExceeded)
+async def workspace_disk_quota(_request: Request, exc: WorkspaceDiskQuotaExceeded) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
@@ -92,6 +98,10 @@ app.add_middleware(
 
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
+from app.api.admin_resource_pressure import (
+    export_router as admin_resource_pressure_export_router,
+    router as admin_resource_pressure_router,
+)
 from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.admin_tavily import router as admin_tavily_router
 from app.api.advanced import router as advanced_router
@@ -210,6 +220,8 @@ app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_tavily_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_resource_pressure_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_resource_pressure_export_router, prefix=settings.API_PREFIX)
 app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)
