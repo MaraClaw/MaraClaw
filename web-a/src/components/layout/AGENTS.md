@@ -16,7 +16,7 @@ Scope: console navigation, notification entry point and shared screen chrome.
    `tests/admin-navigation.test.ts` regex-parses `navItems` from source; keep flat object literals.
 2. Each gated entry has a flag matching the route guard in `routes/` and the predicate in `src/lib/types/auth.ts`
    (or `transfer-review-access.ts`). Change entry, guard and predicate together.
-3. `platformAdminOnly` marks `/companies`, `/search-engine`, `/openclaw-updates`.
+3. `platformAdminOnly` marks `/companies`, `/search-engine`, `/openclaw-updates`, `/upgrade-signals`.
    `isPlatformAdminUser` accepts the platform flag or the `platform_admin` role.
 4. `broadcastOnly` (`/broadcast`) uses `canSendBroadcast`: role `org_admin`, not a platform admin.
    `invitationsOnly` (`/invitations`) uses `canManageInvitations`: the same plus a non-null `tenant_id`.

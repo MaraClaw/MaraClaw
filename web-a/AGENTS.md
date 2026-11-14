@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates.
+Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates, Upgrade signals (PA resource-pressure summary, episodes, CSV).
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -32,7 +32,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - JWT storage: `maraclaw-admin-token`. `AuthProvider` bootstraps `GET /api/auth/me`; reject non-admin roles even after valid credentials.
 - `mustChangePassword` is true when the token response, `user` or `identity` flag says so. `ProtectedRoute` redirects to `/settings`; Settings stays open until cleared and legacy `/account` redirects there. After `PUT /api/auth/me/password`, call `refreshReplacement` with the captured owner and replacement access token.
 - Only an authenticated 401 expires the session (see `src/lib/AGENTS.md`). A 403, including `must_change_password`, is a plain `ApiError` and keeps the token.
-- Companies + Search + OpenClaw updates require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
+- Companies + Search + OpenClaw updates + Upgrade signals (`/upgrade-signals`) require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
 - Narrower gates (non-PA org admin for Broadcast and Invitations, genesis for Admissions, active own-org admin for Agent deletions, active PA only for Payments) live in `src/lib/types/auth.ts` and `transfer-review-access.ts`; route guard and nav entry must use the same predicate.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.

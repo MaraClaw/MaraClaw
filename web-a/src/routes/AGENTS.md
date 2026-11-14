@@ -25,6 +25,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/companies` `/companies/:companyId` | `PlatformAdminRoute` | companies, company detail + domains + deletion |
 | `/search-engine` | `PlatformAdminRoute` | search-engine |
 | `/openclaw-updates` | `PlatformAdminRoute` | openclaw-updates |
+| `/upgrade-signals` | `PlatformAdminRoute` | upgrade-signals |
 | `*` (inside shell) | none | `Navigate` → `/` |
 
 Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
@@ -38,7 +39,7 @@ Analytics is `?tab=analytics` on `/search-engine`, not a route.
 |------|------|
 | `index.tsx` | `AppRouter`, all pages lazy under one `Suspense`, plus the `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `AgentDeletionReviewRoute` guards. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
-| `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine` and `/openclaw-updates`; their nav items use `platformAdminOnly`. |
+| `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine`, `/openclaw-updates` and `/upgrade-signals`; their nav items use `platformAdminOnly`. |
 | `transfer-review.tsx` | `TransferReviewRoute`: `useTransferReviewAccess().canReview ? Outlet : /`. |
 
 Nav chrome: `../components/layout/admin-shell.tsx` (per-gate nav flags, force-pw locks links). Add the route here first, then the nav entry with the same predicate (see `../components/layout/AGENTS.md`).

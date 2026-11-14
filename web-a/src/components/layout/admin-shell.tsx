@@ -33,6 +33,7 @@ const navItems: {
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/openclaw-updates', label: 'Updates', icon: 'tools', platformAdminOnly: true },
+  { to: '/upgrade-signals', label: 'Upgrade signals', icon: 'analytics', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
   { to: '/invitations', label: 'Invitations', icon: 'users', invitationsOnly: true },
   { to: '/activity', label: 'Activity', icon: 'analytics' },

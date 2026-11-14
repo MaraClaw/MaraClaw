@@ -17,6 +17,7 @@ const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({
 const CompanyDetailPage = lazy(() => import('@/pages/company-detail').then((module) => ({ default: module.CompanyDetailPage })))
 const OverviewPage = lazy(() => import('@/pages/overview').then((module) => ({ default: module.OverviewPage })))
 const OpenClawUpdatesPage = lazy(() => import('@/pages/openclaw-updates').then((module) => ({ default: module.OpenClawUpdatesPage })))
+const UpgradeSignalsPage = lazy(() => import('@/pages/upgrade-signals').then((module) => ({ default: module.UpgradeSignalsPage })))
 const ToolsPage = lazy(() => import('@/pages/tools').then((module) => ({ default: module.ToolsPage })))
 const ResetPasswordPage = lazy(() => import('@/pages/reset-password').then((module) => ({ default: module.ResetPasswordPage })))
 const SearchEnginePage = lazy(() => import('@/pages/search-engine').then((module) => ({ default: module.SearchEnginePage })))
@@ -98,6 +99,7 @@ export function AppRouter() {
               </Route>
               <Route element={<PlatformAdminRoute />}>
                 <Route path="openclaw-updates" element={<OpenClawUpdatesPage />} />
+                <Route path="upgrade-signals" element={<UpgradeSignalsPage />} />
                 <Route path="companies" element={<CompaniesPage />} />
                 <Route path="companies/:companyId" element={<CompanyDetailPage />} />
                 <Route path="search-engine" element={<SearchEnginePage />} />
