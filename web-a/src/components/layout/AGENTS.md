@@ -25,6 +25,8 @@ Scope: console navigation, notification entry point and shared screen chrome.
    active `org_admin`, not a platform admin, with a `tenant_id`.
 6. `paymentReviewOnly` (`/transfer-payments`) uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
    Only active platform admins pass, using the canonical platform flag or role, without a tenant lookup.
+   `capacityReviewOnly` (`/capacity-payments`, label "Capacity payments", distinct from "Payments") uses `canReviewCapacityPayments`
+   (active platform admin). The org-admin payment page `/capacity-orders/:orderId` has no nav entry.
 7. Under `mustChangePassword`, surviving nav entries other than `/settings`
    render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.

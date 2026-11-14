@@ -11,6 +11,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `agent-deletion-options.ts`: deletion queue/detail reads and the approval mutation.
 - `agent-transfer-options.ts`: transfer source/recipient reads and the ownership-transfer mutation.
 - `transfer-review-options.ts`: payment queue/detail reads and the decision mutation.
+- `capacity-options.ts`: `['admin-capacity', ...]` reads (overview, orders, order, review queue/detail, settings) and the create, evidence, cancel, decision and settings mutations.
 - `invitation-options.ts`: tenant-keyed invitation history, send and revoke.
 - `broadcast-options.ts`: broadcast email-status polling.
 - `resource-pressure-options.ts`: parsed-filter summary and cursor-page episode reads (`['admin-resource-pressure', ...]`, `retry: false`).
@@ -27,6 +28,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `use-admissions.ts`, `use-agent-deletions.ts`: role-gated reads and session-owned decisions.
 - `use-notifications.ts`: gated notification reads and session-owned read/archive mutations.
 - `use-transfer-reviews.ts`: `useTransferReviewAccess` capability plus gated payment reads and decisions.
+- `use-capacity.ts`: `useCapacityAccess` (`canBuy`, `canView`, `canReview`, `canManageSettings`, all false under a password-change lock) plus the gated reads and session-owned mutations.
 - `use-session-mutation.ts`: React mutation binding to the current auth owner.
 
 ## Invariants
@@ -65,6 +67,7 @@ Scope: query-option factories, context providers, session ownership and consumer
     Success cancels and invalidates transfers, users, user, companies, deletion queries and notifications;
     a 403 or 409 invalidates only the transfer family. No automatic retry.
 11. Invitation reads need a non-null tenant and key on `[tenant, page]`; send and revoke invalidate `invitationKeys.tenant`.
+    Capacity reads need `useCapacityAccess` and a company: org admins send no `tenant_id` (the engine uses their own), platform admins send the selected one. Every capacity mutation throws a local 403 `CapacityGuardError` (a translation key, shown through `capacityGuardKey`) when not allowed, retries never, shares one scope per order (`capacity-order-{id}`), and on success stores the returned order, then cancels and invalidates `['admin-capacity']` plus notifications; a 404/409/403 only invalidates `['admin-capacity']`.
 12. `ThemeProvider` reads/writes `maraclaw-admin-theme`; missing/invalid values resolve via `system`.
     Accepted preferences: `light`, `dark`, `system`; resolved values: `light`, `dark`.
     DOM application updates the root dark class, color scheme, theme dataset and theme-color meta.
