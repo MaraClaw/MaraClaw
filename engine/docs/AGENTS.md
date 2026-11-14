@@ -11,6 +11,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | Shared human runtime | `shared-openclaw-runtime.md` | One shared human transcript lane per agent, FIFO head dispatch, destination contracts, guest session identity, focused verification |
 | Gateway reports | `gateway-report-delivery.md` | Native terminal settlement and independent `/gateway/report`, durable agent and IM destinations, chunk checkpoints, provider backoff, delivery-ambiguity limits |
 | Guest containers | `guest-containers.md` | Engine-side ownership/replacement, readiness deadlines, bootstrap handshake, tier guest limits (applied on create and resume), aggregate admission, workspace disk quota, resource-pressure episodes; policy, not live-host validation |
+| AWS deployment and pricing | `aws-deployment-pricing.md` | Why guests need EC2 Docker hosts rather than Fargate, per-agent cost on AWS, margin model behind the agent-priced terms; dated research, not enforced behavior (terms: `organization-pricing.md`) |
 | AgentBay | `agentbay.md` | Env vars, API-key lookup order, diagnostics endpoint and CLI |
 | gogcli keyring | `gogcli-keyring-password.md` | Password file path, permissions, rotation and security notes |
 | gogcli OAuth | `gogcli-oauth-handoff.md` | Website/backend/OpenClaw handoff and credential snapshot lifecycle |

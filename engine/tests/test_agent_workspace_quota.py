@@ -35,7 +35,7 @@ from app.services.organization_plans import AmbiguousOrganizationTierError
 from app.services.quota_guard import QuotaExceededError
 
 GIB = 1024**3
-PRO_LIMIT = 2_684_354_560
+PRO_LIMIT = 3_221_225_472
 
 
 def _write(path: Path, size: int) -> Path:
@@ -311,7 +311,7 @@ async def test_exactly_the_allowance_is_not_over(world: World):
 
 
 async def test_the_walk_and_the_inspect_hold_no_database_connection(world: World):
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
 
     await quota.measure_agent(_agent())
 
@@ -321,7 +321,7 @@ async def test_the_walk_and_the_inspect_hold_no_database_connection(world: World
 
 async def test_an_over_agent_alerts_its_creator_once_with_a_reference_and_no_agent_recipient(world: World):
     agent = _agent()
-    world.dir_bytes, world.layer_bytes = 2 * GIB, GIB
+    world.dir_bytes, world.layer_bytes = 2 * GIB, 2 * GIB
 
     await quota.measure_agent(agent)
 
@@ -333,9 +333,9 @@ async def test_an_over_agent_alerts_its_creator_once_with_a_reference_and_no_age
     assert kwargs["ref_id"] == agent.id
     assert kwargs["notification_kind"].value == "system_alert"
     assert "agent_id" not in kwargs
+    assert "4.00 GiB" in kwargs["body"]
     assert "3.00 GiB" in kwargs["body"]
-    assert "2.50 GiB" in kwargs["body"]
-    assert "files 2.00 GiB, container 1.00 GiB" in kwargs["body"]
+    assert "files 2.00 GiB, container 2.00 GiB" in kwargs["body"]
     assert kwargs["body"].endswith("Stop and start the agent to clear its container's temporary data.")
     assert len(kwargs["title"]) <= 200
     assert world.rows[agent.id].over_since is not None
@@ -343,7 +343,7 @@ async def test_an_over_agent_alerts_its_creator_once_with_a_reference_and_no_age
 
 
 async def test_an_alert_for_files_over_the_allowance_says_to_delete_files(world: World):
-    world.dir_bytes, world.layer_bytes = 3 * GIB, GIB
+    world.dir_bytes, world.layer_bytes = 4 * GIB, GIB
 
     await quota.measure_agent(_agent())
 
@@ -354,7 +354,7 @@ async def test_an_alert_for_files_over_the_allowance_says_to_delete_files(world:
 
 async def test_a_second_pass_over_the_allowance_does_not_alert_again(world: World):
     agent = _agent()
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
     first = world.rows[agent.id].over_since
 
@@ -366,7 +366,7 @@ async def test_a_second_pass_over_the_allowance_does_not_alert_again(world: Worl
 
 async def test_dropping_under_clears_the_block_and_a_later_overage_alerts_again(world: World):
     agent = _agent()
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
 
     world.dir_bytes = GIB
@@ -374,7 +374,7 @@ async def test_dropping_under_clears_the_block_and_a_later_overage_alerts_again(
 
     row = world.rows[agent.id]
     assert (row.over_since, row.notified_at) == (None, None)
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
     assert world.notify.await_count == 2
 
@@ -441,7 +441,7 @@ async def test_an_unreadable_layer_keeps_the_stored_size_and_a_missing_container
 
 async def test_an_unreadable_layer_does_not_lift_the_block_or_alert_again(world: World):
     agent = _agent()
-    world.dir_bytes, world.layer_bytes = GIB, 2 * GIB
+    world.dir_bytes, world.layer_bytes = GIB, 3 * GIB
     await quota.measure_agent(agent)
     first = world.rows[agent.id].over_since
     assert first is not None
@@ -450,7 +450,7 @@ async def test_an_unreadable_layer_does_not_lift_the_block_or_alert_again(world:
     await quota.measure_agent(agent)
 
     row = world.rows[agent.id]
-    assert (row.layer_bytes, row.over_since) == (2 * GIB, first)
+    assert (row.layer_bytes, row.over_since) == (3 * GIB, first)
     world.notify.assert_awaited_once()
 
 
@@ -544,7 +544,7 @@ async def test_an_older_started_over_quota_write_landing_late_leaves_the_newer_u
     agent = _agent()
     world.dir_bytes = GIB
     await quota.measure_agent(agent)
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
 
     await quota.measure_agent(agent)
 
@@ -560,18 +560,18 @@ async def test_an_older_started_under_quota_write_never_lifts_a_newer_block_or_a
 ):
     monkeypatch.setattr(quota, "datetime", Clock(LATER, EARLIER))
     agent = _agent()
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
     world.dir_bytes = GIB
 
     await quota.measure_agent(agent)
 
     row = world.rows[agent.id]
-    assert (row.dir_bytes, row.measured_at) == (3 * GIB, LATER)
+    assert (row.dir_bytes, row.measured_at) == (4 * GIB, LATER)
     assert row.over_since is not None
     assert row.notified_at is not None
     world.notify.assert_awaited_once()
-    assert [sample[2] for sample in world.pressure] == [3 * GIB]
+    assert [sample[2] for sample in world.pressure] == [4 * GIB]
 
 
 async def test_each_stored_measurement_feeds_the_pressure_episodes(world: World):
@@ -599,7 +599,7 @@ async def test_a_failing_pressure_store_never_breaks_the_quota_pass(world: World
         pressure.agent_resource_pressure_episode_dao, "record_pressure", AsyncMock(side_effect=OSError("database down"))
     )
     agent = _agent()
-    world.dir_bytes = 3 * GIB
+    world.dir_bytes = 4 * GIB
 
     await quota.measure_agent(agent)
 
@@ -610,7 +610,7 @@ async def test_a_failing_pressure_store_never_breaks_the_quota_pass(world: World
 @pytest.mark.parametrize(
     ("tier", "limit"),
     [
-        (OrganizationPlanId.PRO, 2_684_354_560),
+        (OrganizationPlanId.PRO, 3_221_225_472),
         (OrganizationPlanId.MAX, 5 * GIB),
         (OrganizationPlanId.ULTRA, 8 * GIB),
     ],
@@ -624,23 +624,25 @@ async def test_the_stored_limit_is_the_current_tier_allowance(world: World, tier
     assert world.rows[agent.id].limit_bytes == limit
 
 
-def _over(agent: AgentRecord, used: int = 3 * GIB, limit: int = PRO_LIMIT) -> AgentWorkspaceUsageRecord:
+def _over(agent: AgentRecord, used: int = 4 * GIB, limit: int = PRO_LIMIT) -> AgentWorkspaceUsageRecord:
     return AgentWorkspaceUsageRecord(agent.id, used, 0, limit, over_since=datetime.now(UTC))
 
 
 async def test_an_over_agent_refuses_new_work_with_the_allowance_in_the_message(world: World):
     agent = _agent()
-    world.rows[agent.id] = AgentWorkspaceUsageRecord(agent.id, 2 * GIB, GIB, PRO_LIMIT, over_since=datetime.now(UTC))
+    world.rows[agent.id] = AgentWorkspaceUsageRecord(
+        agent.id, 2 * GIB, 2 * GIB, PRO_LIMIT, over_since=datetime.now(UTC)
+    )
 
     with pytest.raises(WorkspaceDiskQuotaExceeded) as refused:
         await quota.ensure_workspace_within_quota(agent)
 
     assert isinstance(refused.value, QuotaExceededError)
     assert refused.value.quota_type == "agent_workspace_disk"
-    assert (refused.value.used_bytes, refused.value.limit_bytes) == (3 * GIB, PRO_LIMIT)
-    assert (refused.value.dir_bytes, refused.value.layer_bytes) == (2 * GIB, GIB)
+    assert (refused.value.used_bytes, refused.value.limit_bytes) == (4 * GIB, PRO_LIMIT)
+    assert (refused.value.dir_bytes, refused.value.layer_bytes) == (2 * GIB, 2 * GIB)
     assert refused.value.message == (
-        "This agent's workspace is using 3.00 GiB of its 2.50 GiB disk allowance. "
+        "This agent's workspace is using 4.00 GiB of its 3.00 GiB disk allowance. "
         "Stop and start the agent to clear its container's temporary data."
     )
 
@@ -648,8 +650,8 @@ async def test_an_over_agent_refuses_new_work_with_the_allowance_in_the_message(
 @pytest.mark.parametrize(
     ("dir_bytes", "layer_bytes", "remedy"),
     [
-        pytest.param(3 * GIB, 0, "Delete files to continue.", id="files-over"),
-        pytest.param(3 * GIB, GIB, "Delete files to continue.", id="files-over-and-layer"),
+        pytest.param(4 * GIB, 0, "Delete files to continue.", id="files-over"),
+        pytest.param(4 * GIB, GIB, "Delete files to continue.", id="files-over-and-layer"),
         pytest.param(PRO_LIMIT + 1, 0, "Delete files to continue.", id="files-one-byte-over"),
         pytest.param(PRO_LIMIT, 1, "Stop and start the agent to clear its container's temporary data.", id="files-fit"),
         pytest.param(GIB, 2 * GIB, "Stop and start the agent to clear its container's temporary data.", id="layer"),
@@ -726,7 +728,7 @@ async def test_a_failed_re_measure_after_a_delete_never_raises(
         pytest.param(None, False, id="unmeasured"),
         pytest.param(AgentWorkspaceUsageRecord(uuid4(), GIB, GIB, PRO_LIMIT), False, id="under-allowance"),
         pytest.param(
-            AgentWorkspaceUsageRecord(uuid4(), 3 * GIB, GIB, PRO_LIMIT, over_since=datetime.now(UTC)),
+            AgentWorkspaceUsageRecord(uuid4(), 4 * GIB, GIB, PRO_LIMIT, over_since=datetime.now(UTC)),
             False,
             id="files-over",
         ),
@@ -803,7 +805,7 @@ async def test_the_quota_handler_is_registered_and_answers_507_with_the_allowanc
 
     @scratch.get("/refuse")
     async def refuse() -> None:
-        raise WorkspaceDiskQuotaExceeded(2 * GIB, GIB, PRO_LIMIT)
+        raise WorkspaceDiskQuotaExceeded(2 * GIB, 2 * GIB, PRO_LIMIT)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=scratch), base_url="http://quota.test") as client:
         response = await client.get("/refuse")
@@ -812,12 +814,12 @@ async def test_the_quota_handler_is_registered_and_answers_507_with_the_allowanc
     assert response.json() == {
         "detail": {
             "code": "workspace_disk_quota_exceeded",
-            "message": "This agent's workspace is using 3.00 GiB of its 2.50 GiB disk allowance. "
+            "message": "This agent's workspace is using 4.00 GiB of its 3.00 GiB disk allowance. "
             "Stop and start the agent to clear its container's temporary data.",
-            "used_bytes": 3 * GIB,
+            "used_bytes": 4 * GIB,
             "limit_bytes": PRO_LIMIT,
             "dir_bytes": 2 * GIB,
-            "layer_bytes": GIB,
+            "layer_bytes": 2 * GIB,
         }
     }
 
@@ -836,7 +838,7 @@ async def test_a_personal_original_for_an_over_agent_is_a_quota_rejection_that_c
 ):
     savepoints = Savepoints()
     charge_sender, charge_agent = AsyncMock(), AsyncMock()
-    ensure = AsyncMock(side_effect=WorkspaceDiskQuotaExceeded(3 * GIB, 0, PRO_LIMIT) if over else None)
+    ensure = AsyncMock(side_effect=WorkspaceDiskQuotaExceeded(4 * GIB, 0, PRO_LIMIT) if over else None)
 
     @asynccontextmanager
     async def connection() -> AsyncGenerator[Savepoints]:

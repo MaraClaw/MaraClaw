@@ -12502,7 +12502,7 @@
         "enum": [
           2147483648,
           3221225472,
-          4294967296
+          5368709120
         ],
         "title": "OrganizationGuestMemoryBytes",
         "type": "integer",
@@ -12683,7 +12683,7 @@
       "OrganizationStorageLimitBytes": {
         "description": "Logical bytes of current managed S3 objects one agent may hold, per tier; the only place the numbers live.",
         "enum": [
-          1073741824,
+          2147483648,
           5368709120,
           10737418240
         ],
@@ -12698,7 +12698,7 @@
       "OrganizationWorkspaceDiskBytes": {
         "description": "Bytes one agent's host workspace directory plus its guest container writable layer may use before new work is refused (measured soft quota), per tier; the only place the numbers live.",
         "enum": [
-          2684354560,
+          3221225472,
           5368709120,
           8589934592
         ],

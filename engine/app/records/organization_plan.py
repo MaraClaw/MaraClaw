@@ -53,7 +53,7 @@ class OrganizationAgentLimit(IntEnum):
 class OrganizationStorageLimitBytes(IntEnum):
     """Logical bytes of current managed S3 objects one agent may hold, per tier; the only place the numbers live."""
 
-    PRO = 1_073_741_824
+    PRO = 2_147_483_648
     MAX = 5_368_709_120
     ULTRA = 10_737_418_240
 
@@ -79,7 +79,7 @@ class OrganizationGuestMemoryBytes(IntEnum):
 
     PRO = 2_147_483_648
     MAX = 3_221_225_472
-    ULTRA = 4_294_967_296
+    ULTRA = 5_368_709_120
 
 
 class OrganizationGuestMillicpus(IntEnum):
@@ -109,7 +109,7 @@ class OrganizationGuestPidsLimit(IntEnum):
 class OrganizationWorkspaceDiskBytes(IntEnum):
     """Bytes one agent's host workspace directory plus its guest container writable layer may use before new work is refused (measured soft quota), per tier; the only place the numbers live."""
 
-    PRO = 2_684_354_560
+    PRO = 3_221_225_472
     MAX = 5_368_709_120
     ULTRA = 8_589_934_592
 

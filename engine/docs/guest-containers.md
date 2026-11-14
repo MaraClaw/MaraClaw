@@ -200,9 +200,9 @@ image change is required for this transport retirement.
 
 | Tier | Memory (and memory+swap) | CPUs | CPU shares | PIDs | Workspace disk |
 |---|---:|---:|---:|---:|---:|
-| Pro | 2 GiB | 1.5 | 1024 | 512 | 2.5 GiB |
+| Pro | 2 GiB | 1.5 | 1024 | 512 | 3 GiB |
 | Max | 3 GiB | 2.0 | 1536 | 768 | 5 GiB |
-| Ultra | 4 GiB | 3.0 | 2048 | 1024 | 8 GiB |
+| Ultra | 5 GiB | 3.0 | 2048 | 1024 | 8 GiB |
 
 The workspace disk column is not a Docker limit; see
 [Workspace Disk Quota](#workspace-disk-quota). The global
@@ -213,7 +213,7 @@ The workspace disk column is not a Docker limit; see
 | `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` | `2147483648` (2 GiB) | Positive bytes |
 | `OPENCLAW_GUEST_CPUS` | `1.0` (1 CPU) | Positive; fractional values allowed |
 | `OPENCLAW_GUEST_PIDS_LIMIT` | `512` | Positive PID limit |
-| `OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES` | `0` (disabled) | `0`, or at least the larger of `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` and the Ultra tier's 4 GiB; settings validation rejects anything lower |
+| `OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES` | `0` (disabled) | `0`, or at least the larger of `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` and the Ultra tier's 5 GiB; settings validation rejects anything lower |
 
 Docker creation sets both `memory` and `memory_swap` to the target memory. Since
 `memory_swap` is the combined memory-plus-swap ceiling, equal values request no
@@ -297,7 +297,7 @@ measurement.
   `guest_memory_capacity_exceeded`. Neither refusal removes the existing guest.
 - `0` disables this guest inventory check and its global lock. A nonzero value
   smaller than the larger of `OPENCLAW_GUEST_MEMORY_LIMIT_BYTES` and the Ultra tier's
-  4 GiB is rejected by settings validation, so it covers at least one guest of any
+  5 GiB is rejected by settings validation, so it covers at least one guest of any
   tier. Lowering the budget does not evict or resize existing guests.
 - Inventory is read in one batch: one `docker container list` plus one batch
   `docker container inspect` per 100 containers, not one or more inspects per guest.

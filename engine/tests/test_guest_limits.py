@@ -25,7 +25,7 @@ GIB = 1024**3
 TIERS = [
     pytest.param(OrganizationPlanId.PRO, 2 * GIB, 1.5, 1024, 512, id="pro"),
     pytest.param(OrganizationPlanId.MAX, 3 * GIB, 2.0, 1536, 768, id="max"),
-    pytest.param(OrganizationPlanId.ULTRA, 4 * GIB, 3.0, 2048, 1024, id="ultra"),
+    pytest.param(OrganizationPlanId.ULTRA, 5 * GIB, 3.0, 2048, 1024, id="ultra"),
 ]
 MAX_LIMITS = GuestLimits(memory_bytes=3 * GIB, cpus=2.0, cpu_shares=1536, pids_limit=768, tier=OrganizationPlanId.MAX)
 

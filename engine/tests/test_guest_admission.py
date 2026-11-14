@@ -145,7 +145,7 @@ def test_settings_reject_invalid_aggregate_boundary(aggregate):
     # Then settings never reach the manager with an impossible budget.
 
 
-TIER_MAX_MEMORY = 4 * 1024**3
+TIER_MAX_MEMORY = 5 * 1024**3
 
 
 @pytest.mark.parametrize(
@@ -159,7 +159,7 @@ TIER_MAX_MEMORY = 4 * 1024**3
     ],
 )
 def test_settings_aggregate_must_cover_the_largest_guest_limit(memory, aggregate, valid):
-    # Given a configured per-guest default and a budget around the largest tier (Ultra, 4 GiB).
+    # Given a configured per-guest default and a budget around the largest tier (Ultra, 5 GiB).
     # When the aggregate budget is built from them.
     if valid:
         settings = Settings(

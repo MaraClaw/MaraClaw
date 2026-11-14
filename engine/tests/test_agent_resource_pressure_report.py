@@ -41,7 +41,7 @@ def test_the_tiers_are_ordered_from_smallest_to_largest():
 
 @pytest.mark.parametrize(
     ("resource", "expected"),
-    [(MEMORY, 2 * GIB), (CPU, 1500), (DISK, 2_684_354_560), (STORAGE, GIB)],
+    [(MEMORY, 2 * GIB), (CPU, 1500), (DISK, 3_221_225_472), (STORAGE, 2 * GIB)],
 )
 def test_each_resource_reads_its_plan_field_in_the_unit_episodes_use(resource: PressureResource, expected: int):
     assert report.resource_limit(plan_for(PRO), resource) == expected
@@ -52,16 +52,18 @@ def test_each_resource_reads_its_plan_field_in_the_unit_episodes_use(resource: P
     [
         (PRO, MEMORY, int(1.9 * GIB), False, MAX),
         (PRO, MEMORY, int(2.9 * GIB), False, ULTRA),
-        (PRO, MEMORY, int(3.7 * GIB), False, None),
+        (PRO, MEMORY, int(3.7 * GIB), False, ULTRA),
+        (PRO, MEMORY, int(4.6 * GIB), False, None),
         (MAX, MEMORY, int(3.1 * GIB), False, ULTRA),
         (ULTRA, MEMORY, 4 * GIB, False, None),
         (PRO, CPU, 1300, False, None),
         (PRO, CPU, 1400, False, MAX),
         (PRO, CPU, 1900, False, ULTRA),
         (PRO, CPU, 2800, False, None),
-        (PRO, DISK, int(2.4 * GIB), False, MAX),
+        (PRO, DISK, int(2.4 * GIB), False, None),
+        (PRO, DISK, int(2.8 * GIB), False, MAX),
         (MAX, DISK, int(4.9 * GIB), False, ULTRA),
-        (PRO, STORAGE, int(0.95 * GIB), False, MAX),
+        (PRO, STORAGE, int(1.9 * GIB), False, MAX),
         (PRO, STORAGE, 5 * GIB, False, ULTRA),
         (PRO, MEMORY, 2 * GIB, True, MAX),
         (MAX, MEMORY, 3 * GIB, True, ULTRA),

@@ -24,7 +24,7 @@ from tier_limit_fixtures import approve_admission_for
 __all__ = ["deletion_scenario"]
 
 GIB = 1024**3
-PRO_LIMIT = 2_684_354_560
+PRO_LIMIT = 3_221_225_472
 UNKNOWN_AGENT = UUID(int=0)
 
 
@@ -93,11 +93,11 @@ async def test_over_since_marks_the_overage_window_and_clears_when_back_under(de
     under = await _record(agent.id, dir_bytes=GIB, layer_bytes=GIB // 2, limit_bytes=PRO_LIMIT)
     assert (under.used_bytes, under.over_since, under.notified_at) == (GIB + GIB // 2, None, None)
 
-    first = await _record(agent.id, dir_bytes=2 * GIB, layer_bytes=GIB, limit_bytes=PRO_LIMIT)
+    first = await _record(agent.id, dir_bytes=2 * GIB, layer_bytes=2 * GIB, limit_bytes=PRO_LIMIT)
     assert first.over_since is not None
     assert first.measured_at is not None
 
-    again = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    again = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     assert again.over_since == first.over_since
     assert again.measured_at is not None
     assert again.measured_at >= first.measured_at
@@ -115,7 +115,7 @@ async def test_a_measurement_that_started_earlier_cannot_overwrite_a_later_one(d
     assert kept.measured_at == later
 
     superseded = await agent_workspace_usage_dao.record_measurement(
-        agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT, started=earlier
+        agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT, started=earlier
     )
 
     assert superseded is None
@@ -124,8 +124,8 @@ async def test_a_measurement_that_started_earlier_cannot_overwrite_a_later_one(d
     assert (row["dir_bytes"], row["over_since"], row["notified_at"]) == (GIB, None, None)
     assert await agent_workspace_usage_dao.claim_notification(agent.id) is None
 
-    same_start = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT, started=later)
-    assert (same_start.dir_bytes, same_start.over_since) == (3 * GIB, later)
+    same_start = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT, started=later)
+    assert (same_start.dir_bytes, same_start.over_since) == (4 * GIB, later)
 
     newer = await _record(
         agent.id, dir_bytes=GIB, layer_bytes=0, limit_bytes=PRO_LIMIT, started=later + timedelta(seconds=1)
@@ -142,26 +142,26 @@ async def test_the_alert_is_claimed_once_per_overage(deletion_scenario: Deletion
     assert await dao.claim_notification(agent.id) is None
     assert await dao.claim_notification(UNKNOWN_AGENT) is None
 
-    _ = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     claimed = await dao.claim_notification(agent.id)
     assert claimed is not None
     assert claimed.notified_at is not None
     assert await dao.claim_notification(agent.id) is None
 
-    stays = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    stays = await _record(agent.id, dir_bytes=5 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     assert stays.notified_at == claimed.notified_at
     assert await dao.claim_notification(agent.id) is None
 
     cleared = await _record(agent.id, dir_bytes=GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     assert (cleared.over_since, cleared.notified_at) == (None, None)
-    _ = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     assert await dao.claim_notification(agent.id) is not None
 
 
 async def test_concurrent_claims_have_exactly_one_winner(deletion_scenario: DeletionScenario):
     scenario = deletion_scenario
     agent = await _tiered_agent(scenario)
-    _ = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
 
     results = await asyncio.gather(*(agent_workspace_usage_dao.claim_notification(agent.id) for _ in range(16)))
 
@@ -236,14 +236,14 @@ async def test_an_over_agent_is_blocked_alerted_once_and_unblocked_by_a_smaller_
 ):
     scenario = deletion_scenario
     agent = await _tiered_agent(scenario)
-    workspace.dir_bytes = 3 * GIB
+    workspace.dir_bytes = 4 * GIB
 
     await quota.measure_agent(agent)
 
     assert workspace.walks == [tmp_path / str(agent.id)]
     with pytest.raises(WorkspaceDiskQuotaExceeded) as refused:
         await quota.ensure_workspace_within_quota(agent)
-    assert (refused.value.used_bytes, refused.value.limit_bytes) == (3 * GIB, PRO_LIMIT)
+    assert (refused.value.used_bytes, refused.value.limit_bytes) == (4 * GIB, PRO_LIMIT)
     (alert,) = await _alerts(scenario)
     assert alert["user_id"] == scenario["owner"].id
     assert alert["agent_id"] is None
@@ -261,7 +261,7 @@ async def test_an_over_agent_is_blocked_alerted_once_and_unblocked_by_a_smaller_
     assert row is not None
     assert (row["over_since"], row["notified_at"]) == (None, None)
 
-    workspace.dir_bytes = 3 * GIB
+    workspace.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
     assert len(await _alerts(scenario)) == 2
 
@@ -271,7 +271,7 @@ async def test_a_failed_alert_rolls_its_claim_back_so_the_next_pass_sends_it(
 ):
     scenario = deletion_scenario
     agent = await _tiered_agent(scenario)
-    workspace.dir_bytes = 3 * GIB
+    workspace.dir_bytes = 4 * GIB
     real_send = quota.send_notification
 
     async def broken(**_kwargs: object) -> None:
@@ -297,7 +297,7 @@ async def test_a_tier_upgrade_lifts_the_block_on_the_next_measurement(
 ):
     scenario = deletion_scenario
     agent = await _tiered_agent(scenario)
-    workspace.dir_bytes = 3 * GIB
+    workspace.dir_bytes = 4 * GIB
     await quota.measure_agent(agent)
     with pytest.raises(WorkspaceDiskQuotaExceeded):
         await quota.ensure_workspace_within_quota(agent)
@@ -326,7 +326,7 @@ async def test_agents_without_an_allowance_lose_their_stale_row_and_are_never_wa
         found = await agent_dao.get(agent_id)
         assert found is not None
         agent = found
-    _ = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
 
     await quota.measure_agent(agent)
 
@@ -346,7 +346,7 @@ async def test_a_file_delete_lifts_the_block_at_once_and_only_re_measures_a_bloc
     assert workspace.walks == []
     assert await _row(scenario, agent.id) is None
 
-    _ = await _record(agent.id, dir_bytes=3 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
+    _ = await _record(agent.id, dir_bytes=4 * GIB, layer_bytes=0, limit_bytes=PRO_LIMIT)
     await quota.refresh_workspace_usage_after_delete(agent)
 
     assert len(workspace.walks) == 1

@@ -19,7 +19,7 @@ from tier_limit_fixtures import approve_admission_for
 __all__ = ["channel_db", "linked", "receipt_db", "writable_receipt_db"]
 
 GIB = 1024**3
-PRO_LIMIT = 2_684_354_560
+PRO_LIMIT = 3_221_225_472
 
 
 async def _govern(db: ReceiptDatabase) -> UUID:
@@ -43,7 +43,7 @@ async def _block(db: ReceiptDatabase) -> None:
         await db.first.execute(
             "INSERT INTO agent_workspace_usage (agent_id, dir_bytes, layer_bytes, limit_bytes, measured_at, over_since) "
             "VALUES (%(id)s, %(used)s, 0, %(limit)s, now(), now())",
-            {"id": db.agent.id, "used": 3 * GIB, "limit": PRO_LIMIT},
+            {"id": db.agent.id, "used": 4 * GIB, "limit": PRO_LIMIT},
         )
 
 

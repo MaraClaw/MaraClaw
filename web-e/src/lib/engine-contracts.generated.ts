@@ -825,9 +825,9 @@ export const OrganizationGuestCpuShares = { PRO: 1024, MAX: 1536, ULTRA: 2048 } 
 export const OrganizationGuestCpuSharesSchema = z.intersection(z.union([z.literal(1024), z.literal(1536), z.literal(2048)]), z.number().refine(Number.isInteger));
 export type OrganizationGuestCpuShares = z.infer<typeof OrganizationGuestCpuSharesSchema>;
 
-export const OrganizationGuestMemoryBytesValues = [2147483648,3221225472,4294967296] as const;
-export const OrganizationGuestMemoryBytes = { PRO: 2147483648, MAX: 3221225472, ULTRA: 4294967296 } as const;
-export const OrganizationGuestMemoryBytesSchema = z.intersection(z.union([z.literal(2147483648), z.literal(3221225472), z.literal(4294967296)]), z.number().refine(Number.isInteger));
+export const OrganizationGuestMemoryBytesValues = [2147483648,3221225472,5368709120] as const;
+export const OrganizationGuestMemoryBytes = { PRO: 2147483648, MAX: 3221225472, ULTRA: 5368709120 } as const;
+export const OrganizationGuestMemoryBytesSchema = z.intersection(z.union([z.literal(2147483648), z.literal(3221225472), z.literal(5368709120)]), z.number().refine(Number.isInteger));
 export type OrganizationGuestMemoryBytes = z.infer<typeof OrganizationGuestMemoryBytesSchema>;
 
 export const OrganizationGuestMillicpusValues = [1500,2000,3000] as const;
@@ -865,14 +865,14 @@ export const OrganizationPlanName = { PRO: "Pro", MAX: "Max", ULTRA: "Ultra" } a
 export const OrganizationPlanNameSchema = z.intersection(z.union([z.literal("Pro"), z.literal("Max"), z.literal("Ultra")]), z.string());
 export type OrganizationPlanName = z.infer<typeof OrganizationPlanNameSchema>;
 
-export const OrganizationStorageLimitBytesValues = [1073741824,5368709120,10737418240] as const;
-export const OrganizationStorageLimitBytes = { PRO: 1073741824, MAX: 5368709120, ULTRA: 10737418240 } as const;
-export const OrganizationStorageLimitBytesSchema = z.intersection(z.union([z.literal(1073741824), z.literal(5368709120), z.literal(10737418240)]), z.number().refine(Number.isInteger));
+export const OrganizationStorageLimitBytesValues = [2147483648,5368709120,10737418240] as const;
+export const OrganizationStorageLimitBytes = { PRO: 2147483648, MAX: 5368709120, ULTRA: 10737418240 } as const;
+export const OrganizationStorageLimitBytesSchema = z.intersection(z.union([z.literal(2147483648), z.literal(5368709120), z.literal(10737418240)]), z.number().refine(Number.isInteger));
 export type OrganizationStorageLimitBytes = z.infer<typeof OrganizationStorageLimitBytesSchema>;
 
-export const OrganizationWorkspaceDiskBytesValues = [2684354560,5368709120,8589934592] as const;
-export const OrganizationWorkspaceDiskBytes = { PRO: 2684354560, MAX: 5368709120, ULTRA: 8589934592 } as const;
-export const OrganizationWorkspaceDiskBytesSchema = z.intersection(z.union([z.literal(2684354560), z.literal(5368709120), z.literal(8589934592)]), z.number().refine(Number.isInteger));
+export const OrganizationWorkspaceDiskBytesValues = [3221225472,5368709120,8589934592] as const;
+export const OrganizationWorkspaceDiskBytes = { PRO: 3221225472, MAX: 5368709120, ULTRA: 8589934592 } as const;
+export const OrganizationWorkspaceDiskBytesSchema = z.intersection(z.union([z.literal(3221225472), z.literal(5368709120), z.literal(8589934592)]), z.number().refine(Number.isInteger));
 export type OrganizationWorkspaceDiskBytes = z.infer<typeof OrganizationWorkspaceDiskBytesSchema>;
 
 export const OrganizationPlanSchema = z.strictObject({ ["additional_account_monthly_usd"]: OrganizationAdditionalAccountMonthlyUsdSchema, ["currency"]: OrganizationCurrencySchema, ["daily_messages_per_agent"]: OrganizationDailyAgentMessageLimitSchema, ["guest_cpu_shares"]: OrganizationGuestCpuSharesSchema, ["guest_memory_bytes"]: OrganizationGuestMemoryBytesSchema, ["guest_millicpus"]: OrganizationGuestMillicpusSchema, ["guest_pids_limit"]: OrganizationGuestPidsLimitSchema, ["id"]: OrganizationPlanIdSchema, ["included_accounts"]: z.number().min(1).refine(Number.isInteger), ["max_accounts"]: OrganizationMaxAccountsSchema, ["max_agents_per_account"]: OrganizationAgentLimitSchema, ["max_file_size_bytes"]: OrganizationFileLimitBytesSchema, ["monthly_price_usd"]: z.number().min(0).refine(Number.isInteger), ["name"]: OrganizationPlanNameSchema, ["storage_limit_bytes"]: OrganizationStorageLimitBytesSchema, ["workspace_disk_bytes"]: OrganizationWorkspaceDiskBytesSchema });

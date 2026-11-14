@@ -53,7 +53,7 @@ def test_catalog_names_each_tier_from_the_plan_name_enum():
 
 def test_catalog_grants_per_agent_storage_and_file_byte_limits():
     assert [(plan.id, plan.storage_limit_bytes, plan.max_file_size_bytes) for plan in ORGANIZATION_PLANS] == [
-        (OrganizationPlanId.PRO, 1_073_741_824, 26_214_400),
+        (OrganizationPlanId.PRO, 2_147_483_648, 26_214_400),
         (OrganizationPlanId.MAX, 5_368_709_120, 52_428_800),
         (OrganizationPlanId.ULTRA, 10_737_418_240, 104_857_600),
     ]
@@ -74,7 +74,7 @@ def test_catalog_grants_per_guest_memory():
     assert [(plan.id, plan.guest_memory_bytes) for plan in ORGANIZATION_PLANS] == [
         (OrganizationPlanId.PRO, 2_147_483_648),
         (OrganizationPlanId.MAX, 3_221_225_472),
-        (OrganizationPlanId.ULTRA, 4_294_967_296),
+        (OrganizationPlanId.ULTRA, 5_368_709_120),
     ]
     assert [plan.guest_memory_bytes for plan in ORGANIZATION_PLANS] == list(OrganizationGuestMemoryBytes)
 
@@ -108,7 +108,7 @@ def test_catalog_grants_per_guest_process_limit():
 
 def test_catalog_grants_per_agent_workspace_disk():
     assert [(plan.id, plan.workspace_disk_bytes) for plan in ORGANIZATION_PLANS] == [
-        (OrganizationPlanId.PRO, 2_684_354_560),
+        (OrganizationPlanId.PRO, 3_221_225_472),
         (OrganizationPlanId.MAX, 5_368_709_120),
         (OrganizationPlanId.ULTRA, 8_589_934_592),
     ]
@@ -157,7 +157,7 @@ def test_current_snapshot_round_trips_as_current():
     assert raw["storage_limit_bytes"] == 10_737_418_240
     assert raw["max_file_size_bytes"] == 104_857_600
     assert raw["daily_messages_per_agent"] == 500
-    assert raw["guest_memory_bytes"] == 4_294_967_296
+    assert raw["guest_memory_bytes"] == 5_368_709_120
     assert raw["guest_millicpus"] == 3000
     assert raw["guest_cpu_shares"] == 2048
     assert raw["guest_pids_limit"] == 1024
