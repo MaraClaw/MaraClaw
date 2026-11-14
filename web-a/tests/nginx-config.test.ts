@@ -16,6 +16,25 @@ test('production API requests reach the engine with their original URI and forwa
   assert.match(apiBlock, /^\s*proxy_set_header\s+X-Forwarded-Proto\s+\$scheme\s*;/m)
 })
 
+test('payment evidence uploads alone get the large body limit and otherwise proxy like any API call', () => {
+  // Given
+  const config = readFileSync(new URL('../docker/nginx.conf', import.meta.url), 'utf8')
+  const apiBlock = config.match(/^\s*location\s+\/api\/\s*\{([^{}]*)\}/m)?.[1]
+  // When
+  const evidenceBlock = config.match(/^\s*location\s+~\s+\^\/api\/capacity\/orders\/\[0-9a-f-\]\+\/evidence\$\s*\{([^{}]*)\}/m)?.[1]
+  const proxyLines = (block: string) => block.split('\n').map((line) => line.trim())
+    .filter((line) => /^(proxy_|set\s+\$maraclaw_route)/.test(line))
+  // Then
+  assert.ok(apiBlock)
+  assert.ok(evidenceBlock, 'the evidence upload needs its own location')
+  assert.match(evidenceBlock, /^\s*client_max_body_size\s+11m\s*;/m)
+  assert.match(evidenceBlock, /^\s*client_body_timeout\s+60s\s*;/m)
+  assert.deepEqual(proxyLines(evidenceBlock), proxyLines(apiBlock))
+  assert.doesNotMatch(apiBlock, /client_max_body_size|client_body_timeout/)
+  assert.match(config, /^ {4}client_max_body_size\s+2m\s*;/m)
+  assert.match(config, /^ {4}client_body_timeout\s+10s\s*;/m)
+})
+
 test('production health probes retain their local success response', () => {
   // Given
   const config = readFileSync(new URL('../docker/nginx.conf', import.meta.url), 'utf8')

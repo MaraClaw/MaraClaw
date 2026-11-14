@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
 import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 const navItems: {
@@ -27,6 +27,7 @@ const navItems: {
   organizationAdmissionReviewOnly?: boolean
   agentDeletionReviewOnly?: boolean
   paymentReviewOnly?: boolean
+  capacityReviewOnly?: boolean
 }[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/notifications', label: 'Notifications', icon: 'notifications' },
@@ -41,6 +42,7 @@ const navItems: {
   { to: '/organization-admissions', label: 'Org admissions', icon: 'companies', organizationAdmissionReviewOnly: true },
   { to: '/agent-deletion-requests', label: 'Agent deletions', icon: 'tools', agentDeletionReviewOnly: true },
   { to: '/transfer-payments', label: 'Payments', icon: 'analytics', paymentReviewOnly: true },
+  { to: '/capacity-payments', label: 'Capacity payments', icon: 'analytics', capacityReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
@@ -114,7 +116,7 @@ function NavItems({
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly }) => {
+      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly, capacityReviewOnly }) => {
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (invitationsOnly && !canManageInvitations(user)) return null
@@ -122,6 +124,7 @@ function NavItems({
         if (organizationAdmissionReviewOnly && !canReviewOrganizationAdmissions(user)) return null
         if (agentDeletionReviewOnly && !canReviewAgentDeletions(user)) return null
         if (paymentReviewOnly && !paymentAccess.canReview) return null
+        if (capacityReviewOnly && !canReviewCapacityPayments(user)) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/settings'
         if (locked) {

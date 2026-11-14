@@ -72,3 +72,19 @@ export function canReviewOrganizationAdmissions(user: UserOut | null | undefined
 export function canReviewAgentDeletions(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active
 }
+
+export function canBuyCapacity(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active === true
+}
+
+export function canReviewCapacityPayments(user: UserOut | null | undefined): boolean {
+  return user?.is_active === true && isPlatformAdminUser(user)
+}
+
+export function canViewCapacityOrders(user: UserOut | null | undefined): boolean {
+  return canBuyCapacity(user) || canReviewCapacityPayments(user)
+}
+
+export function canManageCapacityPaymentSettings(user: UserOut | null | undefined): boolean {
+  return canReviewOrganizationAdmissions(user)
+}

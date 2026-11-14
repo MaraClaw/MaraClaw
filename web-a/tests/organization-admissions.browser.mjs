@@ -24,13 +24,13 @@ await runBrowser(async ({ scenario, capture, verify, receipt }) => {
       verify('submitted organization is detail heading', await page.evaluate(() => document.querySelector('main h2')?.textContent), 'Synthetic International Operations')
       verify('applicant email remains visible', await page.evaluate(() => document.querySelector('main')?.textContent.includes('founder-1@example.test')))
       verify('detail heading receives keyboard focus', await page.evaluate(() => document.activeElement === document.querySelector('main h2')))
-      verify('new quote renders its per-account cap', await page.evaluate(() => [...document.querySelectorAll('main dl > div')].map((field) => [field.querySelector('dt')?.textContent, field.querySelector('dd')?.textContent]).find(([label]) => label === 'Maximum agents per account')), ['Maximum agents per account', '5'])
+      verify('new quote renders its per-account cap', await page.evaluate(() => [...document.querySelectorAll('main dl > div')].map((field) => [field.querySelector('dt')?.textContent, field.querySelector('dd')?.textContent]).find(([label]) => label === 'Maximum agents per account')), ['Maximum agents per account', '3'])
     }
     await button(page, 'Back to requests').click(); await visible(review(2)); await review(2).click()
     await visible(button(page, 'Approve request')); await capture(page, state, 'legacy')
     if (receipt.mode !== 'before') {
       verify('legacy detail names absence', await page.evaluate(() => document.querySelector('main h2')?.textContent), 'Organization name not provided')
-      verify('unnamed request retains current per-account cap', await page.evaluate(() => [...document.querySelectorAll('main dl > div')].map((field) => [field.querySelector('dt')?.textContent, field.querySelector('dd')?.textContent]).find(([label]) => label === 'Maximum agents per account')), ['Maximum agents per account', '5'])
+      verify('unnamed request retains current per-account cap', await page.evaluate(() => [...document.querySelectorAll('main dl > div')].map((field) => [field.querySelector('dt')?.textContent, field.querySelector('dd')?.textContent]).find(([label]) => label === 'Maximum agents per account')), ['Maximum agents per account', '3'])
       verify('legacy approve disabled', await page.evaluate(() => document.querySelector('button[type="submit"]')?.disabled))
       await visible(enabledButton(page, 'Reject request'))
       const before = state.calls.filter((call) => call.method === 'POST').length

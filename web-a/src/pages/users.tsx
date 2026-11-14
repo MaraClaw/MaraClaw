@@ -24,6 +24,7 @@ import {
   setUserActive,
   type AdminUser,
 } from '@/lib/users-api'
+import { UsersCapacity } from '@/pages/users-capacity'
 import { TenantUsers } from '@/pages/users-departments'
 import { resetUsersPagination, useUsersPagination } from '@/pages/users-pagination'
 import { useUsersRosterExport } from '@/pages/users-roster-export'
@@ -229,6 +230,8 @@ export function UsersPage() {
           </div>
         </div>
       ) : null}
+
+      {tenantId ? <UsersCapacity key={tenantId} tenantId={tenantId} /> : null}
 
       <div className="flex flex-col gap-4">
         {platformAdmin ? (

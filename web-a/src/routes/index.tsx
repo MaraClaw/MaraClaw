@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { AdminShell } from '@/components/layout/admin-shell'
 import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
@@ -34,6 +34,9 @@ const TransferPaymentsPage = lazy(() => import('@/pages/transfer-payments').then
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
 const AgentDeletionRequestsPage = lazy(() => import('@/pages/agent-deletion-requests').then((module) => ({ default: module.AgentDeletionRequestsPage })))
 const AgentDeletionRequestDetailPage = lazy(() => import('@/pages/agent-deletion-request-detail').then((module) => ({ default: module.AgentDeletionRequestDetailPage })))
+const CapacityOrderPage = lazy(() => import('@/pages/capacity-order').then((module) => ({ default: module.CapacityOrderPage })))
+const CapacityPaymentsPage = lazy(() => import('@/pages/capacity-payments').then((module) => ({ default: module.CapacityPaymentsPage })))
+const CapacityPaymentDetailPage = lazy(() => import('@/pages/capacity-payment-detail').then((module) => ({ default: module.CapacityPaymentDetailPage })))
 
 function BroadcastRoute() {
   const { user } = useAuth()
@@ -60,6 +63,16 @@ function AgentDeletionReviewRoute() {
   return canReviewAgentDeletions(user) ? <Outlet /> : <Navigate to="/" replace />
 }
 
+function CapacityReviewRoute() {
+  const { user } = useAuth()
+  return canReviewCapacityPayments(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
+function CapacityOrderRoute() {
+  const { user } = useAuth()
+  return canViewCapacityOrders(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
 export function AppRouter() {
   const { t } = useTranslation()
   return (
@@ -83,6 +96,13 @@ export function AppRouter() {
               <Route element={<TransferReviewRoute />}>
                 <Route path="transfer-payments" element={<TransferPaymentsPage />} />
                 <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
+              </Route>
+              <Route element={<CapacityReviewRoute />}>
+                <Route path="capacity-payments" element={<CapacityPaymentsPage />} />
+                <Route path="capacity-payments/:orderId" element={<CapacityPaymentDetailPage />} />
+              </Route>
+              <Route element={<CapacityOrderRoute />}>
+                <Route path="capacity-orders/:orderId" element={<CapacityOrderPage />} />
               </Route>
               <Route element={<AdmissionReviewRoute />}>
                 <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
