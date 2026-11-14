@@ -103,7 +103,7 @@ class AuditDatabase(CountingRawConnection):
         assert query.startswith("DELETE FROM llm_models ")
         deleted = self.rows["llm_models"].pop(row_id, None)
         for tenant in self.rows["tenants"].values():
-            for slot in ("default_model_id", "default_secondary_model_id", "default_fallback_model_id"):
+            for slot in ("default_model_id", "default_fallback_model_id"):
                 if tenant[slot] == row_id:
                     tenant[slot] = None
         return deepcopy(deleted)
@@ -134,7 +134,6 @@ def audit_db(monkeypatch: pytest.MonkeyPatch) -> AuditDatabase:
 
     for method in (
         "migrate_primary_model",
-        "migrate_secondary_model",
         "migrate_fallback_model",
         "clear_other_slots_matching",
     ):

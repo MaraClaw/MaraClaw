@@ -65,7 +65,6 @@ export type LlmModel = {
   tenant_id: string | null
   is_default: boolean
   is_fallback: boolean
-  is_secondary: boolean
   reasoning_effort?: string | null
   auth_kind?: string
   created_at: string
@@ -143,10 +142,6 @@ export async function setDefaultLlmModel(modelId: string): Promise<void> {
 
 export async function setFallbackLlmModel(modelId: string): Promise<void> {
   return apiRequest(`/api/enterprise/llm-models/${modelId}/set-fallback`, { method: 'POST' })
-}
-
-export async function setSecondaryLlmModel(modelId: string): Promise<void> {
-  return apiRequest(`/api/enterprise/llm-models/${modelId}/set-secondary`, { method: 'POST' })
 }
 
 export async function deleteLlmModel(modelId: string, force = false): Promise<void> {

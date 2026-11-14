@@ -67,7 +67,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         },
         {"role": "tool", "tool_call_id": f"call_{tool_id}", "content": "found status"},
     ]
-    prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, None, "channel-test")
+    prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, "channel-test")
     list_recent = AsyncMock(return_value=history_rows)
     prepare = AsyncMock(return_value=prepared)
     insert_message = AsyncMock(

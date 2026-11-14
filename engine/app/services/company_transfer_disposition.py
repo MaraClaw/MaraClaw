@@ -107,7 +107,7 @@ async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> 
         )
         await db.execute("UPDATE agent_triggers SET is_enabled=false WHERE agent_id=%(agent)s", params)
         models = await db.fetchone(
-            "SELECT primary_model_id,secondary_model_id,fallback_model_id FROM agents WHERE id=%(agent)s",
+            "SELECT primary_model_id,fallback_model_id FROM agents WHERE id=%(agent)s",
             params,
         )
         bindings: dict[str, object] = {}
@@ -173,7 +173,6 @@ async def seal_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> Non
                 "heartbeat_enabled": False,
                 "api_key_hash": None,
                 "primary_model_id": None,
-                "secondary_model_id": None,
                 "fallback_model_id": None,
                 "autonomy_policy": {},
                 "access_mode": AgentSharingMode.PRIVATE,

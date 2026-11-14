@@ -117,7 +117,7 @@ async def test_accepted_queue_cannot_bypass_later_owner_disable(
                         await routing.prepare_openclaw_message(agent=stale_agent, content="new work")
             case "enqueue":
                 async with transaction(fixture.db.first):
-                    prepared = routing.PreparedOpenClawMessage(stale_agent, "prepared", "primary", None, None, "test")
+                    prepared = routing.PreparedOpenClawMessage(stale_agent, "prepared", "primary", None, "test")
                     with pytest.raises(HTTPException):
                         await routing.enqueue_prepared_openclaw_message(prepared)
     finally:

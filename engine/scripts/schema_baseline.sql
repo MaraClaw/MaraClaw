@@ -169,7 +169,6 @@ CREATE TABLE IF NOT EXISTS tenants (
 	a2a_async_enabled BOOLEAN NOT NULL DEFAULT true, 
 	default_model_id UUID, 
 	default_fallback_model_id UUID, 
-	default_secondary_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
 	name_tsv tsvector GENERATED ALWAYS AS (
@@ -177,8 +176,7 @@ CREATE TABLE IF NOT EXISTS tenants (
 	) STORED,
 	PRIMARY KEY (id), 
 	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
-	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
-	FOREIGN KEY(default_secondary_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
+	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
@@ -722,7 +720,6 @@ CREATE TABLE IF NOT EXISTS agents (
 	container_port INTEGER, 
 	openclaw_image_id VARCHAR(200),
 	primary_model_id UUID, 
-	secondary_model_id UUID, 
 	fallback_model_id UUID, 
 	autonomy_policy JSON NOT NULL DEFAULT '{}', 
 	max_tokens_per_day INTEGER, 
@@ -764,7 +761,6 @@ CREATE TABLE IF NOT EXISTS agents (
 	FOREIGN KEY(creator_id) REFERENCES users (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id), 
 	FOREIGN KEY(primary_model_id) REFERENCES llm_models (id), 
-	FOREIGN KEY(secondary_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(fallback_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(template_id) REFERENCES agent_templates (id)
 );
@@ -1634,7 +1630,6 @@ CREATE TABLE IF NOT EXISTS gateway_messages (
 	result TEXT, 
 	selected_slot VARCHAR(20),
 	guest_model_ref VARCHAR(200),
-	complexity VARCHAR(20),
 	routing_reason VARCHAR(40),
     reply_binding_id UUID REFERENCES openclaw_reply_bindings(id) ON DELETE SET NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 

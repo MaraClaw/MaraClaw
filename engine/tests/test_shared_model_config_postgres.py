@@ -18,14 +18,14 @@ from app.services.agent_manager import guest_model_ref
 __all__ = ["channel_db", "lane", "linked", "receipt_db"]
 
 
-async def test_shared_secondary_selection_is_applied_even_with_nonshared_primary_pending(lane: Lane) -> None:
+async def test_shared_fallback_selection_is_applied_even_with_nonshared_primary_pending(lane: Lane) -> None:
     # Given an exactly selected Shared model and an unrelated pending primary turn.
-    secondary = model_named("haiku")
-    lane.guest.bundle.secondary = secondary
-    selected_ref = guest_model_ref(secondary)
+    fallback = model_named("haiku")
+    lane.guest.bundle.fallback = fallback
+    selected_ref = guest_model_ref(fallback)
     shared_id = await legacy_row(lane, "shared work", model_ref=selected_ref)
     async with connection_ctx() as db:
-        await db.execute("UPDATE gateway_messages SET selected_slot = 'secondary' WHERE id = %(id)s", {"id": shared_id})
+        await db.execute("UPDATE gateway_messages SET selected_slot = 'fallback' WHERE id = %(id)s", {"id": shared_id})
         _ = await gateway_message_dao.create(
             obj_in={
                 "agent_id": lane.agent_id,
@@ -45,13 +45,13 @@ async def test_shared_secondary_selection_is_applied_even_with_nonshared_primary
 
 
 async def test_shared_and_nonshared_claims_preserve_independent_models(lane: Lane) -> None:
-    # Given a Shared secondary turn alongside an unrelated nonshared primary turn.
-    secondary = model_named("haiku")
-    lane.guest.bundle.secondary = secondary
-    secondary_ref, primary_ref = guest_model_ref(secondary), guest_model_ref(model_named("opus"))
-    shared_id = await legacy_row(lane, "shared work", model_ref=secondary_ref)
+    # Given a Shared fallback turn alongside an unrelated nonshared primary turn.
+    fallback = model_named("haiku")
+    lane.guest.bundle.fallback = fallback
+    fallback_ref, primary_ref = guest_model_ref(fallback), guest_model_ref(model_named("opus"))
+    shared_id = await legacy_row(lane, "shared work", model_ref=fallback_ref)
     async with connection_ctx() as db:
-        await db.execute("UPDATE gateway_messages SET selected_slot='secondary' WHERE id=%(id)s", {"id": shared_id})
+        await db.execute("UPDATE gateway_messages SET selected_slot='fallback' WHERE id=%(id)s", {"id": shared_id})
         nonshared = await gateway_message_dao.create(
             obj_in={
                 "agent_id": lane.agent_id,
@@ -69,8 +69,8 @@ async def test_shared_and_nonshared_claims_preserve_independent_models(lane: Lan
     # Then each claimed selection remains independent and each model is applied for its turn.
     assert shared is not None
     assert shared.id == shared_id
-    assert (shared.guest_model_ref, shared.selected_slot) == (secondary_ref, "secondary")
+    assert (shared.guest_model_ref, shared.selected_slot) == (fallback_ref, "fallback")
     assert ordinary is not None
     assert ordinary.id == nonshared.id
     assert (ordinary.guest_model_ref, ordinary.selected_slot, ordinary.status) == (primary_ref, "primary", "delivered")
-    assert lane.guest.written == [secondary_ref, primary_ref]
+    assert lane.guest.written == [fallback_ref, primary_ref]

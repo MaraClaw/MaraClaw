@@ -22,7 +22,6 @@ def apply_guest_model(agent: AgentRecord, bundle: ModelBundle, selected: LLMMode
         _ = agent_manager.write_guest_config(
             agent,
             primary=bundle.primary,
-            secondary=bundle.secondary,
             fallback=bundle.fallback,
             selected=selected,
         )

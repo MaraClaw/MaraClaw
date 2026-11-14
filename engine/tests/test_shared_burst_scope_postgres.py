@@ -150,7 +150,7 @@ async def test_a_stored_model_that_is_no_longer_assigned_is_never_substituted(la
     assert (blocked.message, blocked.blocked) == (None, "model_unavailable")
     assert (await gateway(lane, queued)).status == "pending"
     assert lane.guest.written == []
-    lane.guest.bundle.secondary = model_named("retired")
+    lane.guest.bundle.fallback = model_named("retired")
     claimed = (await claim(lane)).message
     assert claimed is not None
     assert claimed.id == queued

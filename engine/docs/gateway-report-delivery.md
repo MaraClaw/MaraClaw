@@ -26,7 +26,7 @@ delivery tasks never beat.
 `record_report` conceals the underlying model before `complete`: the result passes through
 `response_identity.response_guard`, so the stored result, assistant transcript, `done` event, IM chunks and agent
 forwards all read the same redacted text. The guard covers the turn's `guest_model_ref` and the agent's assigned
-primary, secondary and fallback models (`provider/model`, `model` and trailing-path forms, with and without a `:tag`),
+primary and fallback models (`provider/model`, `model` and trailing-path forms, with and without a `:tag`),
 matched case-insensitively on token boundaries and replaced by `APP_NAME`. Provider names alone, short or plain-word
 ids and user messages are untouched, completed rows are not rewritten, and nothing beyond those configured
 identifiers is detected.

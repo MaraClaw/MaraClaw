@@ -70,7 +70,7 @@ async def test_model_creation_and_default_assignment_share_owned_transaction(mon
 
 
 @pytest.mark.parametrize("failure", ["none", "outer", "audit"])
-@pytest.mark.parametrize("operation", ["create", "update", "delete", "set_default", "set_secondary", "set_fallback"])
+@pytest.mark.parametrize("operation", ["create", "update", "delete", "set_default", "set_fallback"])
 async def test_model_mutation_and_audit_share_transaction_and_recover_savepoint(
     audit_db: AuditDatabase, failure: str, operation: str
 ) -> None:
@@ -104,7 +104,6 @@ async def test_model_mutation_and_audit_share_transaction_and_recover_savepoint(
             else:
                 assignment = {
                     "set_default": enterprise.set_default_llm_model,
-                    "set_secondary": enterprise.set_secondary_llm_model,
                     "set_fallback": enterprise.set_fallback_llm_model,
                 }[operation]
                 await assignment(audit_db.model.id, audit_db.actor)

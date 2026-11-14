@@ -11,7 +11,7 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 
 if TYPE_CHECKING:
-    from app.services.llm.turn import Complexity, ModelSlot
+    from app.services.llm.turn import ModelSlot
 
 # Reserved marker on a Personal burst anchor: a missing header can never pass as a legacy, immediately ready row.
 BURST_ROUTING_REASON: Final = "whatsapp_burst"
@@ -42,7 +42,6 @@ class PreparedOpenClawMessage:
     content: str
     selected_slot: ModelSlot | None
     guest_model_ref: str | None
-    complexity: Complexity | None
     routing_reason: str
 
 
@@ -70,6 +69,5 @@ class SharedClaim:
     content: str
     selected_slot: str | None
     guest_model_ref: str | None
-    complexity: str | None
     routing_reason: str | None
     now: datetime

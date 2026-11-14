@@ -31,7 +31,6 @@ class A2AContext:
     origin_source_channel: str
     origin_session_id: str | None
     primary_model: LLMModelRecord | None = None
-    secondary_model: LLMModelRecord | None = None
     fallback_model: LLMModelRecord | None = None
     conversation_history: list[OpenAIMessage] = field(default_factory=list[OpenAIMessage])
 

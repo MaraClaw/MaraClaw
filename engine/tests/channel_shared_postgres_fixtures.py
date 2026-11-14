@@ -80,7 +80,7 @@ async def live_channel(schema_db, monkeypatch):
     assert agent is not None
 
     async def prepare(*, agent, content, history=None):
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "qa")
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "qa")
 
     monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(openclaw_routing, "_schedule_inbox_wake", lambda *args: None)

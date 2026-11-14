@@ -30,7 +30,6 @@ import {
   REASONING_EFFORTS,
   setDefaultLlmModel,
   setFallbackLlmModel,
-  setSecondaryLlmModel,
   startGrokSubscription,
   testLlmModel,
   updateLlmModel,
@@ -239,7 +238,7 @@ export function LlmModelsPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Models')}</h1>
         <p className="mt-2 text-muted-foreground">
-          {t('Add providers and choose the company primary, secondary, and fallback models. New agents inherit all three. Primary handles complex work. Secondary handles short, routine turns. Fallback is only used when the chosen model fails. Members cannot change these assignments.')}
+          {t('Add providers and choose the company primary and fallback models. New agents inherit both. The primary model handles every turn. The fallback is used only when the primary fails. Members cannot change these assignments.')}
         </p>
       </div>
 
@@ -612,17 +611,6 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
     },
   })
 
-  const makeSecondary = useMutation({
-    mutationFn: () => setSecondaryLlmModel(item.id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-llm-models'] })
-      toast.success(t('{name} is now the secondary model', { name: item.label }))
-    },
-    onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : t('Could not set secondary model'))
-    },
-  })
-
   const probe = useMutation({
     mutationFn: () =>
       testLlmModel({
@@ -669,7 +657,6 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
           <CardTitle className="flex flex-wrap items-center gap-2">
             {item.label}
             {item.is_default ? <Badge variant="soft">{t('Primary')}</Badge> : null}
-            {item.is_secondary ? <Badge variant="outline">{t('Secondary')}</Badge> : null}
             {item.is_fallback ? <Badge variant="outline">{t('Fallback')}</Badge> : null}
             {item.auth_kind === 'grok_subscription' ? <Badge variant="soft">{t('Grok subscription')}</Badge> : null}
             {item.auth_kind === 'chatgpt_subscription' ? <Badge variant="soft">{t('ChatGPT subscription')}</Badge> : null}
@@ -850,18 +837,7 @@ function ModelCard({ item, efforts }: { item: LlmModel; efforts: readonly string
                 {t('Set as primary')}
               </Button>
             ) : null}
-            {item.enabled && !item.is_secondary && !item.is_default && !item.is_fallback ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={makeSecondary.isPending}
-                onClick={() => makeSecondary.mutate()}
-              >
-                {t('Set as secondary')}
-              </Button>
-            ) : null}
-            {item.enabled && !item.is_fallback && !item.is_default && !item.is_secondary ? (
+            {item.enabled && !item.is_fallback && !item.is_default ? (
               <Button
                 type="button"
                 variant="outline"

@@ -57,8 +57,10 @@ async def prepare_openclaw_message(
 ) -> PreparedOpenClawMessage:
     """Ensure models and select routing metadata before queue insertion.
 
-    Raises ``OpenClawUpdateGateError`` before any config or model side effect.
+    Raises ``OpenClawUpdateGateError`` before any config or model side effect. ``history`` is accepted for call-site
+    compatibility; routing no longer reads it.
     """
+    del history
     await assert_work_allowed(agent.id)
     agent = await load_agent_for_new_work(agent.id)
     if not recently_ensured(agent):
@@ -73,16 +75,8 @@ async def prepare_openclaw_message(
         )
     mark_ensured(agent)
     set_cached_bundle(agent, bundle)
-    choice = await select_turn_model(
-        bundle,
-        user_text=content,
-        history=history,
-        agent_id=agent.id,
-        skip_classifier=True,
-    )
-    return PreparedOpenClawMessage(
-        agent, content, choice.slot, guest_model_ref(choice.model), choice.complexity, choice.reason
-    )
+    choice = select_turn_model(bundle, agent_id=agent.id)
+    return PreparedOpenClawMessage(agent, content, choice.slot, guest_model_ref(choice.model), choice.reason)
 
 
 async def enqueue_prepared_openclaw_message(

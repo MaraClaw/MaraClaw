@@ -124,7 +124,6 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
             content=kwargs["content"],
             selected_slot="primary",
             guest_model_ref=None,
-            complexity=None,
             routing_reason="test",
         )
 

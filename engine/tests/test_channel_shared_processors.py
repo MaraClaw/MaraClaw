@@ -67,7 +67,7 @@ def pipeline(context, monkeypatch):
         return shared if session_id == shared.id else route
 
     async def prepare(*, agent, content, history):
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "channel-unit")
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "channel-unit")
 
     monkeypatch.setattr(submissions, "compute_agent_access_level", access)
     monkeypatch.setattr(submissions, "connection_ctx", connection)

@@ -30,29 +30,20 @@ async def agent(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AgentRecord]:
     openclaw_hot_cache.reset()
 
 
-@pytest.mark.parametrize(
-    ("content", "slot", "ref"),
-    [
-        ("hi", "secondary", "anthropic/haiku"),
-        ("Can you help me with this tomorrow morning please", "primary", "anthropic/opus"),
-    ],
-)
-async def test_preparation_selects_without_guest_write_or_classifier(
-    agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, content: str, slot: str, ref: str
+@pytest.mark.parametrize("content", ["hi", "Can you help me with this tomorrow morning please"])
+async def test_preparation_selects_the_primary_without_guest_write(
+    agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, content: str
 ) -> None:
     primary = LLMModelRecord(uuid4(), "anthropic", "opus", "key", "Primary")
-    secondary = LLMModelRecord(uuid4(), "anthropic", "haiku", "key", "Secondary")
-    monkeypatch.setattr(routing, "load_agent_model_bundle", AsyncMock(return_value=ModelBundle(primary, secondary)))
+    fallback = LLMModelRecord(uuid4(), "anthropic", "haiku", "key", "Fallback")
+    monkeypatch.setattr(routing, "load_agent_model_bundle", AsyncMock(return_value=ModelBundle(primary, fallback)))
     writer = Mock(side_effect=AssertionError("enqueue must not alter an active turn's model"))
-    classifier = AsyncMock(side_effect=AssertionError("enqueue must remain responsive"))
     monkeypatch.setattr(agent_manager, "write_guest_config", writer)
-    monkeypatch.setattr("app.services.llm.router._classify_with_llm", classifier)
 
     prepared = await routing.prepare_openclaw_message(agent=agent, content=content)
 
-    assert (prepared.selected_slot, prepared.guest_model_ref) == (slot, ref)
+    assert (prepared.selected_slot, prepared.guest_model_ref) == ("primary", "anthropic/opus")
     writer.assert_not_called()
-    classifier.assert_not_awaited()
 
 
 async def test_preparation_gates_before_model_work(agent: AgentRecord, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,7 +76,7 @@ async def test_empty_bundle_is_rejected_and_never_cached(agent: AgentRecord, mon
 
 
 async def test_enqueue_returns_while_owned_turn_is_running(agent: AgentRecord, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "anthropic/opus", "complex", "rule")
+    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "anthropic/opus", "rule")
     pending = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
     started, release = asyncio.Event(), asyncio.Event()
 

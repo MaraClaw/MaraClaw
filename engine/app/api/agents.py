@@ -321,17 +321,12 @@ async def create_agent(
         primary = (data.primary_model_id if can_assign_models else None) or (
             tenant.default_model_id if tenant else None
         )
-        secondary = (data.secondary_model_id if can_assign_models else None) or (
-            tenant.default_secondary_model_id if tenant else None
-        )
         fallback = (data.fallback_model_id if can_assign_models else None) or (
             tenant.default_fallback_model_id if tenant else None
         )
-        await assert_models_in_tenant_pool(target_tenant_id, primary, secondary, fallback)
-        assert_distinct_model_slots(primary, secondary, fallback)
-        effective_data = data.model_copy(
-            update={"primary_model_id": primary, "secondary_model_id": secondary, "fallback_model_id": fallback}
-        )
+        await assert_models_in_tenant_pool(target_tenant_id, primary, fallback)
+        assert_distinct_model_slots(primary, fallback)
+        effective_data = data.model_copy(update={"primary_model_id": primary, "fallback_model_id": fallback})
         agent, raw_key = await provision_agent(context, effective_data, setup_pending=True)
         await persist_agent_setup(agent, data, raw_key)
     await flush_request_transaction()
@@ -690,24 +685,21 @@ async def update_agent(
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
-    if "primary_model_id" in update_data or "fallback_model_id" in update_data or "secondary_model_id" in update_data:
+    if "primary_model_id" in update_data or "fallback_model_id" in update_data:
         if not is_llm_pool_admin(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an organization admin can change an agent's models",
             )
         next_primary = update_data.get("primary_model_id", agent.primary_model_id)
-        next_secondary = update_data.get("secondary_model_id", getattr(agent, "secondary_model_id", None))
         next_fallback = update_data.get("fallback_model_id", agent.fallback_model_id)
         await assert_models_in_tenant_pool(
             agent.tenant_id,
             next_primary if isinstance(next_primary, uuid.UUID) else None,
-            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
             next_fallback if isinstance(next_fallback, uuid.UUID) else None,
         )
         assert_distinct_model_slots(
             next_primary if isinstance(next_primary, uuid.UUID) else None,
-            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
             next_fallback if isinstance(next_fallback, uuid.UUID) else None,
         )
 

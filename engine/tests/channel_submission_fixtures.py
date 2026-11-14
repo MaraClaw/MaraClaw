@@ -75,7 +75,7 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
         )
 
     async def prepare(*, agent: AgentRecord, content: str, history):
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "channel-qa")
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "channel-qa")
 
     async def acl_version(_agent_id: UUID):
         return 0

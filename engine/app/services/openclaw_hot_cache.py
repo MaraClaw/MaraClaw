@@ -73,12 +73,7 @@ def reset() -> None:
 
 
 def _slot_key(agent: AgentRecord) -> str:
-    return (
-        f"{agent.id}:"
-        f"{getattr(agent, 'primary_model_id', None)}:"
-        f"{getattr(agent, 'secondary_model_id', None)}:"
-        f"{getattr(agent, 'fallback_model_id', None)}"
-    )
+    return f"{agent.id}:{getattr(agent, 'primary_model_id', None)}:{getattr(agent, 'fallback_model_id', None)}"
 
 
 def recently_ensured(agent: AgentRecord) -> bool:

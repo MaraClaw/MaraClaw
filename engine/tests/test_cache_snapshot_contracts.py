@@ -157,11 +157,7 @@ def test_tenant_ignores_extras_and_defaults_malformed_optional_values() -> None:
     payload: dict[str, object] = dict.fromkeys(
         ("im_provider", "default_message_period", "timezone", "country_region"), ""
     )
-    payload.update(
-        dict.fromkeys(
-            ("default_model_id", "default_fallback_model_id", "default_secondary_model_id", "created_at"), "bad"
-        )
-    )
+    payload.update(dict.fromkeys(("default_model_id", "default_fallback_model_id", "created_at"), "bad"))
     payload.update(id=str(tenant_id), name="Acme", slug="acme", sso_domain=123, im_config=[], future={"extra": True})
 
     loaded = tenant_cache._load(payload)
@@ -264,7 +260,6 @@ def test_tenant_producer_matches_serialized_contract(populated: bool) -> None:
             a2a_async_enabled=False,
             default_model_id=uuid4(),
             default_fallback_model_id=uuid4(),
-            default_secondary_model_id=uuid4(),
             is_system=True,
             is_default_end_user_org=True,
         )

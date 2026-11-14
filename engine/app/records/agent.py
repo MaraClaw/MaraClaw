@@ -69,7 +69,6 @@ class AgentRecord:
     container_port: int | None = None
     openclaw_image_id: str | None = None
     primary_model_id: UUID | None = None
-    secondary_model_id: UUID | None = None
     fallback_model_id: UUID | None = None
     autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
     max_tokens_per_day: int | None = None
@@ -130,7 +129,6 @@ class AgentRecord:
             container_port=int_from_row(row["container_port"]) if row.get("container_port") is not None else None,
             openclaw_image_id=str_from_row(row.get("openclaw_image_id")) or None,
             primary_model_id=uuid_from_row_opt(row.get("primary_model_id")),
-            secondary_model_id=uuid_from_row_opt(row.get("secondary_model_id")),
             fallback_model_id=uuid_from_row_opt(row.get("fallback_model_id")),
             autonomy_policy=policy,
             max_tokens_per_day=int_from_row(row["max_tokens_per_day"])

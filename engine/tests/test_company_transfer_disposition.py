@@ -61,7 +61,7 @@ async def test_final_disposition_stops_runtime_without_rewriting_history_ownersh
         statements.append(sql)
 
     async def models(_db: DbConnection, _sql: str, _params: object = None) -> dict[str, object]:
-        return {"primary_model_id": agent.primary_model_id, "secondary_model_id": None, "fallback_model_id": None}
+        return {"primary_model_id": agent.primary_model_id, "fallback_model_id": None}
 
     async def foreign_model(_db: DbConnection, _sql: str, _params: object = None) -> bool:
         return False

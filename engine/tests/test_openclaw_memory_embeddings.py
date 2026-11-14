@@ -53,7 +53,7 @@ class Guest:
         return json.loads(self.config_path.read_text(encoding="utf-8"))["memory"]["search"]
 
     def fingerprint(self) -> str:
-        return self.manager._guest_config_fingerprint(primary=None, secondary=None, fallback=None)
+        return self.manager._guest_config_fingerprint(primary=None, fallback=None)
 
 
 @pytest.fixture

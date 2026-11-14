@@ -170,7 +170,7 @@ async def _claim_joined(
     """First dispatch of a Personal batch: route the final joined body now, then deliver it."""
     body = sealed.frozen_body or ""
     try:
-        route = await choose_route(agent, body, fresh=True)
+        route = await choose_route(agent, fresh=True)
     except NoCompanyModelError:
         return _model_unavailable(message, agent)
     claim = SharedClaim(
@@ -180,7 +180,6 @@ async def _claim_joined(
         body,
         route.slot,
         route.ref,
-        route.complexity,
         route.reason,
         request.now,
     )
@@ -206,7 +205,6 @@ async def _claim_stored(
         message.content,
         message.selected_slot,
         message.guest_model_ref,
-        message.complexity,
         message.routing_reason,
         request.now,
     )

@@ -39,9 +39,7 @@ async def recovery_case(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RecoveryCase]:
     db = pooled_database
-    prepared = openclaw_routing.PreparedOpenClawMessage(
-        db.agent, "hello", "primary", "provider/secret-model-v3", None, "qa"
-    )
+    prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "hello", "primary", "provider/secret-model-v3", "qa")
     async with transaction(db.first):
         native = await openclaw_routing.enqueue_prepared_openclaw_message(
             prepared,
