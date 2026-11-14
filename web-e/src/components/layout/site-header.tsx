@@ -5,7 +5,6 @@ import { Link } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { LanguageSelector } from '@/components/language-selector'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import {
@@ -71,7 +70,6 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-2 lg:flex">
-          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           {signedIn ? (
             <>
@@ -89,7 +87,6 @@ export function SiteHeader() {
         </div>
 
         <div className="flex items-center gap-2 lg:hidden">
-          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           <Sheet>
             <SheetTrigger asChild>
@@ -104,7 +101,6 @@ export function SiteHeader() {
                   {translate("OpenClaw agents for teams and companies.")}</SheetDescription>
               </SheetHeader>
               <nav className="flex flex-col gap-1 px-4 pt-4" aria-label={translate("Mobile")}>
-                {!signedIn ? <LanguageSelector /> : null}
                 {navItems.map((item) => (
                   <SheetClose key={item.href} asChild>
                     <a
