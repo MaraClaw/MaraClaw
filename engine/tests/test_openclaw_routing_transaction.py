@@ -39,7 +39,7 @@ async def test_prepared_enqueue_defers_wake_until_commit(
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
     monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", AsyncMock(return_value=agent))
     sender = uuid4()
-    prepared = routing.PreparedOpenClawMessage(agent, "relay payload", "primary", "openai/model", "complex", "rule")
+    prepared = routing.PreparedOpenClawMessage(agent, "relay payload", "primary", "openai/model", "rule")
     created = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content=prepared.content)
     inserted: list[Mapping[str, object]] = []
     woke = asyncio.Event()
@@ -94,7 +94,6 @@ async def test_prepared_enqueue_defers_wake_until_commit(
             "status": "pending",
             "selected_slot": "primary",
             "guest_model_ref": "openai/model",
-            "complexity": "complex",
             "routing_reason": "rule",
         }
     ]
@@ -108,7 +107,7 @@ async def test_prepared_enqueue_suppresses_duplicate_user_message(
     # Given
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
     sender = uuid4()
-    prepared = routing.PreparedOpenClawMessage(agent, "hello", "secondary", "openai/cheap", "manageable", "rule")
+    prepared = routing.PreparedOpenClawMessage(agent, "hello", "fallback", "openai/cheap", "rule")
     monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", AsyncMock(return_value=agent))
     pending = GatewayMessageRecord(
         id=uuid4(), agent_id=agent.id, content="hello", sender_user_id=sender, conversation_id="thread"
@@ -132,7 +131,7 @@ async def test_shutdown_between_enqueue_and_commit_refuses_deferred_drain(
     monkeypatch: pytest.MonkeyPatch, raw: _FakeRawConnection
 ) -> None:
     agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
-    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "openai/model", "complex", "rule")
+    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "openai/model", "rule")
     created = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
     monkeypatch.setattr(routing, "_insert_prepared_message", AsyncMock(return_value=created))
     run = AsyncMock()

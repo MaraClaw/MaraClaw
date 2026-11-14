@@ -12,7 +12,7 @@ const reasons = [
 ] as const
 
 for (const [reason, label] of reasons) {
-  test(`server-derived ${reason} explanation appears on cards and Settings, but not shared chat`, async ({ page }) => {
+  test(`server-derived ${reason} explanation appears on cards, but not in agent sections`, async ({ page }) => {
     // Given
     await prepareChat(page)
     let reads = 0
@@ -30,12 +30,13 @@ for (const [reason, label] of reasons) {
     await expect(page.getByText(label, { exact: true })).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: `Message ${agent.name}` })).toBeVisible()
     await page.getByRole('navigation', { name: 'Agent sections' }).getByRole('link', { name: 'Settings', exact: true }).click()
-    await expect(page.getByText(label, { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: agent.name, exact: true })).toBeVisible()
+    await expect(page.getByText(label, { exact: true })).toHaveCount(0)
     expect(reads).toBe(1)
   })
 }
 
-test('session replacement removes the old explanation while a shared detail read is pending', async ({ page }) => {
+test('session replacement discards the old agent while a shared detail read is pending', async ({ page }) => {
   // Given
   await prepareWorkspace(page)
   const requested = Promise.withResolvers<void>()
@@ -44,10 +45,10 @@ test('session replacement removes the old explanation while a shared detail read
     if (route.request().headers().authorization === `Bearer ${originalToken}`) {
       requested.resolve()
       await release.promise
-      return route.fulfill({ json: { ...originalAgent, access_reason: 'creator' } })
+      return route.fulfill({ json: { ...originalAgent, name: 'Original session agent', access_reason: 'creator' } })
     }
     expect(route.request().headers().authorization).toBe(`Bearer ${replacementToken}`)
-    return route.fulfill({ json: { ...originalAgent, creator_id: replacementUser.id, access_reason: 'department' } })
+    return route.fulfill({ json: { ...originalAgent, name: 'Replacement session agent', creator_id: replacementUser.id, access_reason: 'department' } })
   })
   await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
   await page.route('**/api/agent-deletion-requests?*', (route) => route.fulfill({ json: { items: [], next_cursor: null } }))
@@ -56,10 +57,11 @@ test('session replacement removes the old explanation while a shared detail read
     await requested.promise
     // When
     await writeFromOtherTab(page, replacementToken)
-    await expect(page.getByText('Shared with your department', { exact: true })).toBeVisible()
+    const replacement = page.getByRole('heading', { name: 'Replacement session agent', exact: true })
+    await expect(replacement).toBeVisible()
     release.resolve()
     // Then
-    await expect(page.getByText('You created this agent', { exact: true })).toHaveCount(0)
-    await expect(page.getByText('Shared with your department', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Original session agent', exact: true })).toHaveCount(0)
+    await expect(replacement).toBeVisible()
   } finally { release.resolve() }
 })

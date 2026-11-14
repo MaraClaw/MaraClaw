@@ -321,17 +321,12 @@ async def create_agent(
         primary = (data.primary_model_id if can_assign_models else None) or (
             tenant.default_model_id if tenant else None
         )
-        secondary = (data.secondary_model_id if can_assign_models else None) or (
-            tenant.default_secondary_model_id if tenant else None
-        )
         fallback = (data.fallback_model_id if can_assign_models else None) or (
             tenant.default_fallback_model_id if tenant else None
         )
-        await assert_models_in_tenant_pool(target_tenant_id, primary, secondary, fallback)
-        assert_distinct_model_slots(primary, secondary, fallback)
-        effective_data = data.model_copy(
-            update={"primary_model_id": primary, "secondary_model_id": secondary, "fallback_model_id": fallback}
-        )
+        await assert_models_in_tenant_pool(target_tenant_id, primary, fallback)
+        assert_distinct_model_slots(primary, fallback)
+        effective_data = data.model_copy(update={"primary_model_id": primary, "fallback_model_id": fallback})
         agent, raw_key = await provision_agent(context, effective_data, setup_pending=True)
         await persist_agent_setup(agent, data, raw_key)
     await flush_request_transaction()
@@ -690,24 +685,21 @@ async def update_agent(
 
     update_data = object_mapping_from(data.model_dump(exclude_unset=True))
 
-    if "primary_model_id" in update_data or "fallback_model_id" in update_data or "secondary_model_id" in update_data:
+    if "primary_model_id" in update_data or "fallback_model_id" in update_data:
         if not is_llm_pool_admin(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an organization admin can change an agent's models",
             )
         next_primary = update_data.get("primary_model_id", agent.primary_model_id)
-        next_secondary = update_data.get("secondary_model_id", getattr(agent, "secondary_model_id", None))
         next_fallback = update_data.get("fallback_model_id", agent.fallback_model_id)
         await assert_models_in_tenant_pool(
             agent.tenant_id,
             next_primary if isinstance(next_primary, uuid.UUID) else None,
-            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
             next_fallback if isinstance(next_fallback, uuid.UUID) else None,
         )
         assert_distinct_model_slots(
             next_primary if isinstance(next_primary, uuid.UUID) else None,
-            next_secondary if isinstance(next_secondary, uuid.UUID) else None,
             next_fallback if isinstance(next_fallback, uuid.UUID) else None,
         )
 
@@ -723,28 +715,10 @@ async def update_agent(
 
     clamped_fields: list[AgentClampedField] = []
     tenant = None
-    if current_user.tenant_id and (
-        "heartbeat_interval_minutes" in update_data
-        or {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(update_data.keys())
+    if current_user.tenant_id and {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(
+        update_data.keys()
     ):
         tenant = await tenant_dao.get(current_user.tenant_id)
-
-    if "heartbeat_interval_minutes" in update_data and tenant:
-        original = json_as_int(update_data["heartbeat_interval_minutes"])
-        if original >= tenant.min_heartbeat_interval_minutes:
-            original = None
-    else:
-        original = None
-    if original is not None and tenant:
-        update_data["heartbeat_interval_minutes"] = tenant.min_heartbeat_interval_minutes
-        clamped_fields.append(
-            {
-                "field": "heartbeat_interval_minutes",
-                "requested": original,
-                "applied": tenant.min_heartbeat_interval_minutes,
-                "reason": "company_floor",
-            }
-        )
 
     if tenant and {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(update_data.keys()):
         if "min_poll_interval_min" in update_data:

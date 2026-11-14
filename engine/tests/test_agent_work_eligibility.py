@@ -105,7 +105,8 @@ async def test_policy_reads_committed_postgres_state_despite_cached_principal(ch
                 await fixture.db.second.execute("UPDATE tenants SET is_active=FALSE")
             case "moved" | "transfer":
                 await fixture.db.second.execute(
-                    "INSERT INTO tenants(id,name,slug) VALUES (%(id)s,'Target','target')", {"id": target_id}
+                    "INSERT INTO tenants (id,name,slug,tier) VALUES (%(id)s,'Target','target','ultra')",
+                    {"id": target_id},
                 )
                 if state == "moved":
                     await fixture.db.second.execute(

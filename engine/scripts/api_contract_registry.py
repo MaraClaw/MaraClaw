@@ -29,26 +29,39 @@ from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.domain.users import UserRole
 from app.core.notification_kinds import NotificationKind
 from app.records.agent_deletion_request import CancelReason, DeletionStatus
+from app.records.agent_resource_pressure_episode import PressureKind, PressureResource
+from app.records.capacity_order import CapacityOrderKind, CapacityOrderStatus
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
 from app.records.company_transfer import TransferChoice, TransferStatus
 from app.records.organization_plan import (
     OrganizationAdditionalAccountMonthlyUsd,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationAgentLimit,
+    OrganizationAnnualPriceUsd,
+    OrganizationBillingCycle,
     OrganizationCurrency,
     OrganizationDailyAgentMessageLimit,
     OrganizationFileLimitBytes,
-    OrganizationMaxAccounts,
+    OrganizationGuestCpuShares,
+    OrganizationGuestMemoryBytes,
+    OrganizationGuestMillicpus,
+    OrganizationGuestPidsLimit,
+    OrganizationIncludedAgents,
     OrganizationPlanId,
     OrganizationPlanName,
     OrganizationStorageLimitBytes,
+    OrganizationWorkspaceDiskBytes,
 )
 from app.schemas.chat_wire import CHAT_SERVER_EVENT_ADAPTER, ChatEventType, ChatRejectionReason
+from app.schemas.organization_admission import OrganizationAdmissionAcknowledgment
 from app.schemas.schemas import ApprovalDecisionRequest
 
 AUDITED_HTTP_MODULES = frozenset(
     f"app.api.{name}"
     for name in (
         "activity",
+        "admin_capacity",
+        "admin_resource_pressure",
         "admin_search_analytics",
         "advanced",
         "agent_credentials",
@@ -61,6 +74,7 @@ AUDITED_HTTP_MODULES = frozenset(
         "agentbay_control",
         "agents",
         "auth",
+        "capacity",
         "channel_catalog",
         "chat_sessions",
         "member_auth",
@@ -127,13 +141,25 @@ ENUM_TYPES: tuple[type[StrEnum | IntEnum], ...] = (
     TransferStatus,
     OrganizationPlanId,
     OrganizationPlanName,
+    OrganizationBillingCycle,
+    OrganizationAnnualPriceUsd,
     OrganizationAdditionalAccountMonthlyUsd,
     OrganizationCurrency,
-    OrganizationMaxAccounts,
     OrganizationAgentLimit,
+    OrganizationIncludedAgents,
+    OrganizationAdditionalAgentMonthlyUsd,
     OrganizationStorageLimitBytes,
     OrganizationFileLimitBytes,
     OrganizationDailyAgentMessageLimit,
+    OrganizationGuestMemoryBytes,
+    OrganizationGuestMillicpus,
+    OrganizationGuestCpuShares,
+    OrganizationGuestPidsLimit,
+    OrganizationWorkspaceDiskBytes,
+    PressureResource,
+    PressureKind,
+    CapacityOrderKind,
+    CapacityOrderStatus,
     ChatRejectionReason,
     ChatEventType,
 )
@@ -163,4 +189,8 @@ def explicit_schemas() -> dict[str, JsonValue]:
         ref_template="#/components/schemas/{model}"
     )
     schemas["UploadPolicy"] = UploadPolicy.model_json_schema(ref_template="#/components/schemas/{model}")
+    # The submit route is unaudited (multipart body), so its acknowledgment is not reachable from an audited route.
+    schemas["OrganizationAdmissionAcknowledgment"] = OrganizationAdmissionAcknowledgment.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
     return schemas

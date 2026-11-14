@@ -31,7 +31,7 @@ npm run preview
 
 ## Docker (production)
 
-Multi-stage image: **Node.js 26** builds the Vite SPA; **nginx (unprivileged)** serves `dist` on port **8080**.
+Multi-stage image: **Node.js 26** builds the Vite SPA; **Caddy 2.11.9 (alpine)** serves `dist` on port **8080**.
 
 ```bash
 docker build -t maraclaw-web-e .

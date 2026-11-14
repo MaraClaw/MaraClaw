@@ -4,6 +4,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyPlanBadge } from '@/components/companies/company-plan-badge'
 import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
@@ -105,6 +106,7 @@ export function CompanyDetailPage() {
         <div className="mt-3 flex flex-wrap gap-2">
           {company?.is_system ? <Badge variant="secondary">{t('System')}</Badge> : null}
           {company?.is_default_end_user_org ? <Badge>{t('Default for end users')}</Badge> : null}
+          {company ? <CompanyPlanBadge tier={company.tier} /> : null}
         </div>
       </div>
 

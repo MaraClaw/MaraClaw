@@ -90,7 +90,7 @@ async def receipt_db(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureReq
                     )
 
                 async def prepare(*, agent: AgentRecord, content: str, history):
-                    return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "receipt-qa")
+                    return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "receipt-qa")
 
                 async def access(_user: UserRecord, _agent: UUID):
                     return agent, "manage"

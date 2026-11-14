@@ -324,18 +324,18 @@ def test_guest_agent_settings_survive_model_switch_and_retired_provider_is_remov
 
 @pytest.mark.parametrize("duplicate", [False, True])
 def test_assigned_openrouter_slots_are_exactly_authorized(guest: Guest, duplicate: bool) -> None:
-    names = ["nvidia/nemotron-3.5-lightning:free", "nvidia/nemotron-3.5-super-vl:free", "recursive/flint-v1.0:free"]
+    names = ["nvidia/nemotron-3.5-lightning:free", "nvidia/nemotron-3.5-super-vl:free"]
     models = [
         LLMModelRecord(id=uuid4(), provider="openrouter", model=name, label=name, api_key_encrypted="")
         for name in names
     ]
     if duplicate:
-        models[2] = models[1]
+        models[1] = models[0]
 
-    config = guest.manager._generate_openclaw_config(guest.agent, models[0], secondary=models[1], fallback=models[2])
+    config = guest.manager._generate_openclaw_config(guest.agent, models[0], fallback=models[1])
 
     defaults = json_object_from(json_object_from(config["agents"])["defaults"])
-    expected = [f"openrouter/{name}" for name in (names[:2] if duplicate else names)]
+    expected = [f"openrouter/{name}" for name in (names[:1] if duplicate else names)]
     assert json_object_from(defaults["modelPolicy"])["allow"] == expected
 
 

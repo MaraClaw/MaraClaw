@@ -207,19 +207,17 @@ async def test_status_rejects_member_and_other_tenant_org_admin():
 
 
 @pytest.mark.asyncio
-async def test_subscription_model_can_fill_primary_then_distinct_secondary_and_fallback(monkeypatch):
+async def test_subscription_model_can_fill_primary_then_distinct_fallback(monkeypatch):
     primary = _model(label="Grok SuperGrok")
-    secondary = _model(provider="anthropic", model="claude-sonnet-4-5", label="Claude", auth_kind="api_key")
     fallback = _model(provider="openai", model="gpt-6.1-sol", label="GPT", auth_kind="api_key")
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=None,
         default_fallback_model_id=None,
-        default_secondary_model_id=None,
     )
 
     async def load_model(model_id):
-        for row in (primary, secondary, fallback):
+        for row in (primary, fallback):
             if row.id == model_id:
                 return row
         return None
@@ -236,19 +234,16 @@ async def test_subscription_model_can_fill_primary_then_distinct_secondary_and_f
 
     monkeypatch.setattr(enterprise_api.tenant_dao, "update", tenant_update)
     monkeypatch.setattr(enterprise_api.agent_dao, "migrate_primary_model", AsyncMock(return_value=0))
-    monkeypatch.setattr(enterprise_api.agent_dao, "migrate_secondary_model", AsyncMock(return_value=0))
     monkeypatch.setattr(enterprise_api.agent_dao, "migrate_fallback_model", AsyncMock(return_value=0))
     monkeypatch.setattr(enterprise_api.agent_dao, "clear_other_slots_matching", AsyncMock())
 
     await enterprise_api.set_default_llm_model(primary.id, current_user=_user())
-    await enterprise_api.set_secondary_llm_model(secondary.id, current_user=_user())
     await enterprise_api.set_fallback_llm_model(fallback.id, current_user=_user())
     assert tenant.default_model_id == primary.id
-    assert tenant.default_secondary_model_id == secondary.id
     assert tenant.default_fallback_model_id == fallback.id
 
     with pytest.raises(HTTPException) as same:
-        await enterprise_api.set_secondary_llm_model(primary.id, current_user=_user())
+        await enterprise_api.set_fallback_llm_model(primary.id, current_user=_user())
     assert same.value.status_code == 400
 
 
@@ -360,13 +355,11 @@ async def test_ensure_agent_inherits_grok_subscription_when_primary_missing(monk
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=None,
-        secondary_model_id=None,
         fallback_model_id=None,
     )
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=None,
-        default_secondary_model_id=None,
         default_fallback_model_id=None,
     )
     monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -395,13 +388,11 @@ async def test_ensure_agent_prefers_subscription_over_grok_api_key(monkeypatch):
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=dummy.id,
-        secondary_model_id=None,
         fallback_model_id=None,
     )
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=dummy.id,
-        default_secondary_model_id=None,
         default_fallback_model_id=None,
     )
     monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -449,13 +440,11 @@ async def test_ensure_agent_replaces_foreign_primary(monkeypatch):
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=foreign_id,
-        secondary_model_id=None,
         fallback_model_id=None,
     )
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=grok.id,
-        default_secondary_model_id=None,
         default_fallback_model_id=None,
     )
     monkeypatch.setattr(pool.tenant_dao, "get", AsyncMock(return_value=tenant))

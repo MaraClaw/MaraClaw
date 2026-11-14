@@ -1,12 +1,19 @@
 import { organizationAdmissionSchema } from '../src/lib/organization-admissions-api.ts'
 
 export const organizationAdmission = organizationAdmissionSchema.parse({
-  id: '9ec5429b-f1e1-4673-b541-44652ff1bbd0', organization_name: 'Example Organization', email: 'founder@example.test', tier: 'max',
-  plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 199,
-    included_accounts: 5, additional_account_monthly_usd: 5, max_accounts: 75, max_agents_per_account: 5,
-    storage_limit_bytes: 1073741824, max_file_size_bytes: 26214400, daily_messages_per_agent: 200 },
+  id: '9ec5429b-f1e1-4673-b541-44652ff1bbd0', organization_name: 'Example Organization', email: 'founder@example.test', phone: '+84912345678', tier: 'max',
+  plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 249, annual_price_usd: 2490,
+    included_accounts: 15, additional_account_monthly_usd: 4, max_agents_per_account: 3,
+    included_agents: 5, additional_agent_monthly_usd: 49,
+    storage_limit_bytes: 5368709120, max_file_size_bytes: 52428800, daily_messages_per_agent: 200,
+    guest_memory_bytes: 3221225472, guest_millicpus: 2000, guest_cpu_shares: 1536, guest_pids_limit: 768,
+    workspace_disk_bytes: 5368709120, storage_addon_bytes: 10737418240, storage_addon_monthly_usd: 5,
+    workspace_disk_addon_bytes: 5368709120, workspace_disk_addon_monthly_usd: 3 },
   status: 'pending', created_at: '2026-11-05T00:00:00Z', reviewed_at: null, reviewed_by: null, review_note: null,
   credential_email_status: null, credential_email_error: null,
+  billing: 'monthly', amount_usd: 249, usd_vnd_rate: 25000, amount_vnd: 6_225_000,
+  recipient: { bank_name: 'Example Bank', account_number: '0123456789', branch_name: 'District 1 Branch' },
+  payment_reference: 'MO7K2QX4ZA', evidence: { filename: 'transfer-receipt.png', content_type: 'image/png', size_bytes: 20480 },
 })
 
 export const approvedOrganizationAdmission = organizationAdmissionSchema.parse({

@@ -51,7 +51,7 @@ async def test_retry_reloads_current_identity_and_tenant_gates(setup_db, setup_h
         case "disabled_tenant":
             tenant_id = uuid4()
             await db.execute(
-                "INSERT INTO tenants (id, name, slug, is_active) VALUES (%(id)s, 'Disabled', 'disabled', false)",
+                "INSERT INTO tenants (id, name, slug, is_active, tier) VALUES (%(id)s, 'Disabled', 'disabled', false, 'ultra')",
                 {"id": tenant_id},
             )
             await db.execute(

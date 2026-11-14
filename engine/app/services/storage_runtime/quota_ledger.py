@@ -21,7 +21,7 @@ from app.db.errors import DbError
 from app.db.session import durable_transaction
 from app.records.agent_storage import StorageObjectRecord, StorageOperationKind
 from app.records.organization_plan import OrganizationPlan
-from app.services.organization_plans import AmbiguousOrganizationTierError, plan_for, tier_for_tenant
+from app.services.organization_plans import plan_for, tier_for_tenant
 from app.services.storage_runtime.quota_errors import (
     StorageAccountingUnavailableError,
     StorageFileTooLargeError,
@@ -69,7 +69,7 @@ async def ledger_tx() -> AsyncGenerator[DbConnection]:
         async with durable_transaction() as db:
             await db.execute(f"SET LOCAL lock_timeout = {LOCK_WAIT_MS}")
             yield db
-    except (DbError, psycopg.Error, OSError, AmbiguousOrganizationTierError) as exc:
+    except (DbError, psycopg.Error, OSError) as exc:
         logger.warning(f"[storage-quota] accounting unavailable: {type(exc).__name__}")
         raise StorageAccountingUnavailableError from exc
 
@@ -89,7 +89,7 @@ async def settle_with_retry(attempt: Callable[[], Awaitable[None]], operation_id
 
 
 async def agent_plan(db: DbConnection, agent_id: UUID) -> OrganizationPlan | None:
-    """The agent's current organization's plan; ``None`` for organizations without a paid tier."""
+    """The agent's current organization's plan; ``None`` for an agent with no organization (or whose row is gone)."""
     tier = await tier_for_tenant(await dao.agent_tenant(db, agent_id))
     return plan_for(tier) if tier is not None else None
 

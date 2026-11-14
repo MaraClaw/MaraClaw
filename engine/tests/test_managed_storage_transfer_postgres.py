@@ -79,7 +79,7 @@ async def test_a_reservation_committed_before_the_preflight_counts_against_the_d
 
 
 @pytest.mark.parametrize("sizes", [(300, 300), (401,)])
-async def test_unlimited_tier_objects_block_a_paid_transfer_that_cannot_fit_them(
+async def test_unlimited_objects_block_a_paid_transfer_that_cannot_fit_them(
     quota_world: StorageWorld, sizes: tuple[int, ...]
 ):
     world = quota_world

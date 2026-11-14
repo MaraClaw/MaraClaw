@@ -2,7 +2,7 @@
 
 [Architecture index](README.md) | Source snapshot: **2026-11-01**
 
-The three packages are independently built and launched, not a root npm workspace. The frontend containers below represent separately shipped SPA applications with nginx delivery; React executes in the browser, not on the nginx server. Node/Vite are build-time tools in the [web-e image](../../web-e/Dockerfile#L25-L71) and [web-a image](../../web-a/Dockerfile#L32-L83). The [deployment view](c4-deployment.md) separates browser instances from servers.
+The three packages are independently built and launched, not a root npm workspace. The frontend containers below represent separately shipped SPA applications with Caddy delivery; React executes in the browser, not on the Caddy server. Node/Vite are build-time tools in the [web-e image](../../web-e/Dockerfile#L26-L74) and [web-a image](../../web-a/Dockerfile#L33-L86). The [deployment view](c4-deployment.md) separates browser instances from servers.
 
 ![MaraClaw containers and state boundaries](c4-containers.svg)
 
@@ -19,9 +19,9 @@ C4Container
   Person(operator, "Admin", "Operates the platform or organization")
 
   System_Boundary(platform, "MaraClaw") {
-    Container(memberApp, "web-e", "React, TypeScript; nginx delivery", "Public and member browser application")
+    Container(memberApp, "web-e", "React, TypeScript; Caddy delivery", "Public and member browser application")
     Container(engine, "engine", "Python, FastAPI, Uvicorn", "API, workers, connectors, guest management")
-    Container(adminApp, "web-a", "React, TypeScript; nginx delivery", "Admin browser application")
+    Container(adminApp, "web-a", "React, TypeScript; Caddy delivery", "Admin browser application")
     ContainerDb(postgres, "Platform records", "PostgreSQL, psycopg", "Durable domain, chat, work, delivery state")
     Container(guests, "OpenClaw guests", "Managed OpenClaw containers", "Dynamic per-agent execution runtimes")
     ContainerDb(redis, "Coordination state", "Redis", "Tickets, cache, presence, Pub/Sub")
@@ -58,7 +58,7 @@ C4Container
 
 ## Sources and interpretation
 
-- Empty `VITE_API_BASE_URL` uses same-origin requests: [member URL builder](../../web-e/src/lib/api.ts#L1-L47), [admin URL builder](../../web-a/src/lib/api.ts#L1-L26). In the images, member nginx proxies `/api/`, WebSocket-upgraded `/ws/`, and `/p/`; admin nginx proxies `/api/` only: [member proxy](../../web-e/docker/nginx.conf#L62-L90), [admin proxy](../../web-a/docker/nginx.conf#L65-L74). Development instead uses [member Vite proxies](../../web-e/vite.config.ts#L23-L40) and the [admin Vite proxy](../../web-a/vite.config.ts#L17-L27).
+- Empty `VITE_API_BASE_URL` uses same-origin requests: [member URL builder](../../web-e/src/lib/api.ts#L1-L47), [admin URL builder](../../web-a/src/lib/api.ts#L1-L26). In the images, member Caddy proxies `/api/`, WebSocket-upgraded `/ws/`, and `/p/`; admin Caddy proxies `/api/` only: [member proxy](../../web-e/docker/Caddyfile#L112-L122), [admin proxy](../../web-a/docker/Caddyfile#L113-L126). Development instead uses [member Vite proxies](../../web-e/vite.config.ts#L23-L40) and the [admin Vite proxy](../../web-a/vite.config.ts#L17-L27).
 - One default engine enables bootstrap, API, worker, and connector responsibilities with `PROCESS_ROLE=all`: [setting](../../engine/app/config.py#L162-L167), [runtime startup](../../engine/app/runtime/lifecycle.py#L66-L146). Optional role splitting is configuration, not evidence of deployed microservices; [router mounts](../../engine/app/main.py#L130-L191) remain unconditional.
 - PostgreSQL is the durable authority. [Transaction scopes](../../engine/app/db/session.py#L80-L120) join DAO writes; [chat acceptance](../../engine/app/services/chat_submissions.py#L88-L134) and [report settlement](../../engine/app/services/openclaw_gateway_delivery.py#L73-L137) commit transcript, gateway work, and applicable delivery intents. Redis [single-use tickets](../../engine/app/services/chat_tickets.py#L70-L121) and [presence/PubSub](../../engine/app/services/realtime_runtime/router.py#L63-L165) are not a durable task queue.
 - Local storage is the default; the [storage facade](../../engine/app/services/storage_runtime/facade.py#L17-L43) can select S3-compatible storage with optional local read fallback. That choice does not remove the filesystem required by [guest bind mounts](../../engine/app/services/agent_manager.py#L671-L685). PostgreSQL, Redis, and optional object storage must be supplied/configured separately; the [package launcher](../../engine/start-from-docker.sh#L129-L214) does not provision them.

@@ -197,6 +197,21 @@ async def test_tenant_enable_leaves_the_generation_alone(monkeypatch):
     assert not raw.updates_to("identities")
 
 
+@pytest.mark.parametrize("limit", [None, 2])
+async def test_tenant_enable_restores_at_most_the_limit_admins_first(monkeypatch, limit):
+    # Given a member deactivated with the company.
+    tenant_id = uuid4()
+    member = _membership(tenant_id=tenant_id, is_active=False)
+    with recording_user_writes(monkeypatch, member) as raw:
+        # When the company is enabled with or without a free-slot limit.
+        await user_dao.reactivate_for_tenant(tenant_id, limit=limit)
+    # Then one UPDATE picks the rows in a fixed order, organization admins first, and passes the limit through.
+    [(query, params)] = raw.updates_to("users")
+    assert "ORDER BY (role = 'org_admin') DESC, is_genesis DESC, updated_at DESC, created_at ASC, id" in query
+    assert "LIMIT %(limit)s" in query
+    assert params["limit"] == limit
+
+
 async def test_deactivating_an_admin_with_a_peer_advances_the_generation_in_the_same_update(monkeypatch):
     # Given an org admin and the last-admin guard writer.
     admin = _membership(tenant_id=uuid4(), role=UserRole.ORG_ADMIN)

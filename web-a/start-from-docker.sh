@@ -16,9 +16,10 @@
 #   DETACH=1            run with -d --restart unless-stopped (default: --rm)
 #   PULL=1              build with --pull
 #
-# API prerequisite: engine must already run with alias maraclaw-engine on
-# maraclaw_network (or the DOCKER_NETWORK override). nginx proxies /api/ to it;
-# this launcher supplies --network (manual runs need --network maraclaw_network).
+# API upstream: the engine runs with alias maraclaw-engine on the same
+# DOCKER_NETWORK (default maraclaw_network). Caddy proxies /api/ to it and
+# resolves the name per connection, so start order does not matter. This
+# launcher supplies --network (manual runs need --network maraclaw_network).
 # Only the public API URL is passed to the build; no runtime env is forwarded.
 
 set -euo pipefail

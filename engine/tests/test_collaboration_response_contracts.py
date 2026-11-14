@@ -26,6 +26,7 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.notification import NotificationRecord
 from app.records.okr import OKRKeyResultRecord, OKRObjectiveRecord, OKRSettingsRecord
 from app.records.org import OrgMemberRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.template import AgentTemplateRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -42,6 +43,7 @@ from app.schemas.schemas import AgentOut, AgentUpdate
 from app.services import heartbeat, okr_daily_collection, onboarding
 from app.services.agent_manager import agent_manager
 from app.services.autonomy_service import autonomy_service
+from app.services.guest_limits import GuestLimits
 from openclaw_update_gate_fixtures import open_guest_write_gate
 
 ROUTES = tuple(
@@ -155,25 +157,41 @@ async def test_update_keeps_direct_clamps_but_existing_http_model_filters_them(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, clamped: bool
 ) -> None:
     assert actor.tenant_id is not None
-    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_heartbeat_interval_minutes=240)
+    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_poll_interval_floor=5, tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(agents.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(agents.agent_dao, "update", AsyncMock(return_value=agent))
-    interval = 10 if clamped else 300
+    interval = 1 if clamped else 30
 
-    direct = await agents.update_agent(agent.id, AgentUpdate(heartbeat_interval_minutes=interval), actor)
+    direct = await agents.update_agent(agent.id, AgentUpdate(min_poll_interval_min=interval), actor)
 
     assert ("_clamped_fields" in direct) is clamped
     if clamped:
         assert direct.get("_clamped_fields") == [
-            {"field": "heartbeat_interval_minutes", "requested": 10, "applied": 240, "reason": "company_floor"}
+            {"field": "min_poll_interval_min", "requested": 1, "applied": 5, "reason": "company_floor"}
         ]
     TypeAdapter(AgentUpdatedResponse).validate_python(direct)
-    response = await client.patch(f"/api/agents/{agent.id}", json={"heartbeat_interval_minutes": interval})
+    response = await client.patch(f"/api/agents/{agent.id}", json={"min_poll_interval_min": interval})
     assert response.status_code == 200
     assert "_clamped_fields" not in response.json()
     created_at = TypeAdapter(JsonObject).validate_json(response.content)["created_at"]
     assert isinstance(created_at, str)
     assert created_at.endswith("Z")
+
+
+async def test_update_never_writes_the_engine_managed_heartbeat(
+    client: AsyncClient, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    update = AsyncMock(return_value=agent)
+    monkeypatch.setattr(agents.agent_dao, "update", update)
+
+    response = await client.patch(
+        f"/api/agents/{agent.id}",
+        json={"heartbeat_enabled": False, "heartbeat_interval_minutes": 10, "heartbeat_active_hours": "08:00-17:00"},
+    )
+
+    assert response.status_code == 200
+    assert update.await_args is not None
+    assert update.await_args.kwargs["obj_in"] == {"heartbeat_active_hours": "08:00-17:00"}
 
 
 @pytest.mark.parametrize("has_grant", [False, True])
@@ -417,6 +435,8 @@ async def test_metrics_preserve_nested_counts_open_ports_and_container_omissions
 ) -> None:
     agent.tokens_used_today, agent.cache_read_tokens_today = 7, 2
     monkeypatch.setattr(advanced.task_dao, "count_for_agent", AsyncMock(side_effect=[3, 2, 1]))
+    limits = GuestLimits(memory_bytes=2 * 1024**3, cpus=1.0, cpu_shares=None, pids_limit=512, tier=None)
+    monkeypatch.setattr(advanced, "resolve_guest_limits", AsyncMock(return_value=limits))
     connection = Mock(fetchval=AsyncMock(side_effect=[8, 2, 5]))
 
     @asynccontextmanager

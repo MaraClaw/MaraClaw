@@ -12,6 +12,7 @@ import pytest
 
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import org_membership as membership
@@ -34,6 +35,7 @@ def _tenant(
         default_max_agents=default_max_agents,
         is_default_end_user_org=is_default_end_user_org,
         is_system=is_system,
+        tier=OrganizationPlanId.PRO,
     )
 
 

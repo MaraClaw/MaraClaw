@@ -15,6 +15,7 @@ from app.records.chat import ChatMessageRecord
 from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
 from app.services.agent_message_quota import charge_agent_daily_message
+from app.services.agent_workspace_quota import ensure_workspace_within_quota
 from app.services.chat_session_access import can_access_chat_session
 from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
@@ -126,6 +127,7 @@ async def accept_submission(
                 raise SubmissionConflictError
             return _replay(existing, candidate)
         await charge_conversation_quota(user)
+        await ensure_workspace_within_quota(agent)
         await charge_agent_daily_message(agent)
         title = (submission.display_content or submission.content).replace("[图片] ", "📷 ")
         title = title.replace("[image_data:", "").strip()

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyPlanBadge } from '@/components/companies/company-plan-badge'
 import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { CreateCompanyForm } from '@/components/companies/create-company-form'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +17,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { toggleCompany } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
+import { formatPhone } from '@/lib/phone'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { useTranslation } from '@/hooks/use-translation'
 
@@ -110,11 +112,13 @@ export function CompaniesPage() {
                 <CardDescription>
                   {company.slug}
                   {company.org_admin_email ? ` · ${company.org_admin_email}` : ''}
+                  {company.phone ? ` · ${formatPhone(company.phone)}` : ''}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
               {company.is_system ? <Badge variant="secondary">{t('System')}</Badge> : null}
               {company.is_default_end_user_org ? <Badge>{t('Default for end users')}</Badge> : null}
+                <CompanyPlanBadge tier={company.tier} />
                 <Badge variant={company.is_active ? 'success' : 'destructive'}>
                 {t(company.is_active ? 'Active' : 'Disabled')}
                 </Badge>

@@ -13,6 +13,7 @@ from app.core.json_types import JsonObject
 from app.dao.organization_admission_email_dao import organization_admission_email_dao as emails
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tenant_email_dao import tenant_email_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.services import organization_admission_email_worker as worker
 from app.services.organization_admission_credentials import unseal
 from organization_admission_fixtures import OrganizationScenario, organization_scenario
@@ -108,7 +109,9 @@ async def test_platform_smtp_receives_the_credential_message_and_payload_is_dele
     organization_scenario: OrganizationScenario, sink: _Sink
 ):
     scenario = organization_scenario
-    maraclaw = await tenant_dao.create(obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True})
+    maraclaw = await tenant_dao.create(
+        obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True, "tier": OrganizationPlanId.ULTRA}
+    )
     await tenant_email_dao.put(maraclaw.id, _settings(sink))
     request_id = await _approved_request(scenario)
     payload = await scenario.db.fetchval("SELECT payload FROM organization_admission_credential_emails")
@@ -133,7 +136,9 @@ async def test_only_the_platform_smtp_is_ever_used_never_the_new_company(
     organization_scenario: OrganizationScenario, sink: _Sink
 ):
     scenario = organization_scenario
-    _ = await tenant_dao.create(obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True})
+    _ = await tenant_dao.create(
+        obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True, "tier": OrganizationPlanId.ULTRA}
+    )
     request_id = await _approved_request(scenario)
     created = await scenario.db.fetchval(
         "SELECT provisioned_tenant_id FROM organization_admission_requests WHERE id=%(id)s", {"id": request_id}
@@ -156,7 +161,9 @@ async def test_smtp_rejections_split_into_terminal_and_retryable(
     organization_scenario: OrganizationScenario, sink: _Sink, reply: bytes, expected: tuple[str, str, bool]
 ):
     scenario = organization_scenario
-    maraclaw = await tenant_dao.create(obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True})
+    maraclaw = await tenant_dao.create(
+        obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True, "tier": OrganizationPlanId.ULTRA}
+    )
     await tenant_email_dao.put(maraclaw.id, _settings(sink))
     sink.rcpt_reply = reply
     _ = await _approved_request(scenario)

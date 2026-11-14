@@ -67,7 +67,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         },
         {"role": "tool", "tool_call_id": f"call_{tool_id}", "content": "found status"},
     ]
-    prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, None, "channel-test")
+    prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, "channel-test")
     list_recent = AsyncMock(return_value=history_rows)
     prepare = AsyncMock(return_value=prepared)
     insert_message = AsyncMock(
@@ -94,6 +94,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
     monkeypatch.setattr(submissions, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(submissions, "ensure_workspace_within_quota", AsyncMock())
     monkeypatch.setattr(submissions, "charge_agent_daily_message", AsyncMock())
     monkeypatch.setattr(submissions, "find_or_create_channel_session", AsyncMock(return_value=reply))
     monkeypatch.setattr(

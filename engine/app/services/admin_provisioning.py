@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from app.core.domain.users import UserRole
@@ -14,10 +15,12 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.dao.user_dao import user_dao
+from app.db.connection import DbConnection
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
+from app.services.company_capacity import require_account_slot
 from app.services.tenant_provisioning import AdminEmailTakenError
 
 
@@ -111,7 +114,10 @@ async def create_additional_org_admin(
     display_name = (admin_display_name or "").strip() or email.split("@", 1)[0]
 
     try:
-        async with connection_ctx():
+        async with connection_ctx() as connection:
+            db = cast("DbConnection | None", connection)
+            if db is not None:
+                await require_account_slot(db, tenant.id)
             identity = await identity_dao.create_identity(
                 email=email,
                 password_hash=password_hash,
@@ -339,7 +345,10 @@ async def set_peer_admin_active(
     if target.is_active == is_active:
         return target
 
-    async with connection_ctx():
+    async with connection_ctx() as connection:
+        db = cast("DbConnection | None", connection)
+        if is_active and tenant_for_count is not None and db is not None:
+            await require_account_slot(db, tenant_for_count, excluded_user_id=target.id)
         if not is_active and target.is_active:
             updated = await user_dao.deactivate_unless_last_active(
                 target.id, role=target.role, tenant_id=tenant_for_count
@@ -397,7 +406,10 @@ async def set_end_user_active(
     if target.is_active == is_active:
         return target
 
-    async with connection_ctx():
+    async with connection_ctx() as connection:
+        db = cast("DbConnection | None", connection)
+        if is_active and db is not None:
+            await require_account_slot(db, target.tenant_id, excluded_user_id=target.id)
         updated = await user_dao.update(db_obj=target, obj_in={"is_active": is_active}) or target
         if not is_active:
             tenant_id = getattr(target, "tenant_id", None)

@@ -43,7 +43,8 @@ async def live_channel(schema_db, monkeypatch):
     identities = tuple(uuid4() for _ in range(3))
     users = tuple(uuid4() for _ in range(3))
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Channel QA', 'channel-qa')", {"id": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Channel QA', 'channel-qa', 'ultra')",
+        {"id": tenant_id},
     )
     for index, (identity_id, user_id) in enumerate(zip(identities, users, strict=True)):
         await schema_db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})
@@ -80,7 +81,7 @@ async def live_channel(schema_db, monkeypatch):
     assert agent is not None
 
     async def prepare(*, agent, content, history=None):
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "qa")
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "qa")
 
     monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(openclaw_routing, "_schedule_inbox_wake", lambda *args: None)

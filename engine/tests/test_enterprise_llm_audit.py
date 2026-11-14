@@ -21,10 +21,9 @@ if TYPE_CHECKING:
     from tests.enterprise_audit_fakes import AuditDatabase
 
 pytest_plugins = ("tests.enterprise_audit_fakes",)
-_SLOTS = ("default_model_id", "default_secondary_model_id", "default_fallback_model_id")
+_SLOTS = ("default_model_id", "default_fallback_model_id")
 _ASSIGNMENTS = {
     "set_default": enterprise.set_default_llm_model,
-    "set_secondary": enterprise.set_secondary_llm_model,
     "set_fallback": enterprise.set_fallback_llm_model,
 }
 
@@ -148,7 +147,7 @@ async def test_masked_or_subscription_credentials_are_not_reported_replaced(audi
     _assert_redacted(event, audit_db.model)
 
 
-@pytest.mark.parametrize("operation", ["set_default", "set_secondary", "set_fallback", "disable", "delete"])
+@pytest.mark.parametrize("operation", ["set_default", "set_fallback", "disable", "delete"])
 async def test_audit_captures_all_effective_slot_changes(
     audit_db: AuditDatabase, monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
@@ -158,15 +157,12 @@ async def test_audit_captures_all_effective_slot_changes(
     updates: dict[str, UUID | None] = {}
     if operation in {"disable", "delete"}:
         before = dict.fromkeys(_SLOTS, audit_db.model.id)
-        updates.update(default_model_id=None, default_secondary_model_id=None, default_fallback_model_id=None)
+        updates.update(default_model_id=None, default_fallback_model_id=None)
     elif operation == "set_default":
-        before["default_secondary_model_id"] = before["default_fallback_model_id"] = audit_db.model.id
-        updates.update(default_model_id=None, default_secondary_model_id=None, default_fallback_model_id=None)
-        updates["default_model_id"] = audit_db.model.id
+        before["default_fallback_model_id"] = audit_db.model.id
+        updates.update(default_model_id=audit_db.model.id, default_fallback_model_id=None)
     else:
-        updates["default_secondary_model_id" if operation == "set_secondary" else "default_fallback_model_id"] = (
-            audit_db.model.id
-        )
+        updates["default_fallback_model_id"] = audit_db.model.id
     tenant.update(before)
     original_update = enterprise.tenant_dao.update
 
@@ -202,7 +198,7 @@ async def test_audit_captures_all_effective_slot_changes(
     _assert_redacted(event, audit_db.model)
 
 
-@pytest.mark.parametrize("operation", ["create", "update", "delete", "set_default", "set_secondary", "set_fallback"])
+@pytest.mark.parametrize("operation", ["create", "update", "delete", "set_default", "set_fallback"])
 async def test_foreign_tenant_rejection_leaves_no_writes_or_audit(audit_db: AuditDatabase, operation: str) -> None:
     # Given
     actor = replace(audit_db.actor, tenant_id=uuid4())

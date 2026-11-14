@@ -83,7 +83,7 @@ async def _seed(db: DbConnection, tenant_ids: tuple[UUID, UUID]) -> tuple[str, s
     for tenant_id in tenant_ids:
         identity, user = uuid4(), uuid4()
         await db.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'OKR QA', %(slug)s)",
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'OKR QA', %(slug)s, 'ultra')",
             {"id": tenant_id, "slug": tenant_id.hex},
         )
         await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity})

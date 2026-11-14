@@ -27,6 +27,7 @@ npm test
   - `helpers.ts`: `MemoryStorage`, `createFixture` (session policy + storage), `adminUser`, `tokenResponse`, `storageTarget`, `DeferredBodyResponse`.
   - `admin-audit-fixtures.ts`: `ownAuditSession` with owned synthetic-window/session teardown; audit records.
   - `admission-fixtures.ts`, `agent-lifecycle-fixtures.ts`, `transfer-review-fixtures.ts`: records parsed with the production schemas.
+  - `capacity-fixtures.ts`: capacity orders and overviews parsed with the production schemas; `capacity-api.test.ts` stubs `window.localStorage` to sign in for the multipart and binary paths (they use the default admin session).
   - `roster-export-fixtures.ts`: owned session and download-document doubles for roster export.
   - `company-deletion-authorization-fixture.tsx`: browser-only React mounting fixture.
 - Ownership tests (`http-ownership`, `mutation-ownership`, `query-ownership`, `session-*`, `*-session`) pin the session contracts: a retired owner's success, failure or 401 has no effect; a current 401 clears credentials and notifies auth. Extend them when touching `src/lib/session-policy.ts`, `http.ts` or `src/hooks/session-*`.

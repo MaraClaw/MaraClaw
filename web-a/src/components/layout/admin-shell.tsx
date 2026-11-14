@@ -15,8 +15,10 @@ import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
 import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
-const navItems: {
+type NavItem = {
   to: string
+  /** Detail paths owned by this entry that sit outside its own prefix. */
+  aliases?: readonly string[]
   label: PlainMessageKey
   icon: NavIconName
   end?: boolean
@@ -27,24 +29,32 @@ const navItems: {
   organizationAdmissionReviewOnly?: boolean
   agentDeletionReviewOnly?: boolean
   paymentReviewOnly?: boolean
-}[] = [
+}
+
+const navItems: NavItem[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/notifications', label: 'Notifications', icon: 'notifications' },
   { to: '/companies', label: 'Companies', icon: 'companies', platformAdminOnly: true },
   { to: '/search-engine', label: 'Search', icon: 'search', platformAdminOnly: true },
   { to: '/openclaw-updates', label: 'Updates', icon: 'tools', platformAdminOnly: true },
+  { to: '/upgrade-signals', label: 'Upgrade signals', icon: 'analytics', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
   { to: '/invitations', label: 'Invitations', icon: 'users', invitationsOnly: true },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
   { to: '/organization-admissions', label: 'Org admissions', icon: 'companies', organizationAdmissionReviewOnly: true },
   { to: '/agent-deletion-requests', label: 'Agent deletions', icon: 'tools', agentDeletionReviewOnly: true },
-  { to: '/transfer-payments', label: 'Payments', icon: 'analytics', paymentReviewOnly: true },
+  { to: '/payments', label: 'Payments', icon: 'analytics', aliases: ['/transfer-payments', '/capacity-payments'], paymentReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
   { to: '/models', label: 'Models', icon: 'models' },
   { to: '/tools', label: 'Tools', icon: 'tools' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
+
+function matchesNavItem({ to, end, aliases = [] }: NavItem, pathname: string): boolean {
+  if (end) return pathname === to
+  return [to, ...aliases].some((path) => pathname === path || pathname.startsWith(`${path}/`))
+}
 
 function navItemClass(compact: boolean, extra?: string) {
   return cn(
@@ -108,12 +118,14 @@ function NavItems({
 }) {
   const { mustChangePassword, user } = useAuth()
   const { t, number } = useTranslation()
+  const { pathname } = useLocation()
   const platformAdmin = isPlatformAdminUser(user)
   const paymentAccess = useTransferReviewAccess()
 
   return (
     <>
-      {navItems.map(({ to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly }) => {
+      {navItems.map((item) => {
+        const { to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (invitationsOnly && !canManageInvitations(user)) return null
@@ -123,6 +135,7 @@ function NavItems({
         if (paymentReviewOnly && !paymentAccess.canReview) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/settings'
+        const matched = matchesNavItem(item, pathname)
         if (locked) {
           return (
             <span
@@ -154,7 +167,7 @@ function NavItems({
                   'transition-[color,transform] duration-150 ease-out hover:text-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   'active:scale-[0.96] motion-reduce:active:scale-100 motion-reduce:transition-none',
-                  isActive && 'text-foreground',
+                  (isActive || matched) && 'text-foreground',
                 ),
               )
             }
@@ -164,7 +177,7 @@ function NavItems({
                 icon={icon}
                 label={t(label)}
                 compact={compact}
-                active={isActive}
+                active={isActive || matched}
                 unreadCount={notificationCount}
               />
             )}
@@ -189,13 +202,13 @@ export function AdminShell() {
     const target = active.getBoundingClientRect()
     rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
   }, [pathname])
-  const section = navItems.find((item) => item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(`${item.to}/`))
+  const section = navItems.find((item) => matchesNavItem(item, pathname))
   useEffect(() => {
     if (!section) return
     document.title = `${t(section.label)} - MaraClaw Admin`
     return () => { document.title = 'MaraClaw Admin' }
   }, [section, t])
-  const flushMain = pathname.startsWith('/search-engine')
+  const flushMain = pathname.startsWith('/search-engine') || pathname === '/payments'
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">

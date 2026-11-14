@@ -26,7 +26,6 @@ def _make_agent(
     agent.expires_at = None
     agent.creator_id = uuid.uuid4()
     agent.primary_model_id = primary_model_id
-    agent.secondary_model_id = None
     agent.fallback_model_id = None
     agent.role_description = ""
     agent.max_tool_rounds = 50

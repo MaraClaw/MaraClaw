@@ -87,16 +87,13 @@ async def restore_existing_guest(manager: AgentManager, agent: AgentRecord, *, r
         from app.dao.llm_dao import llm_model_dao
         from app.services.enterprise_llm import owned_model_or_none
 
-        ids = [item for item in (agent.primary_model_id, agent.secondary_model_id, agent.fallback_model_id) if item]
+        ids = [item for item in (agent.primary_model_id, agent.fallback_model_id) if item]
         models = {row.id: row for row in await llm_model_dao.get_many(ids)} if ids else {}
         path.parent.mkdir(parents=True, exist_ok=True)
         _ = manager.write_guest_config(
             agent,
             primary=owned_model_or_none(
                 models.get(agent.primary_model_id) if agent.primary_model_id else None, agent.tenant_id
-            ),
-            secondary=owned_model_or_none(
-                models.get(agent.secondary_model_id) if agent.secondary_model_id else None, agent.tenant_id
             ),
             fallback=owned_model_or_none(
                 models.get(agent.fallback_model_id) if agent.fallback_model_id else None, agent.tenant_id

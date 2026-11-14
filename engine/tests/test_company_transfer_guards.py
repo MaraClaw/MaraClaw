@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.company_admissions import router
 from app.core.security import get_current_user
 from app.records.company_admission import AdmissionMethod
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services.company_admissions import submit_request
 from company_transfer_fixture import TransferFixture, transfer_fixture
@@ -49,7 +50,7 @@ async def test_nondefault_source_is_forbidden_for_every_admission_method(
 ) -> None:
     # Given an ordinary company member, even without assets.
     fixture = transfer_fixture
-    source = TenantRecord(id=fixture.source.id, name="Existing company", slug="company")
+    source = TenantRecord(id=fixture.source.id, name="Existing company", slug="company", tier=OrganizationPlanId.PRO)
     fixture.admissions.tenants[source.id] = source
     fixture.owned_agents = False
     # When an alternate method requests another company's admission.

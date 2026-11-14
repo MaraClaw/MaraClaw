@@ -16,10 +16,12 @@ Marketing sections composed by `src/pages/landing.tsx`. Copy/demo data **hardcod
 | `how-it-works.tsx` | `HowItWorks` | `#how-it-works` | 3-step narrative |
 | `integrations.tsx` | `Integrations` | `#integrations` | Channels / ecosystem badges |
 | `enterprise.tsx` | `Enterprise` | `#enterprise` | B2B controls |
+| `pricing.tsx` | `Pricing` | `#pricing` | Organization plans + paid creation form (`organization-admission-form.tsx`): Create organization requests a price quote, stores it and opens `/organization-payment` |
+| `individuals.tsx` | `Individuals` | `#individuals` | Individual signup: KABERs (Pro tier system org) → `/register`; Pro numbers come from the generated contract enums |
 | `faq.tsx` | `Faq` | `#faq` | Accordion objections |
 | `cta.tsx` | `Cta` | `#cta` | Final conversion (`mailto:hello@maraclaw.com`) |
 
-Order: Hero → Features → Agents → HowItWorks → Integrations → Enterprise → Faq → Cta.
+Order: Hero → Features → Agents → HowItWorks → Integrations → Enterprise → Pricing → Individuals → Faq → Cta.
 
 Header `navItems` omit `#enterprise`; footer has it. Do not “fix” one side only.
 

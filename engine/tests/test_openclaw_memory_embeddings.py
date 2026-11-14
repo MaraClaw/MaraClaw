@@ -53,7 +53,7 @@ class Guest:
         return json.loads(self.config_path.read_text(encoding="utf-8"))["memory"]["search"]
 
     def fingerprint(self) -> str:
-        return self.manager._guest_config_fingerprint(primary=None, secondary=None, fallback=None)
+        return self.manager._guest_config_fingerprint(primary=None, fallback=None)
 
 
 @pytest.fixture
@@ -70,6 +70,8 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
     directory = tmp_path / str(agent.id)
     directory.mkdir()

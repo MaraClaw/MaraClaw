@@ -11,7 +11,6 @@ from agent_deletion_fixtures import deletion_scenario
 from app.db.errors import DbError
 from app.db.pool import close_pool, get_pool, init_pool
 from app.db.session import connection_ctx
-from app.records.organization_plan import OrganizationPlanId
 from app.services.storage_runtime import quota_ledger
 from app.services.storage_runtime.quota_errors import (
     StorageAccountingUnavailableError,
@@ -21,7 +20,6 @@ from app.services.storage_runtime.quota_keys import ManagedKey
 from app.services.storage_runtime.quota_ledger import Reservation, reserve_write
 from managed_storage_fixtures import StorageWorld, quota_world
 from s3_wire_server import Gate
-from tier_limit_fixtures import approve_admission_for
 
 __all__ = ["deletion_scenario", "quota_world"]
 
@@ -184,17 +182,6 @@ async def test_a_ledger_outage_refuses_a_paid_agents_write_before_the_provider(
         await world.backend.write_bytes(key, b"a" * 100)
     assert raised.value.status_code == 503
     assert world.s3.state.count("PUT", key) == 0
-
-
-async def test_an_ambiguous_tier_link_fails_closed(quota_world: StorageWorld):
-    world = quota_world
-    world.scale(LIMIT, CEILING)
-    tenant = await world.tenant(OrganizationPlanId.PRO)
-    _ = await approve_admission_for(world.scenario.db, tenant, OrganizationPlanId.MAX)
-    agent = await world.scenario.agent("owner", tenant_id=tenant)
-    with pytest.raises(StorageAccountingUnavailableError):
-        await world.backend.write_bytes(world.key(agent), b"a" * 100)
-    assert world.s3.state.count("PUT", world.key(agent)) == 0
 
 
 async def test_a_write_succeeds_while_every_request_pool_connection_is_held(quota_world: StorageWorld):

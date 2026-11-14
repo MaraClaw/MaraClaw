@@ -9,6 +9,7 @@ from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.tenant_dao import tenant_dao
 from app.records.company_admission import AdmissionMethod
 from app.records.company_transfer import CompanyTransferRecord, TransferChoice
+from app.records.organization_plan import OrganizationPlanId
 from app.services.agent_mcp_sync import desired_servers
 from app.services.company_transfer_disposition import migrate_agent, seal_agent
 
@@ -29,7 +30,9 @@ async def test_company_transfer_does_not_restore_revoked_mcp_credentials(
         "is_default,tenant_id,mcp_server_name) VALUES(%(id)s,'source','Source','','mcp','','','{}','{}',false,%(tenant)s,'company')",
         {"id": uuid4(), "tenant": mcp.user.tenant_id},
     )
-    target = await tenant_dao.create(obj_in={"name": "Destination", "slug": "destination"})
+    target = await tenant_dao.create(
+        obj_in={"name": "Destination", "slug": "destination", "tier": OrganizationPlanId.ULTRA}
+    )
     transfer = CompanyTransferRecord(
         id=uuid4(),
         applicant_user_id=mcp.user.id,

@@ -35,8 +35,6 @@ async def _load_agent_and_model(
     """Load agent and LLM model configs.
 
     Returns (agent, enabled primary model, enabled fallback model).
-    ``_call_llm_with_config`` loads the secondary model and selects the turn's
-    model and failover target later; the secondary model is not a tuple slot.
     """
     from app.dao import agent_dao
     from app.services.llm.router import load_agent_model_bundle
@@ -80,12 +78,7 @@ async def _call_llm_with_config(
         return "This Agent has expired and is off duty. Please contact your admin to extend its service."
 
     bundle = await load_agent_model_bundle(agent, primary=model, fallback=fallback_model)
-    choice = await select_turn_model(
-        bundle,
-        user_text=user_text,
-        history=history,
-        agent_id=agent_id,
-    )
+    choice = select_turn_model(bundle, agent_id=agent_id)
     selected = choice.model
     if not selected:
         return f"⚠️ {agent.name} has no LLM model configured. Set one in the admin console."
@@ -103,11 +96,9 @@ async def _call_llm_with_config(
     turn = TurnContext(
         agent=agent,
         primary_model=bundle.primary,
-        secondary_model=bundle.secondary,
         fallback_model=bundle.fallback,
         selected_model=selected,
         selected_slot=choice.slot,
-        complexity=choice.complexity,
         routing_reason=choice.reason,
     )
 

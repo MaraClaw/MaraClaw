@@ -11,6 +11,7 @@ import pytest
 
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import org_membership as membership
@@ -31,7 +32,9 @@ SMTP = SystemEmailConfig(
 
 
 def _tenant(*, name: str = "Acme", is_active: bool = True, tenant_id: uuid.UUID | None = None) -> TenantRecord:
-    return TenantRecord(id=tenant_id or uuid.uuid4(), name=name, slug="acme", is_active=is_active)
+    return TenantRecord(
+        id=tenant_id or uuid.uuid4(), name=name, slug="acme", is_active=is_active, tier=OrganizationPlanId.PRO
+    )
 
 
 def _user(
@@ -155,6 +158,7 @@ class _Move:
         monkeypatch.setattr(membership, "connection_ctx", _ctx)
         monkeypatch.setattr("app.core.acl_locks.lock_tenants", AsyncMock())
         monkeypatch.setattr("app.core.acl_locks.lock_user", AsyncMock())
+        monkeypatch.setattr("app.services.company_capacity.require_account_slot", AsyncMock())
         monkeypatch.setattr(membership.user_dao, "get", AsyncMock(return_value=fresh))
         monkeypatch.setattr(membership.tenant_dao, "get", AsyncMock(side_effect=self.tenants.get))
         monkeypatch.setattr("app.services.company_transfer_guards.has_owned_agents", AsyncMock(return_value=False))

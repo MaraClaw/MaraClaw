@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.core.json_types import JsonObject, json_object_from
 from app.records.agent import AgentRecord
 from app.services.agent_manager import AgentManager, ContainerStatus, InspectedContainerStatus
+from app.services.guest_limits import GuestLimits, limits_differ
 
 
 class GuestOwnership(TypedDict):
@@ -31,6 +32,14 @@ class GuestHardLimits(TypedDict):
     pids_limit: int | None
 
 
+class GuestExpectedLimits(TypedDict):
+    memory_bytes: int
+    memory_swap_bytes: int
+    nano_cpus: int
+    cpu_shares: int | None
+    pids_limit: int
+
+
 class GuestPortDrift(TypedDict):
     persisted_port: int | None
     published_ports: list[int]
@@ -45,6 +54,8 @@ class ObservedGuestStatus(InspectedContainerStatus):
     health: NotRequired[GuestHealth]
     oom_killed: bool | None
     limits: GuestHardLimits
+    expected_limits: GuestExpectedLimits | None
+    limits_drift: bool | None
     port_drift: GuestPortDrift
 
 
@@ -66,13 +77,17 @@ def _published_gateway_ports(ports: JsonObject | None) -> list[int]:
     return sorted(published)
 
 
-def get_guest_container_status(manager: AgentManager, agent: AgentRecord) -> ContainerStatus | ObservedGuestStatus:
+def get_guest_container_status(
+    manager: AgentManager, agent: AgentRecord, expected: GuestLimits | None = None
+) -> ContainerStatus | ObservedGuestStatus:
     """Inspect once, reporting only safe observed fields; call off the event loop.
 
     A legacy name remains valid when its full UUID ownership label matches.
     Hard limits retain Docker's raw units and zero/-1 unlimited sentinels.
     Port drift compares published gateway bindings, not requested HostConfig
     bindings. Without a port observation or persisted port it remains unknown.
+    ``expected`` is the already resolved target (the caller resolves it async);
+    without it, or without an observed HostConfig, ``limits_drift`` stays unknown.
     """
     client = manager.docker_client
     if client is None or agent.container_id is None or agent.container_id == "":
@@ -107,6 +122,16 @@ def get_guest_container_status(manager: AgentManager, agent: AgentRecord) -> Con
                 "cpuset_cpus": limits.cpuset_cpus if limits is not None else None,
                 "pids_limit": limits.pids_limit if limits is not None else None,
             },
+            "expected_limits": None
+            if expected is None
+            else {
+                "memory_bytes": expected.memory_bytes,
+                "memory_swap_bytes": expected.memory_bytes,
+                "nano_cpus": expected.nano_cpus,
+                "cpu_shares": expected.cpu_shares,
+                "pids_limit": expected.pids_limit,
+            },
+            "limits_drift": None if expected is None or limits is None else limits_differ(limits, expected),
             "port_drift": {
                 "persisted_port": agent.container_port,
                 "published_ports": published_ports,

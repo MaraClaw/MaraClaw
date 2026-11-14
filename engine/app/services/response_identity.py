@@ -130,7 +130,7 @@ async def response_guard(agent: AgentRecord, turn_ref: str | None) -> ResponseGu
 
     bundle = get_cached_bundle(agent) or await load_agent_model_bundle(agent)
     identifiers = [turn_ref]
-    for model in (bundle.primary, bundle.secondary, bundle.fallback):
+    for model in (bundle.primary, bundle.fallback):
         if model is not None:
             identifiers += (guest_model_ref(model), f"{model.provider}/{model.model}", model.model)
     return ResponseGuard.build(identifiers)

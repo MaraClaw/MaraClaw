@@ -28,6 +28,7 @@ from app.services.collaboration import (
     collaboration_service,
 )
 from app.services.guest_container_status import get_guest_container_status
+from app.services.guest_limits import resolve_guest_limits
 
 router = APIRouter(tags=["advanced"])
 
@@ -265,7 +266,8 @@ async def get_agent_metrics(
     # Container status
     from app.services.agent_manager import agent_manager
 
-    container_status = await to_thread.run_sync(get_guest_container_status, agent_manager, agent)
+    expected_limits = await resolve_guest_limits(agent)
+    container_status = await to_thread.run_sync(get_guest_container_status, agent_manager, agent, expected_limits)
 
     today_tokens = agent.tokens_used_today or 0
     month_tokens = agent.tokens_used_month or 0

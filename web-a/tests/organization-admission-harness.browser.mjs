@@ -26,8 +26,8 @@ export async function runBrowser(exercise) {
     const quote = await page.evaluate(() => document.querySelector('main dl') !== null)
     if (quote && receipt.mode !== 'before') {
       const fields = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('main dl > div')].map((field) => [field.querySelector('dt').textContent, field.querySelector('dd').textContent])))
-      verify(`${label}: stored quote storage remains visible`, fields['Managed S3 storage per agent'], '1 GiB')
-      verify(`${label}: stored quote file size remains visible`, fields['Maximum managed S3 file size'], '25 MiB')
+      verify(`${label}: stored quote storage remains visible`, fields['Managed S3 storage per agent'], '5 GiB')
+      verify(`${label}: stored quote file size remains visible`, fields['Maximum managed S3 file size'], '50 MiB')
       const text = await page.evaluate(() => document.querySelector('main').innerText)
       verify(`${label}: managed S3 scope remains visible`, text.includes('managed S3 uploads/files only'))
       verify(`${label}: guest local-write exclusion remains visible`, text.includes('Direct guest workspace/local writes are excluded'))

@@ -15,6 +15,7 @@ from app.dao.sso_scan_session_dao import sso_scan_session_dao
 from app.db import session
 from app.main import app
 from app.records.identity import IdentityProviderRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import google_workspace_oauth, platform_service as platform_module, system_email_service
@@ -88,7 +89,7 @@ async def test_platform_setting_rejects_public_base_url_before_writes(monkeypatc
 @pytest.mark.asyncio
 async def test_invitation_missing_base_reports_clear_error_before_creating_codes(monkeypatch, url_actor):
     url_actor.role = UserRole.ORG_ADMIN
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(system_email_service, "resolve_email_config_async", AsyncMock(return_value=object()))
@@ -108,7 +109,9 @@ async def test_invitation_missing_base_reports_clear_error_before_creating_codes
 
 @pytest.mark.asyncio
 async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url_actor):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example")
+    tenant = TenantRecord(
+        id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example", tier=OrganizationPlanId.PRO
+    )
     provider = IdentityProviderRecord(
         id=uuid4(),
         provider_type="google_workspace",
@@ -135,7 +138,9 @@ async def test_google_oauth_missing_base_reaches_shared_handler(monkeypatch, url
 
 @pytest.mark.asyncio
 async def test_sso_callback_config_requires_base_even_with_custom_tenant_domain(monkeypatch, url_actor):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example")
+    tenant = TenantRecord(
+        id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example", tier=OrganizationPlanId.PRO
+    )
     scan = SimpleNamespace(id=uuid4(), tenant_id=tenant.id, expires_at=datetime.now(UTC) + timedelta(minutes=5))
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(sso.sso_scan_session_dao, "get", AsyncMock(return_value=scan))
@@ -152,7 +157,9 @@ async def test_sso_callback_config_requires_base_even_with_custom_tenant_domain(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redirect_enabled", [False, True])
 async def test_tenant_switch_requires_base_only_when_redirecting(monkeypatch, url_actor, redirect_enabled):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example")
+    tenant = TenantRecord(
+        id=uuid4(), name="Acme", slug="acme", sso_domain="https://custom.example", tier=OrganizationPlanId.PRO
+    )
     target = UserRecord(id=uuid4(), identity_id=url_actor.identity_id, tenant_id=tenant.id, role=UserRole.MEMBER)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(auth.user_dao, "get_by_identity_and_tenant", AsyncMock(return_value=target))

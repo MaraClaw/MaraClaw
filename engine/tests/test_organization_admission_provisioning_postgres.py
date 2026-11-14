@@ -4,19 +4,26 @@ from uuid import UUID
 
 import anyio
 import pytest
+from fastapi import HTTPException
+from psycopg import errors as pg_errors
 from pydantic import TypeAdapter
 
+from app.api import admin as admin_api
 from app.core.security import verify_password_async
-from app.dao.organization_admission_dao import organization_admission_dao
 from app.dao.user_dao import user_dao
-from app.db.errors import CheckViolationError
-from app.db.types import as_jsonb
+from app.db.errors import CheckViolationError, DbError
 from app.records.organization_plan import OrganizationPlanId
-from app.services import organization_admissions
+from app.services import organization_admissions, tenant_provisioning
+from app.services.company_capacity import company_caps
 from app.services.organization_admission_credentials import unseal
-from app.services.organization_plans import plan_for
+from app.services.organization_plans import tier_for_tenant
 from app.services.quota_guard import agent_capacity
-from organization_admission_fixtures import OrganizationScenario, organization_scenario
+from organization_admission_fixtures import (
+    PHONE,
+    OrganizationScenario,
+    insert_admission_row,
+    organization_scenario,
+)
 
 __all__ = ["organization_scenario"]
 
@@ -49,15 +56,17 @@ async def _issued_password(scenario: OrganizationScenario, request_id: UUID) -> 
     return unseal(request_id, payload)
 
 
-@pytest.mark.parametrize(("tier", "cap"), [("pro", 2), ("max", 5), ("ultra", 10)])
-async def test_approval_links_the_tenant_to_its_tier_and_replay_keeps_one_link(
+@pytest.mark.parametrize(("tier", "cap"), [("pro", 2), ("max", 3), ("ultra", 5)])
+async def test_approval_creates_the_tenant_with_the_request_tier_and_replay_keeps_one_tenant(
     organization_scenario: OrganizationScenario, tier: str, cap: int
 ):
     scenario = organization_scenario
     _ = await scenario.submit(tier=tier)
     request_id = await scenario.pending_id()
+    before = await _counts(scenario)
     assert (await scenario.decide(request_id, scenario.genesis, APPROVE)).status_code == 200
     assert (await scenario.decide(request_id, scenario.genesis, APPROVE)).status_code == 200
+    assert (await _counts(scenario))["tenants"] == before["tenants"] + 1
     row = await scenario.db.fetchone(
         "SELECT provisioned_tenant_id, provisioned_admin_user_id FROM organization_admission_requests WHERE id=%(id)s",
         {"id": request_id},
@@ -66,7 +75,8 @@ async def test_approval_links_the_tenant_to_its_tier_and_replay_keeps_one_link(
     tenant_id, admin_id = row["provisioned_tenant_id"], row["provisioned_admin_user_id"]
     assert isinstance(tenant_id, UUID)
     assert isinstance(admin_id, UUID)
-    assert await organization_admission_dao.approved_tiers_for_tenant(tenant_id) == [OrganizationPlanId(tier)]
+    assert await scenario.db.fetchval("SELECT tier FROM tenants WHERE id=%(id)s", {"id": tenant_id}) == tier
+    assert await tier_for_tenant(tenant_id) is OrganizationPlanId(tier)
     admin = await user_dao.get(admin_id)
     assert admin is not None
     capacity = await agent_capacity(admin, tenant_id)
@@ -100,7 +110,7 @@ async def test_approval_provisions_the_named_organization_and_queues_one_encrypt
         "intents": 1,
     }
     tenant = await scenario.db.fetchone(
-        "SELECT id,name FROM tenants WHERE name=%(name)s", {"name": body["organization_name"]}
+        "SELECT id,name,phone FROM tenants WHERE name=%(name)s", {"name": body["organization_name"]}
     )
     admin = await scenario.db.fetchone(
         "SELECT u.id,u.role,u.is_genesis,u.is_active,i.id AS identity_id,i.email,i.email_verified,"
@@ -109,6 +119,7 @@ async def test_approval_provisions_the_named_organization_and_queues_one_encrypt
         {"tenant": tenant["id"] if tenant is not None else None},
     )
     assert tenant is not None
+    assert tenant["phone"] == PHONE
     assert admin is not None
     assert (admin["role"], admin["is_genesis"], admin["is_active"], admin["email"]) == (
         "org_admin",
@@ -196,6 +207,9 @@ async def test_identity_or_domain_conflict_is_a_sanitized_409_that_rolls_everyth
     organization_scenario: OrganizationScenario, conflict: str, detail: str
 ):
     scenario = organization_scenario
+    _ = await scenario.submit()
+    request_id = await scenario.pending_id()
+    # The quote and the submit refuse these up front, so the conflict has to appear after the request was accepted.
     if conflict == "identity":
         await scenario.db.execute(
             "INSERT INTO identities (id,email,password_hash) VALUES (gen_random_uuid(),'buyer@example.com','existing-hash')"
@@ -204,8 +218,6 @@ async def test_identity_or_domain_conflict_is_a_sanitized_409_that_rolls_everyth
         await scenario.db.execute(
             "INSERT INTO tenant_email_domains (id,tenant_id,domain) SELECT gen_random_uuid(),id,'example.com' FROM tenants WHERE slug='acme'"
         )
-    _ = await scenario.submit()
-    request_id = await scenario.pending_id()
     before = await _counts(scenario)
     response = await scenario.decide(request_id, scenario.genesis, APPROVE)
     assert (response.status_code, response.json()) == (409, {"detail": detail})
@@ -237,6 +249,117 @@ async def test_failure_after_tenant_creation_rolls_back_the_whole_approval(
     assert (await _counts(scenario))["tenants"] == before["tenants"] + 1
 
 
+async def test_platform_admin_creation_stores_the_chosen_tier_and_a_failure_leaves_nothing(
+    organization_scenario: OrganizationScenario, monkeypatch: pytest.MonkeyPatch
+):
+    scenario = organization_scenario
+
+    async def totals() -> dict[str, int]:
+        row = await scenario.db.fetchone(
+            "SELECT (SELECT count(*) FROM tenants) AS tenants, (SELECT count(*) FROM users) AS users, "
+            "(SELECT count(*) FROM identities) AS identities, "
+            "(SELECT count(*) FROM organization_admission_requests) AS admissions"
+        )
+        assert row is not None
+        return TypeAdapter(dict[str, int]).validate_python(row)
+
+    def request(tier: OrganizationPlanId, email: str) -> admin_api.CompanyCreateRequest:
+        return admin_api.CompanyCreateRequest(
+            name="Acme Robotics", tier=tier, phone=PHONE, admin_email=email, admin_password="initial-password"
+        )
+
+    before = await totals()
+
+    # When a platform admin creates a Max company through the route.
+    created = await admin_api.create_company(
+        request(OrganizationPlanId.MAX, "Founder@Robotics.com"), current_user=scenario.genesis, client_ip=None
+    )
+
+    # Then the tier is on the tenant row, no admission request was written, and the company caps follow the tier.
+    tenant_id = created.company.id
+    assert await scenario.db.fetchval("SELECT tier FROM tenants WHERE id=%(id)s", {"id": tenant_id}) == "max"
+    assert await scenario.db.fetchval("SELECT phone FROM tenants WHERE id=%(id)s", {"id": tenant_id}) == PHONE
+    assert created.company.phone == PHONE
+    created_state = await totals()
+    assert created_state == {
+        "tenants": before["tenants"] + 1,
+        "users": before["users"] + 1,
+        "identities": before["identities"] + 1,
+        "admissions": before["admissions"],
+    }
+    assert await tier_for_tenant(tenant_id) is OrganizationPlanId.MAX
+    caps = await company_caps(scenario.db, tenant_id)
+    assert caps is not None
+    assert (caps.tier, caps.account_limit, caps.agent_limit) == (OrganizationPlanId.MAX, 15, 5)
+    assert created.company.tier is OrganizationPlanId.MAX
+    audit = await scenario.db.fetchval(
+        "SELECT changes->'tier' FROM admin_audit_logs WHERE action='tenant_create' AND target_id=%(id)s",
+        {"id": tenant_id},
+    )
+    assert audit == {"before": None, "after": "max"}
+
+    # When the admin email is taken, then when a write fails after the tenant row was written.
+    with pytest.raises(HTTPException) as taken:
+        _ = await admin_api.create_company(
+            request(OrganizationPlanId.PRO, "founder@robotics.com"), current_user=scenario.genesis, client_ip=None
+        )
+    assert taken.value.status_code == 409
+    assert await totals() == created_state
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            tenant_provisioning.participant_dao, "create_for_user", AsyncMock(side_effect=RuntimeError("injected"))
+        )
+        with pytest.raises(RuntimeError, match="injected"):
+            _ = await admin_api.create_company(
+                request(OrganizationPlanId.PRO, "other@elsewhere.com"), current_user=scenario.genesis, client_ip=None
+            )
+
+    # Then neither leaves a tenant, an account or an identity behind.
+    assert await totals() == created_state
+
+
+async def test_the_database_refuses_a_tenant_without_a_known_tier(organization_scenario: OrganizationScenario):
+    scenario = organization_scenario
+    before = await _counts(scenario)
+
+    with pytest.raises(DbError) as missing:
+        await scenario.db.execute(
+            "INSERT INTO tenants (id, name, slug) VALUES (gen_random_uuid(), 'No tier', 'no-tier')"
+        )
+    with pytest.raises(CheckViolationError):
+        await scenario.db.execute(
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (gen_random_uuid(), 'Bad tier', 'bad-tier', 'enterprise')"
+        )
+    with pytest.raises(DbError) as cleared:
+        await scenario.db.execute("UPDATE tenants SET tier = NULL")
+
+    assert isinstance(missing.value.orig, pg_errors.NotNullViolation)
+    assert isinstance(cleared.value.orig, pg_errors.NotNullViolation)
+    with pytest.raises(CheckViolationError):
+        await scenario.db.execute("UPDATE tenants SET tier = 'free'")
+    assert (await _counts(scenario))["tenants"] == before["tenants"]
+
+
+async def test_the_database_refuses_a_malformed_phone_and_an_admission_without_one(
+    organization_scenario: OrganizationScenario,
+):
+    scenario = organization_scenario
+
+    await scenario.db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (gen_random_uuid(), 'No phone', 'no-phone', 'pro')"
+    )
+    for phone in ("0912345678", "+0912345678", "+84 912 345 678", "+841234", "+84912345678abcd"):
+        with pytest.raises(CheckViolationError):
+            await scenario.db.execute("UPDATE tenants SET phone = %(phone)s WHERE slug = 'no-phone'", {"phone": phone})
+        with pytest.raises(CheckViolationError):
+            await insert_admission_row(scenario.db, email="bad@example.com", phone=phone)
+    with pytest.raises(DbError) as missing:
+        await insert_admission_row(scenario.db, email="none@example.com", phone=None)
+
+    assert isinstance(missing.value.orig, pg_errors.NotNullViolation)
+    assert await scenario.db.fetchval("SELECT count(*) FROM organization_admission_requests") == 0
+
+
 async def test_rejection_provisions_nothing_and_has_no_credential_email_to_retry(
     organization_scenario: OrganizationScenario,
 ):
@@ -253,16 +376,11 @@ async def test_rejection_provisions_nothing_and_has_no_credential_email_to_retry
 
 async def test_legacy_unnamed_requests_are_never_guessed_or_provisioned(organization_scenario: OrganizationScenario):
     scenario = organization_scenario
-    plan = as_jsonb(plan_for(OrganizationPlanId.PRO).model_dump(mode="json"))
     for email, status, reviewed_at in (
         ("old-approved@example.com", "approved", datetime.now(UTC)),
         ("old-pending@example.com", "pending", None),
     ):
-        await scenario.db.execute(
-            "INSERT INTO organization_admission_requests (id,email,tier,plan,status,reviewed_at) "
-            "VALUES (gen_random_uuid(),%(email)s,'pro',%(plan)s,%(status)s,%(reviewed_at)s)",
-            {"email": email, "plan": plan, "status": status, "reviewed_at": reviewed_at},
-        )
+        await insert_admission_row(scenario.db, email=email, status=status, reviewed_at=reviewed_at)
     approved_id = await scenario.db.fetchval("SELECT id FROM organization_admission_requests WHERE status='approved'")
     pending_id = await scenario.pending_id()
     before = await _counts(scenario)

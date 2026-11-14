@@ -79,7 +79,7 @@ async def _roster_database(monkeypatch: pytest.MonkeyPatch, max_size: int) -> As
                 monkeypatch.setattr(pool_module, "_pool", pool)
                 monkeypatch.setattr(user_roster_tickets, "get_redis", AsyncMock(return_value=TicketRedis()))
                 await writer.execute(
-                    "INSERT INTO tenants (id, name, slug) VALUES (%(own)s, 'Own', 'own'), (%(foreign)s, 'Other', 'other')",
+                    "INSERT INTO tenants (id, name, slug, tier) VALUES (%(own)s, 'Own', 'own', 'ultra'), (%(foreign)s, 'Other', 'other', 'ultra')",
                     {"own": TENANT, "foreign": FOREIGN},
                 )
                 await writer.execute(

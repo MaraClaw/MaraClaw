@@ -26,6 +26,7 @@ from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection
 from app.records.agent import AgentRecord
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.services import agent_deletion_cleanup, agent_stops
 from app.services.agent_deletion_archive import publish_deletion_archive
@@ -140,8 +141,10 @@ async def deletion_scenario(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
             await db.execute(f'SET search_path TO "{schema}"')
             await db.execute(BASELINE.read_text())
             await init_pool(conninfo=make_conninfo(dsn, options=f"-csearch_path={schema}"), min_size=1, max_size=8)
-            tenant = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme"})
-            foreign = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
+            tenant = await tenant_dao.create(obj_in={"name": "Acme", "slug": "acme", "tier": OrganizationPlanId.ULTRA})
+            foreign = await tenant_dao.create(
+                obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.ULTRA}
+            )
 
             password_hash = await hash_password_async("qa-password")
 

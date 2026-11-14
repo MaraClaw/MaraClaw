@@ -356,17 +356,26 @@ class UserDAO(BaseDAO[UserRecord]):
             await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
 
-    async def reactivate_for_tenant(self, tenant_id: UUID) -> int:
-        """Restore members deactivated with the tenant. Does not touch platform admins."""
+    async def reactivate_for_tenant(self, tenant_id: UUID, *, limit: int | None = None) -> int:
+        """Restore members deactivated with the tenant. Does not touch platform admins.
+
+        ``limit`` is how many inactive memberships may come back (``None``: all). A capped company passes its free
+        account slots, read under the same tenant lock (``company_capacity.free_account_slots``); the rest stay
+        inactive. The order is deterministic: organization admins first (the genesis admin first among them), then
+        the most recently updated membership (``deactivate_for_tenant`` stamps its members together, so those come
+        before members deactivated earlier one by one), then the oldest account, then id.
+        """
         async with self.session() as db:
             from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
 
             await lock_tenants(db, (tenant_id,))
             rows = await db.fetchall(
-                "UPDATE users SET is_active = TRUE, updated_at = now() "
-                "WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
-                "AND role <> %(platform_admin)s RETURNING id",
-                {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
+                "UPDATE users SET is_active = TRUE, updated_at = now() WHERE id IN ("
+                "SELECT id FROM users WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
+                "AND role <> %(platform_admin)s "
+                "ORDER BY (role = 'org_admin') DESC, is_genesis DESC, updated_at DESC, created_at ASC, id "
+                "LIMIT %(limit)s FOR UPDATE) RETURNING id",
+                {"tenant_id": tenant_id, "platform_admin": "platform_admin", "limit": limit},
             )
             await invalidate_tenant_agents(db, tenant_id)
             await bump_user_sessions([row["id"] for row in rows])

@@ -11,7 +11,7 @@ import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifi
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { safeNotificationLink } from '@/lib/notification-links'
 import { type NotificationId, type NotificationView } from '@/lib/notifications-api'
-import { canReviewAgentDeletions } from '@/lib/types/auth'
+import { canReviewAgentDeletions, canReviewCapacityPayments } from '@/lib/types/auth'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
@@ -152,7 +152,8 @@ export function NotificationsPage() {
       {items.length > 0 ? <ul className="flex flex-col gap-4" aria-label={t('Notifications')} aria-busy={pending}>
         {items.map((item) => {
           const safeLink = safeNotificationLink(item.link)
-          const link = safeLink?.startsWith('/agent-deletion-requests') && !canReviewAgentDeletions(user) ? null : safeLink
+          const link = safeLink?.startsWith('/agent-deletion-requests') && !canReviewAgentDeletions(user) ? null
+            : safeLink?.startsWith('/capacity-payments/') && !canReviewCapacityPayments(user) ? null : safeLink
           return <li key={item.id}>
             <Card className={item.is_read ? 'bg-card' : 'bg-accent'}>
               <CardContent className="flex flex-col gap-4">

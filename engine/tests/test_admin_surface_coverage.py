@@ -26,6 +26,7 @@ from app.core.domain.users import UserRole
 from app.dao.tenant_dao import TenantUsageStats
 from app.records.audit import AdminAuditLogRecord
 from app.records.company_admission import AdmissionMethod, AdmissionStatus
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.schemas.company_admission import AdmissionTenant, RequestSummary
 from app.schemas.schemas import TokenResponse
@@ -76,6 +77,7 @@ def _tenant(**kwargs):
         "name": "Acme",
         "slug": "acme-abc",
         "im_provider": "web_only",
+        "tier": OrganizationPlanId.PRO,
         "timezone": "UTC",
         "country_region": "001",
         "is_active": True,
@@ -2042,7 +2044,13 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
 
     monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
     with pytest.raises(AdminEmailTakenError):
-        await tp.create_tenant_with_org_admin(name="Acme", admin_email="oa@acme.com", admin_password="secret1")
+        await tp.create_tenant_with_org_admin(
+            tier=OrganizationPlanId.PRO,
+            name="Acme",
+            phone="+84912345678",
+            admin_email="oa@acme.com",
+            admin_password="secret1",
+        )
 
     monkeypatch.setattr(tp.identity_dao, "get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr(tp, "hash_password_async", AsyncMock(return_value="h"))
@@ -2051,7 +2059,13 @@ async def test_seeder_and_tenant_provisioning_remaining(monkeypatch):
         ctx.return_value.__aenter__ = AsyncMock(return_value=None)
         ctx.return_value.__aexit__ = AsyncMock(return_value=None)
         with pytest.raises(RuntimeError):
-            await tp.create_tenant_with_org_admin(name="Acme", admin_email="oa@acme.com", admin_password="secret1")
+            await tp.create_tenant_with_org_admin(
+                tier=OrganizationPlanId.PRO,
+                name="Acme",
+                phone="+84912345678",
+                admin_email="oa@acme.com",
+                admin_password="secret1",
+            )
 
 
 @pytest.mark.asyncio

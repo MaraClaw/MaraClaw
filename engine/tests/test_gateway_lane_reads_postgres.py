@@ -174,7 +174,7 @@ async def test_enqueue_treats_null_and_empty_conversations_as_one_duplicate_lane
         return db.agent
 
     monkeypatch.setattr(openclaw_enqueue, "load_agent_for_new_work", eligible)
-    prepared = PreparedOpenClawMessage(db.agent, "hello", "primary", None, None, "lane-qa")
+    prepared = PreparedOpenClawMessage(db.agent, "hello", "primary", None, "lane-qa")
 
     async def enqueue(conversation: str | None, *, deduplicate: bool = True) -> GatewayMessageRecord:
         async with transaction(db.first):

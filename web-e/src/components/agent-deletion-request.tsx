@@ -1,11 +1,13 @@
 import { useTranslation } from '@/hooks/use-translation'
 import * as Dialog from '@radix-ui/react-dialog'
+import { Trash2 } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { IconTooltip } from '@/components/ui/tooltip'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import {
   deletionReasonSchema, getAgentDeletionRequest, listPendingAgentDeletions,
@@ -73,11 +75,14 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
         setOpen(next)
         if (next) { setError(null); setReasonError(null) }
       })}>
-        <Dialog.Trigger asChild>
-          <Button type="button" size="sm" variant="outline" className="min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-            aria-disabled={!available} onClick={(event) => { if (!available) event.preventDefault() }}>
-            {translate("Request deletion")}</Button>
-        </Dialog.Trigger>
+        <IconTooltip label={translate("Request deletion")}>
+          <Dialog.Trigger asChild>
+            <Button type="button" size="icon" variant="outline" className="size-11 text-destructive aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              aria-label={translate("Request deletion")}
+              aria-disabled={!available} onClick={(event) => { if (!available) event.preventDefault() }}>
+              <Trash2 aria-hidden="true" /></Button>
+          </Dialog.Trigger>
+        </IconTooltip>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content

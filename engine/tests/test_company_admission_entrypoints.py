@@ -7,6 +7,7 @@ from app.api import auth
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.services.auth_provider import ExternalUserInfo, GoogleAuthProvider
 from company_admission_fixtures import AdmissionScenario, admission_http_domain, admission_scenario
 
@@ -225,7 +226,7 @@ async def test_admitted_sso_does_not_request_again(admission_scenario: Admission
 async def test_other_pending_target_conflicts(admission_scenario: AdmissionScenario):
     scenario = admission_scenario
     await scenario.submit()
-    other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
+    other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.ULTRA})
     await scenario.db.execute(
         "INSERT INTO invitation_codes (id,code,tenant_id,max_uses,used_count,invited_email) "
         "VALUES (%(id)s,'OTHER',%(target)s,1,0,'applicant@acme.test')",

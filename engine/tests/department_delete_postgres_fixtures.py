@@ -52,7 +52,7 @@ async def department_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPa
     members = (uuid4(), uuid4(), uuid4())
     agent_ids = (uuid4(), uuid4(), uuid4())
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(own)s, 'Own', 'own'), (%(foreign)s, 'Other', 'other')",
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(own)s, 'Own', 'own', 'ultra'), (%(foreign)s, 'Other', 'other', 'ultra')",
         {"own": tenant, "foreign": foreign},
     )
     await schema_db.execute(

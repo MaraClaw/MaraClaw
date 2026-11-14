@@ -72,6 +72,7 @@ from app.schemas.schemas import (
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.autonomy_service import autonomy_service
+from app.services.capacity_payment_settings import RESERVED_SETTING_KEYS
 from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ChatGPTSubscriptionRefreshOut,
@@ -87,6 +88,7 @@ from app.services.chatgpt_subscription_types import (
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
 )
+from app.services.company_capacity import require_account_slot
 from app.services.enterprise_llm import (
     assert_can_manage_model,
     assert_llm_pool_admin,
@@ -149,7 +151,6 @@ def _llm_slot_changes(tenant: TenantRecord, updates: Mapping[str, uuid.UUID | No
     changes: dict[str, object] = {}
     slots = {
         "default_model_id": tenant.default_model_id,
-        "default_secondary_model_id": getattr(tenant, "default_secondary_model_id", None),
         "default_fallback_model_id": getattr(tenant, "default_fallback_model_id", None),
     }
     for slot, before in slots.items():
@@ -352,13 +353,11 @@ async def _list_llm_models(tenant_id: str | None, current_user: UserRecord) -> l
     admin = is_llm_pool_admin(current_user)
     default_model_id = None
     fallback_model_id = None
-    secondary_model_id = None
     if tid:
         tenant = await tenant_dao.get(tid)
         if tenant:
             default_model_id = tenant.default_model_id
             fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
-            secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
 
     models_out = []
     try:
@@ -374,7 +373,6 @@ async def _list_llm_models(tenant_id: str | None, current_user: UserRecord) -> l
                 is_admin=admin,
                 default_model_id=default_model_id,
                 fallback_model_id=fallback_model_id,
-                secondary_model_id=secondary_model_id,
             )
         )
     return models_out
@@ -441,6 +439,14 @@ async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_us
     )
 
 
+def _schedule_company_model_push(tenant_id: uuid.UUID) -> None:
+    """After commit, rewrite every guest's OpenClaw config in the company from its migrated slots."""
+    from app.api.background_tasks import schedule_background_task
+    from app.services.openclaw_company_models import push_company_models_to_guests
+
+    schedule_background_task(push_company_models_to_guests(tenant_id), f"push company models tenant={tenant_id}")
+
+
 @router.post("/llm-models/{model_id}/set-default", status_code=status.HTTP_204_NO_CONTENT)
 async def set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)) -> None:
     async with optional_connection_ctx():
@@ -466,8 +472,6 @@ async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord) 
     updates: dict[str, uuid.UUID | None] = {"default_model_id": model.id}
     if getattr(tenant, "default_fallback_model_id", None) == model.id:
         updates["default_fallback_model_id"] = None
-    if getattr(tenant, "default_secondary_model_id", None) == model.id:
-        updates["default_secondary_model_id"] = None
     changes = _llm_slot_changes(tenant, updates)
     _ = await tenant_dao.update(db_obj=tenant, obj_in=updates)
 
@@ -481,6 +485,7 @@ async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord) 
             f"[set_default_llm_model] Migrated agents in tenant {tenant.id} from {previous_default} -> {model.id}"
         )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="primary")
+    _schedule_company_model_push(tenant.id)
     await write_admin_audit(
         actor=current_user,
         action="llm_model_set_default",
@@ -517,11 +522,6 @@ async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord)
             status_code=400,
             detail="Fallback must be different from the primary model",
         )
-    if getattr(tenant, "default_secondary_model_id", None) == model.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Fallback must be different from the secondary model",
-        )
 
     previous_fallback = getattr(tenant, "default_fallback_model_id", None)
     changes = _llm_slot_changes(tenant, {"default_fallback_model_id": model.id})
@@ -532,62 +532,11 @@ async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord)
         new_model_id=model.id,
     )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="fallback")
+    _schedule_company_model_push(tenant.id)
     logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
     await write_admin_audit(
         actor=current_user,
         action="llm_model_set_fallback",
-        target_type="llm_model",
-        target_id=model.id,
-        tenant_id=model.tenant_id,
-        changes=changes,
-        details=_llm_audit_metadata(model),
-    )
-
-
-@router.post("/llm-models/{model_id}/set-secondary", status_code=status.HTTP_204_NO_CONTENT)
-async def set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord = Depends(get_current_admin)) -> None:
-    async with optional_connection_ctx():
-        return await _set_secondary_llm_model(model_id, current_user)
-
-
-async def _set_secondary_llm_model(model_id: uuid.UUID, current_user: UserRecord) -> None:
-    """Mark this model as the tenant's secondary (manageable-task) model."""
-    model = await llm_model_dao.get(model_id)
-    if not model:
-        raise HTTPException(status_code=404, detail="Model not found")
-    assert_can_manage_model(current_user, model)
-    if not model.tenant_id:
-        raise HTTPException(status_code=400, detail="Model is not tenant-scoped")
-    if not model.enabled:
-        raise HTTPException(status_code=400, detail="Model is disabled")
-
-    tenant = await tenant_dao.get(model.tenant_id)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    if tenant.default_model_id == model.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Secondary must be different from the primary model",
-        )
-    if getattr(tenant, "default_fallback_model_id", None) == model.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Secondary must be different from the fallback model",
-        )
-
-    previous_secondary = getattr(tenant, "default_secondary_model_id", None)
-    changes = _llm_slot_changes(tenant, {"default_secondary_model_id": model.id})
-    _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_secondary_model_id": model.id})
-    _ = await agent_dao.migrate_secondary_model(
-        tenant_id=tenant.id,
-        old_model_id=previous_secondary,
-        new_model_id=model.id,
-    )
-    await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="secondary")
-    logger.info(f"[set_secondary_llm_model] Set secondary for tenant {tenant.id} to {model.id}")
-    await write_admin_audit(
-        actor=current_user,
-        action="llm_model_set_secondary",
         target_type="llm_model",
         target_id=model.id,
         tenant_id=model.tenant_id,
@@ -634,7 +583,7 @@ async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: User
                     tenant,
                     {
                         slot: None
-                        for slot in ("default_model_id", "default_secondary_model_id", "default_fallback_model_id")
+                        for slot in ("default_model_id", "default_fallback_model_id")
                         if getattr(tenant, slot, None) == model.id
                     },
                 )
@@ -713,7 +662,6 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
         run_after_commit(drop_model_caches)
         default_model_id = None
         fallback_model_id = None
-        secondary_model_id = None
         changes: dict[str, object] = {
             field: field_change(before[field], after)
             for field, after in _llm_audit_metadata(model).items()
@@ -727,15 +675,12 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
                     slot_clears["default_model_id"] = None
                 if getattr(tenant, "default_fallback_model_id", None) == model.id:
                     slot_clears["default_fallback_model_id"] = None
-                if getattr(tenant, "default_secondary_model_id", None) == model.id:
-                    slot_clears["default_secondary_model_id"] = None
                 if slot_clears:
                     changes.update(_llm_slot_changes(tenant, slot_clears))
                     tenant = await tenant_dao.update(db_obj=tenant, obj_in=slot_clears) or tenant
             if tenant:
                 default_model_id = tenant.default_model_id
                 fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
-                secondary_model_id = getattr(tenant, "default_secondary_model_id", None)
         await write_admin_audit(
             actor=current_user,
             action="llm_model_update",
@@ -750,7 +695,6 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
             is_admin=True,
             default_model_id=default_model_id,
             fallback_model_id=fallback_model_id,
-            secondary_model_id=secondary_model_id,
         )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update model") from None
@@ -1054,7 +998,7 @@ async def get_notification_bar_public() -> NotificationBarResponse:
 @router.get("/system-settings/{key}", response_model=None)
 async def get_system_setting(key: str, current_user: UserRecord = Depends(get_current_user)) -> SystemSettingResponse:
     """Get a system setting by key."""
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     _ = current_user
     setting = await system_setting_dao.get_by_key(key)
@@ -1071,7 +1015,7 @@ async def get_system_setting(key: str, current_user: UserRecord = Depends(get_cu
 async def update_system_setting(
     key: str, data: SettingUpdate, current_user: UserRecord = Depends(get_current_user)
 ) -> SystemSettingResponse:
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     await get_current_admin(current_user)
     async with optional_connection_ctx():
@@ -1080,7 +1024,7 @@ async def update_system_setting(
 
 async def _update_system_setting(key: str, data: SettingUpdate, current_user: UserRecord) -> SystemSettingResponse:
     """Create or update a system setting."""
-    if key == "system_email_platform":
+    if key in RESERVED_SETTING_KEYS:
         raise HTTPException(404, "Setting not found")
     if key == "platform" and not _is_platform_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only platform admin can modify platform settings")
@@ -1604,6 +1548,13 @@ def _new_invitation_code() -> str:
     return new_invitation_code()
 
 
+async def _require_free_account(tenant_id: uuid.UUID) -> None:
+    """Advisory: refuse issuing invitations to a company with no free account; accepting one still enforces the cap."""
+    async with optional_connection_ctx() as db:
+        if db is not None:
+            await require_account_slot(db, tenant_id, lock=False)
+
+
 @router.post("/invitation-codes", response_model=None)
 async def create_invitation_codes(
     data: InvitationCodeCreate, current_user: UserRecord = Depends(get_current_user)
@@ -1617,6 +1568,7 @@ async def _create_invitation_codes(
 ) -> InvitationCodesCreatedResponse:
     """Batch-create invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
+    await _require_free_account(tenant_id)
     codes_created = []
     expires_at = invitation_expiry(data.ttl_hours)
     for _ in range(min(data.count, 100)):
@@ -1664,6 +1616,7 @@ async def _invite_users(
     await _ensure_invitation_email_enabled(tenant_id)
 
     base_url = await platform_service.get_public_base_url(request=request)
+    await _require_free_account(tenant_id)
 
     invited_count = 0
     expires_at = invitation_expiry(data.ttl_hours)

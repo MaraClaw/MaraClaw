@@ -25,6 +25,7 @@ from app.db import connection as connection_module
 from app.db.connection import DbConnection
 from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection
+from app.records.organization_plan import OrganizationPlanId
 
 _BASE = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -39,7 +40,13 @@ class CompanyWorld:
 
 async def _tenant(created_at: datetime, name: str, tenant_id: UUID | None = None) -> UUID:
     tenant = await tenant_dao.create(
-        obj_in={"id": tenant_id or uuid4(), "name": name, "slug": f"s-{uuid4().hex[:12]}", "created_at": created_at}
+        obj_in={
+            "id": tenant_id or uuid4(),
+            "name": name,
+            "slug": f"s-{uuid4().hex[:12]}",
+            "created_at": created_at,
+            "tier": OrganizationPlanId.ULTRA,
+        }
     )
     return tenant.id
 

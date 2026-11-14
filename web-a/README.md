@@ -43,7 +43,7 @@ npm run lint
 
 ## Docker (production)
 
-Multi-stage image: **Node.js 26** builds the Vite SPA; **nginx (unprivileged)** serves `dist` on port **8080**.
+Multi-stage image: **Node.js 26** builds the Vite SPA; **Caddy 2.11.9 (alpine)** serves `dist` on port **8080**.
 
 ```bash
 # From web-a/
@@ -54,7 +54,7 @@ docker build -t maraclaw-web-a \
   --build-arg VITE_API_BASE_URL=https://api.example.com \
   .
 
-# Prerequisite: engine already running with alias maraclaw-engine on maraclaw_network.
+# Join the engine network (alias maraclaw-engine); start order does not matter.
 docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 # open http://localhost:8080
 # health: http://localhost:8080/healthz
@@ -62,9 +62,9 @@ docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 
 Notes:
 
-- Image runs as non-root (`nginx` uid), SPA fallback for React Router.
+- Image runs as non-root (`caddy` user, uid 101), SPA fallback for React Router.
 - `VITE_AUTH_BYPASS` is ignored in production builds (`import.meta.env.DEV` only).
-- nginx proxies same-origin `/api/` → `http://maraclaw-engine:8000` without stripping `/api`. The engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
+- Caddy proxies same-origin `/api/` → `http://maraclaw-engine:8000` without stripping `/api`. Run this container on the engine's network (`--network maraclaw_network`), where the engine has alias `maraclaw-engine`. Start order no longer matters: Caddy resolves `maraclaw-engine` per connection, so requests get 502 until the engine is reachable.
 
 ## Structure
 

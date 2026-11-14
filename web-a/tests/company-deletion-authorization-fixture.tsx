@@ -13,7 +13,7 @@ const company = {
   id: 'alpha', name: 'Alpha Labs', slug: 'alpha', is_active: true, sso_enabled: false,
   sso_domain: null, is_system: false, is_default_end_user_org: false, can_disable: true,
   created_at: null, user_count: 20, active_user_count: 19, inactive_user_count: 1,
-  agent_count: 8, org_admin_email: null,
+  agent_count: 8, org_admin_email: null, phone: null, tier: 'pro',
 } satisfies CompanyStats
 
 function AuthorizationFixture() {

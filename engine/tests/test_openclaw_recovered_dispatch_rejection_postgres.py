@@ -82,7 +82,7 @@ async def test_unproven_or_revoked_receipt_preserves_delivered_head(
             case "tenant_roundtrip":
                 other = uuid4()
                 await db.first.execute(
-                    "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other', %(slug)s)",
+                    "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Other', %(slug)s, 'ultra')",
                     {"id": other, "slug": str(other)},
                 )
                 for tenant in (other, None):

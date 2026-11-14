@@ -9,7 +9,7 @@ Parent: `../AGENTS.md`. Follow the owning child guide below for implementation d
 ## OVERVIEW
 
 Operator UI for `platform_admin` and `org_admin`: React 19, Vite 8 `:5174`, RR 7, TanStack Query, RHF+Zod, Tailwind v4, Recharts, Sonner.
-Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates.
+Live: auth, force-change, companies + claimed domains + member agent-section visibility + deletion, Users (roster export, org departments, agent transfer), Invitations, Models, Tools catalog/MCP/configuration, Tavily keys + search analytics, Broadcast, Notifications, Activity, admission approvals, agent deletion review, transfer payments, Settings (SMTP, transfer policy), OpenClaw updates, Upgrade signals (PA resource-pressure summary, episodes, CSV), extra accounts and agents (Users capacity section, `/capacity-orders/:orderId` payment page, PA Payments `/payments?tab=capacity` review, genesis payment settings).
 Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those surfaces here or admin screens in `web-e`.
 
 ## WHERE TO LOOK
@@ -32,8 +32,9 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - JWT storage: `maraclaw-admin-token`. `AuthProvider` bootstraps `GET /api/auth/me`; reject non-admin roles even after valid credentials.
 - `mustChangePassword` is true when the token response, `user` or `identity` flag says so. `ProtectedRoute` redirects to `/settings`; Settings stays open until cleared and legacy `/account` redirects there. After `PUT /api/auth/me/password`, call `refreshReplacement` with the captured owner and replacement access token.
 - Only an authenticated 401 expires the session (see `src/lib/AGENTS.md`). A 403, including `must_change_password`, is a plain `ApiError` and keeps the token.
-- Companies + Search + OpenClaw updates require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
+- Companies + Search + OpenClaw updates + Upgrade signals (`/upgrade-signals`) require `PlatformAdminRoute` and `platformAdminOnly` nav; Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`, not a new route.
 - Narrower gates (non-PA org admin for Broadcast and Invitations, genesis for Admissions, active own-org admin for Agent deletions, active PA only for Payments) live in `src/lib/types/auth.ts` and `transfer-review-access.ts`; route guard and nav entry must use the same predicate.
+- Capacity gates (`canBuyCapacity`: active non-PA org admin with a tenant; `canViewCapacityOrders`: that or an active PA; `canReviewCapacityPayments`: active PA; `canManageCapacityPaymentSettings`: active genesis PA) live in `src/lib/types/auth.ts`; the route guard and the `use-capacity.ts` query gates share them (the Payments nav entry uses the equivalent `canReviewTransferPayments`). PAs read a company's capacity with `?tenant_id=` and never buy.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
 
@@ -73,6 +74,6 @@ docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 ## DEVELOPMENT AND PRODUCTION
 
 - `vite.config.ts`: dev `:5174`; `/api` proxies to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. This is dev-only.
-- `Dockerfile` + `docker/nginx.conf`: Node 26.13.1 build, nginx-unprivileged SPA on `:8080`, CSP and `/healthz`; `/api/` proxies to `http://maraclaw-engine:8000` preserving `/api`. Engine must already run with alias `maraclaw-engine` on `maraclaw_network`; run this container with `--network maraclaw_network`.
+- `Dockerfile` + `docker/Caddyfile`: Node 26.13.1 build, Caddy 2.11.9 (alpine) SPA as uid 101 on `:8080`, CSP and `/healthz`; `/api/` proxies to `http://maraclaw-engine:8000` preserving `/api`. The server-wide request body limit is 2MiB with a 10s body idle timeout (`read_body_idle`); only `POST /api/capacity/orders/{uuid}/evidence` (matcher `@evidence`, same `engine_proxy` snippet) gets `request_body max_size 11MiB` and `timeouts { read_timeout 60s }` for the 10 MiB payment evidence upload. Run this container with `--network maraclaw_network`, where the engine has alias `maraclaw-engine`; start order does not matter because Caddy resolves `maraclaw-engine` per connection.
 - `.env.example`: empty `VITE_API_BASE_URL` = same-origin; image override is `--build-arg VITE_API_BASE_URL=...`.
 - Reset emails: engine `public_base_url` must point at this admin app.

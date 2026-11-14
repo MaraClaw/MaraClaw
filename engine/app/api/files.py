@@ -50,6 +50,7 @@ from app.schemas.content_response_files import (
 )
 from app.schemas.file_pages import FileInfo, FileInfoPage, FileListingCursor
 from app.services import file_download_tickets, workspace_collaboration as workspace
+from app.services.agent_workspace_quota import refresh_workspace_usage_after_delete
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
     PREVIEW_MAX_CHARS,
@@ -1096,6 +1097,7 @@ async def delete_file(
         if "not found" in result.message.lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=result.message)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.message)
+    await refresh_workspace_usage_after_delete(agent)
     return {"status": "ok", "path": path}
 
 

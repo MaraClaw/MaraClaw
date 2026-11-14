@@ -83,6 +83,8 @@ class _Env:
             primary_model_id=None,
             gogcli_enabled=True,
             setup_pending=False,
+            tenant_id=None,
+            is_system=False,
             container_id=None,
             container_port=None,
             **agent_fields,

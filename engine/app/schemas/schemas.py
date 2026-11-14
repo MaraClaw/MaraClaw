@@ -248,7 +248,6 @@ class AgentCreate(BaseModel):
     boundaries: str = ""
     # Model
     primary_model_id: uuid.UUID | None = None
-    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     # Permissions
     permission_scope_type: AgentPermissionScope = AgentPermissionScope.COMPANY
@@ -279,7 +278,6 @@ class AgentOut[CreatedAt: datetime | None = datetime](BaseModel):
     creator_id: uuid.UUID
     creator_username: str | None = None  # Populated by API layer; not in ORM model directly
     primary_model_id: uuid.UUID | None = None
-    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     autonomy_policy: JsonObject
     tokens_used_today: int
@@ -343,7 +341,6 @@ class AgentUpdate(BaseModel):
     avatar_url: str | None = None
     autonomy_policy: JsonObject | None = None
     primary_model_id: uuid.UUID | None = None
-    secondary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     context_window_size: int | None = Field(default=None, ge=1, le=500)
     max_tokens_per_day: int | None = None
@@ -352,8 +349,6 @@ class AgentUpdate(BaseModel):
     max_triggers: int | None = None
     min_poll_interval_min: int | None = None
     webhook_rate_limit: int | None = None
-    heartbeat_enabled: bool | None = None
-    heartbeat_interval_minutes: int | None = None
     heartbeat_active_hours: str | None = None
     timezone: str | None = None
     expires_at: datetime | None = None  # Admin only - extend agent expiry
@@ -552,7 +547,6 @@ class LLMModelOut(BaseModel):
     tenant_id: uuid.UUID | None = None
     is_default: bool = False
     is_fallback: bool = False
-    is_secondary: bool = False
     reasoning_effort: str | None = None
     auth_kind: str = "api_key"
     created_at: datetime

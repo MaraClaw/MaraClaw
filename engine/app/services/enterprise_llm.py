@@ -89,13 +89,11 @@ def serialize_llm_model(
     is_admin: bool,
     default_model_id: uuid.UUID | None,
     fallback_model_id: uuid.UUID | None = None,
-    secondary_model_id: uuid.UUID | None = None,
 ) -> LLMModelOut:
     """Build an API payload. Members never receive keys or endpoints."""
     out = LLMModelOut.model_validate(model)
     out.is_default = default_model_id is not None and model.id == default_model_id
     out.is_fallback = fallback_model_id is not None and model.id == fallback_model_id
-    out.is_secondary = secondary_model_id is not None and model.id == secondary_model_id
     if is_admin:
         if is_subscription_row(model):
             out.api_key_masked = ""
@@ -180,15 +178,14 @@ def is_replaceable_api_key_row(model: LLMModelRecord | None) -> bool:
 
 def assert_distinct_model_slots(
     primary_id: uuid.UUID | None,
-    secondary_id: uuid.UUID | None,
     fallback_id: uuid.UUID | None,
 ) -> None:
-    """Reject overlapping primary / secondary / fallback assignments."""
-    filled = [mid for mid in (primary_id, secondary_id, fallback_id) if mid is not None]
+    """Reject overlapping primary / fallback assignments."""
+    filled = [mid for mid in (primary_id, fallback_id) if mid is not None]
     if len(filled) != len(set(filled)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Primary, secondary, and fallback models must be different",
+            detail="Primary and fallback models must be different",
         )
 
 
@@ -266,10 +263,8 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
 
     wanted = [
         getattr(agent, "primary_model_id", None),
-        getattr(agent, "secondary_model_id", None),
         getattr(agent, "fallback_model_id", None),
         tenant.default_model_id,
-        getattr(tenant, "default_secondary_model_id", None),
         getattr(tenant, "default_fallback_model_id", None),
     ]
     loaded = {row.id: row for row in await llm_model_dao.get_many([mid for mid in wanted if mid])}
@@ -303,7 +298,6 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
                 _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_model_id": picked.id})
                 _ = await agent_dao.assign_primary_where_null(tenant_id=tenant_id, model_id=picked.id)
 
-    tenant_secondary = owned(getattr(tenant, "default_secondary_model_id", None))
     tenant_fallback = owned(getattr(tenant, "default_fallback_model_id", None))
     updates: dict[str, uuid.UUID | None] = {}
     agent_primary = owned(agent.primary_model_id)
@@ -318,13 +312,6 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
         primary_next = _slot_replacement(getattr(agent, "primary_model_id", None), agent_primary, tenant_primary)
         if primary_next is not _UNCHANGED:
             updates["primary_model_id"] = primary_next if isinstance(primary_next, uuid.UUID) else None
-    secondary_next = _slot_replacement(
-        getattr(agent, "secondary_model_id", None),
-        owned(getattr(agent, "secondary_model_id", None)),
-        tenant_secondary,
-    )
-    if secondary_next is not _UNCHANGED:
-        updates["secondary_model_id"] = secondary_next if isinstance(secondary_next, uuid.UUID) else None
     fallback_next = _slot_replacement(
         getattr(agent, "fallback_model_id", None),
         owned(getattr(agent, "fallback_model_id", None)),

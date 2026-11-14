@@ -4,17 +4,17 @@
 # Multi-stage production image:
 #   1) deps    - install lockfile deps on Node 26.13.1 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
-#   3) runtime - unprivileged nginx serves dist and proxies /api/ to engine
+#   3) runtime - unprivileged Caddy serves dist and proxies /api/ to engine
 #
 # Build:
 #   docker build -t maraclaw-web-a .
 #   docker build -t maraclaw-web-a --build-arg VITE_API_BASE_URL=https://api.example.com .
 #
 # Run:
-#   Engine must already run with alias maraclaw-engine on maraclaw_network.
+#   Join the network where the engine runs with alias maraclaw-engine (start order does not matter).
 #   docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 #
-# Prefer leaving VITE_API_BASE_URL empty: nginx proxies same-origin /api/
+# Prefer leaving VITE_API_BASE_URL empty: Caddy proxies same-origin /api/
 # to http://maraclaw-engine:8000 without stripping /api from the request URI.
 
 ARG NODE_VERSION=26.13.1
@@ -57,27 +57,30 @@ RUN npm run build \
   && test -f dist/index.html
 
 # ─── Runtime ────────────────────────────────────────────────────────────────
-# nginx-unprivileged: non-root by default, listens on 8080.
-FROM nginxinc/nginx-unprivileged:1.31.7-alpine AS runtime
+# Caddy serves dist on 8080 as an unprivileged user (no capabilities, no TLS, no admin API).
+FROM caddy:2.11.9-alpine AS runtime
 
 LABEL org.opencontainers.image.title="MaraClaw web-a" \
       org.opencontainers.image.description="MaraClaw admin / operator console" \
       org.opencontainers.image.vendor="MaraClaw"
 
-# Replace the default site with our SPA + API proxy config (port 8080, security headers).
-COPY --chown=nginx:nginx docker/nginx.conf /etc/nginx/conf.d/default.conf
+# Unprivileged service account (uid/gid 101). Caddy only needs its data/config directories writable.
+RUN addgroup -S -g 101 caddy \
+  && adduser -S -D -H -u 101 -G caddy -s /sbin/nologin caddy \
+  && chown caddy:caddy /data /config
+
+# Replace the default site with our SPA + API proxy config (port 8080, security headers); fail the image on a bad config.
+COPY docker/Caddyfile /etc/caddy/Caddyfile
+RUN caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 # Static assets only - no Node runtime, no package tree, no source.
-COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
+COPY --from=build /app/dist /srv
 
-# Image already runs as uid 101 (nginx). Do not escalate.
-USER nginx
+USER caddy
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
 
-STOPSIGNAL SIGQUIT
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

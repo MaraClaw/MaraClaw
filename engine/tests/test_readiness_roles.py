@@ -49,13 +49,16 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch: pytest.MonkeyPatch, role: str, failed_worker: str
 ) -> None:
     from app.services import (
+        agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
         broadcast_email_worker,
         broadcast_fanout_worker,
         cache_invalidation_worker,
+        capacity_renewal_worker,
         chat_history_retention_worker,
         company_transfer_cleanup,
         gateway_report_relay,
@@ -126,7 +129,10 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
+    monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
+    monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
+    monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
@@ -151,6 +157,8 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "worker"):
             assert required["openclaw_dispatch"][1] is False
         assert ("chat_history_retention" in required) == role_enabled(roles, "worker")
+        assert ("agent_workspace_quota" in required) == role_enabled(roles, "worker")
+        assert ("agent_resource_pressure" in required) == role_enabled(roles, "worker")
         assert ("operational_log_retention" in required) == role_enabled(roles, "worker")
         assert ("transfer_cleanup" in required) == role_enabled(roles, "connector")
         for worker_name in ("cache-invalidation-recovery", "auth_email", "broadcast_fanout"):

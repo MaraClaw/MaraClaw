@@ -6,6 +6,7 @@ import re
 import secrets
 import unicodedata
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from anyascii import anyascii
@@ -18,11 +19,14 @@ from app.dao.identity_dao import identity_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
+from app.db.connection import DbConnection
 from app.db.errors import UniqueViolationError
 from app.db.session import connection_ctx
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.agent_stops import schedule_agent_teardown, snapshot_agent_teardown
+from app.services.company_capacity import require_account_slot
 from app.services.company_transfer_retention import assert_tenant_deletion_allowed
 
 
@@ -94,12 +98,14 @@ def slugify_tenant_name(name: str) -> str:
 
 async def create_tenant_with_org_admin(
     *,
+    tier: OrganizationPlanId,
     name: str,
+    phone: str,
     admin_email: str,
     admin_password: str,
     admin_display_name: str | None = None,
 ) -> ProvisionedTenant:
-    """Create a tenant and its genesis org admin in one transaction.
+    """Create a tenant of ``tier`` with contact ``phone`` (E.164) and its genesis org admin in one transaction.
 
     The org admin must change the initial password after first login.
     """
@@ -115,7 +121,9 @@ async def create_tenant_with_org_admin(
 
     try:
         async with connection_ctx():
-            tenant = await tenant_dao.create(obj_in={"name": name, "slug": slug, "im_provider": "web_only"})
+            tenant = await tenant_dao.create(
+                obj_in={"name": name, "slug": slug, "tier": tier, "phone": phone, "im_provider": "web_only"}
+            )
 
             identity = await identity_dao.create_identity(
                 email=email,
@@ -169,7 +177,11 @@ async def attach_genesis_org_admin(
     admin_password: str,
     admin_display_name: str | None = None,
 ) -> ProvisionedTenant:
-    """Create a genesis org admin for a tenant that does not have one."""
+    """Create a genesis org admin for a tenant that does not have one.
+
+    The repair takes an account: a capped company with no free one refuses it
+    (``CompanyAccountLimitReachedError``, 409) before anything is written.
+    """
     tenant = await tenant_dao.get(tenant_id)
     if tenant is None:
         raise ValueError("tenant not found")
@@ -186,7 +198,10 @@ async def attach_genesis_org_admin(
     display_name = (admin_display_name or "").strip() or local_part
 
     try:
-        async with connection_ctx():
+        async with connection_ctx() as connection:
+            db = cast("DbConnection | None", connection)
+            if db is not None:
+                await require_account_slot(db, tenant.id)
             identity = await identity_dao.create_identity(
                 email=email,
                 password_hash=password_hash,

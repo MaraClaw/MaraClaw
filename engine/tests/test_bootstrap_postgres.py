@@ -25,6 +25,7 @@ from app.db.pool import EnginePool, close_pool, durable_pool, get_pool, init_poo
 from app.db.session import connection_ctx
 from app.main import app
 from app.scripts import bootstrap_db
+from organization_admission_fixtures import insert_admission_row
 
 
 @pytest.fixture
@@ -99,18 +100,15 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("agents", "tokens_used_total"),
         ("agents", "api_key_hash"),
         ("agents", "openclaw_last_seen"),
-        ("agents", "secondary_model_id"),
         ("tenants", "sso_enabled"),
         ("tenants", "sso_domain"),
         ("tenants", "default_fallback_model_id"),
-        ("tenants", "default_secondary_model_id"),
         ("llm_models", "reasoning_effort"),
         ("llm_models", "refresh_token_encrypted"),
         ("llm_models", "token_expires_at"),
         ("llm_models", "oauth_account_id"),
         ("gateway_messages", "selected_slot"),
         ("gateway_messages", "guest_model_ref"),
-        ("gateway_messages", "complexity"),
         ("gateway_messages", "routing_reason"),
         ("local_departments", "name"),
         ("local_department_memberships", "department_id"),
@@ -181,8 +179,6 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         "ck_tavily_key_ring_state_singleton",
         "llm_models_tenant_id_fkey",
         "tenants_default_fallback_model_id_fkey",
-        "tenants_default_secondary_model_id_fkey",
-        "agents_secondary_model_id_fkey",
         "local_department_memberships_user_id_tenant_id_fkey",
         "local_department_memberships_department_id_tenant_id_fkey",
     } <= {row["conname"] for row in constraints}
@@ -218,7 +214,7 @@ async def test_dirty_duplicate_memberships_are_rejected(schema_db: DbConnection)
     await schema_db.execute("DROP INDEX ux_users_identity_single_tenant")
     await schema_db.execute("INSERT INTO identities (id) VALUES ('00000000-0000-0000-0000-000000000001')")
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES ('00000000-0000-0000-0000-000000000002', 'QA', 'qa')"
+        "INSERT INTO tenants (id, name, slug, tier) VALUES ('00000000-0000-0000-0000-000000000002', 'QA', 'qa', 'ultra')"
     )
     await schema_db.execute(
         "INSERT INTO users (id, identity_id, tenant_id, display_name) "
@@ -245,7 +241,7 @@ async def test_department_membership_pair_constraints(schema_db: DbConnection, c
     tenant_id, other_tenant_id, user_id = uuid4(), uuid4(), uuid4()
     first_id, second_id, foreign_id = uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(first)s, 'First', 'first'), (%(second)s, 'Second', 'second')",
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(first)s, 'First', 'first', 'ultra'), (%(second)s, 'Second', 'second', 'ultra')",
         {"first": tenant_id, "second": other_tenant_id},
     )
     await schema_db.execute(
@@ -293,7 +289,8 @@ async def test_legacy_tasks_without_lease_columns_are_upgraded_in_place(schema_d
     await bootstrap_db.main()
     tenant_id, user_id, agent_id, task_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -360,6 +357,7 @@ async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: D
     fresh_columns = await schema_db.fetchall(_ADMISSION_COLUMNS)
     assert [row["conname"] for row in fresh_constraints] == [
         "ck_organization_admission_name",
+        "ck_organization_admission_phone",
         "ck_organization_admission_provisioned",
     ]
     await schema_db.execute(
@@ -371,11 +369,7 @@ async def test_legacy_organization_admissions_are_upgraded_in_place(schema_db: D
         ("pending@example.com", "pending", None),
         ("approved@example.com", "approved", datetime.now(UTC)),
     ):
-        await schema_db.execute(
-            "INSERT INTO organization_admission_requests (id,email,tier,plan,status,reviewed_at) "
-            "VALUES (gen_random_uuid(),%(email)s,'pro','{\"id\":\"pro\"}'::jsonb,%(status)s,%(reviewed_at)s)",
-            {"email": email, "status": status, "reviewed_at": reviewed_at},
-        )
+        await insert_admission_row(schema_db, email=email, status=status, reviewed_at=reviewed_at)
     # When bootstrap upgrades it and then reruns.
     await bootstrap_db.main()
     await bootstrap_db.main()
@@ -420,7 +414,8 @@ async def test_legacy_approvals_without_execution_args_are_upgraded_in_place(sch
     assert fresh_columns[-1]["column_name"] == "execution_args"
     tenant_id, user_id, agent_id, approval_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -476,7 +471,8 @@ async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_pla
     ]
     tenant_id, user_id, agent_id, session_id, legacy_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -568,7 +564,8 @@ async def test_legacy_chat_history_journal_gains_write_time_without_rewrite(
     assert "recorded_at" not in legacy_function
     tenant_id, user_id, agent_id, session_id = uuid4(), uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute(
         "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
@@ -671,7 +668,8 @@ async def test_legacy_users_without_membership_generation_are_upgraded_in_place(
     # And a legacy users table, without the column, holding active and already-inactive memberships.
     tenant_id = uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Legacy', 'legacy')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
     )
     ids = {name: uuid4() for name in ("active-a", "active-b", "inactive-a", "inactive-b")}
     for name, user_id in ids.items():
@@ -720,7 +718,8 @@ async def test_deactivation_writers_revoke_earlier_sessions_and_activation_never
     tenant_id, identity_id = uuid4(), uuid4()
     member_id, elsewhere_id, peer_id = uuid4(), uuid4(), uuid4()
     await schema_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(tenant)s, 'Revocation', 'revocation')", {"tenant": tenant_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Revocation', 'revocation', 'ultra')",
+        {"tenant": tenant_id},
     )
     await schema_db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})
     for user_id, identity, tenant in (

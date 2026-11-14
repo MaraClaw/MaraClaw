@@ -631,6 +631,8 @@ async def test_workspace_mutation_transport_keeps_acknowledgements_and_nullable_
     monkeypatch.setattr(files, "_write_workspace_file", AsyncMock(return_value=result))
     monkeypatch.setattr(files, "_delete_workspace_file", AsyncMock(return_value=result))
     monkeypatch.setattr(files, "_require_agent_file_delete_access", AsyncMock(return_value=agent))
+    refresh = AsyncMock()
+    monkeypatch.setattr(files, "refresh_workspace_usage_after_delete", refresh)
     monkeypatch.setattr(files, "acquire_edit_lock", AsyncMock(return_value=lock))
     monkeypatch.setattr(files, "release_edit_lock", AsyncMock())
     monkeypatch.setattr(files, "list_revisions", AsyncMock(return_value=[revision]))
@@ -652,6 +654,7 @@ async def test_workspace_mutation_transport_keeps_acknowledgements_and_nullable_
 
     assert response.status_code == (409 if operation == "conflict" else 200)
     payload = response.json()
+    assert refresh.await_count == (1 if operation == "delete" else 0)
     if operation == "conflict":
         assert payload == {"detail": "conflict"}
     elif operation in ("write", "restore"):

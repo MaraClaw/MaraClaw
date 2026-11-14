@@ -109,7 +109,6 @@ def _row(**overrides: object) -> dict[str, Any]:
         "result": None,
         "selected_slot": None,
         "guest_model_ref": None,
-        "complexity": None,
         "routing_reason": None,
         "created_at": datetime(2026, 10, 14, 9, 0, tzinfo=UTC),
         "delivered_at": datetime(2026, 10, 14, 9, 1, tzinfo=UTC),

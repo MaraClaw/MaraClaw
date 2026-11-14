@@ -10,6 +10,7 @@ from app.core import session_cache, tenant_cache
 from app.core.cache_contracts import SessionSnapshot, TenantSnapshot
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -108,18 +109,20 @@ def test_session_ignores_extras_and_defaults_malformed_optional_values() -> None
 @pytest.mark.parametrize("fill_nulls", [False, True])
 def test_tenant_defaults_when_fields_are_missing_or_null(fill_nulls: bool) -> None:
     tenant_id = uuid4()
-    payload: dict[str, object] = {"id": str(tenant_id), "name": "Acme", "slug": "acme"}
+    payload: dict[str, object] = {"id": str(tenant_id), "name": "Acme", "slug": "acme", "tier": "pro"}
     if fill_nulls:
-        payload.update({field.name: None for field in fields(TenantRecord) if field.name not in ("id", "name", "slug")})
+        payload.update(
+            {field.name: None for field in fields(TenantRecord) if field.name not in ("id", "name", "slug", "tier")}
+        )
 
     loaded = tenant_cache._load(payload)
 
-    assert loaded == TenantRecord(id=tenant_id, name="Acme", slug="acme")
+    assert loaded == TenantRecord(id=tenant_id, name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
 
 
 @pytest.mark.parametrize("value", [None, "false", "3", 3.5, [], {}, True, False, 0, 1])
 def test_tenant_defaults_instead_of_coercing_flags_and_quotas(value: object) -> None:
-    expected = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    expected = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     flags = ("is_active", "sso_enabled", "a2a_async_enabled", "is_system", "is_default_end_user_org")
     quotas = (
         "default_message_limit",
@@ -132,7 +135,7 @@ def test_tenant_defaults_instead_of_coercing_flags_and_quotas(value: object) -> 
         "max_webhook_rate_ceiling",
     )
     payload: dict[str, object] = dict.fromkeys(flags + quotas, value)
-    payload.update(id=str(expected.id), name=expected.name, slug=expected.slug)
+    payload.update(id=str(expected.id), name=expected.name, slug=expected.slug, tier="pro")
     selected = flags if type(value) is bool else quotas if type(value) is int else ()
     for name in selected:
         setattr(expected, name, value)
@@ -144,10 +147,23 @@ def test_tenant_defaults_instead_of_coercing_flags_and_quotas(value: object) -> 
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("id", "bad"), ("id", None), ("name", None), ("name", ""), ("name", 3), ("slug", None), ("slug", ""), ("slug", 3)],
+    [
+        ("id", "bad"),
+        ("id", None),
+        ("name", None),
+        ("name", ""),
+        ("name", 3),
+        ("slug", None),
+        ("slug", ""),
+        ("slug", 3),
+        ("tier", None),
+        ("tier", ""),
+        ("tier", "enterprise"),
+        ("tier", 3),
+    ],
 )
 def test_tenant_misses_when_required_field_is_invalid(field: str, value: object) -> None:
-    payload: dict[str, object] = {"id": str(uuid4()), "name": "Acme", "slug": "acme", field: value}
+    payload: dict[str, object] = {"id": str(uuid4()), "name": "Acme", "slug": "acme", "tier": "pro", field: value}
 
     assert tenant_cache._load(payload) is None
 
@@ -157,23 +173,23 @@ def test_tenant_ignores_extras_and_defaults_malformed_optional_values() -> None:
     payload: dict[str, object] = dict.fromkeys(
         ("im_provider", "default_message_period", "timezone", "country_region"), ""
     )
+    payload.update(dict.fromkeys(("default_model_id", "default_fallback_model_id", "created_at"), "bad"))
     payload.update(
-        dict.fromkeys(
-            ("default_model_id", "default_fallback_model_id", "default_secondary_model_id", "created_at"), "bad"
-        )
+        id=str(tenant_id), name="Acme", slug="acme", tier="pro", sso_domain=123, im_config=[], future={"extra": True}
     )
-    payload.update(id=str(tenant_id), name="Acme", slug="acme", sso_domain=123, im_config=[], future={"extra": True})
 
     loaded = tenant_cache._load(payload)
 
-    assert loaded == TenantRecord(id=tenant_id, name="Acme", slug="acme")
+    assert loaded == TenantRecord(id=tenant_id, name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
 
 
 @pytest.mark.parametrize("config", [{}, {"provider_extension": {"values": [None, True, 2, 1.5, "x"]}}])
 def test_tenant_preserves_open_im_config_when_decoding(config: object) -> None:
     tenant_id = uuid4()
 
-    loaded = tenant_cache._load({"id": str(tenant_id), "name": "Acme", "slug": "acme", "im_config": config})
+    loaded = tenant_cache._load(
+        {"id": str(tenant_id), "name": "Acme", "slug": "acme", "tier": "pro", "im_config": config}
+    )
 
     assert loaded is not None
     assert loaded.im_config == config
@@ -264,12 +280,13 @@ def test_tenant_producer_matches_serialized_contract(populated: bool) -> None:
             a2a_async_enabled=False,
             default_model_id=uuid4(),
             default_fallback_model_id=uuid4(),
-            default_secondary_model_id=uuid4(),
             is_system=True,
             is_default_end_user_org=True,
+            tier=OrganizationPlanId.PRO,
+            phone="+84912345678",
         )
         if populated
-        else TenantRecord(id=uuid4(), name="Acme", slug="acme")
+        else TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     )
 
     payload = tenant_cache._dump(tenant, "56")
@@ -281,7 +298,7 @@ def test_tenant_producer_matches_serialized_contract(populated: bool) -> None:
 
 
 def test_tenant_producer_keeps_empty_im_config_normalization() -> None:
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", im_config={})
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", im_config={}, tier=OrganizationPlanId.PRO)
 
     payload = tenant_cache._dump(tenant, "0")
 

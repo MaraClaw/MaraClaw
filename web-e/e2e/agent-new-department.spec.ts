@@ -6,6 +6,16 @@ import {
 } from './session-fencing-fixture'
 
 const newAgentPath = '/app/agents/new'
+const soulFor = (name: string) => defaultSoul.replaceAll('{{agent_name}}', () => name)
+const riskTemplate = {
+  id: '5c4b1d36-7f0e-4f7a-9d55-2f3b8c1e6a90', name: 'Risk Manager', description: 'Gatekeeper', icon: 'RM', category: 'trading',
+  is_builtin: true, default_skills: [], default_autonomy_policy: {}, capability_bullets: [], has_bootstrap: false,
+  soul_template: [
+    '# Soul - {name}', '', '## Identity', '- **Role**: Risk Manager', '',
+    '## Personality', '- Calm.', '', '## Work Style - the Stage flow', '- Stage first.', '',
+    '## Boundaries', '- No trades without approval.', '',
+  ].join('\n'),
+}
 
 async function captureWrites(page: Page, status = 200, release = Promise.resolve()) {
   const writes: { method: string; body: unknown }[] = []
@@ -48,7 +58,7 @@ for (const { label, name, valid } of [
       await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
       expect(writes).toEqual([{ method: 'POST', body: {
         name: name.trim(), role_description: '', permission_scope_type: 'user',
-        permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
+        permission_access_level: 'use', gogcli_enabled: true, soul: soulFor(name.trim()),
       } }])
     } else {
       await expect(create).toBeDisabled()
@@ -59,6 +69,21 @@ for (const { label, name, valid } of [
     }
   })
 }
+
+test('updates Create readiness immediately at the soul length boundary', async ({ page }) => {
+  await prepareOrgDepartments(page)
+  await page.goto(newAgentPath)
+  await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
+  const create = page.getByRole('button', { name: 'Create', exact: true })
+  await expect(create).toBeEnabled()
+
+  await page.getByLabel('Soul', { exact: true }).fill('x'.repeat(20001))
+
+  await expect(create).toBeDisabled()
+  await expect(page.locator('#create-disabled-reason')).toBeVisible()
+  await page.getByLabel('Soul', { exact: true }).fill('x'.repeat(20000))
+  await expect(create).toBeEnabled()
+})
 
 test('updates Create readiness immediately at the optional role length boundary', async ({ page }) => {
   await prepareOrgDepartments(page)
@@ -97,31 +122,106 @@ test('requires a department again when a selection is cleared and only for depar
   await expect(create).toBeEnabled()
 })
 
-for (const activation of ['option card', 'Space key'] as const) {
-  test(`enables gogcli through the ${activation} and sends the checked value`, async ({ page }) => {
-    await prepareOrgDepartments(page)
-    const writes = await captureWrites(page)
-    await page.goto(newAgentPath)
-    await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
-    const checkbox = page.getByRole('checkbox', { name: 'Enable Google CLI (gogcli)', exact: true })
-    await expect(checkbox).not.toBeChecked()
+test('starts from the default soul, replaces the soul per template and sends the edited soul', async ({ page }) => {
+  await prepareOrgDepartments(page)
+  await page.route('**/api/agents/templates', (route) => route.fulfill({ json: [riskTemplate] }))
+  const writes = await captureWrites(page)
+  await page.goto(newAgentPath)
+  const template = page.getByLabel('Template', { exact: true })
+  const soul = page.getByLabel('Soul', { exact: true })
 
-    if (activation === 'option card') await page.locator('#gogcli-description').click()
-    else {
-      await checkbox.focus()
-      await page.keyboard.press('Space')
-      await expect(checkbox).toBeFocused()
-    }
+  await expect(template).toHaveValue('')
+  await expect(template.locator('option')).toHaveText(['Default', riskTemplate.name])
+  await expect(page.getByRole('checkbox')).toHaveCount(0)
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('')
+  for (const removed of ['Personality', 'Work style', 'Boundaries']) {
+    await expect(page.getByLabel(removed, { exact: true })).toHaveCount(0)
+  }
+  await expect(soul).toBeEditable()
+  await expect(soul).toHaveValue(defaultSoul)
 
-    await expect(checkbox).toBeChecked()
-    await page.getByRole('button', { name: 'Create', exact: true }).click()
-    await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
-    expect(writes).toEqual([{ method: 'POST', body: {
-      name: delayedAgent.name, role_description: '', permission_scope_type: 'user',
-      permission_access_level: 'use', gogcli_enabled: true, soul: defaultSoul,
-    } }])
-  })
-}
+  await template.selectOption(riskTemplate.id)
+
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('Risk Manager')
+  await expect(soul).toHaveValue([
+    '# Soul - {{agent_name}}', '',
+    '## Personality', '- Calm.', '',
+    '## Boundaries', '- No trades without approval.', '',
+    '## Work Style', '- Stage first.', '',
+  ].join('\n'))
+  const edited = '# Soul - {{agent_name}}\n\n## Personality\n- Calm and exact.\n'
+  await soul.fill(edited)
+  await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
+  await expect(soul).toHaveValue(edited.replace('{{agent_name}}', delayedAgent.name))
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+
+  await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
+  expect(writes).toEqual([{ method: 'POST', body: {
+    name: delayedAgent.name, template_id: riskTemplate.id, role_description: 'Risk Manager', permission_scope_type: 'user',
+    permission_access_level: 'use', gogcli_enabled: true, soul: edited.replace('{{agent_name}}', delayedAgent.name),
+  } }])
+})
+
+test('restores the default soul when the template goes back to Default', async ({ page }) => {
+  await prepareOrgDepartments(page)
+  await page.route('**/api/agents/templates', (route) => route.fulfill({ json: [riskTemplate] }))
+  await page.goto(newAgentPath)
+  const soul = page.getByLabel('Soul', { exact: true })
+  await page.getByLabel('Template', { exact: true }).selectOption(riskTemplate.id)
+  await expect(soul).toHaveValue(/- Calm\./)
+
+  await page.getByLabel('Template', { exact: true }).selectOption('')
+
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('')
+  await expect(soul).toHaveValue(defaultSoul)
+})
+
+test('keeps every name and role mention in the soul in step with the Name and Role fields without touching other edits', async ({ page }) => {
+  await prepareOrgDepartments(page)
+  await page.route('**/api/agents/default-soul', (route) => route.fulfill({ json: {
+    soul: '# Soul - {{agent_name}}\n\n## Identity\n- **Name**: {{agent_name}}\n- **Role**: {{role_description}}\n\n## Personality\nI\'m {{agent_name}}.\n',
+  } }))
+  const writes = await captureWrites(page)
+  await page.goto(newAgentPath)
+  const soul = page.getByLabel('Soul', { exact: true })
+  const identity = (name: string, role: string, personality = "I'm {{agent_name}}.") =>
+    `# Soul - ${name}\n\n## Identity\n- **Name**: ${name}\n- **Role**: ${role}\n\n## Personality\n${personality}\n`
+  await expect(soul).toHaveValue(identity('{{agent_name}}', '{{role_description}}'))
+
+  await page.getByLabel('Name', { exact: true }).fill('Rita')
+  await page.getByLabel('Role', { exact: true }).fill('Risk\nanalyst')
+  await expect(soul).toHaveValue(identity('Rita', 'Risk analyst', "I'm Rita."))
+
+  await soul.fill(identity('Rita', 'Risk analyst', "I'm Rita. Calm and exact."))
+  await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
+  await page.getByLabel('Role', { exact: true }).fill('')
+  await expect(soul).toHaveValue(identity(delayedAgent.name, '{{role_description}}', `I'm ${delayedAgent.name}. Calm and exact.`))
+  await page.getByLabel('Name', { exact: true }).fill('')
+  await expect(soul).toHaveValue(identity('{{agent_name}}', '{{role_description}}', "I'm {{agent_name}}. Calm and exact."))
+  await page.getByLabel('Name', { exact: true }).fill(delayedAgent.name)
+  await page.getByLabel('Role', { exact: true }).fill('Risk analyst')
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+
+  await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
+  expect(writes).toEqual([{ method: 'POST', body: {
+    name: delayedAgent.name, role_description: 'Risk analyst', permission_scope_type: 'user',
+    permission_access_level: 'use', gogcli_enabled: true, soul: identity(delayedAgent.name, 'Risk analyst', `I'm ${delayedAgent.name}. Calm and exact.`),
+  } }])
+})
+
+test('fills the creator and creation date into the soul', async ({ page }) => {
+  await prepareOrgDepartments(page)
+  await page.route('**/api/agents/default-soul', (route) => route.fulfill({ json: {
+    soul: '# Soul - {{agent_name}}\n\n## Identity\n- **Created by**: {{creator_name}}\n- **Created at**: {{created_at}}\n',
+  } }))
+  await page.clock.setFixedTime(new Date('2030-01-02T12:00:00'))
+
+  await page.goto(newAgentPath)
+
+  await expect(page.getByLabel('Soul', { exact: true })).toHaveValue(
+    '# Soul - {{agent_name}}\n\n## Identity\n- **Created by**: Original fencing member\n- **Created at**: 2030-01-02\n',
+  )
+})
 
 for (const visibility of ['default private', 'private', 'company'] as const) {
   test(`creates with ${visibility} scope and omits previously selected department grants`, async ({ page }) => {
@@ -142,7 +242,7 @@ for (const visibility of ['default private', 'private', 'company'] as const) {
     await expect(page).toHaveURL(`/app/agents/${delayedAgent.id}/chat`)
     expect(writes).toEqual([{ method: 'POST', body: {
       name: delayedAgent.name, role_description: '', permission_scope_type: visibility === 'company' ? 'company' : 'user',
-      permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
+      permission_access_level: 'use', gogcli_enabled: true, soul: soulFor(delayedAgent.name),
     } }])
     expect(state.privilegedRequests).toBe(0)
   })
@@ -165,7 +265,7 @@ test('creates one department grant atomically and prevents pending duplicate sub
   await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(1)
   expect(writes).toEqual([{ method: 'POST', body: {
     name: delayedAgent.name, role_description: '', permission_scope_type: 'custom',
-    department_ids: [orgDepartment.id], permission_access_level: 'use', gogcli_enabled: false, soul: defaultSoul,
+    department_ids: [orgDepartment.id], permission_access_level: 'use', gogcli_enabled: true, soul: soulFor(delayedAgent.name),
   } }])
   expect(state.privilegedRequests).toBe(0)
 })

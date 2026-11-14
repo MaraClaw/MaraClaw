@@ -26,6 +26,7 @@ from app.core.redis_cache import (
     has_pending_snapshot_writes,
     read_version,
 )
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 
 
@@ -69,6 +70,7 @@ def _dump(tenant: TenantRecord, ver: str) -> TenantSnapshot:
         "id": str(tenant.id),
         "name": tenant.name,
         "slug": tenant.slug,
+        "tier": tenant.tier.value,
         "im_provider": tenant.im_provider,
         "im_config": json_object_from(tenant.im_config) if tenant.im_config is not None and tenant.im_config else None,
         "is_active": tenant.is_active,
@@ -91,11 +93,9 @@ def _dump(tenant: TenantRecord, ver: str) -> TenantSnapshot:
         "default_fallback_model_id": (
             str(tenant.default_fallback_model_id) if tenant.default_fallback_model_id else None
         ),
-        "default_secondary_model_id": (
-            str(tenant.default_secondary_model_id) if tenant.default_secondary_model_id else None
-        ),
         "is_system": tenant.is_system,
         "is_default_end_user_org": tenant.is_default_end_user_org,
+        "phone": tenant.phone,
     }
 
 
@@ -106,11 +106,16 @@ def _load(data: object) -> TenantRecord | None:
     slug = json_as_str(payload.get("slug"))
     if tenant_id is None or name in (None, "") or slug in (None, ""):
         return None
+    try:
+        tier = OrganizationPlanId(json_as_str(payload.get("tier")))
+    except ValueError:
+        return None
     im_raw = payload.get("im_config")
     return TenantRecord(
         id=tenant_id,
         name=name,
         slug=slug,
+        tier=tier,
         im_provider=json_as_str_or(payload.get("im_provider"), "web_only") or "web_only",
         im_config=mapping_from_row(im_raw) if is_json_object(im_raw) else None,
         is_active=json_as_bool(payload.get("is_active"), True),
@@ -131,9 +136,9 @@ def _load(data: object) -> TenantRecord | None:
         a2a_async_enabled=json_as_bool(payload.get("a2a_async_enabled"), True),
         default_model_id=_parse_uuid(payload.get("default_model_id")),
         default_fallback_model_id=_parse_uuid(payload.get("default_fallback_model_id")),
-        default_secondary_model_id=_parse_uuid(payload.get("default_secondary_model_id")),
         is_system=json_as_bool(payload.get("is_system")),
         is_default_end_user_org=json_as_bool(payload.get("is_default_end_user_org")),
+        phone=json_as_str(payload.get("phone")),
     )
 
 

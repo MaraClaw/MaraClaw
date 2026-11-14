@@ -57,7 +57,8 @@ async def access_api(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AccessAPI
             tenant_id, owner_id, agent_id = uuid4(), uuid4(), uuid4()
             viewer = UserRecord(uuid4(), tenant_id=tenant_id)
             await db.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Access QA', 'access-qa')", {"id": tenant_id}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Access QA', 'access-qa', 'ultra')",
+                {"id": tenant_id},
             )
             for user_id in (owner_id, viewer.id):
                 await db.execute(
@@ -197,7 +198,7 @@ async def test_foreign_tenant_creator_is_denied_without_explanation(access_api: 
     api = access_api
     foreign_id = uuid4()
     await api.db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Foreign', 'foreign')", {"id": foreign_id}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Foreign', 'foreign', 'ultra')", {"id": foreign_id}
     )
     await api.db.execute("DELETE FROM local_department_memberships")
     await api.db.execute(
@@ -273,7 +274,8 @@ async def _seed_every_outcome(api: AccessAPI) -> list[AgentRecord]:
     viewer = api.viewer
     stranger, foreign_tenant, empty_department = uuid4(), uuid4(), uuid4()
     await api.db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other', 'other-access')", {"id": foreign_tenant}
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Other', 'other-access', 'ultra')",
+        {"id": foreign_tenant},
     )
     await api.db.execute(
         "INSERT INTO local_departments (id, tenant_id, name) VALUES (%(id)s, %(tenant)s, 'Nobody')",

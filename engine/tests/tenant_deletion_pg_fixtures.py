@@ -203,7 +203,8 @@ async def deletion_pg(
                         (other_tenant_id, other_user_id, other_identity_id, "Unrelated"),
                     ):
                         await db.execute(
-                            "INSERT INTO tenants (id, name, slug) VALUES (%s, %s, %s)", (tid, name, name.lower())
+                            "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, %s, %s, 'ultra')",
+                            (tid, name, name.lower()),
                         )
                         await db.execute(
                             "INSERT INTO identities (id, email, phone, password_hash) VALUES (%s, %s, %s, 'hash')",

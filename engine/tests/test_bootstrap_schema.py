@@ -50,12 +50,10 @@ def test_tenant_not_null_columns_have_defaults() -> None:
         "is_system BOOLEAN NOT NULL DEFAULT false",
         "is_default_end_user_org BOOLEAN NOT NULL DEFAULT false",
         "default_fallback_model_id UUID",
-        "default_secondary_model_id UUID",
     ):
         assert column in block, column
     assert "CREATE TABLE IF NOT EXISTS tenant_email_domains" in sql
     assert "ux_tenants_default_end_user_org" in sql
-    assert "secondary_model_id UUID" in sql
     assert "ux_tenant_email_domains_domain" in sql
     assert "ux_users_identity_single_tenant" in sql
     assert "WHEN unique_violation THEN" not in sql
@@ -68,7 +66,6 @@ def test_baseline_defines_openclaw_routing_columns() -> None:
     block = sql[start:end]
     assert "selected_slot VARCHAR(20)" in block
     assert "guest_model_ref VARCHAR(200)" in block
-    assert "complexity VARCHAR(20)" in block
     assert "routing_reason VARCHAR(40)" in block
 
 
@@ -88,14 +85,6 @@ def test_baseline_defines_subscription_columns() -> None:
     assert "oauth_account_id VARCHAR(128)" in block
     assert "ux_llm_models_tenant_grok_subscription" in sql
     assert "ux_llm_models_tenant_chatgpt_subscription" in sql
-
-
-def test_baseline_defines_secondary_model_references() -> None:
-    sql = BASELINE.read_text(encoding="utf-8")
-    assert "default_secondary_model_id UUID" in sql
-    assert "secondary_model_id UUID" in sql
-    assert "FOREIGN KEY(default_secondary_model_id) REFERENCES llm_models (id) ON DELETE SET NULL" in sql
-    assert "FOREIGN KEY(secondary_model_id) REFERENCES llm_models (id)" in sql
 
 
 def test_hot_path_indexes_are_declared() -> None:

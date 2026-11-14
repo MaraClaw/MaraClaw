@@ -15,14 +15,14 @@ from app.services.storage_runtime.quota_errors import (
     StorageQuotaExceededError,
 )
 from managed_storage_fixtures import StorageWorld, quota_world
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario", "quota_world"]
 
 LIMIT, CEILING = 1000, 400
 MIB, GIB = 1024 * 1024, 1024**3
 REAL_LIMITS = {
-    OrganizationPlanId.PRO: (1 * GIB, 25 * MIB),
+    OrganizationPlanId.PRO: (2 * GIB, 25 * MIB),
     OrganizationPlanId.MAX: (5 * GIB, 50 * MIB),
     OrganizationPlanId.ULTRA: (10 * GIB, 100 * MIB),
 }
@@ -198,7 +198,7 @@ async def test_refused_delete_keeps_the_charge_and_the_object(quota_world: Stora
     assert row.pending is False
 
 
-async def test_agents_without_a_paid_tier_keep_their_unmetered_behavior(quota_world: StorageWorld):
+async def test_agents_without_an_organization_keep_their_unmetered_behavior(quota_world: StorageWorld):
     world = quota_world
     world.scale(LIMIT, CEILING)
     agent = await world.agent(tier=None)
@@ -216,14 +216,13 @@ async def test_non_agent_keys_are_not_metered(quota_world: StorageWorld):
     assert len(world.stored(key) or b"") == CEILING * 5
 
 
-async def test_limits_come_from_the_agents_current_tier_not_the_requesters_or_a_stored_snapshot(
+async def test_limits_come_from_the_agents_current_tier_not_the_requesters(
     quota_world: StorageWorld,
 ):
     world = quota_world
     db = world.scenario.db
-    _ = await approve_admission_for(db, world.scenario.tenant_id, OrganizationPlanId.ULTRA)
+    await set_tenant_tier(db, world.scenario.tenant_id, OrganizationPlanId.ULTRA)
     agent = await world.agent(OrganizationPlanId.PRO)
-    await db.execute("UPDATE organization_admission_requests SET plan = '{\"storage_limit_bytes\": 1}'::jsonb")
     ceiling = int(plan_for(OrganizationPlanId.PRO).max_file_size_bytes)
     with pytest.raises(StorageFileTooLargeError) as raised:
         await world.backend.write_bytes(world.key(agent), b"x" * (ceiling + 1))

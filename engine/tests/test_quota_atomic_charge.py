@@ -15,7 +15,6 @@ from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.services import quota_guard
-from app.services.organization_plans import AmbiguousOrganizationTierError
 
 
 @pytest.mark.parametrize("returned", [None, 50])
@@ -124,13 +123,11 @@ async def test_member_of_a_tier_governed_organization_is_not_charged_the_per_use
 
 
 @pytest.mark.parametrize("charged", [1, None], ids=["within-limit", "exhausted"])
-async def test_member_of_an_untiered_organization_keeps_the_per_user_quota(
+async def test_member_without_an_organization_keeps_the_per_user_quota(
     monkeypatch: pytest.MonkeyPatch, charged: int | None
 ):
-    user = UserRecord(id=uuid4(), role=UserRole.MEMBER, tenant_id=uuid4(), quota_message_limit=3, quota_messages_used=3)
-    lookup, charge = AsyncMock(return_value=None), AsyncMock(return_value=charged)
-    read = AsyncMock(return_value=user)
-    monkeypatch.setattr(quota_guard, "tier_for_tenant", lookup)
+    user = UserRecord(id=uuid4(), role=UserRole.MEMBER, tenant_id=None, quota_message_limit=3, quota_messages_used=3)
+    charge, read = AsyncMock(return_value=charged), AsyncMock(return_value=user)
     monkeypatch.setattr(user_dao, "charge_message_quota", charge)
     monkeypatch.setattr(user_dao, "get", read)
 
@@ -141,23 +138,7 @@ async def test_member_of_an_untiered_organization_keeps_the_per_user_quota(
     else:
         await quota_guard.charge_conversation_quota(user)
 
-    lookup.assert_awaited_once_with(user.tenant_id)
     charge.assert_awaited_once_with(user.id)
-
-
-async def test_ambiguous_tier_link_propagates_without_charging_the_user(monkeypatch: pytest.MonkeyPatch):
-    user = UserRecord(id=uuid4(), role=UserRole.MEMBER, tenant_id=uuid4())
-    assert user.tenant_id is not None
-    monkeypatch.setattr(
-        quota_guard, "tier_for_tenant", AsyncMock(side_effect=AmbiguousOrganizationTierError(user.tenant_id))
-    )
-    charge = AsyncMock()
-    monkeypatch.setattr(user_dao, "charge_message_quota", charge)
-
-    with pytest.raises(AmbiguousOrganizationTierError):
-        await quota_guard.charge_conversation_quota(user)
-
-    charge.assert_not_awaited()
 
 
 async def test_admission_at_limit_rejects_without_read_then_write(monkeypatch: pytest.MonkeyPatch):

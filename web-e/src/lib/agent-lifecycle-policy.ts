@@ -16,6 +16,8 @@ export const lifecycleBlockMessage = {
   runtime_not_running: 'The recorded runtime is not running.',
   upgrade_in_progress: 'An upgrade is in progress. Wait for it to finish.',
   upgrade_required: 'An upgrade is required before continuing work.',
+  workspace_disk_exceeded:
+    "This agent's workspace is full. Delete files, or stop and start the agent to clear its temporary data, before sending new work.",
 } as const satisfies Record<AgentLifecycle['availability']['blocking_codes'][number], string>
 
 export const startFailureMessage = {

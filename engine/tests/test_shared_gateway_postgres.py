@@ -110,7 +110,6 @@ async def test_low_level_shared_claim_takes_the_lane_lock_and_only_the_fifo_head
                     None,
                     None,
                     None,
-                    None,
                     datetime.now(UTC),
                 )
             )
@@ -132,7 +131,7 @@ async def test_reply_intent_waits_for_completion_and_equal_human_inputs_remain_d
     # Given a shared transcript and an independent provider session.
     db = receipt_database
     await seed_shared(db)
-    prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "same", "primary", None, None, "qa")
+    prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "same", "primary", None, "qa")
     async with transaction(db.first):
         provider = await chat_session_dao.create(
             obj_in={
@@ -213,7 +212,7 @@ async def test_reply_intent_is_not_rederived_and_rejects_forged_destination(pool
                 "external_conv_id": "C-QA",
             }
         )
-        prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "IM input", "primary", None, None, "qa")
+        prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "IM input", "primary", None, "qa")
         message = await openclaw_routing.enqueue_prepared_openclaw_message(
             prepared,
             sender_user_id=db.user.id,

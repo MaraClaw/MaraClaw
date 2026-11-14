@@ -67,7 +67,7 @@ async def test_a_changed_fence_cancels_the_due_batch_but_keeps_transcripts_and_q
     if fence == "tenant":
         async with transaction(lane.linked.f.db.first):
             await lane.linked.f.db.first.execute(
-                "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'x', 'x')", {"id": uuid4()}
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'x', 'x', 'ultra')", {"id": uuid4()}
             )
     # When dispatch is attempted.
     await update_connection(lane, FENCES[fence])
@@ -150,7 +150,7 @@ async def test_a_stored_model_that_is_no_longer_assigned_is_never_substituted(la
     assert (blocked.message, blocked.blocked) == (None, "model_unavailable")
     assert (await gateway(lane, queued)).status == "pending"
     assert lane.guest.written == []
-    lane.guest.bundle.secondary = model_named("retired")
+    lane.guest.bundle.fallback = model_named("retired")
     claimed = (await claim(lane)).message
     assert claimed is not None
     assert claimed.id == queued

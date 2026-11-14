@@ -169,16 +169,16 @@ CREATE TABLE IF NOT EXISTS tenants (
 	a2a_async_enabled BOOLEAN NOT NULL DEFAULT true, 
 	default_model_id UUID, 
 	default_fallback_model_id UUID, 
-	default_secondary_model_id UUID, 
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	is_default_end_user_org BOOLEAN NOT NULL DEFAULT false, 
+	tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')), 
+	phone VARCHAR(16) CONSTRAINT ck_tenants_phone CHECK (phone ~ '^\+[1-9][0-9]{6,14}$'), 
 	name_tsv tsvector GENERATED ALWAYS AS (
 		to_tsvector('simple'::regconfig, coalesce(name, '') || ' ' || coalesce(slug, ''))
 	) STORED,
 	PRIMARY KEY (id), 
 	FOREIGN KEY(default_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
-	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL, 
-	FOREIGN KEY(default_secondary_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
+	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
@@ -526,8 +526,22 @@ CREATE TABLE IF NOT EXISTS organization_admission_requests (
     organization_name VARCHAR(200) CONSTRAINT ck_organization_admission_name
         CHECK (organization_name = btrim(organization_name) AND organization_name <> ''),
     email VARCHAR(320) NOT NULL CHECK (email = lower(btrim(email)) AND email <> ''),
+    phone VARCHAR(16) NOT NULL CONSTRAINT ck_organization_admission_phone CHECK (phone ~ '^\+[1-9][0-9]{6,14}$'),
     tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
     plan JSONB NOT NULL,
+    -- The paid first period: the quote (billing cycle, whole USD, rate, VND, bank recipient, transfer reference) and
+    -- the uploaded transfer evidence, all snapshotted when the request is submitted.
+    billing VARCHAR(8) NOT NULL CHECK (billing IN ('monthly','annual')),
+    amount_usd INTEGER NOT NULL CHECK (amount_usd >= 0),
+    usd_vnd_rate INTEGER NOT NULL CHECK (usd_vnd_rate > 0),
+    amount_vnd BIGINT NOT NULL CHECK (amount_vnd >= 0),
+    recipient JSONB NOT NULL CHECK (jsonb_typeof(recipient) = 'object'),
+    payment_reference VARCHAR(10) NOT NULL UNIQUE CHECK (payment_reference ~ '^MO[A-Z2-7]{8}$'),
+    evidence_storage_key TEXT NOT NULL,
+    evidence_content_type VARCHAR(100) NOT NULL,
+    evidence_filename VARCHAR(255) NOT NULL,
+    evidence_size_bytes BIGINT NOT NULL CHECK (evidence_size_bytes > 0),
+    evidence_sha256 CHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at TIMESTAMPTZ,
@@ -571,10 +585,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
     ON organization_admission_requests(email) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS ix_organization_admission_status
     ON organization_admission_requests(status,created_at DESC,id DESC);
--- The tier lookup runs on every accepted human message (per-agent daily cap).
-CREATE INDEX IF NOT EXISTS ix_organization_admission_provisioned_tenant
-    ON organization_admission_requests(provisioned_tenant_id, provisioned_at, id)
-    WHERE status='approved' AND provisioned_tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
@@ -599,6 +609,80 @@ CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
 );
 CREATE INDEX IF NOT EXISTS ix_organization_admission_emails_due
     ON organization_admission_credential_emails (available_at, request_id) WHERE status = 'pending';
+
+-- Paid extra accounts and agents: one row per purchase or monthly renewal of a tiered company (the ledger behind
+-- capacity_ledger.effective_extras). Prices, the VND rate and the bank recipient are snapshotted at creation.
+CREATE TABLE IF NOT EXISTS capacity_orders (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    reference VARCHAR(10) NOT NULL CHECK (reference ~ '^MC[A-Z2-7]{8}$'),
+    kind VARCHAR(16) NOT NULL CHECK (kind IN ('purchase','renewal')),
+    status VARCHAR(24) NOT NULL DEFAULT 'awaiting_payment'
+        CHECK (status IN ('awaiting_payment','submitted','approved','rejected','cancelled','expired')),
+    source_order_id UUID REFERENCES capacity_orders(id) ON DELETE CASCADE,
+    tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
+    billing_month DATE NOT NULL CHECK (EXTRACT(DAY FROM billing_month) = 1),
+    extra_accounts INTEGER NOT NULL CHECK (extra_accounts >= 0),
+    extra_agents INTEGER NOT NULL CHECK (extra_agents >= 0),
+    account_unit_usd INTEGER NOT NULL CHECK (account_unit_usd >= 0),
+    agent_unit_usd INTEGER NOT NULL CHECK (agent_unit_usd >= 0),
+    days_charged INTEGER NOT NULL,
+    days_in_month INTEGER NOT NULL,
+    amount_usd_cents BIGINT NOT NULL CHECK (amount_usd_cents >= 0),
+    usd_vnd_rate INTEGER NOT NULL CHECK (usd_vnd_rate > 0),
+    amount_vnd BIGINT NOT NULL CHECK (amount_vnd >= 0),
+    recipient JSONB NOT NULL CHECK (jsonb_typeof(recipient) = 'object'),
+    grace_until DATE,
+    evidence_storage_key TEXT,
+    evidence_content_type VARCHAR(100),
+    evidence_filename VARCHAR(255),
+    evidence_size_bytes BIGINT,
+    evidence_sha256 CHAR(64),
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    submitted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    submitted_at TIMESTAMPTZ,
+    reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ,
+    review_note TEXT,
+    CONSTRAINT ck_capacity_orders_quantities CHECK (extra_accounts + extra_agents > 0),
+    CONSTRAINT ck_capacity_orders_days CHECK (
+        days_in_month BETWEEN 28 AND 31 AND days_charged BETWEEN 1 AND days_in_month),
+    -- A purchase is prorated and has no grace; a renewal bills the whole month and always has one.
+    CONSTRAINT ck_capacity_orders_kind CHECK (
+        (kind = 'purchase' AND grace_until IS NULL AND source_order_id IS NULL)
+        OR (kind = 'renewal' AND grace_until IS NOT NULL AND days_charged = days_in_month)),
+    CONSTRAINT ck_capacity_orders_evidence CHECK (
+        (evidence_storage_key IS NULL AND evidence_content_type IS NULL AND evidence_filename IS NULL
+            AND evidence_size_bytes IS NULL AND evidence_sha256 IS NULL)
+        OR (evidence_storage_key IS NOT NULL AND evidence_content_type IS NOT NULL AND evidence_filename IS NOT NULL
+            AND evidence_size_bytes > 0 AND evidence_sha256 IS NOT NULL)),
+    CONSTRAINT ck_capacity_orders_status CHECK (
+        (status IN ('awaiting_payment','cancelled','expired')
+            AND evidence_storage_key IS NULL AND submitted_at IS NULL AND submitted_by IS NULL
+            AND reviewed_at IS NULL AND reviewed_by IS NULL AND review_note IS NULL)
+        OR (status = 'submitted'
+            AND evidence_storage_key IS NOT NULL AND submitted_at IS NOT NULL
+            AND reviewed_at IS NULL AND reviewed_by IS NULL AND review_note IS NULL)
+        OR (status IN ('approved','rejected')
+            AND evidence_storage_key IS NOT NULL AND submitted_at IS NOT NULL AND reviewed_at IS NOT NULL)),
+    CONSTRAINT ck_capacity_orders_rejection_note CHECK (status <> 'rejected' OR review_note IS NOT NULL),
+    CONSTRAINT ck_capacity_orders_cancelled_purchase CHECK (status <> 'cancelled' OR kind = 'purchase')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_reference ON capacity_orders(reference);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_source
+    ON capacity_orders(source_order_id) WHERE source_order_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_primary_renewal
+    ON capacity_orders(tenant_id, billing_month) WHERE kind = 'renewal' AND source_order_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_open_purchase
+    ON capacity_orders(tenant_id) WHERE kind = 'purchase' AND status = 'awaiting_payment';
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_month ON capacity_orders(tenant_id, billing_month, status);
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_created ON capacity_orders(tenant_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_status_created ON capacity_orders(status, created_at DESC, id DESC);
+-- The renewal worker scans approved orders of the previous month and expires awaiting orders of earlier months.
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_month_approved
+    ON capacity_orders(billing_month, tenant_id) WHERE status = 'approved';
+CREATE INDEX IF NOT EXISTS ix_capacity_orders_expiry ON capacity_orders(billing_month) WHERE status = 'awaiting_payment';
 
 CREATE TABLE IF NOT EXISTS company_transfer_requests (
     id UUID PRIMARY KEY,
@@ -722,7 +806,6 @@ CREATE TABLE IF NOT EXISTS agents (
 	container_port INTEGER, 
 	openclaw_image_id VARCHAR(200),
 	primary_model_id UUID, 
-	secondary_model_id UUID, 
 	fallback_model_id UUID, 
 	autonomy_policy JSON NOT NULL DEFAULT '{}', 
 	max_tokens_per_day INTEGER, 
@@ -764,7 +847,6 @@ CREATE TABLE IF NOT EXISTS agents (
 	FOREIGN KEY(creator_id) REFERENCES users (id), 
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id), 
 	FOREIGN KEY(primary_model_id) REFERENCES llm_models (id), 
-	FOREIGN KEY(secondary_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(fallback_model_id) REFERENCES llm_models (id), 
 	FOREIGN KEY(template_id) REFERENCES agent_templates (id)
 );
@@ -777,7 +859,7 @@ CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE
 
 CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
 
--- Human messages accepted per agent on one local calendar day (tier-governed organizations only); a row holding an
+-- Human messages accepted per agent on one local calendar day (agents of organizations only); a row holding an
 -- earlier usage_date counts as zero, so there is no reset job.
 CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -785,6 +867,63 @@ CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
     messages_used INTEGER NOT NULL CHECK (messages_used >= 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Last measured host workspace directory plus guest writable-layer bytes per agent (agents of organizations only).
+-- over_since is set while the measurement exceeds limit_bytes and blocks new human work; notified_at records the one
+-- in-app alert of that overage.
+CREATE TABLE IF NOT EXISTS agent_workspace_usage (
+    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    dir_bytes BIGINT NOT NULL CHECK (dir_bytes >= 0),
+    layer_bytes BIGINT NOT NULL CHECK (layer_bytes >= 0),
+    limit_bytes BIGINT NOT NULL CHECK (limit_bytes > 0),
+    measured_at TIMESTAMPTZ NOT NULL,
+    over_since TIMESTAMPTZ,
+    notified_at TIMESTAMPTZ
+);
+
+-- Tier-upsell evidence: one 'threshold' row per continuous stretch an agent's resource stayed at or above the pressure
+-- threshold of its limit (memory, workspace_disk, managed_storage: bytes; cpu: millicpus), one 'oom_kill' row per guest
+-- OOM kill. No foreign key to agents so rows outlive the agent (agent_name is a snapshot); they belong to the tenant
+-- and leave with it. At most one threshold episode is open per agent and resource; an OOM kill is keyed by its event.
+CREATE TABLE IF NOT EXISTS agent_resource_pressure_episodes (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    agent_id UUID,
+    agent_name TEXT NOT NULL,
+    tier VARCHAR(16) NOT NULL CHECK (tier IN ('pro','max','ultra')),
+    resource VARCHAR(20) NOT NULL CHECK (resource IN ('memory','cpu','workspace_disk','managed_storage')),
+    kind VARCHAR(16) NOT NULL DEFAULT 'threshold' CHECK (kind IN ('threshold','oom_kill')),
+    limit_value BIGINT NOT NULL CHECK (limit_value > 0),
+    peak_value BIGINT NOT NULL CHECK (peak_value >= 0),
+    peak_ratio DOUBLE PRECISION NOT NULL CHECK (peak_ratio >= 0),
+    threshold_ratio DOUBLE PRECISION NOT NULL CHECK (threshold_ratio > 0 AND threshold_ratio <= 1),
+    started_at TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ,
+    sample_count INTEGER NOT NULL DEFAULT 1 CHECK (sample_count >= 1),
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    event_key TEXT,
+    CHECK (last_seen_at >= started_at),
+    CHECK (ended_at IS NULL OR ended_at >= started_at),
+    CHECK ((kind = 'oom_kill') = (event_key IS NOT NULL)),
+    CHECK (kind <> 'oom_kill' OR (resource = 'memory' AND ended_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_open
+ON agent_resource_pressure_episodes (tenant_id, (COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid)), resource)
+WHERE ended_at IS NULL AND kind = 'threshold';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_oom_event
+ON agent_resource_pressure_episodes (agent_id, event_key) WHERE kind = 'oom_kill';
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_open_agent
+ON agent_resource_pressure_episodes (agent_id) WHERE ended_at IS NULL AND kind = 'threshold';
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_started
+ON agent_resource_pressure_episodes (started_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_tenant_started
+ON agent_resource_pressure_episodes (tenant_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -1634,7 +1773,6 @@ CREATE TABLE IF NOT EXISTS gateway_messages (
 	result TEXT, 
 	selected_slot VARCHAR(20),
 	guest_model_ref VARCHAR(200),
-	complexity VARCHAR(20),
 	routing_reason VARCHAR(40),
     reply_binding_id UUID REFERENCES openclaw_reply_bindings(id) ON DELETE SET NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 

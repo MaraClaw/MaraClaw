@@ -17,6 +17,7 @@ from app.core.domain.users import UserRole
 from app.core.json_types import json_object_from, json_object_from_response
 from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.auth_responses import (
@@ -58,7 +59,10 @@ async def test_auth_response_union_preserves_payloads(
         created_at=timestamp,
         updated_at=timestamp,
     )
-    tenants = [TenantRecord(id=uuid4(), name=f"Company {index}", slug=f"company-{index}") for index in range(2)]
+    tenants = [
+        TenantRecord(id=uuid4(), name=f"Company {index}", slug=f"company-{index}", tier=OrganizationPlanId.PRO)
+        for index in range(2)
+    ]
     users = [
         UserRecord(
             id=uuid4(),

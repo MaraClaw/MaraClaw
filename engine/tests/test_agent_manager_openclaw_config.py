@@ -222,14 +222,6 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         auth_kind="grok_subscription",
         label="Grok SuperGrok",
     )
-    secondary: Any = SimpleNamespace(
-        id=uuid.uuid4(),
-        provider="anthropic",
-        model="claude-sonnet-4-5",
-        api_key_encrypted="sk-ant-test",
-        auth_kind="api_key",
-        label="Claude",
-    )
     fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="xai",
@@ -239,7 +231,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
         label="Grok fallback",
     )
 
-    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, secondary=secondary, fallback=fallback)
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, primary, fallback=fallback)
 
     assert "agent" not in config
     assert config["agents"]["defaults"]["model"]["primary"] == "xai/grok-4.8"
@@ -487,6 +479,8 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When
@@ -570,6 +564,8 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When
@@ -610,6 +606,8 @@ async def test_start_container_returns_none_when_pywhales_client_is_missing(monk
         primary_model_id=None,
         gogcli_enabled=False,
         setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
 
     # When

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.core.json_types import int_from_row, str_from_row, uuid_from_row_opt
+from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
 from app.db.connection import DbConnection
 from app.records.agent_storage import StorageObjectRecord, StorageUsageRecord
 
@@ -46,6 +46,16 @@ class AgentStorageDAO:
         )
         values = row or {}
         return StorageUsageRecord(agent_id, int_from_row(values.get("charged")), int_from_row(values.get("largest")))
+
+    async def charged_for_agents(self, db: DbConnection, agent_ids: Sequence[UUID]) -> dict[UUID, int]:
+        """Charged bytes of the agents that have a usage row (the others never wrote through managed storage)."""
+        if not agent_ids:
+            return {}
+        rows = await db.fetchall(
+            "SELECT agent_id, charged_bytes FROM agent_storage_usage WHERE agent_id = ANY(%(agents)s)",
+            {"agents": list(agent_ids)},
+        )
+        return {uuid_from_row(row["agent_id"]): int_from_row(row["charged_bytes"]) for row in rows}
 
     async def get_object(self, db: DbConnection, agent_id: UUID, object_key: str) -> StorageObjectRecord | None:
         row = await db.fetchone(

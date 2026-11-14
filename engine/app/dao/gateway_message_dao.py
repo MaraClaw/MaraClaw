@@ -27,7 +27,6 @@ _COLUMNS = (
     "result",
     "selected_slot",
     "guest_model_ref",
-    "complexity",
     "routing_reason",
     "created_at",
     "delivered_at",
@@ -148,8 +147,7 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
         async with self.session() as db:
             row = await db.fetchone(
                 "UPDATE gateway_messages g SET status = 'delivered', delivered_at = %(now)s, content = %(content)s, "
-                "selected_slot = %(slot)s, guest_model_ref = %(ref)s, complexity = %(complexity)s, "
-                "routing_reason = %(reason)s, "
+                "selected_slot = %(slot)s, guest_model_ref = %(ref)s, routing_reason = %(reason)s, "
                 "reply_binding_id = bind_openclaw_reply(g.agent_id, g.conversation_id) "
                 "WHERE g.id = %(id)s AND g.agent_id = %(agent)s AND g.conversation_id = %(conversation)s "
                 "AND g.status = 'pending' AND NOT EXISTS (SELECT 1 FROM gateway_messages d "
@@ -165,7 +163,6 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
                     "content": claim.content,
                     "slot": claim.selected_slot,
                     "ref": claim.guest_model_ref,
-                    "complexity": claim.complexity,
                     "reason": claim.routing_reason,
                     "now": claim.now,
                 },

@@ -15,7 +15,7 @@ from app.records.organization_plan import OrganizationPlanId
 from app.services.storage_runtime import quota_ledger
 from managed_storage_fixtures import StorageWorld, quota_world
 from s3_wire_server import Gate
-from tier_limit_fixtures import approve_admission_for
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario", "quota_world"]
 
@@ -29,8 +29,8 @@ async def api() -> AsyncIterator[AsyncClient]:
 
 
 async def paid_agent(world: StorageWorld, owner: str) -> UUID:
-    """An agent of the scenario organization, which is linked to a paid tier."""
-    _ = await approve_admission_for(world.scenario.db, world.scenario.tenant_id, OrganizationPlanId.PRO)
+    """An agent of the scenario organization, set to the Pro tier."""
+    await set_tenant_tier(world.scenario.db, world.scenario.tenant_id, OrganizationPlanId.PRO)
     return await world.scenario.agent(owner)
 
 
@@ -95,17 +95,6 @@ async def test_a_ledger_outage_is_503_without_provider_or_database_detail(
     assert response.json()["detail"]["code"] == "storage_accounting_unavailable"
     assert "secret" not in response.text
     assert world.s3.state.count("PUT") == 0
-
-
-async def test_an_organization_without_a_paid_tier_has_no_file_or_total_ceiling(
-    quota_world: StorageWorld, api: AsyncClient
-):
-    world = quota_world
-    world.scale(LIMIT, CEILING)
-    agent = await world.scenario.agent("owner")
-    response = await upload(world, api, "owner", agent, CEILING * 4)
-    assert response.status_code == 200, response.text
-    assert await world.usage(agent) == CEILING * 4
 
 
 @pytest.mark.parametrize("surface", ["chat", "workspace"])

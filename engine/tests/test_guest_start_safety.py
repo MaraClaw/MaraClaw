@@ -15,6 +15,7 @@ from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
+from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module, guest_admission as admission
 from app.services.agent_manager import AgentManager
@@ -29,6 +30,7 @@ class Docker:
         self.image = self
         self.guests: dict[str, SimpleNamespace] = {}
         self.runs: list[dict[str, object]] = []
+        self.images: list[str] = []
         self.removed: list[str] = []
         self.failures: list[bytes] = []
         self.listings: list[object] = []
@@ -37,6 +39,8 @@ class Docker:
         self.pull_failure: DockerException | None = None
         self.pulls: list[tuple[str, dict[str, object]]] = []
         self.events: list[str] = []
+        self.updates: list[tuple[str, dict[str, object]]] = []
+        self.update_failure: DockerException | None = None
 
     def exists(self, _reference: str) -> bool:
         if self.exists_failure is not None:
@@ -55,7 +59,14 @@ class Docker:
             id=agent.container_id or f"created-{len(self.runs)}",
             name=guest_container_name(agent.id),
             config=SimpleNamespace(labels={AGENT_LABEL: str(agent.id)}),
-            host_config=SimpleNamespace(memory=memory, port_bindings={}),
+            host_config=SimpleNamespace(
+                memory=memory,
+                memory_swap=memory,
+                nano_cpus=1_000_000_000,
+                pids_limit=512,
+                cpu_shares=0,
+                port_bindings={},
+            ),
             state=SimpleNamespace(status=status, restarting=False),
             restart_count=0,
             mounts=[SimpleNamespace(destination="/home/node/custom-state")],
@@ -72,6 +83,19 @@ class Docker:
     def stop(self, reference: str, **_kwargs: object) -> None:
         self.inspect(reference).state.status = "exited"
 
+    def update(self, reference: str, **kwargs: object) -> None:
+        self.events.append("update")
+        self.updates.append((reference, kwargs))
+        if self.update_failure is not None:
+            raise self.update_failure
+        host_config = self.inspect(reference).host_config
+        for name, value in kwargs.items():
+            if name == "cpus":
+                assert isinstance(value, float)
+                host_config.nano_cpus = round(value * 1_000_000_000)
+            else:
+                setattr(host_config, name, value)
+
     def remove(self, references: builtins.list[str]) -> None:
         for reference in references:
             self.removed.append(reference)
@@ -83,8 +107,9 @@ class Docker:
         self.listings.append(filters)
         return [guest for guest in self.guests.values() if guest.state.status in ("running", "restarting")]
 
-    def run(self, _image: str, _command: builtins.list[str], **kwargs: object) -> SimpleNamespace:
+    def run(self, image: str, _command: builtins.list[str], **kwargs: object) -> SimpleNamespace:
         self.events.append("run")
+        self.images.append(image)
         self.runs.append(kwargs)
         labels = kwargs["labels"]
         assert isinstance(labels, dict)
@@ -99,6 +124,7 @@ class Docker:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_workspace_usage_dao, "get", AsyncMock(return_value=None))
     docker = Docker()
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
@@ -201,6 +227,7 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     assert result == agent.container_id
     run = docker.runs[0]
     assert (run.get("memory"), run.get("memory_swap"), run.get("cpus"), run.get("pids_limit")) == (20, 20, 1.0, 512)
+    assert "cpu_shares" not in run
     assert run["publish"] == [("127.0.0.1:18888", module.settings.OPENCLAW_GATEWAY_PORT)]
     assert docker.listings == []
 

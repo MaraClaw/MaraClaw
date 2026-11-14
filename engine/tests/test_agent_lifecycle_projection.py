@@ -104,6 +104,31 @@ async def test_manager_reads_committed_safe_projection_without_docker(lifecycle_
         assert private not in response.text
 
 
+async def test_workspace_disk_block_is_reported_without_gating_start(lifecycle_db, no_docker):
+    # Given a startable agent whose last workspace measurement is over its allowance.
+    _operation, record = await fixtures.pending_start(lifecycle_db)
+    await succeeded_setup(lifecycle_db, record)
+    await lifecycle_db.execute(
+        "INSERT INTO agent_workspace_usage (agent_id, dir_bytes, layer_bytes, limit_bytes, measured_at, over_since) "
+        "VALUES (%(id)s, 3221225472, 0, 2684354560, now(), now())",
+        {"id": record.id},
+    )
+    user = await load_user_principal(record.creator_id)
+    # When lifecycle is read.
+    availability = (await get_lifecycle(record.id, user)).json()["availability"]
+    # Then the operational code is listed while policy eligibility and every start or retry capability are unchanged.
+    assert availability["blocking_codes"] == ["runtime_stopped", "workspace_disk_exceeded"]
+    assert availability["policy_eligible"]
+    assert availability["can_start"]
+    # And a measurement back under the allowance reports nothing.
+    await lifecycle_db.execute(
+        "UPDATE agent_workspace_usage SET over_since = NULL WHERE agent_id = %(id)s", {"id": record.id}
+    )
+    availability = (await get_lifecycle(record.id, user)).json()["availability"]
+    assert availability["blocking_codes"] == ["runtime_stopped"]
+    assert availability["can_start"]
+
+
 @pytest.mark.parametrize("access", ["use", "foreign"])
 async def test_use_only_and_foreign_tenant_cannot_read_projection(lifecycle_db, no_docker, access):
     # Given a company-use agent and either another company member or a foreign company administrator.

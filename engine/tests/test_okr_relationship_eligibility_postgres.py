@@ -3,6 +3,7 @@ from tests.relationship_postgres_fixtures import RelationshipDatabase, relations
 
 from app.dao import agent_relationship_dao, identity_dao, org_member_dao, tenant_dao, user_dao
 from app.db.session import connection_ctx
+from app.records.organization_plan import OrganizationPlanId
 
 __all__ = ["relationship_database"]
 
@@ -20,7 +21,9 @@ async def test_sync_rechecks_linked_member_eligibility_after_lock_wait(
     )
     member = data.members[0]
     await org_member_dao.update(db_obj=member, obj_in={"user_id": user.id})
-    other = await tenant_dao.create(obj_in={"name": "Other tenant", "slug": identity.id.hex})
+    other = await tenant_dao.create(
+        obj_in={"name": "Other tenant", "slug": identity.id.hex, "tier": OrganizationPlanId.ULTRA}
+    )
 
     async def revoke() -> None:
         statements = {

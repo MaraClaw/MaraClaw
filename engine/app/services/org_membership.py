@@ -236,6 +236,10 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: UserRol
 
                     if await has_owned_agents(user):
                         raise AlreadyInOrgError("Agent disposition requires an approved company admission")
+            if db is not None:
+                from app.services.company_capacity import require_account_slot
+
+                await require_account_slot(db, tenant.id)
             if previous_tenant_id is not None and previous_tenant_id != tenant.id:
                 await org_member_dao.unbind_user_from_tenant(user.id, previous_tenant_id)
             updated = await user_dao.update(
@@ -258,6 +262,34 @@ async def _set_user_org(user: UserRecord, tenant: TenantRecord, *, role: UserRol
     except UniqueViolationError as exc:
         logger.info("Refusing second organization for identity: %s", exc)
         raise AlreadyInOrgError("User already belongs to an organization") from exc
+
+
+async def activate_verified_memberships(identity_id: UUID) -> None:
+    """Activate the inactive memberships of an identity whose email was just verified, in the caller's transaction.
+
+    A membership of a capped company comes back only when it fits the company account cap
+    (``require_account_slot`` under the tenant lock, the member not counted against itself); one that does not fit
+    stays inactive and verification still succeeds. Memberships that are already active are not written, so a
+    deactivation racing this call is never undone.
+    """
+    from app.services.company_capacity import CompanyAccountLimitReachedError, require_account_slot
+
+    async with connection_ctx() as connection:
+        db = cast("DbConnection | None", connection)
+        for membership in await user_dao.get_by_identity_id(identity_id):
+            if membership.is_active:
+                continue
+            if db is not None and membership.tenant_id is not None and membership.role != UserRole.PLATFORM_ADMIN:
+                try:
+                    await require_account_slot(db, membership.tenant_id, excluded_user_id=membership.id)
+                except CompanyAccountLimitReachedError:
+                    logger.info(
+                        "Membership %s stays inactive after verification: company %s has no free account",
+                        membership.id,
+                        membership.tenant_id,
+                    )
+                    continue
+            _ = await user_dao.update(db_obj=membership, obj_in={"is_active": True})
 
 
 async def add_email_domain(tenant_id: UUID, raw_domain: str, *, is_default: bool = False):

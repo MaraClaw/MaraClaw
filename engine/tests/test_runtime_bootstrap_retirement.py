@@ -9,6 +9,7 @@ import pytest
 
 from app.config import get_settings
 from app.dao.tenant_dao import tenant_dao
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.runtime.bootstrap import bootstrap
 from app.services.platform_admin_seeder import PlatformAdminSeedError
@@ -49,7 +50,7 @@ async def test_bootstrap_leaves_global_enterprise_files_unassigned(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, seed_calls: list[str]
 ) -> None:
     # Given: historical global files and a first tenant, but no tenant-scoped files.
-    tenant = TenantRecord(id=uuid4(), name="First", slug="first")
+    tenant = TenantRecord(id=uuid4(), name="First", slug="first", tier=OrganizationPlanId.PRO)
     old_dir = tmp_path / "enterprise_info"
     old_dir.mkdir()
     source = old_dir / "private.txt"

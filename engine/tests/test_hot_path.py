@@ -262,7 +262,7 @@ async def test_call_agent_llm_loads_missing_fallback(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_call_agent_llm_runs_primary_with_fallback_failover(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     async def fake_failover(**kwargs: object) -> str:
@@ -277,14 +277,13 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
 
     tenant_id = uuid4()
     primary: Any = SimpleNamespace(id=uuid4(), model="p", enabled=True, tenant_id=tenant_id, supports_vision=False)
-    secondary: Any = SimpleNamespace(id=uuid4(), model="s", enabled=True, tenant_id=tenant_id, supports_vision=False)
+    fallback: Any = SimpleNamespace(id=uuid4(), model="f", enabled=True, tenant_id=tenant_id, supports_vision=False)
     agent: Any = SimpleNamespace(
         id=uuid4(),
         name="Agent",
         role_description="role",
         primary_model_id=primary.id,
-        secondary_model_id=secondary.id,
-        fallback_model_id=None,
+        fallback_model_id=fallback.id,
         tenant_id=tenant_id,
         is_expired=False,
         expires_at=None,
@@ -292,11 +291,11 @@ async def test_call_agent_llm_routes_trivial_to_secondary(monkeypatch: pytest.Mo
     result = await caller.call_agent_llm(
         agent.id,
         "hi",
-        turn=TurnContext(agent=agent, primary_model=primary, secondary_model=secondary),
+        turn=TurnContext(agent=agent, primary_model=primary, fallback_model=fallback),
     )
     assert result == "ok"
-    assert seen["primary"] is secondary
-    assert seen["fallback"] is primary
+    assert seen["primary"] is primary
+    assert seen["fallback"] is fallback
 
 
 @pytest.mark.asyncio

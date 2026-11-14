@@ -137,13 +137,11 @@ async def test_ensure_agent_inherits_chatgpt_subscription_when_primary_missing(m
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=None,
-        secondary_model_id=None,
         fallback_model_id=None,
     )
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=None,
-        default_secondary_model_id=None,
         default_fallback_model_id=None,
     )
 
@@ -177,13 +175,11 @@ async def test_ensure_agent_prefers_subscription_over_openai_api_key(monkeypatch
         id=uuid.uuid4(),
         tenant_id=_TENANT,
         primary_model_id=dummy.id,
-        secondary_model_id=None,
         fallback_model_id=None,
     )
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=dummy.id,
-        default_secondary_model_id=None,
         default_fallback_model_id=None,
     )
 

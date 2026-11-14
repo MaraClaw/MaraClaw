@@ -135,10 +135,10 @@ function AppShellFrame() {
         <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
           <MaraClawLogo className="size-9" />
           <div className="min-w-0">
-            <p className="font-display text-sm font-semibold">MaraClaw</p>
-            <p className="truncate text-xs text-muted-foreground">
+            <p className="truncate font-display text-base font-bold leading-tight" title={tenantQuery.data?.name}>
               {tenantQuery.data?.name ?? translate("Workspace")}
             </p>
+            <p className="truncate text-xs text-muted-foreground">MaraClaw</p>
           </div>
         </Link>
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2" aria-label={translate("Workspace")}>

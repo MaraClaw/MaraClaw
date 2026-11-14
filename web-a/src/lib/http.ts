@@ -63,68 +63,126 @@ type Transport = {
   readonly url: (path: string) => string
 }
 
-export function createApiRequest(policy: SessionPolicy, transport: Transport) {
-  async function execute(path: string, options: RequestOptions): Promise<unknown> {
-    const headers: Record<string, string> = { Accept: 'application/json' }
-    const current = policy.capture()
-    const token = options.token === undefined ? current.token : options.token
-    const owner = token ? { ...current, token } : null
-    if (owner) policy.assertCurrent(owner)
-    const signal = owner
-      ? (options.signal ? AbortSignal.any([owner.signal, options.signal]) : owner.signal)
-      : options.signal
-    if (token) headers.Authorization = `Bearer ${token}`
-    if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey
+export const MAX_PREVIEW_BYTES = 20 * 1024 * 1024
 
-    let body: string | undefined
-    if (options.body !== undefined) {
-      headers['Content-Type'] = 'application/json'
-      body = JSON.stringify(options.body)
+export class BinaryLimitError extends Error {
+  readonly name = 'BinaryLimitError'
+  constructor() { super('Files over 20 MiB cannot be previewed.') }
+}
+
+type Bytes = Uint8Array<ArrayBuffer>
+
+async function readPreviewBytes(response: Response, assertActive: () => void): Promise<Bytes> {
+  const reader = response.body?.getReader()
+  if (!reader) return new Uint8Array()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    if (Number(response.headers.get('Content-Length')) > MAX_PREVIEW_BYTES) throw new BinaryLimitError()
+    while (true) {
+      assertActive()
+      const chunk = await reader.read()
+      assertActive()
+      if (chunk.done) break
+      size += chunk.value.byteLength
+      if (size > MAX_PREVIEW_BYTES) throw new BinaryLimitError()
+      chunks.push(chunk.value)
     }
+  } catch (error) {
+    await reader.cancel(error)
+    assertActive()
+    throw error
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  return bytes
+}
 
-    function assertOwner() {
-      if (owner) policy.assertCurrent(owner)
-      signal?.throwIfAborted()
-    }
+type ExecutionOptions = RequestOptions & { readonly form?: FormData; readonly binary?: true }
 
-    try {
-      assertOwner()
-      const response = await transport.fetch(transport.url(path), {
-        method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
-        headers,
-        body,
-        signal,
-      })
-      assertOwner()
-      if (response.status === 204) return undefined
+async function execute(
+  policy: SessionPolicy, transport: Transport, path: string, options: ExecutionOptions & { readonly binary: true },
+): Promise<Bytes>
+async function execute(
+  policy: SessionPolicy, transport: Transport, path: string, options: ExecutionOptions,
+): Promise<unknown>
+async function execute(
+  policy: SessionPolicy, transport: Transport, path: string, options: ExecutionOptions,
+): Promise<unknown> {
+  const headers: Record<string, string> = { Accept: options.binary ? 'application/octet-stream' : 'application/json' }
+  const current = policy.capture()
+  const token = options.token === undefined ? current.token : options.token
+  const owner = token ? { ...current, token } : null
+  if (owner) policy.assertCurrent(owner)
+  const signal = owner
+    ? (options.signal ? AbortSignal.any([owner.signal, options.signal]) : owner.signal)
+    : options.signal
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey
 
-      const text = await response.text()
-      assertOwner()
-      let data: unknown = null
-      if (text) {
-        try {
-          data = JSON.parse(text) as unknown
-        } catch (error) {
-          if (!(error instanceof SyntaxError)) throw error
-          data = text
-        }
-      }
-
-      if (!response.ok) {
-        const detail = data && typeof data === 'object' && 'detail' in data ? data.detail : data
-        if (response.status === 401 && owner) policy.expire(owner)
-        throw new ApiError(response.status, detail)
-      }
-      return data
-    } catch (error) {
-      // Expiry has already notified auth; preserve that request's ApiError.
-      if (error instanceof ApiError && error.status === 401) throw error
-      if (owner && !policy.isCurrent(owner)) throw new StaleSessionError()
-      signal?.throwIfAborted()
-      throw error
-    }
+  const { form } = options
+  let body: BodyInit | undefined = form
+  if (!form && options.body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(options.body)
   }
 
+  function assertOwner() {
+    if (owner) policy.assertCurrent(owner)
+    signal?.throwIfAborted()
+  }
+
+  try {
+    assertOwner()
+    const response = await transport.fetch(transport.url(path), {
+      method: options.method ?? (form || options.body !== undefined ? 'POST' : 'GET'),
+      headers,
+      body,
+      signal,
+      ...(options.binary ? { cache: 'no-store', redirect: 'error' } : {}),
+    })
+    assertOwner()
+    if (response.status === 204) return options.binary ? new Uint8Array() : undefined
+
+    let text: string
+    if (options.binary) {
+      const bytes = await readPreviewBytes(response, assertOwner)
+      assertOwner()
+      if (response.ok) return bytes
+      text = new TextDecoder().decode(bytes)
+    } else {
+      text = await response.text()
+    }
+    assertOwner()
+    let data: unknown = null
+    if (text) {
+      try {
+        data = JSON.parse(text) as unknown
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error
+        data = text
+      }
+    }
+
+    if (!response.ok) {
+      const detail = data && typeof data === 'object' && 'detail' in data ? data.detail : data
+      if (response.status === 401 && owner) policy.expire(owner)
+      throw new ApiError(response.status, detail)
+    }
+    return data
+  } catch (error) {
+    // Expiry has already notified auth; preserve that request's ApiError.
+    if (error instanceof ApiError && error.status === 401) throw error
+    if (owner && !policy.isCurrent(owner)) throw new StaleSessionError()
+    signal?.throwIfAborted()
+    throw error
+  }
+}
+
+export function createApiRequest(policy: SessionPolicy, transport: Transport) {
   function apiRequest<T>(path: string, options: SchemaRequestOptions<T>): Promise<T>
   function apiRequest<T = unknown>(
     path: string,
@@ -134,14 +192,28 @@ export function createApiRequest(policy: SessionPolicy, transport: Transport) {
     path: string,
     options: RequestOptions & { readonly schema?: ResponseSchema<T> } = {},
   ): Promise<T> {
-    const data = await execute(path, options)
+    const data = await execute(policy, transport, path, options)
     return options.schema ? options.schema.parse(data) : (data as T)
   }
 
   return apiRequest
 }
 
-export const apiRequest = createApiRequest(adminSession, {
+const adminTransport: Transport = {
   fetch: (...args) => globalThis.fetch(...args),
   url: apiUrl,
-})
+}
+
+/** Multipart upload: the browser sets the `multipart/form-data` boundary, so no JSON `Content-Type` is sent. */
+export async function apiFormRequest<T>(
+  path: string, form: FormData, options: Omit<RequestOptions, 'body'> = {},
+): Promise<T> {
+  return await execute(adminSession, adminTransport, path, { ...options, form }) as T
+}
+
+/** Authenticated bytes (no-store, no redirects, capped at {@link MAX_PREVIEW_BYTES}). */
+export function apiBinaryRequest(path: string, options: Omit<RequestOptions, 'body'> = {}): Promise<Bytes> {
+  return execute(adminSession, adminTransport, path, { ...options, binary: true })
+}
+
+export const apiRequest = createApiRequest(adminSession, adminTransport)

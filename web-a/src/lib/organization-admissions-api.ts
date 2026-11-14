@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { OrganizationAdmissionDecisionRequestSchema, OrganizationAdmissionItemSchema, OrganizationAdmissionPageSchema } from './engine-contracts.generated.ts'
-import { apiRequest } from './http.ts'
+import { apiBinaryRequest, apiRequest } from './http.ts'
 
 export const ORGANIZATION_ADMISSIONS_PAGE_SIZE = 50
 export const ORGANIZATION_ADMISSION_NOTE_LIMIT = 1000
@@ -9,6 +9,8 @@ export const organizationAdmissionIdSchema = z.uuid().brand<'OrganizationAdmissi
 export const organizationAdmissionStatusSchema = z.enum(['pending', 'approved', 'rejected'])
 export const organizationAdmissionSchema = OrganizationAdmissionItemSchema.strip().extend({
   id: organizationAdmissionIdSchema, plan: OrganizationAdmissionItemSchema.shape.plan.readonly(),
+  recipient: OrganizationAdmissionItemSchema.shape.recipient.readonly(),
+  evidence: OrganizationAdmissionItemSchema.shape.evidence.readonly(),
 }).readonly()
 const organizationAdmissionPageSchema = OrganizationAdmissionPageSchema.strip().extend({
   items: z.array(organizationAdmissionSchema).readonly(),
@@ -30,6 +32,12 @@ export async function fetchOrganizationAdmissions(status: OrganizationAdmissionS
     offset: String(z.int().nonnegative().parse(offset)),
   })
   return apiRequest(`/api/admin/organization-admissions?${query}`, { schema: organizationAdmissionPageSchema, signal })
+}
+
+/** Bearer-authenticated evidence bytes (genesis platform admin only); the engine sends them with the stored content type. */
+export async function fetchOrganizationAdmissionEvidence(id: OrganizationAdmissionId, signal?: AbortSignal) {
+  organizationAdmissionIdSchema.parse(id)
+  return apiBinaryRequest(`/api/admin/organization-admissions/${id}/evidence`, { signal })
 }
 
 export async function decideOrganizationAdmission(id: OrganizationAdmissionId, decision: OrganizationAdmissionDecision) {

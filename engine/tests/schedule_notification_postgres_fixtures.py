@@ -23,7 +23,7 @@ async def notifiable_schedule(
     async with connection_ctx() as db:
         await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity})
         await db.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Notify QA', %(slug)s)",
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Notify QA', %(slug)s, 'ultra')",
             {"id": tenant, "slug": tenant.hex},
         )
         await db.execute(

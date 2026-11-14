@@ -61,6 +61,7 @@ class TenantSnapshot(TypedDict):
     id: str
     name: str
     slug: str
+    tier: str
     im_provider: str
     im_config: JsonObject | None
     is_active: bool
@@ -81,6 +82,6 @@ class TenantSnapshot(TypedDict):
     a2a_async_enabled: bool
     default_model_id: str | None
     default_fallback_model_id: str | None
-    default_secondary_model_id: str | None
     is_system: bool
     is_default_end_user_org: bool
+    phone: str | None

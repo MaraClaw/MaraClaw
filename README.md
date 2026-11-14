@@ -24,7 +24,7 @@ The repository contains three independently configured applications:
 | [`web-a/`](web-a/) | Organization and platform administration |
 | [`engine/`](engine/) | FastAPI APIs, authorization, persistence, background work, connectors, and guest management |
 
-Both frontends are React applications that run in the browser. Their production images use nginx to serve the built assets and proxy engine requests. The engine manages separate, dynamically created OpenClaw guest containers for agent execution; the guest image recipe is maintained outside this repository.
+Both frontends are React applications that run in the browser. Their production images use Caddy to serve the built assets and proxy engine requests. The engine manages separate, dynamically created OpenClaw guest containers for agent execution; the guest image recipe is maintained outside this repository.
 
 PostgreSQL stores durable platform records, chat transcripts, gateway work, and reply-delivery intents. Redis supplies short-lived tickets, caches, presence, and cross-instance events, rather than the durable work queue. Agent workspaces use host-mounted directories; file storage defaults to local storage and can be configured for an S3-compatible backend.
 
@@ -50,8 +50,8 @@ Chat and channel intake authorize incoming work and hand it to OpenClaw dispatch
 
 ### 5. Launcher deployment topology
 
-Each package has its own `start-from-docker.sh`. By default, the launchers share `maraclaw_network`, expose the member UI on port **5173**, the admin UI on **5174**, and the engine on **8000**. Member nginx proxies `/api/`, `/ws/`, and `/p/`; admin nginx proxies `/api/`.
+Each package has its own `start-from-docker.sh`. By default, the launchers share `maraclaw_network`, expose the member UI on port **5173**, the admin UI on **5174**, and the engine on **8000**. Member Caddy proxies `/api/`, `/ws/`, and `/p/`; admin Caddy proxies `/api/`.
 
 The engine uses the container daemon to create sibling OpenClaw guests and bind their agent directories from the host. PostgreSQL and Redis must be supplied separately through reachable configured endpoints. This view describes launcher behavior, not proof of a running deployment; TLS termination and other production infrastructure are outside these launchers.
 
-![MaraClaw launcher topology: browser clients, nginx servers, engine, and managed guests](docs/architectures/c4-deployment.svg)
+![MaraClaw launcher topology: browser clients, Caddy servers, engine, and managed guests](docs/architectures/c4-deployment.svg)

@@ -7,7 +7,9 @@ from app.dao.agent_dao import agent_dao, agent_permission_dao
 from app.dao.agent_deletion_request_dao import agent_deletion_request_dao
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
+from app.dao.agent_resource_pressure_episode_dao import agent_resource_pressure_episode_dao
 from app.dao.agent_setup_dao import agent_setup_dao
+from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.dao.approval_dao import approval_request_dao
 from app.dao.audit_log_dao import audit_log_dao
 from app.dao.auth_email_dao import auth_email_dao
@@ -15,6 +17,7 @@ from app.dao.broadcast_email_dao import broadcast_email_dao
 from app.dao.broadcast_history_dao import broadcast_history_dao
 from app.dao.broadcast_job_dao import broadcast_job_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
+from app.dao.capacity_order_dao import capacity_order_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -81,11 +84,13 @@ __all__ = [
     "agent_mcp_server_dao",
     "agent_permission_dao",
     "agent_relationship_dao",
+    "agent_resource_pressure_episode_dao",
     "agent_schedule_dao",
     "agent_setup_dao",
     "agent_template_dao",
     "agent_tool_dao",
     "agent_trigger_dao",
+    "agent_workspace_usage_dao",
     "approval_request_dao",
     "audit_log_dao",
     "auth_email_dao",
@@ -93,6 +98,7 @@ __all__ = [
     "broadcast_history_dao",
     "broadcast_job_dao",
     "broadcast_submission_dao",
+    "capacity_order_dao",
     "channel_config_dao",
     "channel_event_receipt_dao",
     "chat_message_dao",

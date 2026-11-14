@@ -3,8 +3,8 @@
 -- scripts address rows without lookups. Tenant of agent n: (n - 1) % 20 + 1. Owner of agent n: user n.
 SET session_replication_role = replica; -- skip foreign-key checks and triggers during the bulk load
 
-INSERT INTO tenants (id, name, slug)
-SELECT md5('t' || n)::uuid, 'Stress tenant ' || n, 'stress-' || n
+INSERT INTO tenants (id, name, slug, tier)
+SELECT md5('t' || n)::uuid, 'Stress tenant ' || n, 'stress-' || n, 'ultra'
 FROM generate_series(1, 20) AS n;
 
 -- A quota no run can exhaust keeps every intake's quota UPDATE taking the user row lock.

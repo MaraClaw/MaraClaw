@@ -28,7 +28,7 @@ async def test_live_company_transfer_clears_failure_snapshot_when_pending_automa
     target = uuid4()
     async with connection_ctx() as db:
         await db.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Target', %(slug)s)",
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Target', %(slug)s, 'ultra')",
             {"id": target, "slug": target.hex},
         )
     transfer = CompanyTransferRecord(

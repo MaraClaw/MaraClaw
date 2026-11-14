@@ -25,6 +25,7 @@ from app.dao.user_dao import user_dao
 from app.db.session import get_connection
 from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import agentbay_client, email_service, mcp_client, openclaw_update_exclusion as exclusion
@@ -93,7 +94,7 @@ def probe(pool: CountingPool, user: UserRecord, monkeypatch: pytest.MonkeyPatch,
         return user
 
     async def tenant_lookup(tenant_id: UUID) -> TenantRecord:
-        return TenantRecord(id=tenant_id, name="Contention tenant", slug="contention")
+        return TenantRecord(id=tenant_id, name="Contention tenant", slug="contention", tier=OrganizationPlanId.PRO)
 
     async def authorize(*_args: object, **_kwargs: object) -> tuple[AgentRecord, str]:
         state.authority("access")

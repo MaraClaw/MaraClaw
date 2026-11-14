@@ -6,6 +6,7 @@ import pytest
 
 from app.api import enterprise
 from app.config import Settings
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import platform_service as platform_module
 from app.services.sso_service import sso_service
@@ -14,7 +15,7 @@ from app.services.sso_service import sso_service
 @pytest.mark.asyncio
 @pytest.mark.parametrize("active_count", [0, 1])
 async def test_sso_state_updates_enabled_without_persisting_missing_base(monkeypatch, active_count):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=""))
     monkeypatch.setattr(enterprise.identity_provider_dao, "count_active_sso", AsyncMock(return_value=active_count))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -35,7 +36,7 @@ async def test_sso_state_updates_enabled_without_persisting_missing_base(monkeyp
     [("https://app.example.com", "https://acme.example.com", False), ("http://192.0.2.1", "http://192.0.2.1", True)],
 )
 async def test_sso_state_persists_only_configured_domain(monkeypatch, base, domain, clears_others):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=base))
     monkeypatch.setattr(enterprise.identity_provider_dao, "count_active_sso", AsyncMock(return_value=1))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
@@ -53,7 +54,7 @@ async def test_sso_state_persists_only_configured_domain(monkeypatch, base, doma
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base", ["", "https://app.example.com"])
 async def test_sso_enablement_avoids_ip_conflict_lookup_without_configured_ip(monkeypatch, base):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL=base))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
     conflicts = AsyncMock(return_value=[SimpleNamespace(tenant_id=uuid4())])
@@ -68,7 +69,7 @@ async def test_sso_enablement_avoids_ip_conflict_lookup_without_configured_ip(mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("has_conflict", [False, True])
 async def test_sso_enablement_checks_conflicts_for_configured_ip(monkeypatch, has_conflict):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     monkeypatch.setattr(platform_module, "get_settings", lambda: Settings(PUBLIC_BASE_URL="http://192.0.2.1"))
     monkeypatch.setattr(enterprise.tenant_dao, "get", AsyncMock(return_value=tenant))
     conflicts = AsyncMock(return_value=[SimpleNamespace(tenant_id=uuid4())] if has_conflict else [])

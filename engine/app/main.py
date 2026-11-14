@@ -20,6 +20,8 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
 from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
+from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
+from app.services.company_capacity import CompanyAccountLimitReachedError
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 from app.services.storage_runtime.quota_errors import StorageQuotaError
@@ -51,6 +53,16 @@ async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) 
 
 @app.exception_handler(StorageQuotaError)
 async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(WorkspaceDiskQuotaExceeded)
+async def workspace_disk_quota(_request: Request, exc: WorkspaceDiskQuotaExceeded) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(CompanyAccountLimitReachedError)
+async def company_account_limit(_request: Request, exc: CompanyAccountLimitReachedError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
@@ -92,6 +104,11 @@ app.add_middleware(
 
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
+from app.api.admin_capacity import router as admin_capacity_router
+from app.api.admin_resource_pressure import (
+    export_router as admin_resource_pressure_export_router,
+    router as admin_resource_pressure_router,
+)
 from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.admin_tavily import router as admin_tavily_router
 from app.api.advanced import router as advanced_router
@@ -106,6 +123,8 @@ from app.api.agentbay_control import router as agentbay_control_router
 from app.api.agents import router as agents_router
 from app.api.atlassian import router as atlassian_router
 from app.api.auth import router as auth_router
+from app.api.capacity import router as capacity_router
+from app.api.capacity_evidence import router as capacity_evidence_router
 from app.api.channel_catalog import router as channel_catalog_router
 from app.api.chat_sessions import router as chat_sessions_router
 from app.api.clawbook import router as clawbook_router
@@ -129,6 +148,7 @@ from app.api.okr import regeneration_router as okr_regeneration_router, router a
 from app.api.onboarding import router as onboarding_router
 from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
+from app.api.organization_admission_evidence import router as organization_admission_evidence_router
 from app.api.organization_admissions import router as organization_admissions_router
 from app.api.pages import public_router as pages_public_router, router as pages_router
 from app.api.relationships import router as relationships_router
@@ -180,6 +200,9 @@ app.include_router(messages_router, prefix=settings.API_PREFIX, dependencies=_CR
 app.include_router(tenants_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(company_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(organization_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(organization_admission_evidence_router, prefix=settings.API_PREFIX)
+app.include_router(capacity_router, prefix=settings.API_PREFIX)
+app.include_router(capacity_evidence_router, prefix=settings.API_PREFIX)
 app.include_router(schedules_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tools_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tools_probe_router, prefix=settings.API_PREFIX)
@@ -208,8 +231,11 @@ app.include_router(webhooks_router)
 app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_capacity_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_tavily_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_resource_pressure_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_resource_pressure_export_router, prefix=settings.API_PREFIX)
 app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)

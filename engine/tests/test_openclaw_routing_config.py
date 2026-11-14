@@ -40,8 +40,8 @@ def test_guest_model_ref(provider: str, name: str, expected: str | None) -> None
 def test_config_defaults_to_primary_and_registers_all_models() -> None:
     manager = AgentManager.__new__(AgentManager)
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
-    primary, secondary, fallback = model("opus", key="sk-opus"), model("haiku"), model("gpt-5.4", "openai", "sk-gpt")
-    config = manager._generate_openclaw_config(agent, primary, secondary=secondary, fallback=fallback)
+    primary, fallback = model("opus", key="sk-opus"), model("gpt-5.4", "openai", "sk-gpt")
+    config = manager._generate_openclaw_config(agent, primary, fallback=fallback)
     agents = config["agents"]
     assert isinstance(agents, dict)
     defaults = agents["defaults"]
@@ -49,7 +49,6 @@ def test_config_defaults_to_primary_and_registers_all_models() -> None:
     assert defaults["model"] == {"primary": "anthropic/opus", "fallbacks": ["openai/gpt-5.4"]}
     assert defaults["models"] == {
         "anthropic/opus": {"alias": "primary"},
-        "anthropic/haiku": {"alias": "secondary"},
         "openai/gpt-5.4": {"alias": "fallback"},
     }
     environment = config["env"]
@@ -74,12 +73,12 @@ def test_experiment_rewrites_and_unset_respects_guest_ownership(
 ) -> None:
     monkeypatch.setattr(manager_module.settings, "TAVILY_PROXY_ENABLED", False)
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
-    primary, secondary = model("opus"), model("gpt-5.4", "openai")
-    config_path = manager.write_guest_config(agent, primary=primary, secondary=secondary)
+    primary, fallback = model("opus"), model("gpt-5.4", "openai")
+    config_path = manager.write_guest_config(agent, primary=primary, fallback=fallback)
     assert config_path is not None
     baseline = config_path.read_bytes()
     monkeypatch.setattr(manager_module.settings, setting, value)
-    manager.write_guest_config(agent, primary=primary, secondary=secondary)
+    manager.write_guest_config(agent, primary=primary, fallback=fallback)
     defaults = json.loads(config_path.read_bytes())["agents"]["defaults"]
     if path == "cacheRetention":
         assert defaults["models"]["anthropic/opus"]["params"][path] == value
@@ -87,7 +86,7 @@ def test_experiment_rewrites_and_unset_respects_guest_ownership(
     else:
         assert defaults[path] == value
     monkeypatch.setattr(manager_module.settings, setting, None)
-    manager.write_guest_config(agent, primary=primary, secondary=secondary)
+    manager.write_guest_config(agent, primary=primary, fallback=fallback)
     if path == "cacheRetention":
         assert config_path.read_bytes() == baseline
     else:
@@ -209,25 +208,25 @@ def test_write_rotates_credentials_without_changing_model(manager: AgentManager)
 
 def test_write_lists_every_slot_and_defaults_to_primary(manager: AgentManager) -> None:
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
-    primary, secondary = model("opus"), model("haiku")
-    path = manager.write_guest_config(agent, primary=primary, secondary=secondary, selected=secondary)
+    primary, fallback = model("opus"), model("haiku")
+    path = manager.write_guest_config(agent, primary=primary, fallback=fallback, selected=fallback)
     assert path is not None
     written = path.read_text(encoding="utf-8")
     assert '"primary": "anthropic/opus"' in written
-    assert '"alias": "secondary"' in written
+    assert '"alias": "fallback"' in written
 
 
 def test_alternating_selected_slots_write_the_config_once(
     manager: AgentManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
-    primary, secondary = model("opus"), model("haiku")
+    primary, fallback = model("opus"), model("haiku")
     writes = Mock(wraps=manager._atomic_write_json)
     monkeypatch.setattr(manager, "_atomic_write_json", writes)
-    path = manager.write_guest_config(agent, primary=primary, secondary=secondary, selected=primary)
+    path = manager.write_guest_config(agent, primary=primary, fallback=fallback, selected=primary)
     assert path is not None
-    for selected in (secondary, primary, secondary):
-        assert manager.write_guest_config(agent, primary=primary, secondary=secondary, selected=selected) == path
+    for selected in (fallback, primary, fallback):
+        assert manager.write_guest_config(agent, primary=primary, fallback=fallback, selected=selected) == path
     openclaw_writes = [call for call in writes.call_args_list if call.args[0] == path]
     assert len(openclaw_writes) == 1
     assert '"primary": "anthropic/opus"' in path.read_text(encoding="utf-8")

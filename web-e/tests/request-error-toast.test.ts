@@ -30,7 +30,7 @@ test('request presentation ignores retired and aborted requests', () => {
 })
 
 test('request presentation never puts proxy markup into Sonner', () => {
-  showRequestError('<html><h1>502 Bad Gateway</h1>nginx</html>', new Error('proxy failed'))
+  showRequestError('<html><h1>502 Bad Gateway</h1>load-balancer</html>', new Error('proxy failed'))
   const latest = toast.getHistory().at(-1)
   assert.ok(latest && 'title' in latest)
   assert.equal(latest.type, 'error')

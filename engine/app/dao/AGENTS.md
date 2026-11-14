@@ -10,6 +10,7 @@ Pure-psycopg repositories returning `app.records` dataclasses.
 - `BaseDAO.create` fills missing columns from the record dataclass **only if** `record_factory` is `Record.from_row` (not a lambda). `None` defaults are skipped so Postgres `DEFAULT now()` can apply.
 - Lambdas today: `UserDAO`, `SkillDAO` - do not copy that pattern. `skills.is_builtin` / `is_default` have no SQL default.
 - Largest DAOs: `agent_dao.py`, `chat_dao.py`. Keep new queries in the owning DAO.
+- Tenant tier: `tenants.tier` is `NOT NULL` with no default, so every `tenant_dao.create` passes it. `tenant_dao.tiers_for(ids)` reads it for many organizations in one query inside the caller's transaction (never the tenant cache); `organization_plans.tier_for_tenant` is its single-id form.
 - Tenant name search: `tenant_dao.search_by_name` uses generated `name_tsv` + prefix `to_tsquery('simple', 'mara:*')`. Tokens must stay `[a-z0-9]` (see `tenant_name_tsquery`).
 - Partial JSONB state (e.g. trigger `_last_value` / `_poll_seq`) uses a conditional `config || jsonb_build_object(...)` UPDATE with a `WHERE` on the expected value, not `BaseDAO.update` (whole-row replace loses concurrent writes).
 - Keyset paging over nullable sort keys needs an explicit NULL branch in the cursor predicate (`chat_dao.list_page`); never OFFSET.

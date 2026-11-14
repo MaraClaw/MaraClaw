@@ -1,6 +1,9 @@
 const adminNotificationRoute = /^\/(?:|account|settings|notifications|organization-admissions|admission-approvals(?:\/[a-zA-Z0-9_-]+)?|users(?:\/[a-zA-Z0-9_-]+)?|companies(?:\/[a-zA-Z0-9_-]+)?|search-engine|broadcast|models|tools)(?:[?#][^\s\\]*)?$/
 
+const capacityNotificationRoute = /^\/capacity-(?:payments|orders)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export function safeNotificationLink(link: string | null): string | null {
+  if (link?.startsWith('/capacity-')) return capacityNotificationRoute.test(link) ? link : null
   if (link?.startsWith('/agent-deletion-requests')) {
     return /^\/agent-deletion-requests(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i.test(link) ? link : null
   }

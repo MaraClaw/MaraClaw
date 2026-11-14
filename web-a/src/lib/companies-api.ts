@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { OrganizationPlanIdValues, type OrganizationPlanId } from './engine-contracts.generated.ts'
 import { apiRequest } from './http.ts'
 
 const companyDeletionPreviewSchema = z.object({
@@ -40,6 +41,8 @@ export type CompanyStats = {
   inactive_user_count: number
   agent_count: number
   org_admin_email: string | null
+  phone: string | null
+  tier: OrganizationPlanId
 }
 
 const companyOptionSchema = z.object({
@@ -61,6 +64,8 @@ const companyStatsSchema = companyOptionSchema.extend({
   inactive_user_count: z.number().int().nonnegative(),
   agent_count: z.number().int().nonnegative(),
   org_admin_email: z.string().nullable(),
+  phone: z.string().nullable(),
+  tier: z.enum(OrganizationPlanIdValues),
 })
 
 const companiesPageSchema = z.object({
@@ -86,6 +91,8 @@ export type EmailDomain = {
 
 export type CreateCompanyInput = {
   name: string
+  phone: string
+  tier: OrganizationPlanId
   admin_email: string
   admin_password: string
   admin_display_name?: string
@@ -134,6 +141,7 @@ export async function getTenant(tenantId: string, signal?: AbortSignal): Promise
     is_system?: boolean
     is_default_end_user_org?: boolean
     can_disable?: boolean
+    tier: OrganizationPlanId
   }>(`/api/tenants/${tenantId}`, { signal })
   const isSystem = Boolean(tenant.is_system)
   const isDefaultEndUserOrg = Boolean(tenant.is_default_end_user_org)
@@ -153,6 +161,8 @@ export async function getTenant(tenantId: string, signal?: AbortSignal): Promise
     inactive_user_count: 0,
     agent_count: 0,
     org_admin_email: null,
+    phone: null,
+    tier: tenant.tier,
   }
 }
 

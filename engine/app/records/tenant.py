@@ -14,9 +14,11 @@ from app.core.json_types import (
     int_from_row,
     mapping_from_row,
     str_from_row,
+    str_from_row_opt,
     uuid_from_row,
     uuid_from_row_opt,
 )
+from app.records.organization_plan import OrganizationPlanId
 
 
 @dataclass(slots=True)
@@ -26,6 +28,7 @@ class TenantRecord:
     id: UUID
     name: str
     slug: str
+    tier: OrganizationPlanId
     im_provider: str = "web_only"
     im_config: dict[str, Any] | None = None
     is_active: bool = True
@@ -46,9 +49,9 @@ class TenantRecord:
     a2a_async_enabled: bool = True
     default_model_id: UUID | None = None
     default_fallback_model_id: UUID | None = None
-    default_secondary_model_id: UUID | None = None
     is_system: bool = False
     is_default_end_user_org: bool = False
+    phone: str | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> TenantRecord:
@@ -57,6 +60,7 @@ class TenantRecord:
             id=uuid_from_row(row["id"]),
             name=str_from_row(row["name"]),
             slug=str_from_row(row["slug"]),
+            tier=OrganizationPlanId(str_from_row(row["tier"])),
             im_provider=str_from_row(row.get("im_provider"), "web_only") or "web_only",
             im_config=im_config,
             is_active=bool(row.get("is_active", True)),
@@ -77,9 +81,9 @@ class TenantRecord:
             a2a_async_enabled=bool(row.get("a2a_async_enabled", True)),
             default_model_id=uuid_from_row_opt(row.get("default_model_id")),
             default_fallback_model_id=uuid_from_row_opt(row.get("default_fallback_model_id")),
-            default_secondary_model_id=uuid_from_row_opt(row.get("default_secondary_model_id")),
             is_system=bool(row.get("is_system", False)),
             is_default_end_user_org=bool(row.get("is_default_end_user_org", False)),
+            phone=str_from_row_opt(row.get("phone")),
         )
 
     @property

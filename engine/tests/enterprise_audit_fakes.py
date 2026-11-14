@@ -16,6 +16,7 @@ from app.core.domain.users import UserRole
 from app.core.json_types import object_attr
 from app.db import session
 from app.db.connection import DbConnection, Params, Row
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -26,7 +27,7 @@ class AuditDatabase(CountingRawConnection):
         super().__init__()
         self.model = _model(base_url="https://url-user:url-password@provider.invalid/v1?token=url-token#url-fragment")
         assert self.model.tenant_id is not None
-        self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company")
+        self.tenant = TenantRecord(id=self.model.tenant_id, name="Company", slug="company", tier=OrganizationPlanId.PRO)
         self.actor = UserRecord(id=uuid4(), tenant_id=self.tenant.id, role=UserRole.ORG_ADMIN)
         self.rows: dict[str, dict[UUID | str, Row]] = {
             "llm_models": {self.model.id: asdict(self.model)},
@@ -103,7 +104,7 @@ class AuditDatabase(CountingRawConnection):
         assert query.startswith("DELETE FROM llm_models ")
         deleted = self.rows["llm_models"].pop(row_id, None)
         for tenant in self.rows["tenants"].values():
-            for slot in ("default_model_id", "default_secondary_model_id", "default_fallback_model_id"):
+            for slot in ("default_model_id", "default_fallback_model_id"):
                 if tenant[slot] == row_id:
                     tenant[slot] = None
         return deepcopy(deleted)
@@ -134,7 +135,6 @@ def audit_db(monkeypatch: pytest.MonkeyPatch) -> AuditDatabase:
 
     for method in (
         "migrate_primary_model",
-        "migrate_secondary_model",
         "migrate_fallback_model",
         "clear_other_slots_matching",
     ):

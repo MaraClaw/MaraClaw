@@ -15,6 +15,7 @@ from app.core.security import get_current_user
 from app.db.errors import UniqueViolationError
 from app.records.identity import IdentityRecord
 from app.records.org_department import OrgDepartmentRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.department import AssignmentOut, DepartmentMemberOut
@@ -28,7 +29,7 @@ async def transaction() -> AsyncGenerator[None]:
 
 @pytest.fixture
 def directory(monkeypatch):
-    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme")
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
     actor = UserRecord(id=uuid4(), tenant_id=tenant.id, role=UserRole.ORG_ADMIN)
     subject = UserRecord(id=uuid4(), tenant_id=tenant.id)
     first = OrgDepartmentRecord(

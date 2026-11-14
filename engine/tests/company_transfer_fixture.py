@@ -11,6 +11,7 @@ from app.core.notification_kinds import NotificationKind
 from app.db import session
 from app.db.connection import DbConnection
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.transfer_policy import TransferPolicy
@@ -43,8 +44,10 @@ class TransferFixture:
 
 @pytest.fixture
 async def transfer_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TransferFixture]:
-    source = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
-    target = TenantRecord(id=uuid4(), name="Target", slug="target")
+    source = TenantRecord(
+        id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True, tier=OrganizationPlanId.PRO
+    )
+    target = TenantRecord(id=uuid4(), name="Target", slug="target", tier=OrganizationPlanId.PRO)
     identity = IdentityRecord(id=uuid4(), email="applicant@example.test", email_verified=True)
     applicant = UserRecord(id=uuid4(), tenant_id=source.id, identity_id=identity.id, identity=identity)
     reviewer = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)

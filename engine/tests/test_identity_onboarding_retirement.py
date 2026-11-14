@@ -6,6 +6,7 @@ import pytest
 from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityProviderRecord, IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import onboarding, platform_admin_seeder as seeder
@@ -151,8 +152,10 @@ async def test_provider_profile_update_keeps_real_identity_and_membership_persis
 async def test_provider_creation_keeps_identity_link_and_member_role(domain_matched: bool) -> None:
     # Given
     identity = IdentityRecord(id=uuid4(), email="ada@example.com")
-    fallback = TenantRecord(id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True)
-    company = TenantRecord(id=uuid4(), name="Company", slug="company")
+    fallback = TenantRecord(
+        id=uuid4(), name="KABERs", slug="kabers", is_default_end_user_org=True, tier=OrganizationPlanId.PRO
+    )
+    company = TenantRecord(id=uuid4(), name="Company", slug="company", tier=OrganizationPlanId.PRO)
     user = UserRecord(id=uuid4(), identity_id=identity.id, tenant_id=fallback.id)
     updated = UserRecord(id=user.id, identity_id=identity.id, tenant_id=fallback.id, registration_source="feishu")
     info = ExternalUserInfo(provider_type="feishu", provider_union_id="union-123", email="ada@example.com", name="Ada")

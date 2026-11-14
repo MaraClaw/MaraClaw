@@ -19,7 +19,8 @@ async def test_tenant_cleanup_locks_skill_parent_before_children(db, registry, m
     actor, before = registry
     tenant_id = uuid4()
     await db.execute(
-        "INSERT INTO tenants (id,name,slug) VALUES (%(id)s,'Refresh tenant','refresh-tenant')", {"id": tenant_id}
+        "INSERT INTO tenants (id,name,slug,tier) VALUES (%(id)s,'Refresh tenant','refresh-tenant','ultra')",
+        {"id": tenant_id},
     )
     await skill_dao.update(db_obj=before, obj_in={"tenant_id": tenant_id})
     locked, release = anyio.Event(), anyio.Event()

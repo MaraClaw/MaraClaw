@@ -14,6 +14,7 @@ from app.core.domain.users import UserRole
 from app.db import session
 from app.main import app as engine_app
 from app.records.identity import IdentityProviderRecord, IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.auth_audience import AuthAudience
@@ -43,7 +44,10 @@ def member_auth_setup(monkeypatch: pytest.MonkeyPatch, *, count: int = 1) -> Mem
         created_at=timestamp,
         updated_at=timestamp,
     )
-    tenants = [TenantRecord(id=uuid4(), name=f"Company {i}", slug=f"company-{i}") for i in range(count)]
+    tenants = [
+        TenantRecord(id=uuid4(), name=f"Company {i}", slug=f"company-{i}", tier=OrganizationPlanId.PRO)
+        for i in range(count)
+    ]
     users = [
         UserRecord(
             id=uuid4(),

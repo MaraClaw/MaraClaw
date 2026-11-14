@@ -7,7 +7,7 @@ Hard per-agent byte quota on files persisted through the managed S3 backend. The
 - Counted: the logical bytes of the **current** objects under `<agent UUID>/…` in the managed S3 bucket. Not counted: local materialized copies, historical object versions, external provider writes, shared tenant keys (`enterprise_info_<tenant UUID>/…`) and anything a guest writes directly into its bind-mounted workspace. There is no XFS/FUSE/rlimit enforcement; direct guest writes are explicitly out of scope.
 - **Exclusive ownership.** Everything under an agent's UUID prefix must be created, replaced and deleted through `get_storage_backend()` (`storage_runtime/facade.py`), whose S3 primary is `ManagedS3StorageBackend` (`quota_s3.py`). The configured bucket and base prefix are stable for this deployment. External writers, lifecycle expiration, replication and manual changes must not mutate the managed namespace. Analytics exports use a separate non-agent prefix. This is a fresh-deployment ledger, with no migration/backfill for preexisting objects.
 - Only `STORAGE_BACKEND=s3` is metered. The local backend keeps its behavior. With `STORAGE_LOCAL_FALLBACK_ENABLED` the S3 primary stays the metered one, so read-through promotions are charged and can be refused.
-- Agents whose organization has no paid tier (legacy, unlinked, system) have no file or total ceiling. Their managed S3 objects are recorded so assigning a paid destination can check current usage. Non-agent keys remain unmetered. A key whose first segment is a UUID spelled any other way fails closed (`ManagedKeyError`).
+- Agents that belong to no organization have no file or total ceiling, because they have no tier. Their managed S3 objects are recorded so assigning an organization can check current usage. Non-agent keys remain unmetered. A key whose first segment is a UUID spelled any other way fails closed (`ManagedKeyError`).
 - Existing upload and parser ceilings are unchanged; a tier file ceiling does not make every route accept that size.
 
 ## Ledger (`agent_storage_usage`, `agent_storage_objects`)
@@ -20,7 +20,7 @@ No foreign keys, so accounting outlives the agent, user and tenant rows. The usa
 2. **Provider call**, only after the reservation committed. Reserve, call and settle run inside one shielded scope, so cancellation cannot strand a write the provider may have applied.
 3. **Settle**: `LANDED` commits the new size (a delete drops the row and refunds); `REJECTED` restores the previous bytes; `UNKNOWN` keeps the full charge. `REJECTED` means the provider cannot have applied the request: a 4xx, a connection that never opened, an unsupported capability, an exhausted 409 conflict race. Automatic SDK retries are disabled, including environment overrides; only definitive 409 create conflicts retry. A create that loses to an existing object preserves its winner and adopts the provider's size. Everything else (5xx, timeouts, resets, cancellation, unexpected errors) is `UNKNOWN`.
 4. **Pending keys stay blocked.** Every mutation of an unresolved key raises 503 `storage_accounting_pending`. No HEAD result, ETag match, listing result, age or restart can fence a provider request that might arrive later. Both writes and deletes retain their conservative charge indefinitely. Version-token checks run inside the committed key claim, so another managed mutation cannot interleave between check and provider call.
-5. A ledger failure for an agent that might be paid (database, pool, lock timeout, ambiguous tier link) raises 503 `storage_accounting_unavailable` before the provider is called.
+5. A ledger failure (database, pool or lock timeout) raises 503 `storage_accounting_unavailable` before the provider is called.
 
 ## Deletes
 
@@ -28,7 +28,7 @@ No foreign keys, so accounting outlives the agent, user and tenant rows. The usa
 
 ## Company transfer
 
-`quota_transfer.require_destination_storage`, called by `company_transfer_disposition.apply_disposition` for paid transfers before any migration write, locks the moving agents' usage rows inside the transfer transaction and refuses with 409 `transfer_destination_storage_exceeded` when charged bytes (reservations included) or the largest known object exceed a tiered destination. A writer that reserved earlier is therefore counted; a writer that arrives later waits for the transfer to finish and then reserves against the destination tier.
+`quota_transfer.require_destination_storage`, called by `company_transfer_disposition.apply_disposition` for paid transfers before any migration write, locks the moving agents' usage rows inside the transfer transaction and refuses with 409 `transfer_destination_storage_exceeded` when charged bytes (reservations included) or the largest known object exceed the destination organization's tier. A writer that reserved earlier is therefore counted; a writer that arrives later waits for the transfer to finish and then reserves against the destination tier.
 
 ## HTTP contract (`app/main.py`)
 

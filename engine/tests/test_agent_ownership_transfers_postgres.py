@@ -6,6 +6,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
+from app.records.organization_plan import OrganizationPlanId
+from capacity_fixtures import grant_extras
+from tier_limit_fixtures import set_tenant_tier
 
 __all__ = ["deletion_scenario"]
 
@@ -108,8 +111,12 @@ async def test_one_invalid_agent_prevents_every_transfer(deletion_scenario: Dele
     assert await _creator(scenario, good) == scenario["owner"].id
 
 
-async def test_transfer_cannot_exceed_the_new_owners_agent_quota(deletion_scenario: DeletionScenario):
+async def test_transfer_cannot_exceed_the_new_owners_agent_quota(
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
+):
     scenario = deletion_scenario
+    grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     _ = await scenario.agent("target", "Already mine")
     first, second = await scenario.agent("owner", "A"), await scenario.agent("owner", "B")
     expired = await scenario.agent("owner", "Expired", is_expired=True)
@@ -175,8 +182,12 @@ async def test_creator_handover_requires_active_same_company_target(deletion_sce
     ) == [{"cancel_reason": "owner_changed"}]
 
 
-async def test_creator_handover_still_creator_only_and_respects_quota(deletion_scenario: DeletionScenario):
+async def test_creator_handover_still_creator_only_and_respects_quota(
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
+):
     scenario = deletion_scenario
+    grant_extras(monkeypatch, agents=20)  # isolate the per-account cap from the company-wide cap
+    await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)
     agent_id = await scenario.agent("owner")
     _ = await scenario.agent("target", "One")
     _ = await scenario.agent("target", "Two")

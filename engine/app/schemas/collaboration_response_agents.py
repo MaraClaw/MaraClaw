@@ -51,7 +51,6 @@ class AgentModelDump(TypedDict):
     creator_id: UUID
     creator_username: str | None
     primary_model_id: UUID | None
-    secondary_model_id: UUID | None
     fallback_model_id: UUID | None
     autonomy_policy: JsonObject
     tokens_used_today: int
@@ -106,7 +105,6 @@ def agent_model_dump(model: AgentOut) -> AgentModelDump:
         "creator_id": model.creator_id,
         "creator_username": model.creator_username,
         "primary_model_id": model.primary_model_id,
-        "secondary_model_id": model.secondary_model_id,
         "fallback_model_id": model.fallback_model_id,
         "autonomy_policy": deepcopy(model.autonomy_policy),
         "tokens_used_today": model.tokens_used_today,

@@ -61,7 +61,6 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
                 models = await llm_model_dao.list_enabled(tenant_id=transfer.target_tenant_id)
                 primary = next((model for model in models if model.id == agent.primary_model_id), None)
                 primary = primary or next(iter(models), None)
-                secondary = next((model for model in models if model.id == agent.secondary_model_id), None)
                 fallback = next((model for model in models if model.id == agent.fallback_model_id), None)
                 await to_thread.run_sync(
                     lambda: scrub_credentials(
@@ -70,9 +69,7 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
                 )
                 _guest_config_fingerprints.pop(str(agent.id), None)
                 _ = await to_thread.run_sync(
-                    lambda: agent_manager.write_guest_config(
-                        agent, primary=primary, secondary=secondary, fallback=fallback
-                    )
+                    lambda: agent_manager.write_guest_config(agent, primary=primary, fallback=fallback)
                 )
             case unreachable:
                 assert_never(unreachable)

@@ -39,9 +39,7 @@ async def recovery_case(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RecoveryCase]:
     db = pooled_database
-    prepared = openclaw_routing.PreparedOpenClawMessage(
-        db.agent, "hello", "primary", "provider/secret-model-v3", None, "qa"
-    )
+    prepared = openclaw_routing.PreparedOpenClawMessage(db.agent, "hello", "primary", "provider/secret-model-v3", "qa")
     async with transaction(db.first):
         native = await openclaw_routing.enqueue_prepared_openclaw_message(
             prepared,
@@ -169,7 +167,7 @@ async def test_revoked_epoch_never_resurrects_history(recovery_case: RecoveryCas
             case "tenant_roundtrip":
                 tenant = uuid4()
                 await db.first.execute(
-                    "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other', %(slug)s)",
+                    "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Other', %(slug)s, 'ultra')",
                     {"id": tenant, "slug": str(tenant)},
                 )
                 for tenant_id in (tenant, None):

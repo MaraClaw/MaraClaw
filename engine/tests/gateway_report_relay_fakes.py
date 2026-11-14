@@ -185,7 +185,7 @@ class RelayStore:
         assert not self.transaction.get()
         self.now += timedelta(seconds=self.preparation_elapsed)
         self.on_prepare()
-        return PreparedOpenClawMessage(agent, content, "primary", None, None, "test")
+        return PreparedOpenClawMessage(agent, content, "primary", None, "test")
 
     async def enqueue(
         self, prepared: PreparedOpenClawMessage, *, sender_agent_id: UUID, conversation_id: str | None = None

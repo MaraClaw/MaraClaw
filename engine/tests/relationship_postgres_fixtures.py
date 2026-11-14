@@ -22,6 +22,7 @@ from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection, connection_ctx
 from app.records.agent import AgentRecord
 from app.records.org import OrgMemberRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.scripts.bootstrap_db import SCHEMA_BASELINE, _statement_bodies
 
@@ -55,7 +56,9 @@ async def relationship_database() -> AsyncIterator[RelationshipDatabase]:
                 await admin.execute(statement)
             await init_pool(conninfo=make_conninfo(conninfo, options=f"-csearch_path={schema}"), min_size=1, max_size=6)
             async with connection_ctx():
-                tenant = await tenant_dao.create(obj_in={"name": "Relationship QA", "slug": uuid4().hex})
+                tenant = await tenant_dao.create(
+                    obj_in={"name": "Relationship QA", "slug": uuid4().hex, "tier": OrganizationPlanId.ULTRA}
+                )
                 actor = await user_dao.create(
                     obj_in={"display_name": "Manager", "tenant_id": tenant.id, "role": "org_admin", "is_active": True}
                 )

@@ -85,7 +85,8 @@ async def test_get_returns_absent_when_warm_tenant_deleted_in_owning_transaction
     tenant_id = uuid4()
     async with connection_ctx() as db:
         await db.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%s, 'Disposable', %s)", (tenant_id, str(tenant_id))
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Disposable', %s, 'ultra')",
+            (tenant_id, str(tenant_id)),
         )
     assert await tenant_dao.get(tenant_id) is not None
     key = redis_cache.cache_key("tenant", "v1", tenant_id)

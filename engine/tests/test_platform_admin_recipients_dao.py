@@ -150,7 +150,7 @@ async def test_returns_every_membership_when_recipient_count_exceeds_a_page(reci
     # Given 251 active PA memberships, spanning tenants and sharing one active identity.
     await recipient_db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": UUID(int=1000)})
     await recipient_db.execute(
-        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other company', 'other-company')",
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Other company', 'other-company', 'ultra')",
         {"id": UUID(int=2000)},
     )
     async with recipient_db.raw.cursor() as cursor:

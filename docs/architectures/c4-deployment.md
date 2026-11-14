@@ -21,9 +21,9 @@ C4Deployment
 
   Deployment_Node(host, "Container host", "Docker or Podman launcher", "Shared host paths and container network") {
     Deployment_Node(network, "maraclaw_network", "Configurable container network", "Independent package containers and guests") {
-      Container(memberServer, "web-e server", "nginx :8080", "Serves dist; host port 5173")
+      Container(memberServer, "web-e server", "Caddy :8080", "Serves dist; host port 5173")
       Container(engine, "maraclaw-engine", "Uvicorn :8000", "Host port 8000; default role all")
-      Container(adminServer, "web-a server", "nginx :8080", "Serves dist; host port 5174")
+      Container(adminServer, "web-a server", "Caddy :8080", "Serves dist; host port 5174")
       Deployment_Node(guestRuntimes, "Dynamic guest runtimes", "Same container network", "Managed sibling containers") {
         Container(guests, "OpenClaw guest instances", "OpenClaw gateway containers", "Created dynamically per agent")
       }
@@ -63,9 +63,9 @@ C4Deployment
 
 | Concern | Checked-in behavior and source |
 | --- | --- |
-| Package serving | Frontend defaults are host `5173 -> 8080` and `5174 -> 8080`; engine is `8000 -> 8000`. Overrides are launcher inputs: [web-e](../../web-e/start-from-docker.sh#L29-L32), [web-a](../../web-a/start-from-docker.sh#L29-L32), [engine](../../engine/start-from-docker.sh#L63-L67). Node builds the assets; nginx serves them: [web-e image](../../web-e/Dockerfile#L43-L71), [web-a image](../../web-a/Dockerfile#L55-L83). |
-| Shared network | All three launchers create/join `DOCKER_NETWORK` (default `maraclaw_network`). Engine receives DNS alias `maraclaw-engine`: [engine network and run arguments](../../engine/start-from-docker.sh#L129-L183), [member launcher](../../web-e/start-from-docker.sh#L72-L87), [admin launcher](../../web-a/start-from-docker.sh#L72-L87). Start engine before frontend nginx resolves the upstream. |
-| Proxy paths | Member nginx proxies `/api/`, `/ws/` with upgrade headers, and `/p/`; admin proxies `/api/` only: [member config](../../web-e/docker/nginx.conf#L62-L90), [admin config](../../web-a/docker/nginx.conf#L65-L74). These checked-in listeners use HTTP; production HTTPS needs separately supplied infrastructure. |
+| Package serving | Frontend defaults are host `5173 -> 8080` and `5174 -> 8080`; engine is `8000 -> 8000`. Overrides are launcher inputs: [web-e](../../web-e/start-from-docker.sh#L29-L32), [web-a](../../web-a/start-from-docker.sh#L29-L32), [engine](../../engine/start-from-docker.sh#L63-L67). Node builds the assets; Caddy serves them: [web-e image](../../web-e/Dockerfile#L44-L74), [web-a image](../../web-a/Dockerfile#L56-L86). |
+| Shared network | All three launchers create/join `DOCKER_NETWORK` (default `maraclaw_network`). Engine receives DNS alias `maraclaw-engine`: [engine network and run arguments](../../engine/start-from-docker.sh#L129-L183), [member launcher](../../web-e/start-from-docker.sh#L72-L87), [admin launcher](../../web-a/start-from-docker.sh#L72-L87). Caddy resolves `maraclaw-engine` per connection, so the engine and frontend launchers can start in either order. |
+| Proxy paths | Member Caddy proxies `/api/`, WebSocket-upgraded `/ws/`, and `/p/`; admin proxies `/api/` only: [member config](../../web-e/docker/Caddyfile#L112-L122), [admin config](../../web-a/docker/Caddyfile#L113-L126). These checked-in listeners use HTTP; production HTTPS needs separately supplied infrastructure. |
 | Dependencies | Supply reachable `DATABASE_URL` and `REDIS_URL`; launchers do not start database or Redis servers: [settings](../../engine/app/config.py#L97-L108), [engine run configuration](../../engine/start-from-docker.sh#L129-L229). Their placement in the diagram is intentionally unspecified. |
 | Host path identity | Engine mounts `DATA_DIR` at both `/data` and the same absolute host path, and pins `AGENT_DATA_DIR` and `STORAGE_LOCAL_ROOT` to its `agents` directory. This lets sibling guest mounts resolve on the daemon host: [launcher](../../engine/start-from-docker.sh#L129-L183), [guest mount](../../engine/app/services/agent_manager.py#L671-L685). |
 | Docker control | Launcher mounts a Linux Docker CLI and mounts the daemon socket when available; without it, guest creation fails: [launcher](../../engine/start-from-docker.sh#L189-L214). Guests join the shared network and publish their gateway only on host loopback `127.0.0.1:<allocated-port>`: [guest run arguments](../../engine/app/services/agent_manager.py#L671-L685). |

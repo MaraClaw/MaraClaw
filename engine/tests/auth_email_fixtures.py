@@ -28,6 +28,7 @@ from app.db.pool import close_pool, init_pool
 from app.db.session import bind_crud_connection
 from app.records.auth_email import AuthEmailKind, AuthEmailMaterial
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.services import auth_email_delivery as delivery, frontend_origin, password_reset_service as reset
 from app.services.email_verification_service import email_verification_service as verification
 
@@ -159,7 +160,9 @@ async def scenario(monkeypatch: pytest.MonkeyPatch, sink: MailSink) -> AsyncIter
                 identity = await identity_dao.create(
                     obj_in={"email": "member@example.com", "password_hash": "original-hash"}
                 )
-                platform = await tenant_dao.create(obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True})
+                platform = await tenant_dao.create(
+                    obj_in={"name": "MaraClaw", "slug": "maraclaw", "is_system": True, "tier": OrganizationPlanId.ULTRA}
+                )
                 await tenant_email_dao.put(
                     platform.id,
                     {

@@ -1,4 +1,4 @@
-"""Per-agent daily human-message cap of tier-governed organizations (``../../docs/organization-pricing.md``).
+"""Per-agent daily human-message cap of every organization (``../../docs/organization-pricing.md``).
 
 The day is the local calendar date in the timezone of the organization's genesis org admin (UTC when unset or
 invalid). Usage is keyed by that date, so a new local date counts from zero without any reset job.
@@ -59,14 +59,12 @@ async def _tenant_local_day(tenant_id: UUID) -> LocalDay:
 async def charge_agent_daily_message(agent: AgentRecord) -> None:
     """Charge one accepted human message to ``agent``; call in the accepting transaction, right after the user charge.
 
-    System agents and organizations without a tier have no cap. The tier is read inside the caller's transaction.
+    System agents and agents with no organization have no cap. The tier is read inside the caller's transaction.
     A refusal raises ``QuotaExceeded`` so the caller's rollback also undoes the user's own charge.
     """
     if agent.is_system or agent.tenant_id is None:
         return
     tier = await tier_for_tenant(agent.tenant_id)
-    if tier is None:
-        return
     limit = plan_for(tier).daily_messages_per_agent.value
     day = await _tenant_local_day(agent.tenant_id)
     if await agent_daily_message_usage_dao.charge(agent.id, day.usage_date, limit) is None:
@@ -81,7 +79,7 @@ async def daily_messages_for_agents(
 ) -> dict[UUID, AgentDailyMessages]:
     """Today's usage of each capped agent among ``agents`` (all owned inside ``tenant_id``).
 
-    System agents and every agent of an untiered organization are absent from the result.
+    System agents and every agent with no organization are absent from the result.
     """
     capped = [agent.id for agent in agents if not agent.is_system]
     if tier is None or tenant_id is None or not capped:

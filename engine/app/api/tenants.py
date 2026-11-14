@@ -25,6 +25,7 @@ from app.dao.tenant_dao import TenantDeletionPreview, tenant_dao
 from app.dao.user_dao import user_dao
 from app.db.session import optional_connection_ctx
 from app.records.company_transfer import TransferChoice
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.company_admission import ApprovedAdmissionResponse, PendingAdmissionResponse
@@ -37,6 +38,7 @@ from app.schemas.organization_response_tenant import (
     TenantTokenUsageResponse,
     TokenUsageBucket,
 )
+from app.schemas.phone import PhoneNumber
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.admin_provisioning import (
     AdminGuardError,
@@ -71,6 +73,8 @@ async def get_client_ip(request: Request) -> str | None:
 
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    tier: OrganizationPlanId
+    phone: PhoneNumber
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=128)
     admin_display_name: str | None = Field(default=None, max_length=200)
@@ -80,6 +84,7 @@ class TenantOut(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    tier: OrganizationPlanId
     im_provider: str
     timezone: str = "UTC"
     country_region: str = "001"
@@ -89,7 +94,6 @@ class TenantOut(BaseModel):
     a2a_async_enabled: bool = True
     default_model_id: uuid.UUID | None = None
     default_fallback_model_id: uuid.UUID | None = None
-    default_secondary_model_id: uuid.UUID | None = None
     logo_url: str | None = None
     hidden_agent_sections: list[str] = []
     created_at: datetime | None = None
@@ -212,7 +216,7 @@ async def create_tenant(
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
 ) -> TenantCreateResponse:
-    """Create a company and its genesis org admin (platform admin only).
+    """Create a company of the chosen tier and its genesis org admin (platform admin only).
 
     The org admin is provisioned with the given email + initial password and
     must change the password after the first successful login.
@@ -223,7 +227,9 @@ async def create_tenant(
 
     try:
         provisioned = await create_tenant_with_org_admin(
+            tier=data.tier,
             name=data.name,
+            phone=data.phone,
             admin_email=str(data.admin_email),
             admin_password=data.admin_password,
             admin_display_name=data.admin_display_name,
@@ -241,6 +247,8 @@ async def create_tenant(
         tenant_id=provisioned.tenant.id,
         changes={
             "name": field_change(None, provisioned.tenant.name),
+            "tier": field_change(None, provisioned.tenant.tier.value),
+            "phone": field_change(None, provisioned.tenant.phone),
             "org_admin_email": field_change(None, provisioned.admin_email),
         },
         details={"org_admin_user_id": str(provisioned.org_admin.id)},

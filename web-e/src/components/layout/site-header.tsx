@@ -5,7 +5,6 @@ import { Link } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { LanguageSelector } from '@/components/language-selector'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import {
@@ -28,7 +27,7 @@ const navItems = [
   { href: '#faq', label: 'FAQ' },
 ]
 
-export function SiteHeader() {
+export function SiteHeader({ linksToLanding = false }: { readonly linksToLanding?: boolean }) {
   const { t: translate, owned } = useTranslation()
   const { status, logout } = useAuth()
   const signedIn = status === 'authenticated'
@@ -62,7 +61,7 @@ export function SiteHeader() {
           {navItems.map((item) => (
             <a
               key={item.href}
-              href={item.href}
+              href={linksToLanding ? `/${item.href}` : item.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
                 {owned(item.label)}
@@ -71,7 +70,6 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-2 lg:flex">
-          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           {signedIn ? (
             <>
@@ -82,19 +80,13 @@ export function SiteHeader() {
                 {translate("Sign out")}</Button>
             </>
           ) : (
-            <>
-              <Button variant="ghost" size="sm" asChild>
-                <Link to="/login">{translate("Sign in")}</Link>
-              </Button>
-              <Button size="sm" asChild>
-                <a href="#pricing">{translate("View plans")}</a>
-              </Button>
-            </>
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/login">{translate("Sign in")}</Link>
+            </Button>
           )}
         </div>
 
         <div className="flex items-center gap-2 lg:hidden">
-          {!signedIn ? <LanguageSelector /> : null}
           <ThemeToggle />
           <Sheet>
             <SheetTrigger asChild>
@@ -109,11 +101,10 @@ export function SiteHeader() {
                   {translate("OpenClaw agents for teams and companies.")}</SheetDescription>
               </SheetHeader>
               <nav className="flex flex-col gap-1 px-4 pt-4" aria-label={translate("Mobile")}>
-                {!signedIn ? <LanguageSelector /> : null}
                 {navItems.map((item) => (
                   <SheetClose key={item.href} asChild>
                     <a
-                      href={item.href}
+                      href={linksToLanding ? `/${item.href}` : item.href}
                       className="rounded-xl px-3 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
                     >
                       {owned(item.label)}
@@ -133,18 +124,11 @@ export function SiteHeader() {
                       </SheetClose>
                     </>
                   ) : (
-                    <>
-                      <SheetClose asChild>
-                        <Button variant="outline" asChild>
-                          <Link to="/login">{translate("Sign in")}</Link>
-                        </Button>
-                      </SheetClose>
-                      <SheetClose asChild>
-                        <Button asChild>
-                          <a href="#pricing">{translate("View plans")}</a>
-                        </Button>
-                      </SheetClose>
-                    </>
+                    <SheetClose asChild>
+                      <Button variant="outline" asChild>
+                        <Link to="/login">{translate("Sign in")}</Link>
+                      </Button>
+                    </SheetClose>
                   )}
                 </div>
               </nav>

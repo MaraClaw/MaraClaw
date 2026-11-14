@@ -67,7 +67,7 @@ def pipeline(context, monkeypatch):
         return shared if session_id == shared.id else route
 
     async def prepare(*, agent, content, history):
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, None, "channel-unit")
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "channel-unit")
 
     monkeypatch.setattr(submissions, "compute_agent_access_level", access)
     monkeypatch.setattr(submissions, "connection_ctx", connection)
@@ -76,6 +76,7 @@ def pipeline(context, monkeypatch):
     monkeypatch.setattr(submissions.channel_event_receipt_dao, "lock_conversation", AsyncMock())
     monkeypatch.setattr(submissions, "load_agent_for_new_work", AsyncMock(return_value=agent))
     monkeypatch.setattr(submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(submissions, "ensure_workspace_within_quota", AsyncMock())
     monkeypatch.setattr(submissions, "charge_agent_daily_message", AsyncMock())
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(chat_session_dao, "lock_for_agent", locked)

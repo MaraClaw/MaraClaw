@@ -7,20 +7,24 @@ import { useTranslation } from '@/hooks/use-translation'
 
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
+import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { organizationAdmissionKeys } from '@/hooks/organization-admission-options'
 import { useOrganizationAdmissionDecision, useOrganizationAdmissionEmailRetry, useOrganizationAdmissions } from '@/hooks/use-organization-admissions'
+import { formatFileSize, formatVnd } from '@/lib/capacity-format'
 import { ApiError } from '@/lib/http'
+import { formatPhone } from '@/lib/phone'
 import {
   ORGANIZATION_ADMISSIONS_PAGE_SIZE, ORGANIZATION_ADMISSION_NOTE_LIMIT,
-  organizationAdmissionNoteSchema, organizationAdmissionStatusSchema,
+  fetchOrganizationAdmissionEvidence, organizationAdmissionNoteSchema, organizationAdmissionStatusSchema,
   type OrganizationAdmission, type OrganizationAdmissionDecision, type OrganizationAdmissionStatus,
 } from '@/lib/organization-admissions-api'
 
 const statusLabels = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' } as const
+const billingLabels = { monthly: 'Monthly', annual: 'Annual' } as const
 const actionClass = 'h-auto min-h-11 whitespace-normal'
 const noteDraftSchema = z.object({ note: organizationAdmissionNoteSchema })
 const credentialEmailLabels = {
@@ -29,10 +33,18 @@ const credentialEmailLabels = {
   failed: 'Initial credentials email delivery failed.',
 } as const
 
+function DetailFields({ rows }: { readonly rows: readonly (readonly [label: string, value: string])[] }) {
+  return <dl className="grid gap-4 sm:grid-cols-2">
+    {rows.map(([label, value]) => <div key={label} className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-sm tabular-nums">{value}</dd>
+    </div>)}
+  </dl>
+}
+
 function OrganizationAdmissionReview({ request, ready, onBack }: {
   readonly request: OrganizationAdmission; readonly ready: boolean; readonly onBack: () => void
 }) {
-  const { t, date, number, owned } = useTranslation()
+  const { t, locale, date, number, owned } = useTranslation()
   const usd = (amount: number) => number(amount, { style: 'currency', currency: 'USD' })
   const noteId = useId()
   const submitting = useRef(false)
@@ -48,12 +60,23 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   const conflict = decision.error instanceof ApiError && decision.error.status === 409
   const canDecide = ready && detail.status === 'pending' && !decision.isPending && !conflict
   const canApprove = canDecide && detail.organization_name !== null
+  const paymentFields = [
+    [t('Billing'), t(billingLabels[detail.billing])], [t('Amount'), formatVnd(detail.amount_vnd, locale)],
+    [t('Amount in USD'), usd(detail.amount_usd)], [t('Exchange rate'), t('{rate} VND per USD', { rate: number(detail.usd_vnd_rate) })],
+    [t('Transfer note'), detail.payment_reference], [t('Bank name'), detail.recipient.bank_name],
+    [t('Account number'), detail.recipient.account_number], [t('Branch name'), detail.recipient.branch_name],
+    [t('Payment evidence'), `${detail.evidence.filename} (${formatFileSize(detail.evidence.size_bytes, locale)})`],
+  ] as const
   const fields = [
     ['Requested tier', detail.tier.toUpperCase()], ['Quoted plan', detail.plan.name],
     ['Plan ID', detail.plan.id], ['Currency', detail.plan.currency],
-    ['Monthly price', usd(detail.plan.monthly_price_usd)], ['Included accounts', number(detail.plan.included_accounts)],
+    ['Monthly price', usd(detail.plan.monthly_price_usd)], ['Annual price', usd(detail.plan.annual_price_usd)],
+    ['Included accounts', number(detail.plan.included_accounts)],
     ['Additional account / month', usd(detail.plan.additional_account_monthly_usd)],
-    ['Maximum accounts', number(detail.plan.max_accounts)],
+    ['Included agents', number(detail.plan.included_agents)],
+    ['Additional agent / month', usd(detail.plan.additional_agent_monthly_usd)],
+    ['Storage add-on', t('{size} GiB for {price} per month', { size: number(detail.plan.storage_addon_bytes / (1024 ** 3)), price: usd(detail.plan.storage_addon_monthly_usd) })],
+    ['Workspace disk add-on', t('{size} GiB for {price} per month', { size: number(detail.plan.workspace_disk_addon_bytes / (1024 ** 3)), price: usd(detail.plan.workspace_disk_addon_monthly_usd) })],
     ['Maximum agents per account', number(detail.plan.max_agents_per_account)],
     ['Daily messages per agent', number(detail.plan.daily_messages_per_agent)],
     ['Managed S3 storage per agent', `${number(detail.plan.storage_limit_bytes / (1024 ** 3))} GiB`],
@@ -78,17 +101,19 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
       <CardHeader className="gap-3">
         <h2 ref={resultHeading} tabIndex={-1} className="font-display text-lg font-semibold outline-none">{detail.organization_name ?? t('Organization name not provided')}</h2>
         <p className="text-sm">{detail.email}</p>
+        <p className="text-sm tabular-nums">{formatPhone(detail.phone)}</p>
         <Badge variant="secondary">{t(statusLabels[detail.status])}</Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        <dl className="grid gap-4 sm:grid-cols-2">
-          {fields.map(([label, value]) => <div key={label} className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t(label)}</dt><dd className="mt-1 text-sm tabular-nums">{value}</dd>
-          </div>)}
-        </dl>
+        <section aria-labelledby={`${noteId}-payment`} className="flex flex-col gap-4">
+          <h3 id={`${noteId}-payment`} className="font-medium">{t('Payment')}</h3>
+          <DetailFields rows={paymentFields} />
+          <PaymentEvidencePreview loadKey={detail.id} load={(signal) => fetchOrganizationAdmissionEvidence(detail.id, signal)} evidence={detail.evidence} />
+        </section>
+        <DetailFields rows={fields.map(([label, value]) => [t(label), value] as const)} />
         <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.')}</p>
         {detail.review_note !== null ? <div><h3 className="font-medium">{t('Saved review note')}</h3><p className="mt-2 whitespace-pre-wrap text-sm">{detail.review_note || t('No note provided.')}</p></div> : null}
-        <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Approval creates the named organization and its genesis administrator account, then queues an email with initial sign-in credentials to the applicant. The administrator must change the password at first sign-in. Payment is arranged separately.')}</p>
+        <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Approval creates the named organization and its genesis administrator account, then queues an email with initial sign-in credentials to the applicant. The administrator must change the password at first sign-in. Approve only after you have checked that a transfer of the amount above, with its transfer note, arrived in the bank account.')}</p>
         {detail.status === 'approved' && detail.credential_email_status !== null ? <section aria-labelledby={`${noteId}-email`} className="flex flex-col items-start gap-3">
           <h3 id={`${noteId}-email`} className="font-medium">{t('Initial credentials email')}</h3>
           <p role="status" className="text-sm">{t(credentialEmailLabels[detail.credential_email_status])}</p>
@@ -119,7 +144,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
           </div>
           <label htmlFor={`${noteId}-confirm`} className="flex min-h-11 cursor-pointer items-start gap-3 py-2 text-sm leading-relaxed">
             <input id={`${noteId}-confirm`} type="checkbox" checked={confirmed} disabled={!canDecide} onChange={(event) => setConfirmed(event.currentTarget.checked)} className="mt-1 size-5 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50" />
-            {t('I understand that approval creates the organization and its genesis administrator account and queues their initial sign-in credentials by email, and that a saved decision cannot be changed.')}
+            {t('I checked that {amount} with transfer note {reference} arrived in the bank account. I understand that approval creates the organization and its genesis administrator account and queues their initial sign-in credentials by email, and that a saved decision cannot be changed.', { amount: formatVnd(detail.amount_vnd, locale), reference: detail.payment_reference })}
           </label>
           <div className="flex flex-wrap gap-3">
             <Button type="submit" className={actionClass} disabled={!canApprove || !confirmed} aria-describedby={detail.organization_name === null ? `${noteId}-organization` : undefined}>{t('Approve request')}</Button>
@@ -132,7 +157,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
 }
 
 export function OrganizationAdmissionsPage() {
-  const { t, date, number } = useTranslation()
+  const { t, locale, date, number } = useTranslation()
   const filterId = useId()
   const queueHeading = useRef<HTMLHeadingElement>(null)
   const client = useQueryClient()
@@ -144,7 +169,7 @@ export function OrganizationAdmissionsPage() {
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    <header><h1 ref={queueHeading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight outline-none">{t('Organization admissions')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Review requests for a new organization and the commercial terms quoted at submission.')}</p></header>
+    <header><h1 ref={queueHeading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight outline-none">{t('Organization admissions')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Review requests for a new organization, the commercial terms quoted at submission and the payment evidence uploaded with them.')}</p></header>
     {selected && reviews.isFetching ? <p role="status" className="text-sm">{t('Refreshing request status...')}</p> : null}
     {reviews.isError ? <div className="flex flex-col items-start gap-3"><ErrorToast error={reviews.error} message={reviews.error instanceof ApiError ? reviews.error.message : t('Unable to load organization requests.')} /><Button variant="outline" disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>{t('Retry')}</Button></div> : null}
     {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => setSelected(null)} /> : <>
@@ -162,7 +187,8 @@ export function OrganizationAdmissionsPage() {
         {items.map((request) => <li key={request.id}><Card><CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-display text-lg font-semibold">{request.organization_name ?? t('Organization name not provided')}</h2><Badge variant="secondary">{t(statusLabels[request.status])}</Badge></div>
           <p className="text-sm">{request.email}</p>
-          <p className="text-sm">{request.tier.toUpperCase()} / {request.plan.name} / <span className="tabular-nums">{number(request.plan.monthly_price_usd, { style: 'currency', currency: 'USD' })}</span> {t('per month')}</p>
+          <p className="text-sm tabular-nums">{formatPhone(request.phone)}</p>
+          <p className="text-sm">{request.plan.name} · {t(billingLabels[request.billing])} · <span className="tabular-nums">{formatVnd(request.amount_vnd, locale)}</span> · <span className="tabular-nums">{request.payment_reference}</span></p>
           <time dateTime={request.created_at} className="text-xs text-muted-foreground">{date(request.created_at)}</time>
           <Button variant="outline" className={`self-start ${actionClass}`} onClick={() => setSelected(request)} aria-label={t('Review request from {email}', { email: request.email })}>{t('Review request')}</Button>
         </CardContent></Card></li>)}

@@ -107,7 +107,6 @@ async def provision_agent(
         "agent_type": AgentType.OPENCLAW,
         "gogcli_enabled": bool(data.gogcli_enabled),
         "primary_model_id": data.primary_model_id,
-        "secondary_model_id": data.secondary_model_id,
         "fallback_model_id": data.fallback_model_id,
         "max_tokens_per_day": data.max_tokens_per_day,
         "max_tokens_per_month": data.max_tokens_per_month,

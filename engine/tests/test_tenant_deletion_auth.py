@@ -10,6 +10,7 @@ from app.api import tenants
 from app.core import security
 from app.core.domain.users import UserRole
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
@@ -38,7 +39,7 @@ async def test_tenant_deletion_http_role_matrix(
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=actor))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     pin_membership_generation(monkeypatch)
-    get = AsyncMock(return_value=TenantRecord(id=tenant_id, name="Target", slug="target"))
+    get = AsyncMock(return_value=TenantRecord(id=tenant_id, name="Target", slug="target", tier=OrganizationPlanId.PRO))
     counts = {"users_count": 2, "agents_count": 3, "schedules_count": 5}
     count = AsyncMock(return_value=counts)
     cleanup, audit = AsyncMock(), AsyncMock()
@@ -104,6 +105,7 @@ async def test_tenant_deletion_http_preserves_eligibility_and_authentication_che
         slug="target",
         is_system=condition == "system",
         is_default_end_user_org=condition == "default",
+        tier=OrganizationPlanId.PRO,
     )
     get = AsyncMock(return_value=None if condition == "missing" else tenant)
     count, cleanup, audit, fallback = (AsyncMock() for _ in range(4))

@@ -92,7 +92,7 @@ async def test_live_completion_reloads_original_creator_when_eligibility_changes
                 case "cross_tenant":
                     tenant = uuid4()
                     await db.execute(
-                        "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Other', %(slug)s)",
+                        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Other', %(slug)s, 'ultra')",
                         {"id": tenant, "slug": tenant.hex},
                     )
                     await db.execute(

@@ -8,6 +8,7 @@ from app.core.json_types import JsonObject, json_object_from
 from app.dao.tenant_dao import tenant_dao
 from app.dao.tool_dao import tool_dao
 from app.db.session import get_connection
+from app.records.organization_plan import OrganizationPlanId
 from app.services.mcp_client import MCPClient
 from app.services.tool_config import decrypt_sensitive_fields
 from tool_management_fixtures import ToolScenario, organization_scenario, tool_scenario
@@ -93,7 +94,7 @@ async def test_concurrent_imports_publish_exactly_one_complete_batch(
 ) -> None:
     scenario = tool_scenario
     responses: list[Response] = []
-    other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other"})
+    other = await tenant_dao.create(obj_in={"name": "Other", "slug": "other", "tier": OrganizationPlanId.ULTRA})
     ready = anyio.Event()
     reached = 0
     original = tool_dao.list_by_names

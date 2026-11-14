@@ -116,7 +116,9 @@ async def test_preview_returns_zero_counts_for_empty_company(deletion_pg: Deleti
     # Given
     empty_tenant = uuid4()
     async with connection_ctx() as db:
-        await db.execute("INSERT INTO tenants (id, name, slug) VALUES (%s, 'Empty', 'empty')", (empty_tenant,))
+        await db.execute(
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Empty', 'empty', 'ultra')", (empty_tenant,)
+        )
     actor = UserRecord(id=uuid4(), identity_id=uuid4(), role=UserRole.PLATFORM_ADMIN)
     app = preview_app(actor)
     # When

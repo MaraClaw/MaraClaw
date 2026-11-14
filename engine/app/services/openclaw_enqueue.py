@@ -52,7 +52,6 @@ async def insert_prepared_message(
         "status": "pending",
         "selected_slot": prepared.selected_slot,
         "guest_model_ref": prepared.guest_model_ref,
-        "complexity": prepared.complexity,
         "routing_reason": prepared.routing_reason,
     }
     if shared:

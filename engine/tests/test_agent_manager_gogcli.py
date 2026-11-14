@@ -117,7 +117,13 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
 
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None, setup_pending=False
+        id=agent_id,
+        name="Gog Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
     agent.gogcli_enabled = True
 
@@ -161,7 +167,13 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize_agent_dir)
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Gog Agent", creator_id=uuid.uuid4(), primary_model_id=None, setup_pending=False
+        id=agent_id,
+        name="Gog Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
     agent.gogcli_enabled = True
 
@@ -200,7 +212,13 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
 
     monkeypatch.setattr(agent_manager_module, "restore_gogcli_state", restore_state)
     agent: Any = SimpleNamespace(
-        id=agent_id, name="Plain Agent", creator_id=uuid.uuid4(), primary_model_id=None, setup_pending=False
+        id=agent_id,
+        name="Plain Agent",
+        creator_id=uuid.uuid4(),
+        primary_model_id=None,
+        setup_pending=False,
+        tenant_id=None,
+        is_system=False,
     )
     agent.gogcli_enabled = False
 

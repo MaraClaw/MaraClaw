@@ -93,6 +93,8 @@ def _with_stats(tenant: TenantRecord, stats: TenantUsageStats) -> CompanyStats:
         total_tokens=stats.total_tokens,
         cache_read_tokens_total=stats.cache_read_tokens_total,
         org_admin_email=stats.org_admin_email,
+        tier=tenant.tier,
+        phone=tenant.phone,
     )
 
 

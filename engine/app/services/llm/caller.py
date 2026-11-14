@@ -917,7 +917,6 @@ async def call_agent_llm(
     bundle = await load_agent_model_bundle(
         agent,
         primary=turn.primary_model if turn else None,
-        secondary=turn.secondary_model if turn else None,
         fallback=turn.fallback_model if turn else None,
     )
 
@@ -927,16 +926,10 @@ async def call_agent_llm(
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": user_text})
 
-    choice = await select_turn_model(
-        bundle,
-        user_text=user_text,
-        history=history,
-        agent_id=agent_id,
-    )
+    choice = select_turn_model(bundle, agent_id=agent_id)
     selected_model = choice.model
     failover_model = choice.failover_model
     selected_slot = choice.slot
-    complexity = choice.complexity
     routing_reason = choice.reason
 
     if not selected_model:
@@ -945,12 +938,10 @@ async def call_agent_llm(
     routed_turn = turn or TurnContext(
         agent=agent,
         primary_model=bundle.primary,
-        secondary_model=bundle.secondary,
         fallback_model=bundle.fallback,
     )
     routed_turn.selected_model = selected_model
     routed_turn.selected_slot = selected_slot
-    routed_turn.complexity = complexity
     routed_turn.routing_reason = routing_reason
 
     # Use unified call_llm_with_failover

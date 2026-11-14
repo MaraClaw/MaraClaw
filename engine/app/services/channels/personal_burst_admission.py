@@ -11,6 +11,7 @@ from app.dao.personal_burst_input_dao import personal_burst_input_dao
 from app.db.session import connection_ctx
 from app.records.personal_burst_input import NewBurstMember, ReceiptKey
 from app.services.agent_message_quota import charge_agent_daily_message
+from app.services.agent_workspace_quota import ensure_workspace_within_quota
 from app.services.channels.binding import persist_channel_user_message
 from app.services.channels.personal_burst_gateway import create_burst_anchor
 from app.services.channels.personal_burst_limits import personal_burst_limits
@@ -52,12 +53,14 @@ async def _accept(original: PersonalOriginal) -> PersonalAccepted:
 async def _charge_sender_and_agent(original: PersonalOriginal) -> bool:
     """Charge the sender's quota and the agent's daily cap as one unit; ``False`` when either refuses, neither charged.
 
-    A refusal is a committed outcome here, not an exception, so the sender's own charge needs a savepoint to undo.
+    An agent over its workspace disk allowance refuses the same way. A refusal is a committed outcome here, not an
+    exception, so the sender's own charge needs a savepoint to undo.
     """
     async with connection_ctx() as db:
         await db.execute("SAVEPOINT personal_message_charges")
         try:
             await charge_conversation_quota(original.sender)
+            await ensure_workspace_within_quota(original.agent)
             await charge_agent_daily_message(original.agent)
         except QuotaExceededError:
             await db.execute("ROLLBACK TO SAVEPOINT personal_message_charges")

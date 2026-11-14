@@ -46,7 +46,8 @@ async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
     )
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO tenants (id, name, slug) VALUES (%(id)s, 'Burst QA', 'burst-qa')", {"id": tenant}
+            "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Burst QA', 'burst-qa', 'ultra')",
+            {"id": tenant},
         )
         await db.first.execute(
             "INSERT INTO channel_configs (id, agent_id, channel_type, app_id, app_secret, encrypt_key, "

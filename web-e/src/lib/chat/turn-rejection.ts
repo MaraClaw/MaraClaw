@@ -2,7 +2,7 @@ import type { ChatLine } from './transcript.ts'
 import type { ChatTurnRejection } from './ws-client.ts'
 
 const recoverySteps = {
-  quota_exceeded: 'Ask an admin to check your message allowance.',
+  quota_exceeded: "Ask an admin to check this agent's allowance.",
   agent_expired: 'Ask an admin to renew this agent.',
   no_company_model: 'Ask an admin to set up a company model.',
   enqueue_failed: 'Retry this message.',
