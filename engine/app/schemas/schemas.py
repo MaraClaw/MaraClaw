@@ -349,8 +349,6 @@ class AgentUpdate(BaseModel):
     max_triggers: int | None = None
     min_poll_interval_min: int | None = None
     webhook_rate_limit: int | None = None
-    heartbeat_enabled: bool | None = None
-    heartbeat_interval_minutes: int | None = None
     heartbeat_active_hours: str | None = None
     timezone: str | None = None
     expires_at: datetime | None = None  # Admin only - extend agent expiry

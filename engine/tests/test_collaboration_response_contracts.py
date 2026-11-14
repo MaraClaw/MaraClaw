@@ -156,25 +156,41 @@ async def test_update_keeps_direct_clamps_but_existing_http_model_filters_them(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, clamped: bool
 ) -> None:
     assert actor.tenant_id is not None
-    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_heartbeat_interval_minutes=240)
+    tenant = TenantRecord(actor.tenant_id, "Company", "company", min_poll_interval_floor=5)
     monkeypatch.setattr(agents.tenant_dao, "get", AsyncMock(return_value=tenant))
     monkeypatch.setattr(agents.agent_dao, "update", AsyncMock(return_value=agent))
-    interval = 10 if clamped else 300
+    interval = 1 if clamped else 30
 
-    direct = await agents.update_agent(agent.id, AgentUpdate(heartbeat_interval_minutes=interval), actor)
+    direct = await agents.update_agent(agent.id, AgentUpdate(min_poll_interval_min=interval), actor)
 
     assert ("_clamped_fields" in direct) is clamped
     if clamped:
         assert direct.get("_clamped_fields") == [
-            {"field": "heartbeat_interval_minutes", "requested": 10, "applied": 240, "reason": "company_floor"}
+            {"field": "min_poll_interval_min", "requested": 1, "applied": 5, "reason": "company_floor"}
         ]
     TypeAdapter(AgentUpdatedResponse).validate_python(direct)
-    response = await client.patch(f"/api/agents/{agent.id}", json={"heartbeat_interval_minutes": interval})
+    response = await client.patch(f"/api/agents/{agent.id}", json={"min_poll_interval_min": interval})
     assert response.status_code == 200
     assert "_clamped_fields" not in response.json()
     created_at = TypeAdapter(JsonObject).validate_json(response.content)["created_at"]
     assert isinstance(created_at, str)
     assert created_at.endswith("Z")
+
+
+async def test_update_never_writes_the_engine_managed_heartbeat(
+    client: AsyncClient, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    update = AsyncMock(return_value=agent)
+    monkeypatch.setattr(agents.agent_dao, "update", update)
+
+    response = await client.patch(
+        f"/api/agents/{agent.id}",
+        json={"heartbeat_enabled": False, "heartbeat_interval_minutes": 10, "heartbeat_active_hours": "08:00-17:00"},
+    )
+
+    assert response.status_code == 200
+    assert update.await_args is not None
+    assert update.await_args.kwargs["obj_in"] == {"heartbeat_active_hours": "08:00-17:00"}
 
 
 @pytest.mark.parametrize("has_grant", [False, True])

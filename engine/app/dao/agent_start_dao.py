@@ -101,7 +101,9 @@ class AgentStartDAO:
     async def publish(self, db: DbConnection, operation: AgentStartOperation, agent: AgentRecord) -> bool:
         row = await db.fetchone(
             "UPDATE agents a SET status=%(status)s::agent_status_enum,container_id=%(container)s,container_port=%(port)s,"
-            "last_active_at=now(),api_key_hash=%(key)s,updated_at=now() "
+            "last_active_at=now(),api_key_hash=%(key)s,updated_at=now(),"
+            # The engine owns heartbeat: every published start re-enables it for non-system agents.
+            "heartbeat_enabled=(a.heartbeat_enabled OR a.is_system IS NOT TRUE) "
             "FROM agent_start_operations o WHERE a.id=%(id)s AND o.agent_id=a.id "
             "AND o.operation_id=%(op)s AND o.state='pending' "
             "AND a.creator_id=o.creator_id AND a.tenant_id IS NOT DISTINCT FROM o.tenant_id "

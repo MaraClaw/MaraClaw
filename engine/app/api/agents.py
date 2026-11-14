@@ -715,28 +715,10 @@ async def update_agent(
 
     clamped_fields: list[AgentClampedField] = []
     tenant = None
-    if current_user.tenant_id and (
-        "heartbeat_interval_minutes" in update_data
-        or {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(update_data.keys())
+    if current_user.tenant_id and {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(
+        update_data.keys()
     ):
         tenant = await tenant_dao.get(current_user.tenant_id)
-
-    if "heartbeat_interval_minutes" in update_data and tenant:
-        original = json_as_int(update_data["heartbeat_interval_minutes"])
-        if original >= tenant.min_heartbeat_interval_minutes:
-            original = None
-    else:
-        original = None
-    if original is not None and tenant:
-        update_data["heartbeat_interval_minutes"] = tenant.min_heartbeat_interval_minutes
-        clamped_fields.append(
-            {
-                "field": "heartbeat_interval_minutes",
-                "requested": original,
-                "applied": tenant.min_heartbeat_interval_minutes,
-                "reason": "company_floor",
-            }
-        )
 
     if tenant and {"min_poll_interval_min", "webhook_rate_limit", "max_triggers"} & set(update_data.keys()):
         if "min_poll_interval_min" in update_data:

@@ -116,6 +116,21 @@ async def test_fresh_eligibility_blocks_disabled_subjects(start_db, subject):
     assert await store.recover(operation) is None
 
 
+@pytest.mark.parametrize("is_system", [False, True])
+async def test_published_start_restores_engine_managed_heartbeat(start_db, is_system):
+    # Given a stopped agent whose heartbeat an earlier engine stop turned off.
+    operation, original = await pending_start(start_db)
+    await start_db.execute(
+        "UPDATE agents SET heartbeat_enabled=false, is_system=%(system)s WHERE id=%(id)s",
+        {"id": original.id, "system": is_system},
+    )
+    # When the start publishes its guest.
+    assert await PostgresStartStore().publish(operation, replace(original, status="running", container_id="new"))
+    # Then heartbeat is back on, except for system agents, which keep their seeded setting.
+    enabled = await start_db.fetchval("SELECT heartbeat_enabled FROM agents WHERE id=%(id)s", {"id": original.id})
+    assert enabled is not is_system
+
+
 @pytest.fixture
 def guest_surface(start_db, tmp_path, monkeypatch):
     manager = reconciler.agent_manager
