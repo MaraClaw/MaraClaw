@@ -105,7 +105,7 @@ test('server failure preserves the reason and announces a recoverable error', as
     // When
     request.release(503)
     // Then
-    await expect(page.getByRole('dialog').getByRole('alert')).toContainText('try again')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to request deletion. Check your connection and try again.' })).toContainText('try again')
     await expect(page.getByRole('textbox', { name: 'Reason', exact: true })).toHaveValue('Keep this reason')
     await expect(page.getByRole('dialog').getByRole('button', { name: 'Request deletion', exact: true })).toBeEnabled()
   } finally { request.release(503) }

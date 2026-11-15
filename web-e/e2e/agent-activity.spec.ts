@@ -76,7 +76,7 @@ test('older-page failure retains loaded rows and retries only the encoded cursor
   // When
   await page.getByRole('button', { name: 'Load older activity', exact: true }).click()
   // Then
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Could not load older activity. Your loaded actions are still available.' })).toHaveText('Could not load older activity. Your loaded actions are still available.')
   await expect(page.getByText(activity.summary, { exact: true })).toBeVisible()
   await expect(page.getByText('private backend error')).toHaveCount(0)
   await page.getByRole('button', { name: 'Retry older activity', exact: true }).click()
@@ -92,7 +92,7 @@ test('initial malformed response retries to usable empty history', async ({ page
   await page.route(`**${activityApiPath}*`, (route) => route.fulfill({ json: ++calls === 1
     ? { items: [{ ...activity, summary: null }], next_cursor: null } : { items: [], next_cursor: null } }))
   await page.goto(activityPath)
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Could not load activity. Please try again.' })).toHaveText('Could not load activity. Please try again.')
   // When
   await page.getByRole('button', { name: 'Retry activity', exact: true }).click()
   // Then
