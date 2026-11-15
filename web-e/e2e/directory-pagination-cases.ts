@@ -115,7 +115,7 @@ export function registerPeoplePaginationTests() {
     })
     await page.goto('/app/directory')
     await page.getByRole('button', { name: 'Load more' }).click()
-    await expect(page.getByRole('alert')).toHaveText('Unable to load more people.')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load more people.' })).toHaveText('Unable to load more people.')
     await expect(page.getByText(dana.email, { exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('next-page-error.png') })
     // When
