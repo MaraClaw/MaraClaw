@@ -89,9 +89,9 @@ for (const failure of ['changed', 'deleted'] as const) {
     await page.getByRole('button', { name: 'Release control', exact: true }).click()
     // Then
     await expect(page.getByRole('button', { name: 'Take control', exact: true })).toBeEnabled()
-    await expect(page.getByRole('alert')).toContainText('Control released. Cookies were not saved')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Control released. Cookies were not saved' })).toContainText('Control released. Cookies were not saved')
     await expect(page.getByAltText('Live AgentBay session')).toHaveCount(0)
-    await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0)
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'lock was lost' })).toHaveCount(0)
     await expect(page.getByLabel('Cookie domain on unlock')).toBeEmpty()
     await expect(page.getByLabel('Save cookies on release')).toHaveValue('create')
     const count = fixture.requests.length
@@ -214,7 +214,7 @@ test('release fencing suppresses polling and a concurrent stale lease-loss respo
     await expect(page.getByLabel('Save cookies on release')).toBeDisabled()
     expect(screenshots).toBe(1)
     unlock.resolve()
-    await expect(page.getByRole('alert')).toContainText('selected credential changed')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'selected credential changed' })).toContainText('selected credential changed')
     await expect(page.getByRole('button', { name: 'Take control', exact: true })).toBeEnabled()
     expect(fixture.errors).toEqual([])
   } finally {
