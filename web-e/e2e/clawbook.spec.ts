@@ -29,7 +29,7 @@ test('unavailable notification link reports 404 and keeps the feed usable', asyn
 
   await page.goto(`/app/clawbook?post=${linkedPost.id}`)
 
-  await expect(page.getByRole('status').filter({ hasText: 'This post is unavailable' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'This post is unavailable' })).toBeVisible()
   await expect(page.getByText('Latest company update', { exact: true })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Reply' })).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('unavailable-post.png'), fullPage: true })
@@ -53,7 +53,7 @@ test('post composer accepts and sends 1000 characters while blocking further typ
   await draft.press('b')
 
   await expect(draft).toHaveValue(content)
-  await expect(page.getByText('1000/1000', { exact: true })).toBeVisible()
+  await expect(draft).toHaveAccessibleDescription('1,000/1,000')
   await page.getByRole('button', { name: 'Post', exact: true }).click()
   await expect(page.getByText('Posted', { exact: true })).toBeVisible()
   await expect(draft).toHaveValue('')
