@@ -48,9 +48,13 @@ for (const width of [390, 1440, 1920]) {
             const metadata = footer?.getBoundingClientRect()
             const time = footer?.querySelector('time')?.getBoundingClientRect()
             const icon = footer?.querySelector('svg')?.getBoundingClientRect()
+            const copy = element.querySelector('button[aria-label="Copy response"]')
+            const copyRow = copy?.parentElement
             return { x: rect.x, width: rect.width, height: rect.height, textWidth: range.getBoundingClientRect().width,
               footerHeight: footer ? footer.getBoundingClientRect().height + parseFloat(getComputedStyle(footer).marginTop) : 0,
               metadataWidth: metadata?.width ?? 0, timeWidth: time?.width ?? 0, iconWidth: icon?.width ?? 0,
+              copyWidth: copy ? copy.getBoundingClientRect().width + parseFloat(getComputedStyle(copyRow ?? copy).columnGap) : 0,
+              copyHeight: copyRow?.getBoundingClientRect().height ?? 0,
               footerRight: metadata?.right, footerBottom: metadata?.bottom, contentBottom: range.getBoundingClientRect().bottom,
               footerTop: metadata?.top, right: rect.right, bottom: rect.bottom,
               paddingX: parseFloat(style.paddingLeft) + parseFloat(style.paddingRight),
@@ -88,8 +92,8 @@ for (const width of [390, 1440, 1920]) {
           expect(geometry.textWidth).toBeLessThanOrEqual(geometry.width - geometry.paddingX + 1)
           expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + (outgoing ? geometry.tail.width : 0))
           if (entry.endsWith('short') || entry.endsWith('multiline')) {
-            expect(geometry.width).toBeCloseTo(Math.max(geometry.textWidth, geometry.timeWidth + geometry.iconWidth + (outgoing ? 4 : 0)) + geometry.paddingX, 0)
-            expect(geometry.height).toBeCloseTo(geometry.paddingY + geometry.lineHeight * (entry.endsWith('short') ? 1 : 2) + geometry.footerHeight, 0)
+            expect(geometry.width).toBeCloseTo(Math.max(geometry.textWidth, geometry.timeWidth + geometry.iconWidth + (outgoing ? 4 : 0), geometry.copyWidth) + geometry.paddingX, 0)
+            expect(geometry.height).toBeCloseTo(geometry.paddingY + geometry.copyHeight + geometry.lineHeight * (entry.endsWith('short') ? 1 : 2) + geometry.footerHeight, 0)
           } else expect(geometry.width).toBeCloseTo(Math.min(content.width - (tool ? 0 : tailMargin), content.cap), 0)
         }
         await expect(page.locator('[data-chat-entry="bubble-assistant"] strong')).toHaveText('bold text')
