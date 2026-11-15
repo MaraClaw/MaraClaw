@@ -1350,6 +1350,8 @@ export const vietnamese = {
   'Choose a valid timezone.': 'Chọn một múi giờ hợp lệ.',
   'Unable to save the timezone. Check your connection and try again.': 'Không lưu được múi giờ. Kiểm tra kết nối rồi thử lại.',
   'Upgrade signals': 'Tín hiệu nâng gói',
+  'Upgrade signals for {company}': 'Tín hiệu nâng gói của {company}',
+  'Back to summary': 'Quay lại tổng hợp',
   'Companies whose agents keep hitting their tier limits. Use this to decide who should move to a higher tier.': 'Các công ty có trợ lý thường xuyên chạm giới hạn của gói. Dùng trang này để quyết định công ty nào nên chuyển lên gói cao hơn.',
   'An episode is one stretch of time above the pressure threshold. OOM kills are counted separately. Time under pressure is a lower bound: usage is sampled about every 5 minutes, so the real time may be longer.': 'Một đợt là một khoảng thời gian mức dùng vượt ngưỡng áp lực. Các lần bị tắt do hết bộ nhớ (OOM) được đếm riêng. Thời gian chịu áp lực là giá trị tối thiểu: mức dùng được lấy mẫu khoảng 5 phút một lần nên thời gian thực tế có thể dài hơn.',
   'Suggested tier is the smallest higher tier that keeps the peaks seen here below the pressure threshold. An OOM kill suggests at least the next tier. None means no upgrade is suggested: the company is on the top tier, no higher tier would fit, or its tier is not set.': 'Gói đề xuất là gói cao hơn nhỏ nhất giúp các đỉnh mức dùng ghi nhận ở đây nằm dưới ngưỡng áp lực. Nếu có lần bị tắt do OOM, hệ thống đề xuất tối thiểu là gói kế tiếp. “Không có” nghĩa là không đề xuất nâng gói: công ty đã ở gói cao nhất, không gói cao hơn nào đáp ứng được, hoặc chưa đặt gói.',

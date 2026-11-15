@@ -1,10 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronRight } from 'lucide-react'
-import { Fragment, useId, useMemo, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useId, useMemo, useState, type FormEvent } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 
 import { ErrorToast } from '@/components/error-toast'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -16,11 +14,9 @@ import { useTranslation } from '@/hooks/use-translation'
 import { OrganizationPlanIdValues, PressureResourceValues } from '@/lib/engine-contracts.generated'
 import { ApiError } from '@/lib/http'
 import type { ResourcePressureFilters } from '@/lib/resource-pressure-api'
-import { resourceLabels, summaryRowView, tierName } from '@/lib/resource-pressure-format'
-import type { PlainMessageKey } from '@/lib/translations'
-import { cn } from '@/lib/utils'
+import { resourceLabels, tierName } from '@/lib/resource-pressure-format'
+import { UpgradeSignalsCompanySummary } from '@/pages/upgrade-signals-company-summary'
 import { UpgradeSignalsCsvButton } from '@/pages/upgrade-signals-csv-button'
-import { UpgradeSignalsEpisodes } from '@/pages/upgrade-signals-episodes'
 import {
   emptyUpgradeSignalsForm,
   hasUpgradeSignalsFilters,
@@ -31,11 +27,6 @@ import {
 } from '@/pages/upgrade-signals-filters'
 
 const buttonClass = 'h-auto min-h-11 max-w-full whitespace-normal'
-const headings = [
-  'Company', 'Current tier', 'Suggested tier', 'Memory episodes', 'CPU episodes', 'Workspace disk episodes',
-  'Managed storage episodes', 'OOM kills', 'Time under pressure', 'Peak usage', 'Agents affected', 'Last seen',
-] as const satisfies readonly PlainMessageKey[]
-const numericHeadings: ReadonlySet<string> = new Set(headings.slice(3, 11))
 
 export function UpgradeSignalsPage() {
   const { t } = useTranslation()
@@ -158,10 +149,10 @@ function UpgradeSignalsFilters({ applied, onApply }: {
 }
 
 function UpgradeSignalsResults({ filters, filtered }: { readonly filters: ResourcePressureFilters; readonly filtered: boolean }) {
-  const { t, number, date } = useTranslation()
+  const { t, number } = useTranslation()
+  const { search } = useLocation()
   const id = useId()
   const summary = useQuery(resourcePressureSummaryOptions(filters))
-  const [expanded, setExpanded] = useState<string | null>(null)
   const loadError = summary.error instanceof ApiError ? summary.error.message : t('Could not load upgrade signals. Check your connection and try again.')
   const rows = summary.data
 
@@ -197,68 +188,13 @@ function UpgradeSignalsResults({ filters, filtered }: { readonly filters: Resour
           {filtered ? <p className="text-sm text-muted-foreground">{t('Widen the dates or clear the filters to see more.')}</p> : null}
         </CardContent></Card>
       ) : (
-        <div className="@container overflow-x-auto rounded-2xl border border-border bg-card">
-          <table className="w-full min-w-[64rem] text-sm">
-            <caption className="sr-only">{t('Resource pressure by company. Select a company name to show its episodes.')}</caption>
-            <thead className="text-xs text-muted-foreground">
-              <tr>
-                {headings.map((heading) => (
-                  <th key={heading} scope="col" className={cn('px-3 py-3 font-medium', numericHeadings.has(heading) ? 'text-end' : 'text-start')}>{t(heading)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {summary.data.map((entry) => {
-                const row = summaryRowView(entry, { t, number, date })
-                const open = expanded === row.id
-                const panelId = `${id}-episodes-${row.id}`
-                return (
-                  <Fragment key={row.id}>
-                    <tr className="border-t border-border align-middle">
-                      <th scope="row" className="min-w-40 px-1 py-1 text-start font-medium">
-                        <button
-                          type="button"
-                          aria-expanded={open}
-                          aria-controls={open ? panelId : undefined}
-                          onClick={() => setExpanded(open ? null : row.id)}
-                          className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-start hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none', open && 'rotate-90')} aria-hidden />
-                          <span className="min-w-0 [overflow-wrap:anywhere]">{row.company}</span>
-                        </button>
-                      </th>
-                      <td className="whitespace-nowrap px-3 py-2.5">{row.currentTier}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5">
-                        {row.hasSuggestion
-                          ? <Badge variant="warning" className="px-3 py-1 text-sm font-semibold">{row.suggestedTier}</Badge>
-                          : <span className="text-muted-foreground">{row.suggestedTier}</span>}
-                      </td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.memory}</td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.cpu}</td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.workspaceDisk}</td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.managedStorage}</td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.oomKills}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-end tabular-nums">{row.pressureTime}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-end tabular-nums">{row.maxPeak}</td>
-                      <td className="px-3 py-2.5 text-end tabular-nums">{row.agentsAffected}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5"><time dateTime={row.lastSeenAt}>{row.lastSeen}</time></td>
-                    </tr>
-                    {open ? (
-                      <tr id={panelId}>
-                        <td colSpan={headings.length} className="bg-muted/30 p-0">
-                          {/* Sticky and as wide as the scroller, so the panel neither widens the table nor scrolls out of view. */}
-                          <div className="sticky start-0 w-[100cqw] px-4 py-4">
-                            <UpgradeSignalsEpisodes tenantId={row.id} company={row.company} filters={filters} />
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+        <ul className="grid gap-4">
+          {summary.data.map((entry) => (
+            <li key={entry.tenant_id}>
+              <UpgradeSignalsCompanySummary entry={entry} to={`/upgrade-signals/${entry.tenant_id}${search}`} />
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )
