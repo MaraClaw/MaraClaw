@@ -78,4 +78,4 @@ docker run --rm -p 8080:8080 maraclaw-web-e
 ```
 
 `npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs `contracts:check`, lint, `tsc -b`, `npm test`, build and Docker build.
-Playwright `test:e2e` runs in the workflow's independent `browser` job after installing Chromium and its system dependencies, with two workers and failure artifacts. `playwright.config.ts` uses `testDir: './e2e'` with a build + preview webServer at `http://127.0.0.1:4173`. Test layout and conventions: [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md).
+Playwright `test:e2e` runs in the workflow's independent `browser` matrix across four parallel shards after installing Chromium and its system dependencies, with two workers per shard, a 90-minute job timeout and shard-specific failure artifacts. `playwright.config.ts` uses `testDir: './e2e'` with a build + preview webServer at `http://127.0.0.1:4173`; CI timeouts are 60 seconds per test, 10 seconds per assertion and 180 seconds for server startup (local: 30, 5 and 60 seconds). Test layout and conventions: [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md).
