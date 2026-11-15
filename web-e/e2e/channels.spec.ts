@@ -44,6 +44,8 @@ test('Google Chat saves unrelated fields by omission and accepts only fresh cred
   await google.getByRole('button', { name: 'Save', exact: true }).click()
   await expect.poll(() => fixture.writes.length).toBe(1)
   expect(fixture.writes[0]).toEqual({ project_number: '123456', audience: 'replacement-audience' })
+  // Recording the request precedes onSuccess, which clears the completed draft.
+  await expect(google.getByLabel('Audience', { exact: true })).toHaveValue('')
   await expect(google.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
   const fresh = JSON.stringify({ client_email: 'synthetic@provider.test', private_key: 'synthetic-replacement' })
   await google.getByLabel('Service account JSON', { exact: true }).fill(fresh)

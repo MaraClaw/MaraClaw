@@ -1,6 +1,16 @@
 import { z } from 'zod'
 
-import { OrganizationPlanIdValues, type OrganizationPlanId } from './engine-contracts.generated.ts'
+import {
+  CompanyTierChangeOutSchema,
+  CompanyTierChangeRequestSchema,
+  CompanyTierPreviewSchema,
+  CompanyTierPreviewRequestSchema,
+  CompanyRuntimePageOutSchema,
+  CompanyActivationOutSchema,
+  CompanyActivationRequestSchema,
+  OrganizationPlanIdValues,
+  type OrganizationPlanId,
+} from './engine-contracts.generated.ts'
 import { apiRequest } from './http.ts'
 
 const companyDeletionPreviewSchema = z.object({
@@ -25,25 +35,10 @@ const companyAgentSectionsSchema = z.object({
 
 export type CompanyAgentSections = z.infer<typeof companyAgentSectionsSchema>
 
-export type CompanyStats = {
-  id: string
-  name: string
-  slug: string
-  is_active: boolean
-  sso_enabled: boolean
-  sso_domain: string | null
-  is_system: boolean
-  is_default_end_user_org: boolean
-  can_disable: boolean
-  created_at: string | null
-  user_count: number
-  active_user_count: number
-  inactive_user_count: number
-  agent_count: number
-  org_admin_email: string | null
-  phone: string | null
-  tier: OrganizationPlanId
-}
+export type CompanyStats = z.infer<typeof companyStatsSchema>
+export type CompanyTierPreview = z.infer<typeof CompanyTierPreviewSchema>
+export type CompanyTierChange = z.infer<typeof CompanyTierChangeRequestSchema>
+export type CompanyRuntimePage = z.infer<typeof CompanyRuntimePageOutSchema>
 
 const companyOptionSchema = z.object({
   id: z.string(),
@@ -166,9 +161,32 @@ export async function getTenant(tenantId: string, signal?: AbortSignal): Promise
   }
 }
 
-export async function toggleCompany(companyId: string): Promise<{ ok: boolean; is_active: boolean }> {
-  return apiRequest<{ ok: boolean; is_active: boolean }>(`/api/admin/companies/${companyId}/toggle`, {
-    method: 'PUT',
+export async function toggleCompany(input: { readonly companyId: string; readonly isActive: boolean }) {
+  const { companyId, isActive } = input
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/toggle`, {
+    method: 'PUT', schema: CompanyActivationOutSchema,
+    body: CompanyActivationRequestSchema.parse({ is_active: isActive }),
+  })
+}
+
+export async function previewCompanyTier(companyId: string, targetTier: OrganizationPlanId, signal?: AbortSignal) {
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/tier/preview`, {
+    method: 'POST', signal, schema: CompanyTierPreviewSchema,
+    body: CompanyTierPreviewRequestSchema.parse({ target_tier: targetTier }),
+  })
+}
+
+export async function changeCompanyTier(companyId: string, input: CompanyTierChange) {
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/tier`, {
+    method: 'PATCH', schema: CompanyTierChangeOutSchema, body: CompanyTierChangeRequestSchema.parse(input),
+  })
+}
+
+export async function getCompanyRuntime(companyId: string, cursor: string | null, signal?: AbortSignal) {
+  const query = new URLSearchParams({ limit: '50' })
+  if (cursor !== null) query.set('cursor', cursor)
+  return apiRequest(`/api/admin/companies/${encodeURIComponent(companyId)}/runtime?${query}`, {
+    signal, schema: CompanyRuntimePageOutSchema,
   })
 }
 

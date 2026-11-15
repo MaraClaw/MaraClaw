@@ -22,7 +22,7 @@ test('creation persists an explicit timezone across reload and displays saved-zo
   await page.reload()
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
   await expect(row).toContainText('GMT +8')
-  await expect(row).toContainText('15 Jan 2026, 09:00 GMT+8')
+  await expect(row).toContainText('Jan 15, 2026, 09:00 GMT+8')
   await row.getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT-8')
 })
@@ -39,7 +39,7 @@ test('timezone-only editing sends only timezone and reloads the recomputed next 
   await expect.poll(() => fixture.patches).toEqual([{ timezone: 'Etc/GMT+5' }])
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
   await expect(row).toContainText('GMT -5')
-  await expect(row).toContainText('15 Jan 2026, 09:00 GMT-5')
+  await expect(row).toContainText('Jan 15, 2026, 09:00 GMT-5')
   await page.reload()
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
@@ -123,7 +123,7 @@ for (const status of [422, 503]) {
     await expect(page.getByRole('button', { name: 'Save schedule', exact: true })).toBeEnabled()
     await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT+5')
     await expect(page.getByRole('checkbox', { name: 'Notify me when a scheduled run fails' })).toBeChecked()
-    await expect(page.getByRole('status').filter({ hasText: /timezone/i })).toBeVisible()
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: /timezone/i })).toBeVisible()
     await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue(savedSchedule.instruction)
   })
 }
@@ -149,7 +149,7 @@ test('unavailable saved timezone is named without falling back to browser-local 
 
   await expect(row).toContainText('Not/A_Zone')
   await expect(row).toContainText('Timezone unavailable')
-  await expect(row).not.toContainText('15 Jan 2026')
+  await expect(row).not.toContainText('Jan 15, 2026')
 })
 
 test('history distinguishes outcomes and loads older runs without losing rows on a page error', async ({ page }) => {
@@ -188,7 +188,7 @@ test('history distinguishes outcomes and loads older runs without losing rows on
 
   await history.getByRole('button', { name: 'Load older runs', exact: true }).click()
 
-  await expect(history.getByRole('status')).toHaveText('Unable to load older runs. Try again.')
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load older runs. Try again.' })).toBeVisible()
   await expect(history.getByRole('listitem')).toHaveCount(2)
   await history.getByRole('button', { name: 'Retry older runs', exact: true }).click()
   await olderRequested.promise
@@ -213,7 +213,7 @@ test('history first-page errors offer a retry and only a successful empty page s
   await page.goto(schedulesPath)
   await page.getByRole('button', { name: 'History', exact: true }).click()
   const history = page.getByRole('region', { name: 'Run history', exact: true })
-  await expect(history.getByRole('status')).toHaveText('Unable to load run history. Try again.')
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load run history. Try again.' })).toBeVisible()
   await expect(history.getByText('No history yet.', { exact: true })).toHaveCount(0)
 
   await history.getByRole('button', { name: 'Retry history', exact: true }).click()

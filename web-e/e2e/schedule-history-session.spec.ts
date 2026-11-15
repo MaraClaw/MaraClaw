@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { historyPath, historyRun } from './schedule-history-fixture'
+import { historyPath, historyRun, prepareHistoryNavigation } from './schedule-history-fixture'
 import { savedSchedule, schedulesApiPath, schedulesPath } from './schedules-fixture'
 import {
   originalAgent, originalToken, originalUser, prepareWorkspace, replacementCompany,
@@ -13,7 +13,7 @@ for (const status of [200, 401, 503]) {
     await page.route('**/api/agents/page?*', (route) => route.fulfill({ json: { items: [originalAgent], next_cursor: null, has_more: false } }))
     await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: originalAgent }))
     await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
-    await page.route(`**/api/agents/${originalAgent.id}/sessions/page*`, (route) => route.fulfill({ json: { items: [], next_cursor: null, has_more: false } }))
+    await prepareHistoryNavigation(page)
     await page.route(`**${schedulesApiPath}`, (route) => route.fulfill({ json: [savedSchedule] }))
     const requested = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
@@ -81,7 +81,7 @@ test('cross-tab session replacement clears history errors and fences a late unau
   })
   await page.goto(schedulesPath)
   await page.getByRole('button', { name: 'History', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText('Unable to load run history')
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load run history' })).toBeVisible()
   await page.getByRole('button', { name: 'Retry history' }).click()
   await requested.promise
   const cancelled = page.waitForEvent('requestfailed', { predicate: (request) => request.url().includes('/history/page') })

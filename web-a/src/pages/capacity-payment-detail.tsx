@@ -1,8 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import type { z } from 'zod'
 
 import { capacityActionClass, capacityStatusLabels } from '@/components/capacity/capacity-labels'
@@ -11,6 +10,7 @@ import { CapacityStatusBadge } from '@/components/capacity/capacity-status-badge
 import { ErrorToast } from '@/components/error-toast'
 import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { useCapacityDecision, useCapacityReviewOrder } from '@/hooks/use-capacity'
@@ -122,7 +122,7 @@ export function CapacityPaymentDetailPage() {
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
     <header className="flex flex-col gap-3">
-      <Button asChild variant="outline" className={`self-start ${capacityActionClass}`}><Link to="/payments?tab=capacity"><ArrowLeft aria-hidden="true" className="size-4" />{t('Back to capacity payments')}</Link></Button>
+      <BackLink to="/payments?tab=capacity" label={t('Back to capacity payments')} className="self-start" />
       <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Capacity payment')}</h1>
     </header>
     {!parsedId.success ? <p role="alert" className="text-sm text-destructive">{t('This payment link is invalid.')}</p> : <>

@@ -10,7 +10,7 @@ npm run test:e2e
 ```
 - Script expands to `playwright test`; configuration: `../playwright.config.ts`.
 - Configured server command: `npm run build && npm run preview -- --host 127.0.0.1 --port 4173`.
-- `testDir: './e2e'`; project `chromium` uses `Desktop Chrome`.
+- `testDir: './e2e'`; project `chromium` uses `Desktop Chrome` with the bundled full Chromium channel (`channel: 'chromium'`), including its new headless mode. The installed headless shell exited prematurely in a direct lifetime probe; preserve the full-browser selection when overriding test configuration.
 - `baseURL` is `http://127.0.0.1:4173`; existing server reuse only outside CI.
 - `fullyParallel: true`; CI forbids focused tests and enables one retry; local retries: zero.
 - Trace mode: `on-first-retry`, not an always-on local trace.
@@ -19,7 +19,8 @@ npm run test:e2e
 
 - `../../.github/workflows/frontend-ci.yml` selects the `web-e` package.
 - Its Unit tests step executes `npm test`, whose runtime glob is `tests/*.test.ts`.
-- No e2e step: these specs are not executed by that workflow.
+- Its independent `browser` matrix runs four parallel shards (`shard: [1, 2, 3, 4]`, `fail-fast: false`) with a 90-minute timeout per job. Each installs locked dependencies and Chromium with system dependencies, then runs `npm run test:e2e -- --workers=2 --shard=${{ matrix.shard }}/4 --reporter=line,html`. Failed shards upload `playwright-report/` and `test-results/` as `web-e-playwright-${{ matrix.shard }}`.
+- CI timeouts are 60 seconds per test, 10 seconds per assertion and 180 seconds for server startup; local timeouts remain 30, 5 and 60 seconds, respectively.
 
 ## Conventions
 

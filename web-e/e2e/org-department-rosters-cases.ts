@@ -82,7 +82,7 @@ export function registerOrgDepartmentRosterTests() {
     await expect(roster.getByRole('listitem')).toHaveCount(4)
     await page.getByRole('button', { name: `Show members for ${siblingDepartment.name}`, exact: true }).click()
     const sibling = page.getByRole('region', { name: `${siblingDepartment.name} members`, exact: true })
-    await expect(sibling.getByRole('status')).toContainText('Unable to load department members')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load department members' })).toContainText('Unable to load department members')
     await page.getByRole('button', { name: 'Edit name for Engineering', exact: true }).click()
     await page.getByLabel('Department name').fill('Product engineering')
     await page.getByLabel('Department name').press('Enter')

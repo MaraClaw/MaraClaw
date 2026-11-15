@@ -75,7 +75,7 @@ test('join blocks its chooser when the admission lookup fails', async ({ page })
   // When
   await page.goto('/join')
   // Then
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to check admission status. Refresh to try again.' })).toHaveText('Unable to check admission status. Refresh to try again.')
   await expect(page.getByLabel('Invitation code', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Continue in default workspace', exact: true })).toHaveCount(0)
   await expect(page).toHaveURL('/join')

@@ -5,9 +5,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
+from fastapi import HTTPException
 
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app.dao.agent_dao import agent_dao
@@ -24,7 +27,13 @@ from app.records.agent_resource_pressure_episode import (
     PressureResource,
 )
 from app.records.organization_plan import OrganizationPlanId
-from app.services import agent_resource_pressure as pressure, agent_resource_pressure_report as report
+from app.schemas.admin_companies import CompanyTierChangeRequest
+from app.services import (
+    agent_resource_pressure as pressure,
+    agent_resource_pressure_report as report,
+    agent_workspace_quota as quota,
+    organization_tier_changes as tier_changes,
+)
 from app.services.agent_resource_pressure_docker import GuestInspection, GuestStats
 from tier_limit_fixtures import set_tenant_tier
 
@@ -83,15 +92,16 @@ async def _open(
     resource: PressureResource = MEMORY,
     value: int = 950,
     limit: int = 1000,
-    tier: OrganizationPlanId = PRO,
+    tier: OrganizationPlanId | None = None,
     name: str = "Ops",
     detail: dict[str, object] | None = None,
 ) -> AgentResourcePressureEpisodeRecord:
-    return await dao.record_pressure(
+    current = (await tenant_dao.tiers_for([tenant_id]))[tenant_id] if tier is None else tier
+    episode = await dao.record_pressure(
         tenant_id=tenant_id,
         agent_id=agent_id,
         agent_name=name,
-        tier=tier,
+        tier=current,
         resource=resource,
         limit_value=limit,
         peak_value=value,
@@ -99,6 +109,8 @@ async def _open(
         threshold_ratio=0.9,
         detail=detail or {},
     )
+    assert episode is not None
+    return episode
 
 
 async def test_one_threshold_episode_is_open_per_agent_and_resource_until_it_closes(
@@ -280,11 +292,12 @@ async def test_an_episode_keeps_its_highest_peak_with_its_limit_and_detail_and_i
     deletion_scenario: DeletionScenario,
 ):
     scenario = deletion_scenario
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
     agent = await scenario.agent("owner")
 
     opened = await _open(scenario.tenant_id, agent, value=920, detail={"sample": 1})
     higher = await _open(
-        scenario.tenant_id, agent, value=2940, limit=3000, tier=MAX, name="Renamed", detail={"sample": 2}
+        scenario.tenant_id, agent, value=2940, limit=3000, tier=PRO, name="Renamed", detail={"sample": 2}
     )
     lower = await _open(scenario.tenant_id, agent, value=950, limit=1000, name="Renamed", detail={"sample": 3})
 
@@ -682,3 +695,181 @@ async def test_rerunning_the_baseline_adds_the_table_to_an_existing_database_and
         "ix_agent_resource_pressure_tenant_started",
     }
     _ = await _open(scenario.tenant_id, agent)
+
+
+async def test_tier_change_closes_only_its_company_episodes_and_audits_without_runtime_mutation(
+    deletion_scenario: DeletionScenario,
+):
+    scenario = deletion_scenario
+    agent = await scenario.agent("owner", status="running")
+    for resource in PressureResource:
+        _ = await _open(scenario.tenant_id, agent, resource=resource)
+    _ = await _open(scenario.tenant_id, None, resource=STORAGE)
+    _ = await _open(scenario.foreign_tenant_id, None, resource=STORAGE)
+
+    changed = await tier_changes.apply_tier_change(
+        scenario["psa"],
+        scenario.tenant_id,
+        CompanyTierChangeRequest(expected_tier=OrganizationPlanId.ULTRA, target_tier=MAX),
+    )
+
+    assert (changed.changed, changed.closed_pressure_episodes) == (True, 5)
+    rows = await _episodes(scenario)
+    assert [row["tenant_id"] for row in rows if row["ended_at"] is None] == [scenario.foreign_tenant_id]
+    assert all(row["detail"] == {"closed_reason": "tier_changed"} for row in rows if row["ended_at"] is not None)
+    audit = await scenario.rows(
+        "SELECT action, changes FROM admin_audit_logs WHERE target_id = %(id)s", {"id": scenario.tenant_id}
+    )
+    assert [(row["action"], row["changes"]) for row in audit] == [
+        ("company_tier_update", {"tier": {"before": "ultra", "after": "max"}})
+    ]
+    stored = await agent_dao.get(agent)
+    assert stored is not None
+    assert stored.status == "running"
+    assert scenario.runtime_calls == []
+
+
+@pytest.mark.parametrize("resource", list(PressureResource))
+async def test_old_tier_samples_cannot_extend_or_reopen_and_new_tier_pressure_is_reported(
+    deletion_scenario: DeletionScenario,
+    resource: PressureResource,
+):
+    scenario = deletion_scenario
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
+    agent_id = await scenario.agent("owner")
+    before = await _open(scenario.tenant_id, agent_id, resource=resource)
+    await tier_changes.apply_tier_change(
+        scenario["psa"], scenario.tenant_id, CompanyTierChangeRequest(expected_tier=PRO, target_tier=MAX)
+    )
+
+    stale = await dao.record_pressure(
+        tenant_id=scenario.tenant_id,
+        agent_id=agent_id,
+        agent_name="Ops",
+        tier=PRO,
+        resource=resource,
+        limit_value=1000,
+        peak_value=990,
+        peak_ratio=0.99,
+        threshold_ratio=0.9,
+        detail={},
+    )
+    agent = await agent_dao.get(agent_id)
+    assert agent is not None
+    await pressure.observe_sample(agent, PRO, pressure.PressureSample(resource, 1000, 990, {}))
+    after = await _open(scenario.tenant_id, agent_id, resource=resource, tier=MAX)
+
+    assert stale is None
+    assert after.id != before.id
+    assert after.tier is MAX
+    rows = await _episodes(scenario)
+    assert len(rows) == 2
+    assert [(row["tier"], row["sample_count"], row["ended_at"] is None) for row in rows] == [
+        ("pro", 1, False),
+        ("max", 1, True),
+    ]
+    summaries = await report.tenant_summaries(EpisodeFilters(tier=MAX))
+    assert [(summary.tenant_id, summary.current_tier) for summary in summaries] == [(scenario.tenant_id, MAX)]
+
+
+async def test_workspace_measurement_that_started_before_tier_change_cannot_reopen_pressure(
+    deletion_scenario: DeletionScenario,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    scenario = deletion_scenario
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
+    agent_id = await scenario.agent("owner")
+    _ = await _open(scenario.tenant_id, agent_id, resource=DISK)
+    agent = await agent_dao.get(agent_id)
+    assert agent is not None
+
+    async def measure(*_args, **_kwargs):
+        await tier_changes.apply_tier_change(
+            scenario["psa"], scenario.tenant_id, CompanyTierChangeRequest(expected_tier=PRO, target_tier=MAX)
+        )
+        return 4 * GIB
+
+    monkeypatch.setattr(quota, "to_thread", SimpleNamespace(run_sync=measure))
+    monkeypatch.setattr(quota, "send_notification", AsyncMock())
+
+    await quota.measure_agent(agent)
+
+    rows = await _episodes(scenario)
+    assert [(row["tier"], row["sample_count"], row["ended_at"] is not None) for row in rows] == [("pro", 1, True)]
+
+
+async def test_two_tier_changes_using_the_same_expected_tier_have_one_winner(deletion_scenario: DeletionScenario):
+    scenario = deletion_scenario
+    await set_tenant_tier(scenario.db, scenario.tenant_id, PRO)
+    outcomes: list[int] = []
+
+    async def apply(target: OrganizationPlanId) -> None:
+        try:
+            await tier_changes.apply_tier_change(
+                scenario["psa"], scenario.tenant_id, CompanyTierChangeRequest(expected_tier=PRO, target_tier=target)
+            )
+            outcomes.append(200)
+        except HTTPException as error:
+            outcomes.append(error.status_code)
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(apply, MAX)
+        tasks.start_soon(apply, OrganizationPlanId.ULTRA)
+
+    assert sorted(outcomes) == [200, 409]
+
+
+async def test_failed_episode_closure_rolls_back_the_tier_and_closed_rows(
+    deletion_scenario: DeletionScenario,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    scenario = deletion_scenario
+    _ = await _open(scenario.tenant_id, await scenario.agent("owner"))
+    closing = dao.close_for_tenant
+
+    async def fail(tenant_id: UUID, *, reason: str) -> int:
+        await closing(tenant_id, reason=reason)
+        raise OSError("closure interrupted")
+
+    monkeypatch.setattr(dao, "close_for_tenant", fail)
+
+    with pytest.raises(OSError, match="closure interrupted"):
+        await tier_changes.apply_tier_change(
+            scenario["psa"],
+            scenario.tenant_id,
+            CompanyTierChangeRequest(expected_tier=OrganizationPlanId.ULTRA, target_tier=MAX),
+        )
+
+    assert (await tenant_dao.tiers_for([scenario.tenant_id]))[scenario.tenant_id] is OrganizationPlanId.ULTRA
+    assert [(row["tier"], row["ended_at"]) for row in await _episodes(scenario)] == [("ultra", None)]
+
+
+async def test_tier_preview_reads_real_capacity_owner_usage_and_running_guests_without_writes(
+    deletion_scenario: DeletionScenario, monkeypatch: pytest.MonkeyPatch
+):
+    scenario = deletion_scenario
+    running = await scenario.agent("owner", status="stopped")
+    await scenario.db.execute("UPDATE agents SET container_id = 'tier-running' WHERE id = %(id)s", {"id": running})
+    _ = await scenario.agent("owner")
+    _ = await scenario.agent("owner")
+
+    def inspect(_docker, references, _timeout):
+        assert references == ["tier-running"]
+        return {"tier-running": GuestInspection("tier-running", str(running), True, 0, 0, False, None, "", 0, 0)}
+
+    monkeypatch.setattr(tier_changes, "inspect_guests", inspect)
+
+    preview = await tier_changes.preview_tier_change(scenario["psa"], scenario.tenant_id, PRO)
+
+    assert (preview.current_tier, preview.target_tier) == (OrganizationPlanId.ULTRA, PRO)
+    assert (preview.agents.used, preview.agents.included, preview.agents.extras, preview.agents.over_limit) == (
+        3,
+        2,
+        0,
+        1,
+    )
+    assert [(owner.user_id, owner.overage) for owner in preview.owners_over_limit] == [(scenario["owner"].id, 1)]
+    assert [(guest.agent_id, guest.container_id) for guest in preview.running_guests] == [(running, "tier-running")]
+    assert preview.guest_observation_available is True
+    assert (await tenant_dao.tiers_for([scenario.tenant_id]))[scenario.tenant_id] is OrganizationPlanId.ULTRA
+    assert scenario.runtime_calls == []

@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { AdmissionInboxGate } from '@/components/layout/admission-access-gate'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { notificationArchiveOptions, notificationKeys, notificationListOptions, notificationReadOptions, notificationRestoreOptions, notificationsArchiveSelectedOptions, notificationsReadAllOptions, notificationsReadSelectedOptions, notificationsUnreadSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '@/hooks/notification-options'
@@ -182,7 +183,7 @@ function NotificationContent({ category, view, setView, heading, resetErrorsRef 
       </Button> : null}
       {query.isSuccess && items.length === 0 ? <div className="space-y-3 rounded-xl border border-border p-4">
         <p className="text-sm text-muted-foreground">{view === 'active' ? translate("No active notifications yet. Refresh to check for new updates.") : translate("No archived notifications in this category. Archive a notification from Active to keep it here.")}</p>
-        <Button variant="outline" className={actionClass} disabled={query.isFetching} onClick={scope.effect(() => { selection.clear(); void scope.client.resetQueries({ queryKey: notificationKeys.list(category, view), exact: true }) })}>{translate("Refresh Inbox")}</Button>
+        <RefreshButton label={translate("Refresh Inbox")} disabled={query.isFetching} onClick={scope.effect(() => { selection.clear(); void scope.client.resetQueries({ queryKey: notificationKeys.list(category, view), exact: true }) })} />
       </div> : null}
     </div>
   )

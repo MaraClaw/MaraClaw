@@ -13,10 +13,11 @@ from httpx import ASGITransport, AsyncClient
 from agent_deletion_fixtures import DeletionScenario, deletion_scenario
 from app import main
 from app.api import auth, users
+from app.core.domain.users import UserRole
 from app.dao.identity_dao import identity_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
-from app.db.session import bind_crud_connection
+from app.db.session import bind_crud_connection, connection_ctx
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -389,8 +390,157 @@ async def _active_names(scenario: DeletionScenario) -> set[str]:
     return {str(row["display_name"]) for row in rows}
 
 
+async def _suspended_ids(scenario: DeletionScenario) -> set[UUID]:
+    rows = await scenario.rows(
+        "SELECT user_id FROM tenant_suspended_memberships WHERE tenant_id = %(id)s", {"id": scenario.tenant_id}
+    )
+    return {UUID(str(row["user_id"])) for row in rows}
+
+
+async def test_suspension_preserves_individually_inactive_members_and_repeated_disable_marks(
+    deletion_scenario: DeletionScenario,
+):
+    scenario = deletion_scenario
+    await scenario.set_user("target", is_active=False)
+    await scenario.set_user("oa3", is_active=False)
+    company = await _company(scenario)
+    expected = {scenario[name].id for name in ("genesis", "oa2", "owner", "other", "helper")}
+
+    await tenant_lifecycle.set_tenant_active(company, is_active=False)
+    assert await _suspended_ids(scenario) == expected
+    await tenant_lifecycle.set_tenant_active(company, is_active=False)
+    assert await _suspended_ids(scenario) == expected
+    await tenant_lifecycle.set_tenant_active(company, is_active=True)
+
+    assert await _active_names(scenario) == {"genesis", "oa2", "owner", "other", "helper"}
+    assert await _suspended_ids(scenario) == set()
+
+
+async def test_same_company_role_assignment_keeps_the_membership_eligible_for_restoration(
+    deletion_scenario: DeletionScenario,
+):
+    scenario = deletion_scenario
+    await _set_company_active(scenario, False)
+    target = await _fresh(scenario, "target")
+    before = await _suspended_ids(scenario)
+
+    await admin_provisioning.apply_user_assignment(
+        actor=await _fresh(scenario, "psa"),
+        target=target,
+        tenant_id=scenario.tenant_id,
+        role=UserRole.AGENT_ADMIN,
+    )
+
+    assert await _suspended_ids(scenario) == before
+    await _set_company_active(scenario, True)
+    restored = await _fresh(scenario, "target")
+    assert restored.is_active is True
+    assert restored.role == "agent_admin"
+
+
+@pytest.mark.parametrize("who", ["target", "oa2"])
+@pytest.mark.parametrize("active", [False, True])
+async def test_individual_retry_honors_desired_state_after_a_company_transition(
+    deletion_scenario: DeletionScenario, who: str, active: bool
+):
+    scenario = deletion_scenario
+    if not active:
+        await _set_company_active(scenario, False)
+    snapshot = await _fresh(scenario, who)
+    assert snapshot.is_active is active
+    await _set_company_active(scenario, not active)
+    actor = await _fresh(scenario, "genesis")
+    toggle = admin_provisioning.set_peer_admin_active if who == "oa2" else admin_provisioning.set_end_user_active
+
+    updated = await toggle(actor=actor, target=snapshot, is_active=active)
+
+    assert updated.is_active is active
+    assert (await _fresh(scenario, who)).is_active is active
+    assert updated.id not in await _suspended_ids(scenario)
+
+
+@pytest.mark.parametrize("override", ["member_noop", "admin_noop", "activate", "guarded_deactivate", "move"])
+async def test_individual_overrides_remove_only_the_marked_membership(
+    deletion_scenario: DeletionScenario, override: str
+):
+    scenario = deletion_scenario
+    await _set_company_active(scenario, False)
+    who = "oa2" if override in ("admin_noop", "guarded_deactivate") else "target"
+    target = await _fresh(scenario, who)
+    if override == "member_noop":
+        await _set_active(scenario, who, False)
+    elif override == "admin_noop":
+        await admin_provisioning.set_peer_admin_active(
+            actor=await _fresh(scenario, "genesis"), target=target, is_active=False
+        )
+    elif override == "activate":
+        await _set_active(scenario, who, True)
+    elif override == "guarded_deactivate":
+        assert (
+            await user_dao.deactivate_unless_last_active(target.id, role=target.role, tenant_id=target.tenant_id)
+            is None
+        )
+    else:
+        await user_dao.update(db_obj=target, obj_in={"tenant_id": scenario.foreign_tenant_id})
+
+    assert await _suspended_ids(scenario) == {
+        scenario[name].id for name in ("genesis", "oa2", "oa3", "owner", "other", "target", "helper") if name != who
+    }
+    await _set_company_active(scenario, True)
+    updated = await _fresh(scenario, who)
+    assert updated.is_active is (override == "activate")
+    if override == "move":
+        assert updated.tenant_id == scenario.foreign_tenant_id
+    assert await _suspended_ids(scenario) == set()
+
+
+@pytest.mark.parametrize("active", [False, True])
+async def test_concurrent_desired_state_changes_have_one_transition(deletion_scenario: DeletionScenario, active: bool):
+    scenario = deletion_scenario
+    await scenario.set_user("target", is_active=False)
+    if active:
+        await _set_company_active(scenario, False)
+    company = await _company(scenario)
+
+    results = await asyncio.gather(
+        *(tenant_lifecycle.change_tenant_active(company, is_active=active) for _ in range(2))
+    )
+
+    assert sum(result.changed for result in results) == 1
+    assert all(result.tenant.is_active is active for result in results)
+    assert not (await _fresh(scenario, "target")).is_active
+    assert len(await _suspended_ids(scenario)) == (0 if active else ACCOUNTS - 1)
+
+
+@pytest.mark.parametrize("active", [False, True])
+async def test_company_activation_rolls_back_members_and_marks_together(
+    deletion_scenario: DeletionScenario, active: bool
+):
+    scenario = deletion_scenario
+    if active:
+        await _set_company_active(scenario, False)
+    company = await _company(scenario)
+    before_users = await scenario.rows("SELECT id, is_active, membership_generation FROM users ORDER BY id")
+    before_marks = await _suspended_ids(scenario)
+
+    async def failed_request():
+        async with connection_ctx():
+            await tenant_lifecycle.set_tenant_active(company, is_active=active)
+            raise RuntimeError("later failure")
+
+    with pytest.raises(RuntimeError, match="later failure"):
+        await failed_request()
+
+    assert await scenario.rows("SELECT id, is_active, membership_generation FROM users ORDER BY id") == before_users
+    assert await _suspended_ids(scenario) == before_marks
+    assert await scenario.rows("SELECT is_active FROM tenants WHERE id = %(id)s", {"id": company.id}) == [
+        {"is_active": not active}
+    ]
+
+
 async def test_re_enabling_a_capped_company_restores_organization_admins_first_up_to_its_free_slots(
     deletion_scenario: DeletionScenario,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     scenario = deletion_scenario
     await set_tenant_tier(scenario.db, scenario.tenant_id, OrganizationPlanId.PRO)  # five accounts, no extras
@@ -403,9 +553,16 @@ async def test_re_enabling_a_capped_company_restores_organization_admins_first_u
     for who in ("oa2", "oa3", "owner", "other", "target"):
         await scenario.set_user(who, updated_at=now - timedelta(days=1))
 
-    await _set_company_active(scenario, True)
+    result = await tenant_lifecycle.change_tenant_active(await _company(scenario), is_active=True)
 
     assert await _active_names(scenario) == {"genesis", "oa2", "oa3", "owner", "other"}
+    assert await _accounts(scenario) == 5
+    assert (result.restored_members, result.inactive_members) == (5, 2)
+    assert await _suspended_ids(scenario) == set()
+    grant_extras(monkeypatch, accounts=2)
+    retry = await tenant_lifecycle.change_tenant_active(await _company(scenario), is_active=True)
+    assert retry.changed is False
+    assert (retry.restored_members, retry.inactive_members) == (0, 0)
     assert await _accounts(scenario) == 5
 
 

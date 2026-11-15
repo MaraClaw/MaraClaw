@@ -1,6 +1,7 @@
 // Synthetic organization admission HTTP records, never forwarded to an engine.
 import assert from 'node:assert/strict'
 import { bounded, responseBarrier, uuid } from './admission-fixture.browser.mjs'
+import { organizationAdmission } from './organization-admission-fixtures.ts'
 
 export { bounded, responseBarrier }
 export const listPath = '/api/admin/organization-admissions'
@@ -12,6 +13,7 @@ const reviewer = {
 }
 export function makeFixture(receipt, name) {
   const row = (number, organizationName) => ({
+    ...organizationAdmission,
     id: uuid(number), organization_name: organizationName, email: `founder-${number}@example.test`,
     phone: '+84912345678', tier: 'max', plan: { id: 'max', name: 'Max', currency: 'USD', monthly_price_usd: 249, annual_price_usd: 2490,
       included_accounts: 15, additional_account_monthly_usd: 4, max_agents_per_account: 3,
@@ -42,7 +44,7 @@ async function respond(state, incoming, outgoing) {
     const raw = Buffer.concat(chunks).toString('utf8')
     const call = { scenario: state.name, path: url.pathname.replace(/\/$/u, ''), method: incoming.method,
       params: Object.fromEntries(url.searchParams), payload: raw ? JSON.parse(raw) : undefined }
-    let body, status = 200
+    let body, status = 200, contentType = 'application/json'
     if (call.path === '/api/auth/me') body = reviewer
     else if (call.path === '/api/notifications/unread-count') body = { unread_count: 0 }
     else if (call.path === listPath) {
@@ -53,6 +55,10 @@ async function respond(state, incoming, outgoing) {
       const rows = state.rows.filter((item) => item.status === call.params.status)
       body = status === 200 ? { items: call.params.offset === '0' ? rows : [], has_more: rows.length > 0 && call.params.offset === '0' }
         : { detail: 'Synthetic organization queue unavailable' }
+    } else if (call.path.endsWith('/evidence')) {
+      assert.equal(call.method, 'GET'); assert.ok(state.rows.some((item) => call.path === `${listPath}/${item.id}/evidence`))
+      contentType = 'image/png'
+      body = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
     } else {
       const match = /^\/api\/admin\/organization-admissions\/([\da-f-]+)\/(decision|retry-email)$/u.exec(call.path)
       assert.ok(match, `Unknown synthetic endpoint ${call.path}`); assert.equal(call.method, 'POST')
@@ -78,7 +84,7 @@ async function respond(state, incoming, outgoing) {
     Object.assign(call, { status, response: structuredClone(body) }); state.calls.push(call); state.receipt.requests.push(call)
     barrier = state.barriers.find((candidate) => !candidate.released && candidate.match(call))
     if (barrier) { barrier.enter(call); await barrier.wait }
-    if (!outgoing.destroyed) { outgoing.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); outgoing.end(JSON.stringify(body)) }
+    if (!outgoing.destroyed) { outgoing.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-store' }); outgoing.end(contentType === 'application/json' ? JSON.stringify(body) : body) }
   } catch (error) {
     state.receipt.violations.push({ path: url.pathname, message: String(error) })
     if (!outgoing.destroyed) { outgoing.writeHead(502); outgoing.end('{"detail":"Synthetic firewall blocked request"}') }

@@ -13,6 +13,8 @@ from app.dao.user_dao import user_dao
 from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import agent_work_eligibility as eligibility
 
@@ -43,6 +45,10 @@ async def test_timestamp_boundary_without_materialized_expiry(principal, monkeyp
     )
     codes = await eligibility.agent_work_blocking_codes(agent)
     assert codes == (("expired",) if offset <= 0 else ())
+    assert (
+        eligibility.policy_blocking_codes(agent, eligibility.AgentWorkPolicyContext(principal, None, False, now))
+        == codes
+    )
 
 
 @pytest.mark.parametrize("owner_state", ["missing", "inactive", "identity_missing", "identity_inactive", "legacy"])
@@ -72,7 +78,55 @@ async def test_owner_and_nullable_identity_contract(principal, monkeypatch, owne
         "legacy": (),
     }
     assert codes == expected[owner_state]
+    assert (
+        eligibility.policy_blocking_codes(
+            agent, eligibility.AgentWorkPolicyContext(owner, None, False, datetime.now(UTC))
+        )
+        == codes
+    )
     lookup.assert_awaited_once_with(principal.id, fresh=True)
+
+
+@pytest.mark.parametrize("state", ["tenant_missing", "tenant_inactive", "owner_moved", "transfer", "combined"])
+async def test_snapshot_policy_matches_fresh_path_for_company_and_transfer(principal, monkeypatch, state):
+    tenant = TenantRecord(id=uuid4(), name="Policy", slug="policy", tier=OrganizationPlanId.PRO)
+    principal.tenant_id = tenant.id
+    agent = AgentRecord(id=uuid4(), name="Policy", creator_id=principal.id, tenant_id=tenant.id)
+    transfer_pending = state in ("transfer", "combined")
+    expected = ()
+    match state:
+        case "tenant_missing":
+            tenant = None
+            expected = ("tenant_inactive",)
+        case "tenant_inactive":
+            tenant.is_active = False
+            expected = ("tenant_inactive",)
+        case "owner_moved":
+            principal.tenant_id = uuid4()
+            expected = ("owner_tenant_changed",)
+        case "transfer":
+            expected = ("transfer_pending",)
+        case "combined":
+            principal.is_active = False
+            principal.identity_id = uuid4()
+            principal.tenant_id = uuid4()
+            tenant.is_active = False
+            agent.is_expired = True
+            expected = (
+                "expired",
+                "owner_inactive",
+                "identity_inactive",
+                "owner_tenant_changed",
+                "tenant_inactive",
+                "transfer_pending",
+            )
+    monkeypatch.setattr(eligibility.company_admission_dao, "tenant", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        eligibility.company_transfer_cleanup_dao, "is_pending", AsyncMock(return_value=transfer_pending)
+    )
+    context = eligibility.AgentWorkPolicyContext(principal, tenant, transfer_pending, datetime.now(UTC))
+    assert eligibility.policy_blocking_codes(agent, context) == expected
+    assert await eligibility.agent_work_blocking_codes(agent) == expected
 
 
 @pytest.mark.parametrize("state", ["owner", "identity", "tenant", "moved", "transfer", "expired"])

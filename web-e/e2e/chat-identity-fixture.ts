@@ -1,6 +1,8 @@
 import { expect, type Page, type WebSocketRoute } from '@playwright/test'
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type { ChatMessage } from '../src/lib/chat/message'
+import { DoneEventSchema } from '../src/lib/engine-contracts.generated'
 import { originalAgent, originalToken, originalUser, prepareWorkspace, replacementAgent, replacementToken } from './session-fencing-fixture'
 
 export const firstSession = '387b65d4-6a8d-42f4-9677-12d4caaf6d31'
@@ -9,9 +11,12 @@ export const archivedSession = '647085d3-c393-487c-9c9f-021a493ed319'
 export const firstMessage = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 export const secondMessage = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 export const chatPath = (session = firstSession, agent = originalAgent) => `/app/agents/${agent.id}/chat/${session}`
-export const message = (message_id: string, content: string, role = 'assistant'): ChatMessage => ({
-  message_id, entry_id: message_id, role, content, created_at: '2030-01-01T00:00:00Z',
-})
+export const message = (entry_id: string, content: string, role = 'assistant'): ChatMessage & { readonly message_id: string; readonly entry_id: string } => {
+  const hash = createHash('sha256').update(entry_id).digest('hex')
+  const message_id = z.uuid().safeParse(entry_id).success ? entry_id
+    : `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+  return { message_id, entry_id, role, content, created_at: '2030-01-01T00:00:00Z' }
+}
 
 export async function navigateChat(page: Page, path: string) {
   // Exercise BrowserRouter in the same document now that chat has no session picker.
@@ -187,12 +192,14 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
 }
 
 export function complete(socket: WebSocketRoute, row: ChatMessage) {
-  socket.send(JSON.stringify({ type: 'done', ...row }))
+  socket.send(JSON.stringify(DoneEventSchema.parse({ type: 'done', message_id: row.message_id,
+    content: row.content, role: row.role, ...(row.attachments ? { attachments: row.attachments } : {}) })))
 }
 
 export function submitted(socket: { readonly sent: readonly string[] }, index = 0) {
   return z.object({ client_submission_id: z.uuid(), content: z.string(), display_content: z.string().optional(),
-    file_name: z.string().optional(), model_id: z.string().optional() }).parse(JSON.parse(socket.sent[index] ?? 'null'))
+    file_name: z.string().optional(), attachments: z.array(z.object({ path: z.string(), name: z.string() })).optional(),
+    model_id: z.string().optional() }).parse(JSON.parse(socket.sent[index] ?? 'null'))
 }
 
 export function accept(socket: { readonly route: WebSocketRoute; readonly session: string | null }, client_submission_id: string, message_id = firstMessage) {

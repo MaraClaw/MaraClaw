@@ -32,7 +32,7 @@ test('failed writes retain a secret only in the current draft and discard clears
   await page.getByLabel('API key operation').selectOption('set')
   await page.getByLabel('New API key', { exact: true }).fill('synthetic-new-key')
   await page.getByRole('button', { name: 'Save config', exact: true }).click()
-  await expect(page.getByRole('alert')).toContainText('Could not save')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Could not save' })).toContainText('Could not save')
   await expect(page.getByLabel('New API key', { exact: true })).toHaveValue('synthetic-new-key')
   await page.getByRole('button', { name: 'Discard draft' }).click()
   await expect(page.locator('input[type=password]')).toHaveCount(0)

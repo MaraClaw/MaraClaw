@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +8,7 @@ import { CompanyStatusIcon } from '@/components/companies/company-status-icon'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,6 +24,8 @@ import {
 import { ApiError } from '@/lib/http'
 import { CompanyAgentSections } from '@/pages/company-agent-sections'
 import { CompanyDeletion } from '@/pages/company-deletion'
+import { CompanyTier } from '@/pages/company-tier'
+import { CompanyRuntimeSummary } from '@/pages/company-runtime-summary'
 import { useTranslation } from '@/hooks/use-translation'
 
 export function CompanyDetailPage() {
@@ -85,10 +87,7 @@ export function CompanyDetailPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-      <Button type="button" variant="outline" size="sm" className="w-fit" onClick={goBack}>
-        <ArrowLeft className="size-3.5" aria-hidden />
-        {t('Back')}
-      </Button>
+      <BackButton label={t('Back')} onClick={goBack} />
 
       {companies.error ? (
         <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : t('Failed to load company')} />
@@ -116,6 +115,9 @@ export function CompanyDetailPage() {
         <CompanyStat label={t('Inactive users')} value={company?.inactive_user_count} />
         <CompanyStat label={t('Agents')} value={company?.agent_count} />
       </div>
+
+      {company && !companies.error ? <CompanyTier key={`tier-${company.id}`} company={company} /> : null}
+      {company && !companies.error ? <CompanyRuntimeSummary key={`runtime-${company.id}`} companyId={company.id} /> : null}
 
       <Card>
         <CardHeader>

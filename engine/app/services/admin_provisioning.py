@@ -342,10 +342,16 @@ async def set_peer_admin_active(
     else:
         raise AdminActivationError(403, "Admin access required")
 
-    if target.is_active == is_active:
-        return target
-
     async with connection_ctx() as connection:
+        if target.is_active == is_active:
+            current = await user_dao.clear_suspension_mark(target)
+            if current is None:
+                raise AdminActivationError(404, "User not found")
+            if current.role != target.role or current.is_genesis != target.is_genesis:
+                raise AdminActivationError(409, "User changed; retry the request")
+            target = current
+            if target.is_active == is_active:
+                return target
         db = cast("DbConnection | None", connection)
         if is_active and tenant_for_count is not None and db is not None:
             await require_account_slot(db, tenant_for_count, excluded_user_id=target.id)
@@ -403,10 +409,16 @@ async def set_end_user_active(
     ):
         raise AdminActivationError(403, "Can only change users in your own company")
 
-    if target.is_active == is_active:
-        return target
-
     async with connection_ctx() as connection:
+        if target.is_active == is_active:
+            current = await user_dao.clear_suspension_mark(target)
+            if current is None:
+                raise AdminActivationError(404, "User not found")
+            if current.role != target.role or current.is_genesis != target.is_genesis:
+                raise AdminActivationError(409, "User changed; retry the request")
+            target = current
+            if target.is_active == is_active:
+                return target
         db = cast("DbConnection | None", connection)
         if is_active and db is not None:
             await require_account_slot(db, target.tenant_id, excluded_user_id=target.id)

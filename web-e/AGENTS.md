@@ -57,7 +57,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 - Public `VITE_*` only, never secrets. Empty `VITE_API_BASE_URL` means same-origin; never use `http://0.0.0.0:8000`.
 - Vite serves :5173 (`host: true`); `/api`, `/ws` (websocket), `/p` proxy to `VITE_DEV_API_PROXY` or `http://127.0.0.1:8000`. Production proxies these to `maraclaw-engine:8000`, body limit 51MiB (50 MiB file plus multipart framing), and rewrites root WeCom domain-verification files (`/WW_verify_<token>.txt`) to `/api/wecom-verify/<filename>`; keep that Caddyfile pattern in step with the engine's `_VERIFY_FILENAME_RE`.
 - Docker builds with Node 26.13.1 and serves via Caddy (`caddy:2.11.9-alpine`) running as non-root uid 101 on :8080, health `GET /healthz`, SPA fallback. Never long-cache `index.html`, run as root, or switch to port 80.
-- CSP `font-src 'self' data:` blocks index.html's Google Fonts in the image; external APIs require `connect-src` edits. Local Office parsing uses only `script-src 'wasm-unsafe-eval'` and `worker-src 'self' blob:`; never add JavaScript `unsafe-eval`, data workers or remote viewer/font hosts. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
+- Fonts are self-hosted in `public/fonts/` and loaded through `/fonts/fonts.css`, compatible with CSP `font-src 'self' data:`; preserve the upstream licenses and Unicode subsets. External APIs require `connect-src` edits. Local Office parsing uses only `script-src 'wasm-unsafe-eval'` and `worker-src 'self' blob:`; never add JavaScript `unsafe-eval`, data workers or remote viewer/font hosts. Reset/verify email links prefer engine CORS-allowlisted Origin/Referer, otherwise configured `PUBLIC_BASE_URL`.
 
 ## COMMANDS AND CHECKS
 
@@ -78,4 +78,4 @@ docker run --rm -p 8080:8080 maraclaw-web-e
 ```
 
 `npm test` uses TypeScript checks plus Node's test runner, not Vitest/Jest. Frontend CI runs `contracts:check`, lint, `tsc -b`, `npm test`, build and Docker build.
-Playwright `test:e2e` is separate: `playwright.config.ts` uses `testDir: './e2e'` with a build + preview webServer at `http://127.0.0.1:4173`, and `test:e2e` is not run in `frontend-ci.yml`. Test layout and conventions: [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md).
+Playwright `test:e2e` runs in the workflow's independent `browser` matrix across four parallel shards after installing Chromium and its system dependencies, with two workers per shard, a 90-minute job timeout and shard-specific failure artifacts. `playwright.config.ts` uses `testDir: './e2e'` with a build + preview webServer at `http://127.0.0.1:4173`; CI timeouts are 60 seconds per test, 10 seconds per assertion and 180 seconds for server startup (local: 30, 5 and 60 seconds). Test layout and conventions: [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md).

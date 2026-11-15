@@ -1,7 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { motion, useReducedMotion } from 'framer-motion'
 import {
-  ArrowLeft,
   Building2,
   Eye,
   EyeOff,
@@ -24,6 +23,7 @@ import { message, type LocalMessage } from '@/lib/i18n'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
@@ -402,17 +402,13 @@ export function LoginPage() {
 
                 {tenantChoices ? (
                   <div className="space-y-3">
-                    <Button
-                      type="button"
+                    <BackButton
+                      label={t('Back to credentials')}
                       variant="ghost"
-                      size="sm"
                       className="-ml-2 mb-1"
                       onClick={backToCredentials}
                       disabled={isBusy}
-                    >
-                      <ArrowLeft className="size-4" aria-hidden />
-                      {t('Back to credentials')}
-                    </Button>
+                    />
 
                     <ul className="space-y-2" aria-label={t('Organizations')}>
                       {tenantChoices.map((tenant) => {

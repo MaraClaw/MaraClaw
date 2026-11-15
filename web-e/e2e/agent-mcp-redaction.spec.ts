@@ -73,7 +73,7 @@ test(`an uncommitted backend ${failure.status} retains replacement details witho
   await expect(page.getByLabel('Remote URL', { exact: true })).toHaveValue('')
   await page.getByLabel('Remote URL', { exact: true }).fill('https://mcp.example.test/new')
   await page.getByRole('button', { name: 'Save server', exact: true }).click()
-  await expect(page.getByRole('alert')).toHaveText(failure.message)
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: failure.message })).toHaveText(failure.message)
   await expect(page.getByText('private-credential-payload', { exact: false })).toHaveCount(0)
   await expect(page.getByLabel('Remote URL', { exact: true })).toHaveValue('https://mcp.example.test/new')
   await page.screenshot({ path: testInfo.outputPath('sync-error-retains-draft.png') })

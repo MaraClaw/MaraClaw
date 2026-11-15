@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 
 import { ErrorToast } from '@/components/error-toast'
-import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
 import { adminSession } from '@/lib/admin-session'
@@ -51,7 +51,7 @@ export function BroadcastJobProgress({ receipt, onCompleted }: {
       </dl>
       <p role="status" className="text-sm text-muted-foreground">{t(status.isFetching ? 'Checking broadcast progress...' : 'Email progress and completed history will be available when notification processing finishes.')}</p>
     {status.isError ? <ErrorToast error={status.error} message={t('Could not refresh broadcast progress. The accepted job is kept; counts may be out of date. Refresh progress to try again.')} /> : null}
-      <Button type="button" variant="outline" className="h-auto min-h-11 self-start whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none" disabled={status.isFetching} onClick={() => { if (isCurrent()) void status.refetch() }}>{t('Refresh broadcast progress')}</Button>
+      <RefreshButton label={t('Refresh broadcast progress')} className="self-start" disabled={status.isFetching} onClick={() => { if (isCurrent()) void status.refetch() }} />
     </section>
   )
 }

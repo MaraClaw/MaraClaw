@@ -10,7 +10,7 @@ Scope: this directory's styled controls and composition primitives.
 - `input.tsx`: styled native input.
 - `label.tsx`: styled Radix label.
 - `password-field.tsx`: labeled password input, visibility toggle and error display.
-- `select.tsx`: styled native select with disclosure icon.
+- `select.tsx`: native form select with styled Radix options and disclosure icon; `select-options.ts` reads native options and adapts trigger input.
 - `separator.tsx`: orientation-aware Radix separator.
 - `switch.tsx`: styled Radix switch (`role="switch"`); label it with `<Label htmlFor>`.
 
@@ -36,5 +36,6 @@ Scope: this directory's styled controls and composition primitives.
 - `Button` supplies no default `type`; specify it for non-submit form actions.
 - `Select.className` styles the wrapper; its `ref` targets the native select. `fit` sizes to content (`w-max`); default is full width.
 - Pointer-committed select changes blur; keyboard-committed changes retain focus.
+- Opening Select options keeps logical focus inside the control without forwarding blur; the expanded listbox inherits the field's accessible name. Multiple/size listboxes stay native.
 - `PasswordField` spreads input props after generated ARIA attributes.
   Caller `aria-describedby` or `aria-invalid` therefore overrides those defaults.

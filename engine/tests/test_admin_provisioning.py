@@ -518,12 +518,37 @@ async def test_set_end_user_active_platform_admin_cross_tenant(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_end_user_active_is_noop_when_already_set():
+async def test_set_end_user_active_is_noop_when_already_set(monkeypatch):
     tenant_id = uuid.uuid4()
     actor = _user(role="org_admin", tenant_id=tenant_id)
     target = _user(role="member", tenant_id=tenant_id, is_active=False)
-    updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    clear = AsyncMock(return_value=target)
+    monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear, raising=False)
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
     assert updated is target
+    clear.assert_awaited_once_with(target)
+
+
+async def test_repeated_peer_admin_deactivation_clears_suspension_mark(monkeypatch):
+    from app.core.domain.users import UserRole
+    from app.records.user import UserRecord
+
+    tenant_id = uuid.uuid4()
+    actor = UserRecord(id=uuid.uuid4(), role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_genesis=True)
+    target = UserRecord(id=uuid.uuid4(), role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=False)
+    clear = AsyncMock(return_value=target)
+    monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear, raising=False)
+
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        updated = await provisioning.set_peer_admin_active(actor=actor, target=target, is_active=False)
+
+    assert updated is target
+    clear.assert_awaited_once_with(target)
 
 
 @pytest.mark.asyncio
@@ -608,6 +633,35 @@ def quiet_side_effects(monkeypatch):
     ):
         monkeypatch.setattr(dao, name, AsyncMock(return_value=[]))
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
+
+
+@pytest.mark.parametrize("role", [UserRole.MEMBER, UserRole.ORG_ADMIN])
+@pytest.mark.parametrize("is_active", [False, True])
+async def test_individual_retry_uses_locked_state_after_company_transition(
+    monkeypatch, quiet_side_effects, role, is_active
+):
+    tenant_id = uuid.uuid4()
+    actor = _membership(role=UserRole.ORG_ADMIN, tenant_id=tenant_id, is_active=True, is_genesis=True)
+    snapshot = _membership(role=role, tenant_id=tenant_id, is_active=is_active)
+    current = replace(snapshot, is_active=not is_active)
+    clear = AsyncMock(return_value=current)
+    update = AsyncMock(return_value=replace(current, is_active=is_active))
+    deactivate = AsyncMock(return_value=replace(current, is_active=False))
+    monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear)
+    monkeypatch.setattr(provisioning.user_dao, "update", update)
+    monkeypatch.setattr(provisioning.user_dao, "deactivate_unless_last_active", deactivate)
+    action = provisioning.set_peer_admin_active if role == UserRole.ORG_ADMIN else provisioning.set_end_user_active
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        updated = await action(actor=actor, target=snapshot, is_active=is_active)
+
+    assert updated.is_active is is_active
+    clear.assert_awaited_once_with(snapshot)
+    if role == UserRole.ORG_ADMIN and not is_active:
+        deactivate.assert_awaited_once_with(current.id, role=current.role, tenant_id=tenant_id)
+    else:
+        update.assert_awaited_once_with(db_obj=current, obj_in={"is_active": is_active})
 
 
 @pytest.mark.parametrize("is_active", [False, True], ids=["deactivate", "activate"])

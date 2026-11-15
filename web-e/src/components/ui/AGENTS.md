@@ -21,7 +21,7 @@ Hand-maintained shadcn **new-york** primitives (Radix + CVA + `cn`). Shared by l
 | `label.tsx` | `Label` | Auth + workspace forms |
 | `textarea.tsx` | `Textarea` | Chat composer, clawbook, OKR, files, agent settings and forms |
 | `password-field.tsx` | `PasswordField` | register, reset-password, settings |
-| `select.tsx` | `Select` | Native dropdowns; same radius as Input, custom chevron, `fit` hugs content; blurs only after a pointer pick |
+| `select.tsx`, `select-options.ts` | `Select` | Native form select with styled Radix options; same radius as Input, custom chevron, `fit` hugs content; blurs after a pointer pick |
 
 Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, aliases, Lucide).
 
@@ -37,7 +37,7 @@ Config truth: `/components.json` (style new-york, baseColor zinc, cssVariables, 
 ## CONVENTIONS
 
 - Named exports only; `data-slot="…"` on roots.
-- `Select` wraps a native `<select>`: `rounded-xl` like Input/Button, custom chevron, `fit` hugs content. `onPointerDown` arms a flag and `onKeyDown` clears it; `onChange` calls the caller's handler, then blurs the element only while the flag is armed. A keyboard change never blurs, so keyboard users can walk the options.
+- `Select` keeps a native `<select>` as its trigger, ref, event and form owner: `rounded-xl` like Input/Button, custom chevron, `fit` hugs content. `select-options.ts` reads native labels/options for the named Radix listbox. Opening options does not forward internal blur; keyboard commits restore trigger focus, while pointer commits produce a real native blur, including a same-value pick. Multiple/size listboxes stay native.
 - Props: `React.ComponentProps<'…'> & VariantProps<…>` (and `asChild` via Slot where needed).
 - Function components (not legacy `forwardRef` wrappers unless required).
 - Project polish already baked in:

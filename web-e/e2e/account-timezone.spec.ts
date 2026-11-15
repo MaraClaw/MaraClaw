@@ -86,7 +86,7 @@ test('timezone preference pending and error states retain the selected draft and
     await expect(page.getByRole('button', { name: 'Saving timezone...', exact: true })).toBeDisabled()
   } finally { release.resolve() }
   // 5xx responses never surface raw server detail; userFacingRequestError always falls back for status >= 500.
-  await expect(page.getByRole('status').filter({ hasText: /timezone/i })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to update timezone. Try again.' })).toHaveText('Unable to update timezone. Try again.')
   await expect(page.getByLabel('Timezone')).toHaveValue('Etc/GMT-7')
   await expect(page.getByRole('button', { name: 'Save timezone', exact: true })).toBeEnabled()
 })

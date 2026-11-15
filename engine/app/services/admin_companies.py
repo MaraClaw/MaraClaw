@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hmac import compare_digest, digest
-from typing import ClassVar, Final
+from typing import ClassVar, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -72,6 +72,48 @@ def _search_text(q: str | None) -> str:
     if len(query) > MAX_SEARCH_LENGTH:
         raise HTTPException(status_code=400, detail="Search is too long")
     return query
+
+
+class _CompanyRuntimeCursor(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1]
+    purpose: Literal["company-runtime"]
+    company_id: uuid.UUID
+    agent_id: uuid.UUID
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def _runtime_cursor_signature(company_id: uuid.UUID, agent_id: uuid.UUID) -> str:
+    payload = f"admin-company-runtime-v1:{company_id}:{agent_id}".encode()
+    return digest(get_settings().JWT_SECRET_KEY.encode(), payload, "sha256").hex()
+
+
+def encode_runtime_cursor(company_id: uuid.UUID, agent_id: uuid.UUID) -> str:
+    boundary = _CompanyRuntimeCursor(
+        version=1,
+        purpose="company-runtime",
+        company_id=company_id,
+        agent_id=agent_id,
+        signature=_runtime_cursor_signature(company_id, agent_id),
+    )
+    return urlsafe_b64encode(boundary.model_dump_json().encode()).decode().rstrip("=")
+
+
+def decode_runtime_cursor(value: str, company_id: uuid.UUID) -> uuid.UUID:
+    """Reject foreign-purpose, foreign-company and forged boundaries before any inventory read."""
+    if not value or len(value) > MAX_CURSOR_LENGTH:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    try:
+        raw = b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+        cursor = _CompanyRuntimeCursor.model_validate_json(raw, strict=True)
+    except (Base64Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+    if cursor.company_id != company_id or not compare_digest(
+        cursor.signature, _runtime_cursor_signature(cursor.company_id, cursor.agent_id)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    return cursor.agent_id
 
 
 def _with_stats(tenant: TenantRecord, stats: TenantUsageStats) -> CompanyStats:

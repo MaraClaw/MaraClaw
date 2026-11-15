@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "tsc -p tsconfig.tests.json && node --test tests/*.test.ts",
+    "test:e2e": "tsc -p e2e/tsconfig.json && playwright test",
     "preview": "vite preview"
   },
   "dependencies": {

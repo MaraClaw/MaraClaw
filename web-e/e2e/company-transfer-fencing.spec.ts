@@ -53,7 +53,7 @@ test('a retired owner withdrawal cannot populate the replacement member status v
     await requested.promise
     // When
     await writeFromOtherTab(page, 'replacement-token')
-    await expect(page.getByRole('alert')).toContainText('Not found for replacement member')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Not found for replacement member' })).toContainText('Not found for replacement member')
     release.resolve()
     await completed.promise
     // Then

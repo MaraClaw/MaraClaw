@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useAgentDeletionApproval, useAgentDeletionDetail } from '@/hooks/use-agent-deletions'
 import { agentDeletionIdSchema, canApproveAgentDeletion, type AgentDeletionDetail } from '@/lib/agent-deletion-api'
@@ -89,7 +90,7 @@ export function AgentDeletionRequestDetailPage() {
   const detail = useAgentDeletionDetail(parsed.success ? parsed.data : null)
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
     <header className="flex flex-col items-start gap-3">
-      <Button asChild variant="outline"><Link to="/agent-deletion-requests">{t('Back to deletion requests')}</Link></Button>
+      <BackLink to="/agent-deletion-requests" label={t('Back to deletion requests')} />
       <h1 className="font-display text-2xl font-semibold tracking-tight">{t('Agent deletion request')}</h1>
     </header>
     {!parsed.success ? <p role="alert" className="text-sm text-destructive">{t('This request link is invalid. Return to deletion requests.')}</p> : <>

@@ -84,7 +84,7 @@ export async function runBrowser(exercise) {
     const profile = join(work, 'profile'); await mkdir(profile)
     server = await createServer({ root: process.cwd(), envDir: false, cacheDir: join(work, 'vite'),
       define: { 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
-      server: { host: '127.0.0.1', port: 0, watch: { ignored: [output + '/**', work + '/**'] }, headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*" } },
+      server: { host: '127.0.0.1', port: 0, watch: { ignored: [output + '/**', work + '/**'] }, headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*" } },
       plugins: [{ name: 'synthetic-organization-firewall', enforce: 'pre', configResolved(config) { config.server.proxy = {} },
         configureServer(vite) { vite.middlewares.use((request, response, next) => {
           if (!request.url.startsWith('/api/')) return next()

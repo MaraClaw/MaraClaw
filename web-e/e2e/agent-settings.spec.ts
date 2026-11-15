@@ -72,10 +72,11 @@ test('agent information stays in Settings while focused chat and the section rai
     await expect(page.locator('[data-slot="badge"]').filter({ hasText: new RegExp(`^${badge}$`) })).toHaveCount(1)
   }
   await expect(page.getByText(agent.role_description, { exact: true })).toBeVisible()
-  await expect(page.getByText('Tokens today 123 / 1000 · Tasks 2/5 · 3 approvals', { exact: true })).toBeVisible()
+  await expect(page.getByText('Tokens today 123 / 1,000 · Tasks 2/5 · 3 approvals', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(1)
-  expect(api.reads()).toBe(1)
+  // The runtime-loss notice rechecks the layout's agent on each Chat and Settings visit.
+  expect(api.reads()).toBe(3)
   expect(api.metricsReads()).toBe(1)
   await sections.getByRole('link', { name: 'Chat', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/app/agents/${agent.id}/chat`))
@@ -100,7 +101,8 @@ for (const lifecycle of lifecycleCases) {
     api.setAgent({ ...originalAgent, status: lifecycle.finalStatus })
     request.release()
     await expect(page.locator('[data-slot="badge"]').filter({ hasText: lifecycle.finalStatus })).toBeVisible()
-    expect(api.reads()).toBe(2)
+    // Initial layout + runtime-loss recheck + successful mutation invalidation.
+    expect(api.reads()).toBe(3)
     const [settled, opposite] = lifecycle.action === 'start' ? ['Start', 'Stop'] : ['Stop', 'Start']
     await expect(page.getByRole('button', { name: settled, exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: opposite, exact: true })).toBeEnabled()
@@ -123,7 +125,8 @@ for (const lifecycle of lifecycleCases) {
     await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveText(`Unable to ${lifecycle.action} this agent`)
     await expect(button).toBeEnabled()
     await expect(page.locator('[data-slot="badge"]').filter({ hasText: lifecycle.initialStatus })).toBeVisible()
-    expect(api.reads()).toBe(1)
+    // Initial layout + runtime-loss recheck; a failed mutation does not refresh the agent.
+    expect(api.reads()).toBe(2)
   })
 
   for (const status of [200, 503]) {

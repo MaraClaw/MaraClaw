@@ -81,17 +81,19 @@ class CompanyAgentLimitReachedError(Exception):
         super().__init__(self.message)
 
 
-async def company_caps(conn: DbConnection, tenant_id: UUID | None) -> CompanyCaps | None:
+async def company_caps(
+    conn: DbConnection, tenant_id: UUID | None, *, tier: OrganizationPlanId | None = None
+) -> CompanyCaps | None:
     """The caps of a non-system organization; ``None`` means uncapped: a system organization, or no organization."""
     if tenant_id is None:
         return None
     if bool(await conn.fetchval("SELECT is_system FROM tenants WHERE id = %(id)s", {"id": tenant_id})):
         return None
-    tier = await tier_for_tenant(tenant_id)
-    plan = plan_for(tier)
+    governing_tier = await tier_for_tenant(tenant_id) if tier is None else tier
+    plan = plan_for(governing_tier)
     extras = await effective_extras(conn, tenant_id, vn_today())
     return CompanyCaps(
-        tier=tier,
+        tier=governing_tier,
         account_limit=plan.included_accounts + extras.accounts,
         agent_limit=int(plan.included_agents) + extras.agents,
         extras=extras,

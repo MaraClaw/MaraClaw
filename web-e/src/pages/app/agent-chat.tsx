@@ -13,6 +13,7 @@ import { ChatTranscript } from '@/components/chat/transcript'
 import { HistoryControl } from '@/components/chat/history-control'
 import { SessionList } from '@/components/chat/session-list'
 import { SkillMentionInput } from '@/components/chat/skill-mention-input'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { installedAgentSkillsOptions } from '@/hooks/agent-skills-options'
 import { useChatHistory } from '@/hooks/use-chat-history'
@@ -574,7 +575,7 @@ export function AgentChatPage() {
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         {!writable ? <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
           <p>{translate("Archived conversation. Read-only history.")}</p>
-          <Link className="underline underline-offset-4" to={`/app/agents/${agent.id}/chat`}>{translate("Return to shared conversation")}</Link>
+          <BackLink to={`/app/agents/${agent.id}/chat`} variant="ghost" label={translate("Return to shared conversation")} />
         </div> : null}
         {livePreview ? (
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">

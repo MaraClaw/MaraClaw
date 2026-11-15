@@ -1,13 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, Loader2, Mail } from 'lucide-react'
+import { Loader2, Mail } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/layout/auth-shell'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
@@ -76,9 +76,7 @@ export function ForgotPasswordPage() {
         description={t('If an account with that email exists, a password reset link has been sent.')}
         footer={
           <p className="text-center text-sm text-muted-foreground">
-            <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-              {t('Back to sign in')}
-            </Link>
+            <BackLink to="/login" label={t('Back to sign in')} variant="ghost" />
           </p>
         }
       >
@@ -88,12 +86,7 @@ export function ForgotPasswordPage() {
         >
           {t('Sent to')} <span className="font-medium text-foreground">{email}</span>{t('. The link expires after a short time. Check spam if you do not see it.')}
         </div>
-        <Button asChild variant="outline" className="mt-4 h-11 w-full">
-          <Link to="/login">
-            <ArrowLeft className="size-4" aria-hidden />
-            {t('Return to sign in')}
-          </Link>
-        </Button>
+        <BackLink to="/login" label={t('Return to sign in')} className="mt-4" />
       </AuthShell>
     )
   }
@@ -104,13 +97,7 @@ export function ForgotPasswordPage() {
       description={t('Enter the email for your admin account. We will send a reset link if it matches an active identity.')}
       footer={
         <p className="text-center text-sm text-muted-foreground">
-          <Link
-            to="/login"
-            className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
-          >
-            <ArrowLeft className="size-3.5" aria-hidden />
-            {t('Back to sign in')}
-          </Link>
+          <BackLink to="/login" label={t('Back to sign in')} variant="ghost" />
         </p>
       }
     >

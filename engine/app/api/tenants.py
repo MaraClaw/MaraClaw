@@ -49,7 +49,7 @@ from app.services.admin_provisioning import (
 from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageReadLimitExceededError
-from app.services.tenant_lifecycle import set_tenant_active, tenant_can_be_disabled
+from app.services.tenant_lifecycle import change_tenant_active, tenant_can_be_disabled
 from app.services.tenant_provisioning import (
     AdminEmailTakenError,
     GenesisOrgAdminExistsError,
@@ -824,11 +824,12 @@ async def update_tenant(
             )
         new_active = json_as_bool(update_data.pop("is_active"))
         try:
-            _ = await set_tenant_active(tenant, is_active=new_active)
+            result = await change_tenant_active(tenant, is_active=new_active)
         except DefaultOrgUnavailableError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_changes["is_active"] = field_change(tenant.is_active, new_active)
-        tenant = await tenant_dao.get(tenant_id) or tenant
+        if result.changed:
+            audit_changes["is_active"] = field_change(not result.tenant.is_active, result.tenant.is_active)
+        tenant = result.tenant
 
     updated = await tenant_dao.update(db_obj=tenant, obj_in=update_data) if update_data else tenant
     audit_changes.update({key: field_change(getattr(tenant, key, None), value) for key, value in update_data.items()})

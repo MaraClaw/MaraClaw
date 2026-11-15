@@ -74,6 +74,7 @@ class GuestInspection:
     exit_code: int
     restart_count: int
     started_at: datetime | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +157,7 @@ def _inspection(item: dict[str, object]) -> GuestInspection:
         exit_code=_integer(state.get("ExitCode")),
         restart_count=_integer(item.get("RestartCount")),
         started_at=_timestamp(state.get("StartedAt")),
+        status=status if isinstance(status := state.get("Status"), str) else None,
     )
 
 

@@ -159,7 +159,7 @@ test('stale generation conflict exposes refresh and never automatically repeats 
   // When: the creator starts pairing.
   await card.getByRole('button', { name: 'Connect personal account', exact: true }).click()
   // Then: safe recovery needs an explicit status refresh, not a retry with null generation.
-  await expect(card.getByRole('alert')).toContainText('Connection changed elsewhere')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Connection changed elsewhere' })).toContainText('Connection changed elsewhere')
   await expect(card.getByRole('button', { name: 'Connect personal account', exact: true })).toHaveCount(0)
   fixture.setStatus({ ...unlinked, generation: personalGeneration, attempt_id: personalAttempt, revision: 4 })
   await card.getByRole('button', { name: 'Refresh status', exact: true }).click()

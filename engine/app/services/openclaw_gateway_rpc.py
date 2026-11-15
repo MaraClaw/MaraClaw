@@ -32,7 +32,7 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services.agent_runtime_loss import report_missing_guest
+from app.services.agent_runtime_loss import clear_stopped_guest_loss, report_missing_guest, report_stopped_guest
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.guest_bootstrap import BOOTSTRAP_PENDING_EXIT, BOOTSTRAP_PENDING_STDERR, guarded_argv
 from app.services.guest_identity import GuestOwnershipError, guest_resolutions, resolve_guest
@@ -216,12 +216,19 @@ async def execute_gateway_turn(
                     return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
                 guest_resolutions.put(fresh, guest)
 
-            def inspect_running() -> bool:
+            def inspect_state() -> tuple[bool, bool]:
                 with observation(_policy, deadline=monotonic() + 10):
                     state = client.container.inspect(guest.id).state
-                    return state is not None and state.running is True
+                    running = state is not None and state.running is True
+                    stopped = (
+                        not running
+                        and state is not None
+                        and state.status in ("exited", "created")
+                        and state.restarting is not True
+                    )
+                    return running, stopped
 
-            running = await drain_on_cancel(native_capacity().run(inspect_running))
+            running, stopped = await drain_on_cancel(native_capacity().run(inspect_state))
         except (
             ClientNotFoundError,
             DockerException,
@@ -237,7 +244,10 @@ async def execute_gateway_turn(
             return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
         if not running:
             guest_resolutions.drop(agent.id)
+            if stopped:
+                await report_stopped_guest(fresh)
             return NotAdmittedOutcome(message_id, "not_submitted", "guest_unavailable")
+        await clear_stopped_guest_loss(fresh.id)
         try:
             identity_context = await build_identity_context(fresh, message.sender_user_id)
         except Exception as exc:

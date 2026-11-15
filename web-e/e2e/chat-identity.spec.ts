@@ -16,7 +16,7 @@ test('busy polling still recovers a persisted reply without a completion frame',
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
   await expect.poll(() => socket.sent.length).toBe(1)
   await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
-  chat.setHistory([{ ...question, client_submission_id: submitted(socket).client_submission_id }, reply])
+  chat.setHistory([old, { ...question, client_submission_id: submitted(socket).client_submission_id }, reply])
   const refreshed = page.waitForEvent('requestfinished', {
     predicate: (request) => new URL(request.url()).pathname.endsWith(`/sessions/${firstSession}/messages/page`),
   })
@@ -41,7 +41,7 @@ test('lost acceptance survives reconnect and socket effect recreation with the s
   const reconnected = await chat.socket(1)
   await expect.poll(() => reconnected.sent).toEqual(first.sent)
   chat.setOnboarded(true)
-  reconnected.route.send(JSON.stringify({ type: 'onboarded' }))
+  reconnected.route.send(JSON.stringify({ type: 'onboarded', agent_id: originalAgent.id }))
   const recreated = await chat.socket(2)
   await expect.poll(() => recreated.sent).toEqual(first.sent)
   accept(recreated, envelope.client_submission_id)
@@ -134,14 +134,15 @@ test('file rejection retries the exact uploaded envelope after effect recreation
   await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('file bytes') })
   await expect.poll(() => socket.sent.length).toBe(1)
   const envelope = submitted(socket)
-  expect(envelope).toMatchObject({ content: 'Frozen extracted notes', display_content: 'notes.txt', file_name: 'notes.txt' })
+  expect(envelope).toMatchObject({ content: 'Frozen extracted notes', display_content: 'notes.txt', file_name: 'notes.txt',
+    attachments: [{ path: 'uploads/notes.txt', name: 'notes.txt' }] })
   socket.route.close({ code: 1006 })
   const reconnected = await chat.socket(1)
   await expect.poll(() => reconnected.sent).toEqual(socket.sent)
   reconnected.route.send(JSON.stringify({ type: 'turn_rejected', client_submission_id: envelope.client_submission_id, reason: 'enqueue_failed', content: 'Queue unavailable.' }))
   await expect(page.getByRole('button', { name: 'Retry this message', exact: true })).toBeVisible()
   chat.setOnboarded(true)
-  reconnected.route.send(JSON.stringify({ type: 'onboarded' }))
+  reconnected.route.send(JSON.stringify({ type: 'onboarded', agent_id: originalAgent.id }))
   const recreated = await chat.socket(2)
   expect(recreated.sent).toEqual([])
   await page.screenshot({ path: testInfo.outputPath('file-retry.png'), fullPage: true })
@@ -195,7 +196,7 @@ test('a DONE lost after a CHUNK releases the stale live turn once history ends i
   await composer.press('Enter')
   await expect.poll(() => socket.sent.length).toBe(1)
   const envelope = submitted(socket)
-  accept(socket, envelope.client_submission_id)
+  accept(socket, envelope.client_submission_id, question.message_id)
   socket.route.send(chunk(0, 'Partial streamed text'))
   await expect(page.getByText('Partial streamed text')).toBeVisible()
   chat.setHistory([{ ...question, client_submission_id: envelope.client_submission_id }, reply])
@@ -205,6 +206,7 @@ test('a DONE lost after a CHUNK releases the stale live turn once history ends i
   await refreshed
   await page.clock.runFor(100)
   await expect(page.getByText(reply.content, { exact: true })).toBeVisible()
+  socket.route.send(JSON.stringify({ type: 'heartbeat' }))
   // Then the live turn survives the quiet interval's start, and is released with its straggler ignored after it
   await expect(page.locator('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
   await page.clock.runFor(20_000)

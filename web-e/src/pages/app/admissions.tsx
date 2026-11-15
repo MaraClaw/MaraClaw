@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -54,7 +55,7 @@ export function AdmissionsPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-end gap-3">
-        <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching} onClick={scope.effect(refresh)}>{translate("Refresh status")}</Button>
+        <RefreshButton label={translate("Refresh status")} disabled={query.isFetching} onClick={scope.effect(refresh)} />
       </div>
       <p className="text-sm text-muted-foreground">{translate("Your organization admission history. New invitations join automatically; paid transfers join after payment approval. Historical pending and rejected requests remain here.")}</p>
       <TransferRequests refreshVersion={refreshVersion} />

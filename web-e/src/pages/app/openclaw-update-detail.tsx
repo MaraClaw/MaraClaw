@@ -1,10 +1,10 @@
 import { useTranslation } from '@/hooks/use-translation'
-import { ArrowLeft } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { OpenClawUpdateCard } from '@/components/openclaw-update-card'
 import { Badge } from '@/components/ui/badge'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -26,7 +26,7 @@ export function OpenClawUpdateDetailPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6 [overflow-wrap:anywhere]">
-      <Button asChild variant="outline"><Link to="/app/notifications"><ArrowLeft aria-hidden="true" className="size-4" />{translate("Back to Inbox")}</Link></Button>
+      <BackLink to="/app/notifications" label={translate("Back to Inbox")} />
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading update notice…")}</p> : null}
       {query.isError ? <div className="space-y-3">
         <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, translate("Unable to load this update notice. Check your connection and try again."))} />

@@ -59,7 +59,7 @@ for (const status of [409, 503]) {
       await retry.requested
       retry.release(status)
       // Then
-      await expect(page.getByRole('region', { name: 'Agent lifecycle', exact: true }).getByRole('alert')).toContainText('Unable to retry this integration')
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to retry this integration' })).toContainText('Unable to retry this integration')
       await expect(page.getByRole('button', { name: 'Retry integration company/research', exact: true })).toBeEnabled()
       await expect(page.getByText(/private-secret/)).toHaveCount(0)
     } finally { retry.release(status) }
@@ -72,7 +72,7 @@ test('unavailable lifecycle fails closed and recovers through its own status che
   api.status(503)
   await page.goto(settingsPath)
   const region = page.getByRole('region', { name: 'Agent lifecycle', exact: true })
-  await expect(region.getByRole('alert')).toContainText('unavailable')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Lifecycle status is unavailable' })).toContainText('unavailable')
   await expect(region.getByText('Policy: Eligible', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled()
   // When

@@ -291,6 +291,10 @@ class UserDAO(BaseDAO[UserRecord]):
             if db is not None:
                 await lock_tenants(db, (db_obj.tenant_id, target_tenant))
                 await lock_user(db, db_obj.id, db_obj.tenant_id)
+                if "is_active" in obj_in or target_tenant != db_obj.tenant_id:
+                    await db.execute(
+                        "DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": db_obj.id}
+                    )
                 if target_tenant != db_obj.tenant_id or (
                     "role" in obj_in and obj_in["role"] not in ("member", "agent_admin")
                 ):
@@ -340,6 +344,26 @@ class UserDAO(BaseDAO[UserRecord]):
             )
             return uuid_list_from_rows(rows)
 
+    async def clear_suspension_mark(self, user: UserRecord) -> UserRecord | None:
+        from app.core.acl_locks import lock_tenants, lock_user
+
+        async with self.session() as db:
+            await lock_tenants(db, (user.tenant_id,))
+            await lock_user(db, user.id, user.tenant_id)
+            current = await self.get_with_identity(user.id, fresh=True)
+            await db.execute("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": user.id})
+            return current
+
+    async def count_suspended_for_tenant(self, tenant_id: UUID) -> int:
+        async with self.session() as db:
+            count = await db.fetchval(
+                "SELECT COUNT(*) FROM tenant_suspended_memberships s JOIN users u ON u.id = s.user_id "
+                "WHERE s.tenant_id = %(tenant_id)s AND u.tenant_id = s.tenant_id "
+                "AND u.is_active IS FALSE AND u.role <> 'platform_admin'",
+                {"tenant_id": tenant_id},
+            )
+            return int_from_row(count)
+
     async def deactivate_for_tenant(self, tenant_id: UUID) -> int:
         """Deactivate org members. Does not flip ``identities.is_active``."""
         async with self.session() as db:
@@ -352,6 +376,11 @@ class UserDAO(BaseDAO[UserRecord]):
                 "AND role <> %(platform_admin)s RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin"},
             )
+            await db.execute(
+                "INSERT INTO tenant_suspended_memberships (tenant_id, user_id) "
+                "SELECT %(tenant_id)s, unnest(%(ids)s::uuid[]) ON CONFLICT DO NOTHING",
+                {"tenant_id": tenant_id, "ids": [row["id"] for row in rows]},
+            )
             await invalidate_tenant_agents(db, tenant_id)
             await bump_user_sessions([row["id"] for row in rows])
             return len(rows)
@@ -359,11 +388,9 @@ class UserDAO(BaseDAO[UserRecord]):
     async def reactivate_for_tenant(self, tenant_id: UUID, *, limit: int | None = None) -> int:
         """Restore members deactivated with the tenant. Does not touch platform admins.
 
-        ``limit`` is how many inactive memberships may come back (``None``: all). A capped company passes its free
-        account slots, read under the same tenant lock (``company_capacity.free_account_slots``); the rest stay
-        inactive. The order is deterministic: organization admins first (the genesis admin first among them), then
-        the most recently updated membership (``deactivate_for_tenant`` stamps its members together, so those come
-        before members deactivated earlier one by one), then the oldest account, then id.
+        ``limit`` is how many marked inactive memberships may come back (``None``: all). A capped company passes its
+        free account slots under the tenant lock. Every mark is consumed, including memberships that cannot fit.
+        Organization admins come first (genesis first), then recency, oldest account and id.
         """
         async with self.session() as db:
             from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
@@ -373,9 +400,14 @@ class UserDAO(BaseDAO[UserRecord]):
                 "UPDATE users SET is_active = TRUE, updated_at = now() WHERE id IN ("
                 "SELECT id FROM users WHERE tenant_id = %(tenant_id)s AND is_active IS FALSE "
                 "AND role <> %(platform_admin)s "
+                "AND EXISTS (SELECT 1 FROM tenant_suspended_memberships s "
+                "WHERE s.tenant_id = %(tenant_id)s AND s.user_id = users.id) "
                 "ORDER BY (role = 'org_admin') DESC, is_genesis DESC, updated_at DESC, created_at ASC, id "
                 "LIMIT %(limit)s FOR UPDATE) RETURNING id",
                 {"tenant_id": tenant_id, "platform_admin": "platform_admin", "limit": limit},
+            )
+            await db.execute(
+                "DELETE FROM tenant_suspended_memberships WHERE tenant_id = %(tenant_id)s", {"tenant_id": tenant_id}
             )
             await invalidate_tenant_agents(db, tenant_id)
             await bump_user_sessions([row["id"] for row in rows])
@@ -547,6 +579,7 @@ class UserDAO(BaseDAO[UserRecord]):
                 params,
             )
             user = UserRecord.from_row(row) if row is not None else None
+            await db.execute("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": user_id})
             if user is not None:
                 await bump_user_session(user.id)
                 await invalidate_tenant_agents(db, user.tenant_id)

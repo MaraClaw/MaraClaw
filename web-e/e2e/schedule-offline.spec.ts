@@ -10,7 +10,7 @@ test('uncached schedules announce a paused load and resume on reconnect', async 
   await page.route('**/api/agent-deletion-requests?*', (route) => route.fulfill({ json: { items: [], next_cursor: null } }))
   await page.route(`**${schedulesApiPath}`, (route) => route.fulfill({ status: 422, json: { detail: 'Schedule list unavailable' } }))
   await page.goto(schedulesPath)
-  await expect(page.getByRole('status').filter({ hasText: /Schedule list unavailable/ })).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: /Schedule list unavailable/ })).toBeVisible({ timeout: 15_000 })
   await page.getByRole('navigation', { name: 'Agent sections' }).getByRole('link', { name: 'Settings', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Original company agent', exact: true })).toBeVisible()
   await context.setOffline(true)
@@ -57,7 +57,7 @@ for (const editing of [false, true]) {
     expect(fixture.patches).toEqual([])
     await context.setOffline(false)
     if (editing) {
-      await expect(page.getByRole('status').filter({ hasText: /Synthetic schedule save unavailable/ })).toBeVisible()
+      await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: /Synthetic schedule save unavailable/ })).toBeVisible()
       await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Offline draft')
       await expect(alerts).toBeChecked()
       await expect(page.getByRole('button', { name: 'Save schedule', exact: true })).toBeEnabled()

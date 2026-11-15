@@ -123,7 +123,7 @@ export type AgentLifecycleAvailabilityOut = z.infer<typeof AgentLifecycleAvailab
 export const AgentSetupMCPStatusSchema = z.looseObject({ ["attempts"]: z.number().min(0).refine(Number.isInteger), ["retryable"]: z.boolean(), ["server_id"]: z.string(), ["state"]: z.intersection(z.union([z.literal("pending"), z.literal("running"), z.literal("succeeded"), z.literal("warning")]), z.string()), ["warning_code"]: z.union([z.intersection(z.union([z.literal("missing_credentials"), z.literal("authorization_required"), z.literal("unsupported_remote_transport"), z.literal("connection_failed"), z.literal("tools_unverified"), z.literal("import_failed")]), z.string()), z.null()]) });
 export type AgentSetupMCPStatus = z.infer<typeof AgentSetupMCPStatusSchema>;
 
-export const AgentRuntimeLossOutSchema = z.looseObject({ ["detected_at"]: z.iso.datetime({ offset: true, local: true }), ["reason"]: z.intersection(z.union([z.literal("container_missing"), z.literal("image_unavailable")]), z.string()) });
+export const AgentRuntimeLossOutSchema = z.looseObject({ ["detected_at"]: z.iso.datetime({ offset: true, local: true }), ["reason"]: z.intersection(z.union([z.literal("container_missing"), z.literal("image_unavailable"), z.literal("container_stopped")]), z.string()) });
 export type AgentRuntimeLossOut = z.infer<typeof AgentRuntimeLossOutSchema>;
 
 export const AgentStatusValues = ["creating","running","idle","stopped","error"] as const;
@@ -460,6 +460,12 @@ export type ClickRequest = z.infer<typeof ClickRequestSchema>;
 export const CollaborationAcknowledgementSchema = z.looseObject({ ["status"]: z.intersection(z.literal("ok"), z.string()) });
 export type CollaborationAcknowledgement = z.infer<typeof CollaborationAcknowledgementSchema>;
 
+export const CompanyActivationOutSchema = z.looseObject({ ["inactive_members"]: z.number().refine(Number.isInteger), ["is_active"]: z.boolean(), ["ok"]: z.boolean().optional(), ["restored_members"]: z.number().refine(Number.isInteger) });
+export type CompanyActivationOut = z.infer<typeof CompanyActivationOutSchema>;
+
+export const CompanyActivationRequestSchema = z.strictObject({ ["is_active"]: z.boolean() });
+export type CompanyActivationRequest = z.infer<typeof CompanyActivationRequestSchema>;
+
 export const CompanyConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["unset"]: z.array(z.string()).optional() });
 export type CompanyConfigOperations = z.infer<typeof CompanyConfigOperationsSchema>;
 
@@ -468,6 +474,42 @@ export type CompanyReportOut = z.infer<typeof CompanyReportOutSchema>;
 
 export const CompanyReportRegenerateSchema = z.looseObject({ ["period_start"]: z.string(), ["report_type"]: z.string() });
 export type CompanyReportRegenerate = z.infer<typeof CompanyReportRegenerateSchema>;
+
+export const CompanyRuntimeObservationOutSchema = z.looseObject({ ["container_status"]: z.union([z.string(), z.null()]).optional(), ["exit_code"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["finished_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["oom_killed_since_last_start"]: z.union([z.boolean(), z.null()]).optional(), ["restart_count_since_last_start"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["running"]: z.union([z.boolean(), z.null()]).optional(), ["started_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["state"]: z.intersection(z.union([z.literal("observed"), z.literal("missing"), z.literal("foreign"), z.literal("unavailable")]), z.string()) });
+export type CompanyRuntimeObservationOut = z.infer<typeof CompanyRuntimeObservationOutSchema>;
+
+export const CompanyRuntimeWorkspaceOutSchema = z.looseObject({ ["limit_bytes"]: z.number().refine(Number.isInteger), ["measured_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["over_since"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["used_bytes"]: z.number().refine(Number.isInteger) });
+export type CompanyRuntimeWorkspaceOut = z.infer<typeof CompanyRuntimeWorkspaceOutSchema>;
+
+export const CompanyRuntimeAgentOutSchema = z.looseObject({ ["agent_id"]: z.guid(), ["blocking_codes"]: z.array(AgentWorkBlockCodeSchema), ["creator_id"]: z.guid(), ["name"]: z.string(), ["observation"]: CompanyRuntimeObservationOutSchema, ["recorded_container_id"]: z.union([z.string(), z.null()]), ["recorded_status"]: AgentStatusSchema, ["runtime_loss"]: z.union([AgentRuntimeLossOutSchema, z.null()]), ["start"]: z.union([AgentLifecycleStartOutSchema, z.null()]), ["upgrade_in_progress"]: z.boolean(), ["workspace"]: z.union([CompanyRuntimeWorkspaceOutSchema, z.null()]) });
+export type CompanyRuntimeAgentOut = z.infer<typeof CompanyRuntimeAgentOutSchema>;
+
+export const CompanyRuntimePageOutSchema = z.looseObject({ ["as_of"]: z.iso.datetime({ offset: true, local: true }), ["company_id"]: z.guid(), ["items"]: z.array(CompanyRuntimeAgentOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]), ["observation_available"]: z.boolean() });
+export type CompanyRuntimePageOut = z.infer<typeof CompanyRuntimePageOutSchema>;
+
+export const CompanyTierChangeOutSchema = z.looseObject({ ["changed"]: z.boolean(), ["closed_pressure_episodes"]: z.number().refine(Number.isInteger), ["previous_tier"]: OrganizationPlanIdSchema, ["tenant_id"]: z.guid(), ["tier"]: OrganizationPlanIdSchema });
+export type CompanyTierChangeOut = z.infer<typeof CompanyTierChangeOutSchema>;
+
+export const CompanyTierChangeRequestSchema = z.strictObject({ ["expected_tier"]: OrganizationPlanIdSchema, ["target_tier"]: OrganizationPlanIdSchema });
+export type CompanyTierChangeRequest = z.infer<typeof CompanyTierChangeRequestSchema>;
+
+export const CompanyTierCapacityPreviewSchema = z.looseObject({ ["extras"]: z.number().refine(Number.isInteger), ["included"]: z.number().refine(Number.isInteger), ["limit"]: z.number().refine(Number.isInteger), ["over_included"]: z.number().refine(Number.isInteger), ["over_limit"]: z.number().refine(Number.isInteger), ["used"]: z.number().refine(Number.isInteger) });
+export type CompanyTierCapacityPreview = z.infer<typeof CompanyTierCapacityPreviewSchema>;
+
+export const CompanyTierRenewalPreviewSchema = z.looseObject({ ["account_unit_usd"]: z.number().refine(Number.isInteger), ["agent_unit_usd"]: z.number().refine(Number.isInteger), ["billing_month"]: z.iso.date(), ["extra_accounts"]: z.number().refine(Number.isInteger), ["extra_agents"]: z.number().refine(Number.isInteger), ["monthly_usd"]: z.number().refine(Number.isInteger) });
+export type CompanyTierRenewalPreview = z.infer<typeof CompanyTierRenewalPreviewSchema>;
+
+export const CompanyTierOwnerOverageSchema = z.looseObject({ ["agents_count"]: z.number().refine(Number.isInteger), ["display_name"]: z.union([z.string(), z.null()]), ["limit"]: z.number().refine(Number.isInteger), ["overage"]: z.number().refine(Number.isInteger), ["user_id"]: z.guid() });
+export type CompanyTierOwnerOverage = z.infer<typeof CompanyTierOwnerOverageSchema>;
+
+export const CompanyTierRunningGuestSchema = z.looseObject({ ["agent_id"]: z.guid(), ["container_id"]: z.string(), ["name"]: z.string() });
+export type CompanyTierRunningGuest = z.infer<typeof CompanyTierRunningGuestSchema>;
+
+export const CompanyTierPreviewSchema = z.looseObject({ ["accounts"]: CompanyTierCapacityPreviewSchema, ["agents"]: CompanyTierCapacityPreviewSchema, ["current_tier"]: OrganizationPlanIdSchema, ["existing_orders_keep_recorded_tier"]: z.intersection(z.literal(true), z.boolean()).optional(), ["guest_limits_apply_on"]: z.intersection(z.literal("stop_resume_or_replacement"), z.string()).optional(), ["guest_observation_available"]: z.boolean(), ["next_capacity_renewal"]: CompanyTierRenewalPreviewSchema, ["owners_over_limit"]: z.array(CompanyTierOwnerOverageSchema), ["per_account_agent_limit"]: z.union([z.number().refine(Number.isInteger), z.null()]), ["running_guests"]: z.array(CompanyTierRunningGuestSchema), ["target_tier"]: OrganizationPlanIdSchema, ["tenant_id"]: z.guid() });
+export type CompanyTierPreview = z.infer<typeof CompanyTierPreviewSchema>;
+
+export const CompanyTierPreviewRequestSchema = z.strictObject({ ["target_tier"]: OrganizationPlanIdSchema });
+export type CompanyTierPreviewRequest = z.infer<typeof CompanyTierPreviewRequestSchema>;
 
 export const ConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["unset"]: z.array(z.string()).optional() });
 export type ConfigOperations = z.infer<typeof ConfigOperationsSchema>;

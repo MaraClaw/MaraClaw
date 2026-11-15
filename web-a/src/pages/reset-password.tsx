@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { AuthShell } from '@/components/layout/auth-shell'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { PasswordField } from '@/components/ui/password-field'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { resetPasswordRequest } from '@/lib/auth-api'
@@ -88,12 +89,7 @@ export function ResetPasswordPage() {
             <Button asChild className="h-11 w-full">
               <Link to="/forgot-password">{t('Request a new link')}</Link>
             </Button>
-            <Button asChild variant="ghost" className="h-11 w-full">
-              <Link to="/login">
-                <ArrowLeft className="size-4" aria-hidden />
-                {t('Back to sign in')}
-              </Link>
-            </Button>
+            <BackLink to="/login" label={t('Back to sign in')} variant="ghost" className="self-center" />
           </div>
         }
       >
@@ -113,13 +109,7 @@ export function ResetPasswordPage() {
       description={t('Enter a new password for your admin account. You will sign in again afterward.')}
       footer={
         <p className="text-center text-sm text-muted-foreground">
-          <Link
-            to="/login"
-            className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
-          >
-            <ArrowLeft className="size-3.5" aria-hidden />
-            {t('Back to sign in')}
-          </Link>
+          <BackLink to="/login" label={t('Back to sign in')} variant="ghost" />
         </p>
       }
     >

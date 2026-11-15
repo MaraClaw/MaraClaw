@@ -12,10 +12,9 @@ import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { companiesPageOptions } from '@/hooks/company-options'
+import { companiesPageOptions, companyActivationOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
-import { toggleCompany } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
 import { formatPhone } from '@/lib/phone'
 import { isPlatformAdminUser } from '@/lib/types/auth'
@@ -39,10 +38,14 @@ export function CompaniesPage() {
   const search = useDebouncedValue(searchInput, 300)
   const companies = useInfiniteQuery(companiesPageOptions(user?.tenant_id ?? null, search))
   const rows = companies.data?.pages.flatMap((page) => page.items) ?? []
+  const activation = companyActivationOptions(queryClient)
   const toggle = useMutation({
-    mutationFn: toggleCompany,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-companies'] })
+    ...activation,
+    onSuccess: (result) => {
+      activation.onSuccess()
+      toast.success(result.is_active
+        ? t('Company enabled. {restored} members restored; {inactive} remain inactive.', { restored: number(result.restored_members), inactive: number(result.inactive_members) })
+        : t('Company disabled.'))
     },
     onError: (error) => {
       toast.error(error instanceof ApiError ? error.message : t('Could not update company'))
@@ -128,13 +131,13 @@ export function CompaniesPage() {
               <span className="text-sm text-muted-foreground">
                 {t('{users} users · {agents} agents', { users: number(company.user_count), agents: number(company.agent_count) })}
               </span>
-              {canCreate && company.can_disable ? (
+              {canCreate ? (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="relative z-20"
-                  disabled={toggle.isPending}
-                  onClick={() => toggle.mutate(company.id)}
+                  disabled={!company.can_disable || toggle.isPending}
+                  onClick={() => toggle.mutate({ companyId: company.id, isActive: !company.is_active })}
                   aria-label={t(company.is_active ? 'Disable {name}' : 'Enable {name}', { name: company.name })}
                 >
                   {t(company.is_active ? 'Disable' : 'Enable')}

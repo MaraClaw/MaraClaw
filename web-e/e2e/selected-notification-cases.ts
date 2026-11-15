@@ -53,7 +53,7 @@ export function registerSelectedNotificationTests() {
     // When
     await page.getByRole('button', { name: 'Mark selected read', exact: true }).click()
     // Then
-    await expect(page.getByRole('alert')).toContainText('Unable to mark notifications as read')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to mark notifications as read' })).toContainText('Unable to mark notifications as read')
     await expect(checkbox).toBeChecked()
     await expect(page.getByText('1 unread in Social', { exact: true })).toBeVisible()
     fixture.failWrites(false)
@@ -74,7 +74,7 @@ export function registerSelectedNotificationTests() {
     // When
     await page.getByRole('button', { name: 'Load more', exact: true }).click()
     // Then
-    await expect(page.getByRole('alert')).toContainText('Unable to load more')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load more' })).toContainText('Unable to load more')
     await expect(checkbox).toBeChecked()
     fixture.failLists(false)
     await page.getByRole('button', { name: 'Retry load more', exact: true }).click()

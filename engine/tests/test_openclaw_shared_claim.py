@@ -76,10 +76,11 @@ def queue(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Na
 
 
 @pytest.mark.parametrize("admission", ["not_submitted", "rejected"])
+@pytest.mark.parametrize("code", ["bootstrap_pending", "guest_unavailable"])
 async def test_proven_refusal_releases_exact_claim(
-    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, admission: Literal["not_submitted", "rejected"]
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, admission: Literal["not_submitted", "rejected"], code: str
 ) -> None:
-    execute = AsyncMock(return_value=rpc.NotAdmittedOutcome(str(queue.row.id), admission, "bootstrap_pending"))
+    execute = AsyncMock(return_value=rpc.NotAdmittedOutcome(str(queue.row.id), admission, code))
     monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
     await queue.run()
     assert queue.row.status == "pending"
@@ -120,8 +121,13 @@ async def test_interruption_retains_delivery(
 
 
 @pytest.mark.parametrize("newer", ["completed", "new-claim"])
+@pytest.mark.parametrize(("admission", "code"), [("rejected", "rejected"), ("not_submitted", "guest_unavailable")])
 async def test_refusal_release_cannot_overwrite_newer_state(
-    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch, newer: str
+    queue: NativeQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    newer: str,
+    admission: Literal["not_submitted", "rejected"],
+    code: str,
 ) -> None:
     async def execute(
         _agent: AgentRecord, claimed: GatewayMessageRecord, *, timing: TurnTimeline | None = None
@@ -132,7 +138,7 @@ async def test_refusal_release_cannot_overwrite_newer_state(
             if newer == "completed"
             else replace(queue.row, delivered_at=claimed.delivered_at + timedelta(seconds=1))
         )
-        return rpc.NotAdmittedOutcome(str(claimed.id), "rejected", "rejected")
+        return rpc.NotAdmittedOutcome(str(claimed.id), admission, code)
 
     monkeypatch.setattr(rpc, "execute_gateway_turn", execute)
     await queue.run()

@@ -81,7 +81,7 @@ test('a failed background refresh keeps cached mentions available for sending', 
   await page.clock.fastForward(61_000)
   fixture.setStatus(503)
   await composer.fill('@')
-  await expect(picker.getByText(/Could not refresh installed skills/)).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveText('Could not refresh installed skills. Showing cached skills.')
   // When
   await picker.getByRole('button', { name: /^@audit-review / }).click()
   await composer.press('Enter')

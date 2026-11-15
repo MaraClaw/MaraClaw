@@ -198,13 +198,15 @@ async def test_list_companies_uses_name_search(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_toggle_company_pauses_when_disabling(monkeypatch):
+    from app.services.tenant_lifecycle import TenantActivationChange
+
     tenant = _tenant(is_active=True)
     monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=tenant))
-    set_active = AsyncMock(return_value=tenant)
-    monkeypatch.setattr(admin_api, "set_tenant_active", set_active)
+    set_active = AsyncMock(return_value=TenantActivationChange(_tenant(id=tenant.id, is_active=False), changed=True))
+    monkeypatch.setattr(admin_api, "change_tenant_active", set_active)
     monkeypatch.setattr(admin_api, "write_admin_audit", AsyncMock())
-    result = await admin_api.toggle_company(tenant.id, _user())
-    assert result["is_active"] is False
+    result = await admin_api.toggle_company(tenant.id, admin_api.CompanyActivationRequest(is_active=False), _user())
+    assert result.is_active is False
     set_active.assert_awaited_once()
     assert set_active.await_args is not None
     assert set_active.await_args.kwargs["is_active"] is False
@@ -218,22 +220,22 @@ async def test_toggle_company_rejects_system_and_default_orgs(monkeypatch):
     monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=system))
     monkeypatch.setattr(
         admin_api,
-        "set_tenant_active",
+        "change_tenant_active",
         AsyncMock(side_effect=DefaultOrgUnavailableError("Cannot disable a system organization")),
     )
     with pytest.raises(HTTPException) as exc:
-        await admin_api.toggle_company(system.id, _user())
+        await admin_api.toggle_company(system.id, admin_api.CompanyActivationRequest(is_active=False), _user())
     assert exc.value.status_code == 400
 
     default = _tenant(is_default_end_user_org=True)
     monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=default))
     monkeypatch.setattr(
         admin_api,
-        "set_tenant_active",
+        "change_tenant_active",
         AsyncMock(side_effect=DefaultOrgUnavailableError("Cannot disable the default end-user organization")),
     )
     with pytest.raises(HTTPException) as exc:
-        await admin_api.toggle_company(default.id, _user())
+        await admin_api.toggle_company(default.id, admin_api.CompanyActivationRequest(is_active=False), _user())
     assert exc.value.status_code == 400
 
 
@@ -241,8 +243,78 @@ async def test_toggle_company_rejects_system_and_default_orgs(monkeypatch):
 async def test_toggle_company_not_found(monkeypatch):
     monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as exc:
-        await admin_api.toggle_company(uuid.uuid4(), _user())
+        await admin_api.toggle_company(uuid.uuid4(), admin_api.CompanyActivationRequest(is_active=False), _user())
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_toggle_company_reports_restoration_and_audits_only_a_state_change(monkeypatch, changed):
+    from app.core.domain.users import UserRole
+    from app.records.user import UserRecord
+    from app.services.tenant_lifecycle import TenantActivationChange
+
+    tenant = _tenant(is_active=True)
+    monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    change = TenantActivationChange(
+        tenant, changed=changed, restored_members=3 if changed else 0, inactive_members=2 if changed else 0
+    )
+    apply = AsyncMock(return_value=change)
+    audit = AsyncMock()
+    monkeypatch.setattr(admin_api, "change_tenant_active", apply)
+    monkeypatch.setattr(admin_api, "write_admin_audit", audit)
+
+    result = await admin_api.toggle_company(
+        tenant.id,
+        admin_api.CompanyActivationRequest(is_active=True),
+        UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN),
+    )
+
+    assert result.model_dump() == {
+        "ok": True,
+        "is_active": True,
+        "restored_members": change.restored_members,
+        "inactive_members": change.inactive_members,
+    }
+    assert apply.await_args is not None
+    assert apply.await_args.kwargs == {"is_active": True}
+    assert audit.await_count == int(changed)
+
+
+async def test_company_activation_http_requires_desired_state_and_serializes_counts(monkeypatch):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.security import get_current_user
+    from app.records.user import UserRecord
+    from app.services.tenant_lifecycle import TenantActivationChange
+
+    tenant = _tenant(is_active=True)
+    actor = UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN)
+    monkeypatch.setattr(admin_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(
+        admin_api,
+        "change_tenant_active",
+        AsyncMock(side_effect=[TenantActivationChange(tenant, True, 3, 2), TenantActivationChange(tenant, False)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(admin_api, "write_admin_audit", audit)
+    app = FastAPI()
+    app.include_router(admin_api.router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: actor
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            path = f"/api/admin/companies/{tenant.id}/toggle"
+            missing = await client.put(path, json={})
+            enabled = await client.put(path, json={"is_active": True})
+            retry = await client.put(path, json={"is_active": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert missing.status_code == 422
+    assert enabled.status_code == retry.status_code == 200
+    assert enabled.json() == {"ok": True, "is_active": True, "restored_members": 3, "inactive_members": 2}
+    assert retry.json() == {"ok": True, "is_active": True, "restored_members": 0, "inactive_members": 0}
+    audit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1230,7 +1302,13 @@ async def test_provisioning_noop_active(monkeypatch):
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
-    same = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    clear = AsyncMock(return_value=target)
+    monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear)
+    with patch.object(provisioning, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        same = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
+    clear.assert_awaited_once_with(target)
     assert same.is_active is False
 
     identity = SimpleNamespace(id=uuid.uuid4(), is_active=True)

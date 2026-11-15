@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifications'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
@@ -97,7 +98,7 @@ export function NotificationsPage() {
             <CheckCheck className="size-4" aria-hidden />
             {t(markAllRead.isPending ? 'Marking all as read...' : 'Mark all as read')}
           </Button> : null}
-          <Button variant="outline" className={actionClass} disabled={notifications.isFetching || pending} onClick={() => { changePage([null]); void resetFirstPage() }}>{t('Refresh Inbox')}</Button>
+          <RefreshButton label={t('Refresh Inbox')} disabled={notifications.isFetching || pending} onClick={() => { changePage([null]); void resetFirstPage() }} />
         </div>
       </div>
 

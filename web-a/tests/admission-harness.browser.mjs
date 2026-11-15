@@ -8,10 +8,10 @@ import { createServer } from 'vite'
 import { bounded, listPath, makeFixture, responseBarrier } from './admission-fixture.browser.mjs'
 
 export const exact = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, 'u')
-export const button = (page, name) => page.locator('button:not([aria-label])').filter({ hasText: exact(name) }).last()
+export const button = (page, name) => name === 'Refresh requests' || name === 'Back to requests' ? page.locator(`button[aria-label="${name}"]`).last() : page.locator('button:not([aria-label])').filter({ hasText: exact(name) }).last()
 export const visible = (locator) => locator.waitFor({ state: 'visible', timeout: 15_000 })
 export const detached = (locator) => locator.waitFor({ state: 'detached', timeout: 15_000 })
-export const enabledButton = (page, name) => page.locator('button:not([aria-label]):not(:disabled)').filter({ hasText: exact(name) }).last()
+export const enabledButton = (page, name) => name === 'Refresh requests' || name === 'Back to requests' ? page.locator(`button[aria-label="${name}"]:not(:disabled)`).last() : page.locator('button:not([aria-label]):not(:disabled)').filter({ hasText: exact(name) }).last()
 export const matrix = [390, 1440, 1920].flatMap((width) => ['light', 'dark'].map((theme) => ({ width, theme })))
 const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'"
 

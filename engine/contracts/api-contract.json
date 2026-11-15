@@ -2741,7 +2741,8 @@
           "reason": {
             "enum": [
               "container_missing",
-              "image_unavailable"
+              "image_unavailable",
+              "container_stopped"
             ],
             "title": "Reason",
             "type": "string"
@@ -6016,6 +6017,48 @@
           }
         ]
       },
+      "CompanyActivationOut": {
+        "properties": {
+          "inactive_members": {
+            "title": "Inactive Members",
+            "type": "integer"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "restored_members": {
+            "title": "Restored Members",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "is_active",
+          "restored_members",
+          "inactive_members"
+        ],
+        "title": "CompanyActivationOut",
+        "type": "object"
+      },
+      "CompanyActivationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_active"
+        ],
+        "title": "CompanyActivationRequest",
+        "type": "object"
+      },
       "CompanyAgentSections": {
         "description": "Agent page sections: every canonical id, and the ones hidden from members of the company.",
         "properties": {
@@ -6343,6 +6386,286 @@
         "title": "CompanyReportRegenerate",
         "type": "object"
       },
+      "CompanyRuntimeAgentOut": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "blocking_codes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentWorkBlockCode"
+            },
+            "title": "Blocking Codes",
+            "type": "array"
+          },
+          "creator_id": {
+            "format": "uuid",
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/CompanyRuntimeObservationOut"
+          },
+          "recorded_container_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Container Id"
+          },
+          "recorded_status": {
+            "$ref": "#/components/schemas/AgentStatus"
+          },
+          "runtime_loss": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntimeLossOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentLifecycleStartOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "upgrade_in_progress": {
+            "title": "Upgrade In Progress",
+            "type": "boolean"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyRuntimeWorkspaceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "creator_id",
+          "recorded_status",
+          "recorded_container_id",
+          "runtime_loss",
+          "start",
+          "upgrade_in_progress",
+          "workspace",
+          "blocking_codes",
+          "observation"
+        ],
+        "title": "CompanyRuntimeAgentOut",
+        "type": "object"
+      },
+      "CompanyRuntimeObservationOut": {
+        "properties": {
+          "container_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Status"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "oom_killed_since_last_start": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Docker OOM flag since the last start.",
+            "title": "Oom Killed Since Last Start"
+          },
+          "restart_count_since_last_start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Docker count since the last start.",
+            "title": "Restart Count Since Last Start"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "observed",
+              "missing",
+              "foreign",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CompanyRuntimeObservationOut",
+        "type": "object"
+      },
+      "CompanyRuntimePageOut": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "company_id": {
+            "format": "uuid",
+            "title": "Company Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyRuntimeAgentOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "observation_available": {
+            "title": "Observation Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "company_id",
+          "as_of",
+          "items",
+          "next_cursor",
+          "observation_available"
+        ],
+        "title": "CompanyRuntimePageOut",
+        "type": "object"
+      },
+      "CompanyRuntimeWorkspaceOut": {
+        "properties": {
+          "limit_bytes": {
+            "title": "Limit Bytes",
+            "type": "integer"
+          },
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured At"
+          },
+          "over_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Over Since"
+          },
+          "used_bytes": {
+            "title": "Used Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used_bytes",
+          "limit_bytes",
+          "measured_at",
+          "over_since"
+        ],
+        "title": "CompanyRuntimeWorkspaceOut",
+        "type": "object"
+      },
       "CompanyStats": {
         "properties": {
           "active_user_count": {
@@ -6475,6 +6798,291 @@
           "can_disable"
         ],
         "title": "CompanyStats",
+        "type": "object"
+      },
+      "CompanyTierCapacityPreview": {
+        "properties": {
+          "extras": {
+            "title": "Extras",
+            "type": "integer"
+          },
+          "included": {
+            "title": "Included",
+            "type": "integer"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "over_included": {
+            "title": "Over Included",
+            "type": "integer"
+          },
+          "over_limit": {
+            "title": "Over Limit",
+            "type": "integer"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "included",
+          "extras",
+          "limit",
+          "over_included",
+          "over_limit"
+        ],
+        "title": "CompanyTierCapacityPreview",
+        "type": "object"
+      },
+      "CompanyTierChangeOut": {
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "closed_pressure_episodes": {
+            "title": "Closed Pressure Episodes",
+            "type": "integer"
+          },
+          "previous_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "previous_tier",
+          "tier",
+          "changed",
+          "closed_pressure_episodes"
+        ],
+        "title": "CompanyTierChangeOut",
+        "type": "object"
+      },
+      "CompanyTierChangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "target_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "target_tier",
+          "expected_tier"
+        ],
+        "title": "CompanyTierChangeRequest",
+        "type": "object"
+      },
+      "CompanyTierOwnerOverage": {
+        "properties": {
+          "agents_count": {
+            "title": "Agents Count",
+            "type": "integer"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "overage": {
+            "title": "Overage",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "display_name",
+          "agents_count",
+          "limit",
+          "overage"
+        ],
+        "title": "CompanyTierOwnerOverage",
+        "type": "object"
+      },
+      "CompanyTierPreview": {
+        "properties": {
+          "accounts": {
+            "$ref": "#/components/schemas/CompanyTierCapacityPreview"
+          },
+          "agents": {
+            "$ref": "#/components/schemas/CompanyTierCapacityPreview"
+          },
+          "current_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "existing_orders_keep_recorded_tier": {
+            "const": true,
+            "default": true,
+            "title": "Existing Orders Keep Recorded Tier",
+            "type": "boolean"
+          },
+          "guest_limits_apply_on": {
+            "const": "stop_resume_or_replacement",
+            "default": "stop_resume_or_replacement",
+            "title": "Guest Limits Apply On",
+            "type": "string"
+          },
+          "guest_observation_available": {
+            "description": "Every retained container was observed; false includes missing or unavailable observations.",
+            "title": "Guest Observation Available",
+            "type": "boolean"
+          },
+          "next_capacity_renewal": {
+            "$ref": "#/components/schemas/CompanyTierRenewalPreview"
+          },
+          "owners_over_limit": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyTierOwnerOverage"
+            },
+            "title": "Owners Over Limit",
+            "type": "array"
+          },
+          "per_account_agent_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Account Agent Limit"
+          },
+          "running_guests": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyTierRunningGuest"
+            },
+            "title": "Running Guests",
+            "type": "array"
+          },
+          "target_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "current_tier",
+          "target_tier",
+          "accounts",
+          "agents",
+          "per_account_agent_limit",
+          "owners_over_limit",
+          "running_guests",
+          "guest_observation_available",
+          "next_capacity_renewal"
+        ],
+        "title": "CompanyTierPreview",
+        "type": "object"
+      },
+      "CompanyTierPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "target_tier": {
+            "$ref": "#/components/schemas/OrganizationPlanId"
+          }
+        },
+        "required": [
+          "target_tier"
+        ],
+        "title": "CompanyTierPreviewRequest",
+        "type": "object"
+      },
+      "CompanyTierRenewalPreview": {
+        "description": "Projection of approved coverage; no existing order is repriced or created.",
+        "properties": {
+          "account_unit_usd": {
+            "title": "Account Unit Usd",
+            "type": "integer"
+          },
+          "agent_unit_usd": {
+            "title": "Agent Unit Usd",
+            "type": "integer"
+          },
+          "billing_month": {
+            "format": "date",
+            "title": "Billing Month",
+            "type": "string"
+          },
+          "extra_accounts": {
+            "title": "Extra Accounts",
+            "type": "integer"
+          },
+          "extra_agents": {
+            "title": "Extra Agents",
+            "type": "integer"
+          },
+          "monthly_usd": {
+            "title": "Monthly Usd",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "billing_month",
+          "extra_accounts",
+          "extra_agents",
+          "account_unit_usd",
+          "agent_unit_usd",
+          "monthly_usd"
+        ],
+        "title": "CompanyTierRenewalPreview",
+        "type": "object"
+      },
+      "CompanyTierRunningGuest": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "container_id": {
+            "title": "Container Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "container_id"
+        ],
+        "title": "CompanyTierRunningGuest",
         "type": "object"
       },
       "ConfigOperations": {
@@ -21259,6 +21867,80 @@
         ]
       }
     },
+    "/api/admin/companies/{company_id}/runtime": {
+      "get": {
+        "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f7b636f6d70616e795f69647d2f72756e74696d65",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyRuntimePageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Company Runtime",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/companies/{company_id}/stats": {
       "get": {
         "description": "Stats for one company.",
@@ -21324,11 +22006,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyActivationRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyActivationOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -21350,6 +22044,122 @@
           }
         ],
         "summary": "Toggle Company",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/{tenant_id}/tier": {
+      "patch": {
+        "operationId": "patch_2f6170692f61646d696e2f636f6d70616e6965732f7b74656e616e745f69647d2f74696572",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyTierChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyTierChangeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Change Company Tier",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/companies/{tenant_id}/tier/preview": {
+      "post": {
+        "operationId": "post_2f6170692f61646d696e2f636f6d70616e6965732f7b74656e616e745f69647d2f746965722f70726576696577",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyTierPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyTierPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Company Tier",
         "tags": [
           "admin"
         ]
@@ -47742,9 +48552,16 @@
       "ClawhubInstallIn",
       "ClickRequest",
       "CollaborationAcknowledgement",
+      "CompanyActivationOut",
+      "CompanyActivationRequest",
       "CompanyConfigOperations",
       "CompanyReportOut",
       "CompanyReportRegenerate",
+      "CompanyRuntimePageOut",
+      "CompanyTierChangeOut",
+      "CompanyTierChangeRequest",
+      "CompanyTierPreview",
+      "CompanyTierPreviewRequest",
       "ConfigOperations",
       "ControlActionResult",
       "ControlEnvironment",
@@ -48064,9 +48881,23 @@
       "ClickRequest",
       "CollaborationAcknowledgement",
       "CompanyAccessLevel",
+      "CompanyActivationOut",
+      "CompanyActivationRequest",
       "CompanyConfigOperations",
       "CompanyReportOut",
       "CompanyReportRegenerate",
+      "CompanyRuntimeAgentOut",
+      "CompanyRuntimeObservationOut",
+      "CompanyRuntimePageOut",
+      "CompanyRuntimeWorkspaceOut",
+      "CompanyTierCapacityPreview",
+      "CompanyTierChangeOut",
+      "CompanyTierChangeRequest",
+      "CompanyTierOwnerOverage",
+      "CompanyTierPreview",
+      "CompanyTierPreviewRequest",
+      "CompanyTierRenewalPreview",
+      "CompanyTierRunningGuest",
       "ConfigOperations",
       "ConnectedEvent",
       "ControlActionResult",

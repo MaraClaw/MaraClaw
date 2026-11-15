@@ -214,7 +214,7 @@ test('a refused approved-workspace switch leaves the source session usable', asy
   // When
   await page.getByRole('button', { name: `Open ${target.name}` }).click()
   // Then
-  await expect(page.getByRole('alert')).toHaveText('Membership unavailable')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Membership unavailable' })).toHaveText('Membership unavailable')
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe('source-token')
   await expect(page.getByRole('button', { name: `Open ${target.name}` })).toBeEnabled()
 })

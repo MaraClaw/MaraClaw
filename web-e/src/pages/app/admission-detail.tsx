@@ -1,11 +1,12 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useState, type ComponentProps } from 'react'
-import { ArrowLeft } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useAuth } from '@/hooks/use-auth'
 import { switchTenant } from '@/lib/auth-api'
@@ -75,10 +76,10 @@ function AdmissionDetail({ id }: { readonly id: string }) {
 
   return (
     <div className="admission-content mx-auto max-w-2xl space-y-4 p-6 [overflow-wrap:anywhere]">
-      <Button asChild variant="outline"><Link to="/app/notifications?category=admissions"><ArrowLeft aria-hidden="true" className="size-4" />{translate("All admission requests")}</Link></Button>
+      <BackLink to="/app/notifications?category=admissions" label={translate("All admission requests")} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold">{request?.target_tenant.name ?? translate("Admission request")}</h1>
-        <Button className="h-auto min-h-11 whitespace-normal" variant="outline" disabled={query.isFetching || opening || withdraw.isPending} onClick={scope.effect(() => { void query.refetch() })}>{translate("Refresh status")}</Button>
+        <RefreshButton label={translate("Refresh status")} disabled={query.isFetching || opening || withdraw.isPending} onClick={scope.effect(() => { void query.refetch() })} />
       </div>
       {query.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading request…")}</p> : null}
       {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, translate("Unable to load this request. Refresh to try again."))} /> : null}

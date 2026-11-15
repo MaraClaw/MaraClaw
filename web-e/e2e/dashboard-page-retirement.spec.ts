@@ -78,7 +78,7 @@ for (const domain of ['objectives', 'relationships'] as const) {
     await page.goto(path)
     await expect(page.getByText(first, { exact: true })).toBeVisible()
     await page.getByRole('navigation', { name: navigation }).getByRole('button', { name: 'Next' }).click()
-    await expect(page.getByRole('alert')).toHaveText('Invalid cursor')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Invalid cursor' })).toHaveText('Invalid cursor')
     await page.getByRole('button', { name: `Restart ${domain}`, exact: true }).click()
     await expect(page.getByText(first, { exact: true })).toBeVisible()
     await expect(page.getByRole('navigation', { name: navigation }).getByRole('status')).toHaveText('Page 1')

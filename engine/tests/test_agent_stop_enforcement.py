@@ -18,6 +18,7 @@ from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.dao.agent_dao import agent_dao
 from app.db import session
+from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
@@ -226,6 +227,10 @@ async def test_disable_stops_only_after_owning_crud_commit(monkeypatch, rollback
         else:
             tenant = TenantRecord(
                 id=uuid4(), name="Company", slug="company", created_at=datetime.now(UTC), tier=OrganizationPlanId.PRO
+            )
+            monkeypatch.setattr(DbConnection, "fetchone", AsyncMock(return_value=asdict(tenant)))
+            monkeypatch.setattr(
+                tenant_lifecycle.tenant_dao, "update", AsyncMock(return_value=replace(tenant, is_active=False))
             )
             await tenant_lifecycle.set_tenant_active(tenant, is_active=False)
         assert observed == []

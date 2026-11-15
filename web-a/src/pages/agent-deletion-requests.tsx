@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
 import { useAgentDeletionRequests } from '@/hooks/use-agent-deletions'
@@ -29,7 +30,7 @@ export function AgentDeletionRequestsPage() {
           <option value="pending">{t('Pending')}</option><option value="executed">{t('Executed')}</option><option value="cancelled">{t('Cancelled')}</option>
         </Select>
       </div>
-      <Button variant="outline" disabled={requests.isFetching} onClick={() => { void requests.refetch() }}>{t('Refresh requests')}</Button>
+      <RefreshButton label={t('Refresh requests')} disabled={requests.isFetching} onClick={() => { void requests.refetch() }} />
     </div>
     <p className="text-sm text-muted-foreground">{t('Opening a request records your review. A list view does not count as a review or approval.')}</p>
     {requests.isPending ? <Card><CardContent role="status">{t('Loading deletion requests...')}</CardContent></Card> : null}

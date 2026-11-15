@@ -5,6 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from threading import Event, current_thread
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,6 +31,13 @@ from app.services.turn_timing import AdapterTiming, TurnTimeline
 async def close_native_threads():
     yield
     shutdown_native_capacity()
+
+
+@pytest.fixture(autouse=True)
+def stopped_clear(monkeypatch):
+    cleared = AsyncMock()
+    monkeypatch.setattr(rpc, "clear_stopped_guest_loss", cleared)
+    return cleared
 
 
 def running_client():
@@ -501,7 +509,7 @@ async def test_resolution_failure_is_not_submitted(monkeypatch, tmp_path, error)
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("cached", [False, True])
 @pytest.mark.parametrize("condition", ["stopped", "inspect_error", "exec_error"])
-async def test_fresh_guest_state_gates_execution(monkeypatch, tmp_path, streaming, cached, condition):
+async def test_fresh_guest_state_gates_execution(monkeypatch, tmp_path, streaming, cached, condition, stopped_clear):
     turn = _Turn(monkeypatch, tmp_path)
     inspections = []
     executed = []
@@ -516,7 +524,13 @@ async def test_fresh_guest_state_gates_execution(monkeypatch, tmp_path, streamin
         inspections.append(reference)
         if condition == "inspect_error":
             raise DockerException(["docker", "inspect"], 1, stderr=b"unavailable")
-        return SimpleNamespace(state=SimpleNamespace(running=condition != "stopped"))
+        return SimpleNamespace(
+            state=SimpleNamespace(
+                running=condition != "stopped",
+                status="exited" if condition == "stopped" else "running",
+                restarting=False,
+            )
+        )
 
     def execute(*_args):
         executed.append(True)
@@ -539,6 +553,7 @@ async def test_fresh_guest_state_gates_execution(monkeypatch, tmp_path, streamin
         assert outcome == rpc.NotAdmittedOutcome(turn.message_id, "not_submitted", "guest_unavailable")
         assert executed == []
         assert not list(tmp_path.glob(".maraclaw-rpc-*.json"))
+    assert stopped_clear.await_count == (1 if condition == "exec_error" else 0)
 
 
 @pytest.mark.asyncio
@@ -557,10 +572,11 @@ async def test_staged_payload_carries_the_identity_prompt_for_every_native_turn(
 
 
 @pytest.mark.asyncio
-async def test_exactly_one_work_gate_check_guards_the_exec(monkeypatch, tmp_path):
+async def test_exactly_one_work_gate_check_guards_the_exec(monkeypatch, tmp_path, stopped_clear):
     turn = _Turn(monkeypatch, tmp_path)
     assert isinstance(await turn.run(), rpc.TerminalOutcome)
     assert (turn.gate_calls, turn.executed) == (1, 1)
+    stopped_clear.assert_awaited_once_with(turn.agent.id)
 
 
 @pytest.mark.asyncio

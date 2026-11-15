@@ -62,14 +62,16 @@ npm run contracts:check
 npm run lint
 npx tsc -b
 npm test
+npm run test:e2e
 npm run build
 docker build -t maraclaw-web-a .
 docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 ```
 
 `contracts:generate` / `contracts:check` run `../engine/scripts/contract_codegen/generate.mjs` against `../engine/contracts/api-contract.json` into `src/lib/engine-contracts.generated.ts` (`--check` never writes).
-`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: Node runner over `*.test.ts` only. No npm script runs `tests/*.browser.mjs` (standalone browser QA, harnesses, fixtures) and CI does not either; see `tests/AGENTS.md`.
+`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: Node runner over `*.test.ts` only. `npm run test:e2e` typechecks and runs the selected portable Playwright specs in `e2e/` for company validation/submission, payment alias navigation and admin access, across phone/desktop and light/dark. It requires an already installed Chromium (optional `CHROMIUM_EXECUTABLE`); it never installs one. No npm script runs `tests/*.browser.mjs` (standalone browser QA, harnesses, fixtures); see `tests/AGENTS.md` and README browser usage.
 `../.github/workflows/frontend-ci.yml` (web-a + web-e matrix): contract check, lint, `tsc -b`, tests, build, Docker build.
+Its separate `admin-browser` job installs Playwright Chromium/system dependencies and runs the selected admin gate, uploading failure traces/screenshots/HTML reports. The existing four-shard web-e browser job is independent.
 
 ## DEVELOPMENT AND PRODUCTION
 

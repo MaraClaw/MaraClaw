@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -96,7 +98,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   }
 
   return <>
-    <Button variant="outline" className={`self-start ${actionClass}`} disabled={busy} onClick={onBack}>{t('Back to requests')}</Button>
+    <BackButton label={t('Back to requests')} className="self-start" disabled={busy} onClick={onBack} />
     <Card>
       <CardHeader className="gap-3">
         <h2 ref={resultHeading} tabIndex={-1} className="font-display text-lg font-semibold outline-none">{detail.organization_name ?? t('Organization name not provided')}</h2>
@@ -156,7 +158,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   </>
 }
 
-export function OrganizationAdmissionsPage() {
+export function OrganizationAdmissionsPanel() {
   const { t, locale, date, number } = useTranslation()
   const filterId = useId()
   const queueHeading = useRef<HTMLHeadingElement>(null)
@@ -164,22 +166,24 @@ export function OrganizationAdmissionsPage() {
   const [status, setStatus] = useState<OrganizationAdmissionStatus>('pending')
   const [offset, setOffset] = useState(0)
   const [selected, setSelected] = useState<OrganizationAdmission | null>(null)
-  useEffect(() => { if (selected === null) queueHeading.current?.focus() }, [selected])
   const reviews = useOrganizationAdmissions(status, offset)
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    <header><h1 ref={queueHeading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight outline-none">{t('Organization admissions')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Review requests for a new organization, the commercial terms quoted at submission and the payment evidence uploaded with them.')}</p></header>
+    <h2 ref={queueHeading} tabIndex={-1} className="font-display text-lg font-semibold outline-none">{t('Organization admissions')}</h2>
     {selected && reviews.isFetching ? <p role="status" className="text-sm">{t('Refreshing request status...')}</p> : null}
     {reviews.isError ? <div className="flex flex-col items-start gap-3"><ErrorToast error={reviews.error} message={reviews.error instanceof ApiError ? reviews.error.message : t('Unable to load organization requests.')} /><Button variant="outline" disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>{t('Retry')}</Button></div> : null}
-    {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => setSelected(null)} /> : <>
+    {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => {
+      setSelected(null)
+      queueMicrotask(() => queueHeading.current?.focus())
+    }} /> : <>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-2"><Label htmlFor={filterId}>{t('Request status')}</Label>
           <Select id={filterId} fit value={status} onChange={(event) => { setStatus(organizationAdmissionStatusSchema.parse(event.currentTarget.value)); setOffset(0) }}>
             {organizationAdmissionStatusSchema.options.map((value) => <option key={value} value={value}>{t(statusLabels[value])}</option>)}
           </Select>
         </div>
-        <Button variant="outline" className={actionClass} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: organizationAdmissionKeys.all }) }}>{t('Refresh requests')}</Button>
+        <RefreshButton label={t('Refresh requests')} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: organizationAdmissionKeys.all }) }} />
       </div>
       {reviews.isPending ? <p role="status" className="text-sm">{t('Loading organization requests...')}</p> : null}
       {reviews.isSuccess && items.length === 0 ? <p role="status" className="text-sm">{t('No {status} requests', { status: t(statusLabels[status]).toLowerCase() })}. {t(offset > 0 ? 'Return to the previous page.' : 'New requests will appear here after submission.')}</p> : null}

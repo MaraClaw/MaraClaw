@@ -119,6 +119,22 @@ node tests/admin-audit.browser.mjs
 
 It covers both admin roles, desktop/mobile navigation, filter cancellation, nullable/details rendering, failure recovery, password gates, and session replacement. Each run prints its unique temporary artifact directory; set `ADMIN_AUDIT_ARTIFACTS` to choose an owned output directory instead. `receipt.json` records scenarios, screenshots, and owned-resource cleanup. It runs separately from `npm test`.
 
+## Selected browser regression gate
+
+From `web-a/`, use the installed `@playwright/test` and an already installed Chromium:
+
+```bash
+npm run test:e2e
+# Optional existing browser binary and owned output directory:
+CHROMIUM_EXECUTABLE=/path/to/chromium PLAYWRIGHT_OUTPUT_DIR=/owned/evidence npm run test:e2e
+```
+
+`playwright.config.ts` explicitly selects `e2e/company-form.spec.ts`, `payment-navigation.spec.ts` and `admin-access.spec.ts`. These cover actionable invalid company submission, associated errors/focus, normalized valid submission with pending duplicate prevention, Payments current state and phone rail visibility on both detail aliases, and platform/org-admin, member, anonymous and password-change access gates. Each runs on desktop/phone in light/dark. The company schema, API normalization and session fences remain unchanged; invalid drafts can now submit for validation, and only an in-flight submit disables Create company.
+
+The gate starts Vite on an ephemeral port with its own cache, seeds synthetic auth and HTTP interception before navigation, rejects unexpected calls, and blocks the backend proxy. External font CSS is replaced with an empty offline response. No engine, browser skill, personal profile or local absolute path is required. Browser contexts and Vite/cache resources close on success and failure. Local test outputs default to a unique temporary directory; set `PLAYWRIGHT_OUTPUT_DIR` to retain evidence in a chosen location. Failed tests retain a trace and screenshot.
+
+The `admin-browser` job in `../.github/workflows/frontend-ci.yml` installs locked npm dependencies plus Chromium/system dependencies, runs this selected gate, and uploads failure artifacts for 14 days. Existing standalone `.browser.mjs` entrypoints remain separate; never execute their support modules with a wildcard.
+
 ## Related
 
 | Package | Role |

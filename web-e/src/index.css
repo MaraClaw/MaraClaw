@@ -317,3 +317,9 @@
 @utility shadow-elevated {
   box-shadow: var(--shadow-elevated);
 }
+
+.select-options-viewport {
+  overscroll-behavior: contain;
+  scrollbar-color: var(--muted-foreground) var(--popover);
+  scrollbar-width: thin;
+}

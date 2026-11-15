@@ -6,20 +6,19 @@ import { capacityActionClass, capacityKindLabels, capacityStatusLabels } from '@
 import { CapacityStatusBadge } from '@/components/capacity/capacity-status-badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { capacityKeys } from '@/hooks/capacity-options'
-import { useCapacityAccess, useCapacityReviewOrders } from '@/hooks/use-capacity'
+import { useCapacityReviewOrders } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
 import { CAPACITY_ORDERS_PAGE_SIZE, capacityOrderStatusSchema, type CapacityOrderStatus } from '@/lib/capacity-api'
 import { formatVnd } from '@/lib/capacity-format'
 import { ApiError } from '@/lib/http'
-import { CapacityPaymentSettingsSection } from './capacity-payment-settings'
 
 export function CapacityPaymentsPanel() {
   const { t, locale, date, distance, number } = useTranslation()
-  const { canManageSettings } = useCapacityAccess()
   const filterId = useId()
   const client = useQueryClient()
   const [status, setStatus] = useState<CapacityOrderStatus>('submitted')
@@ -28,7 +27,6 @@ export function CapacityPaymentsPanel() {
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    {canManageSettings ? <CapacityPaymentSettingsSection /> : null}
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor={filterId}>{t('Payment status')}</Label>
@@ -39,7 +37,7 @@ export function CapacityPaymentsPanel() {
           {capacityOrderStatusSchema.options.map((value) => <option key={value} value={value}>{t(capacityStatusLabels[value])}</option>)}
         </Select>
       </div>
-      <Button variant="outline" className={capacityActionClass} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: capacityKeys.all }) }}>{t('Refresh payments')}</Button>
+      <RefreshButton label={t('Refresh payments')} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: capacityKeys.all }) }} />
     </div>
     {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading payments...')}</CardContent></Card> : null}
     {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">

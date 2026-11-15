@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -152,7 +153,7 @@ export function BroadcastPage() {
             </dl>
             <p className="text-sm text-muted-foreground">{t('Sending is not retried automatically. Email queue counts do not confirm delivery.')}</p>
             <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="outline" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>{t('Back to edit')}</Button>
+              <BackButton label={t('Back to edit')} disabled={sending.isPending} onClick={closeReview} />
               <Button type="button" variant="ghost" className={buttonMotion} disabled={sending.isPending} onClick={closeReview}>{t('Cancel')}</Button>
               <Button type="button" className={`${buttonMotion} sm:ml-auto`} disabled={sending.isPending} onClick={() => {
                 if (submitting.current || !active.current || !isSessionCurrent()) return

@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
 import { changePersonalConnection, getPersonalStatus, type PersonalStatus } from '@/lib/whatsapp-api'
 import { createPersonalSession } from '@/lib/whatsapp-personal-session'
@@ -38,7 +39,7 @@ export function WhatsAppPersonalCard({ agentId }: { readonly agentId: string }) 
     <div className="flex flex-wrap gap-3">
       {canPair ? <Button type="button" className="border border-transparent text-base disabled:border-muted-foreground disabled:bg-muted disabled:text-foreground disabled:opacity-100 disabled:shadow-none sm:text-sm" disabled={busy} onClick={scope.effect(() => void session.change(generation === null ? { kind: 'start', generation: null } : { kind: 'relink', generation }))}>{generation === null ? translate("Connect personal account") : translate("Relink account")}</Button> : null}
       {generation !== null && status?.state !== 'disconnected' ? <Button type="button" variant="outline" className="text-base text-destructive disabled:border-muted-foreground disabled:bg-muted disabled:text-foreground disabled:opacity-100 disabled:shadow-none sm:text-sm" disabled={busy || status?.state === 'disconnecting'} onClick={scope.effect(() => void session.change({ kind: 'disconnect', generation }))}>{translate("Disconnect personal account")}</Button> : null}
-      <Button type="button" variant="outline" className="text-base disabled:border-muted-foreground disabled:bg-muted disabled:text-foreground disabled:opacity-100 disabled:shadow-none sm:text-sm" disabled={busy} onClick={scope.effect(session.refresh)}>{translate("Refresh status")}</Button>
+      <RefreshButton label={translate("Refresh status")} className="disabled:border-muted-foreground disabled:bg-muted disabled:text-foreground disabled:opacity-100 disabled:shadow-none" disabled={busy} onClick={scope.effect(session.refresh)} />
     </div>
   </section>
 }

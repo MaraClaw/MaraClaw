@@ -3,6 +3,7 @@ import { useId, useState } from 'react'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
@@ -37,11 +38,11 @@ export function BroadcastHistory() {
       <CardHeader className="gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id={`${id}-heading`} className="font-display text-lg font-semibold">{t('Published broadcasts')}</h2>
-          <Button type="button" variant="outline" className={actionClass} disabled={history.isFetching} onClick={() => {
+          <RefreshButton label={t('Refresh history')} disabled={history.isFetching} onClick={() => {
             if (!isCurrent()) return
             setCursors([null])
             setRevision((value) => value + 1)
-          }}>{t('Refresh history')}</Button>
+          }} />
         </div>
         <p className="text-sm text-muted-foreground">{t('Messages published by all administrators in your current organization, newest first. Email counts are targets queued at publication, not confirmed deliveries.')}</p>
       </CardHeader>

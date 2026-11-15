@@ -64,7 +64,8 @@ for (const state of ['pending', 'running'] as const) {
     // Then
     await expect(page.getByRole('region', { name: 'Agent setup' }).getByRole('status')).toContainText('Setup complete')
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled()
-    expect(api.agentReads()).toBe(2)
+    // Initial layout + runtime-loss recheck + setup-completion invalidation.
+    expect(api.agentReads()).toBe(3)
     const reads = api.setupReads()
     await page.clock.runFor(3200)
     expect(api.setupReads()).toBe(reads)
@@ -88,7 +89,7 @@ test('unknown setup status blocks Start and offers an adjacent safe status retry
     await expect(page.getByText('Checking setup status', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled()
     release.resolve()
-    await expect(page.getByRole('alert')).toContainText('Unable to check setup status')
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to check setup status' })).toBeVisible()
     // When
     status = 200
     await page.getByRole('button', { name: 'Retry status check', exact: true }).click()
@@ -136,7 +137,7 @@ for (const status of [409, 503]) {
       await retry.requested
       retry.release(status)
       // Then
-      await expect(page.getByRole('alert')).toContainText('Unable to retry setup')
+      await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to retry setup' })).toBeVisible()
       await expect(page.getByText('Setup failed', { exact: true })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Retry setup', exact: true })).toBeEnabled()
       await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled()

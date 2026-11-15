@@ -428,6 +428,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
 	ON users (identity_id) WHERE tenant_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS tenant_suspended_memberships (
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (tenant_id, user_id),
+    UNIQUE (user_id)
+);
+
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 
 	tenant_id UUID NOT NULL, 
@@ -1054,7 +1061,7 @@ CREATE OR REPLACE TRIGGER agent_start_retry_state_changed
 -- agent and tenant deletion remove it explicitly, like agent_start_operations.
 CREATE TABLE IF NOT EXISTS agent_runtime_losses (
     agent_id uuid PRIMARY KEY,
-    reason text NOT NULL CHECK (reason IN ('container_missing', 'image_unavailable')),
+    reason text NOT NULL CHECK (reason IN ('container_missing', 'image_unavailable', 'container_stopped')),
     recorded_container_id text,
     image text,
     detected_at timestamptz NOT NULL DEFAULT now(),
