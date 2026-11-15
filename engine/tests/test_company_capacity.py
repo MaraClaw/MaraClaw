@@ -2,7 +2,7 @@
 
 import json
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -747,13 +747,15 @@ async def test_login_without_smtp_activates_memberships_only_through_the_gated_h
 async def test_re_enabling_a_company_restores_only_its_free_account_slots(
     monkeypatch: pytest.MonkeyPatch, slots: int | None
 ):
-    tenant = _tenant()
-    db = SimpleNamespace()
-    free, reactivate = AsyncMock(return_value=slots), AsyncMock(return_value=3)
+    tenant = replace(_tenant(), is_active=False)
+    db = SimpleNamespace(fetchone=AsyncMock(return_value=asdict(tenant)))
+    restored = 3 if slots is None else slots
+    free, reactivate = AsyncMock(return_value=slots), AsyncMock(return_value=restored)
     monkeypatch.setattr(tenant_lifecycle, "connection_ctx", _admin_ctx(db))
     monkeypatch.setattr(tenant_lifecycle.tenant_dao, "update", AsyncMock(return_value=tenant))
     monkeypatch.setattr(tenant_lifecycle, "free_account_slots", free)
     monkeypatch.setattr(tenant_lifecycle.user_dao, "reactivate_for_tenant", reactivate)
+    monkeypatch.setattr(tenant_lifecycle.user_dao, "count_suspended_for_tenant", AsyncMock(return_value=5))
 
     _ = await tenant_lifecycle.set_tenant_active(tenant, is_active=True)
 

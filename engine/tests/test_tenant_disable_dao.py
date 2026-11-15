@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any, Self
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -181,6 +183,13 @@ async def test_tenant_disable_advances_the_generation_in_the_deactivating_update
     assert "AND is_active IS TRUE" in query
     assert not raw.updates_to("identities")
     assert not any("auth_generation" in executed for executed, _ in raw.executed)
+    [(insert, params)] = [
+        (query, params)
+        for query, params in raw.executed
+        if query.startswith("INSERT INTO tenant_suspended_memberships")
+    ]
+    assert "unnest(%(ids)s::uuid[])" in insert
+    assert params == {"tenant_id": tenant_id, "ids": [member.id]}
 
 
 async def test_tenant_enable_leaves_the_generation_alone(monkeypatch):
@@ -210,6 +219,12 @@ async def test_tenant_enable_restores_at_most_the_limit_admins_first(monkeypatch
     assert "ORDER BY (role = 'org_admin') DESC, is_genesis DESC, updated_at DESC, created_at ASC, id" in query
     assert "LIMIT %(limit)s" in query
     assert params["limit"] == limit
+    assert "EXISTS (SELECT 1 FROM tenant_suspended_memberships s" in query
+    assert "s.user_id = users.id" in query
+    assert (
+        "DELETE FROM tenant_suspended_memberships WHERE tenant_id = %(tenant_id)s",
+        {"tenant_id": tenant_id},
+    ) in raw.executed
 
 
 async def test_deactivating_an_admin_with_a_peer_advances_the_generation_in_the_same_update(monkeypatch):
@@ -226,6 +241,7 @@ async def test_deactivating_an_admin_with_a_peer_advances_the_generation_in_the_
     assert "AND is_active IS TRUE" in query
     assert params["user_id"] == admin.id
     assert not any("auth_generation" in executed for executed, _ in raw.executed)
+    assert ("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": admin.id}) in raw.executed
 
 
 @pytest.mark.parametrize("is_active", [False, True], ids=["deactivate", "activate"])
@@ -243,6 +259,43 @@ async def test_generic_update_carries_the_guarded_advance_in_its_own_statement(m
     assert params["is_active"] is is_active
     assert not raw.updates_to("identities")
     assert not any("auth_generation" in executed for executed, _ in raw.executed)
+    assert ("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": member.id}) in raw.executed
+
+
+@pytest.mark.parametrize("change", ["deactivate_again", "move"])
+async def test_individual_membership_override_clears_suspension_mark(monkeypatch, change):
+    member = _membership(tenant_id=uuid4(), is_active=False)
+    update = {"is_active": False} if change == "deactivate_again" else {"tenant_id": uuid4()}
+    with recording_user_writes(monkeypatch, member) as raw:
+        async with connection_ctx():
+            await user_dao.update(db_obj=member, obj_in=update)
+
+    assert ("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": member.id}) in raw.executed
+
+
+async def test_same_company_role_assignment_preserves_suspension_mark(monkeypatch):
+    member = _membership(tenant_id=uuid4(), is_active=False)
+    with recording_user_writes(monkeypatch, member) as raw:
+        async with connection_ctx():
+            await user_dao.update(
+                db_obj=member,
+                obj_in={"tenant_id": member.tenant_id, "role": UserRole.AGENT_ADMIN, "is_genesis": False},
+            )
+
+    assert not any("DELETE FROM tenant_suspended_memberships" in query for query, _ in raw.executed)
+
+
+async def test_clearing_suspension_mark_returns_the_fresh_locked_membership(monkeypatch):
+    member = _membership(tenant_id=uuid4(), is_active=False)
+    current = replace(member, is_active=True)
+    fresh = AsyncMock(return_value=current)
+    monkeypatch.setattr(user_dao, "get_with_identity", fresh)
+    with recording_user_writes(monkeypatch, member) as raw:
+        result = await user_dao.clear_suspension_mark(member)
+
+    assert result is current
+    fresh.assert_awaited_once_with(member.id, fresh=True)
+    assert ("DELETE FROM tenant_suspended_memberships WHERE user_id = %(id)s", {"id": member.id}) in raw.executed
 
 
 async def test_generic_update_without_is_active_never_mentions_the_generation(monkeypatch):

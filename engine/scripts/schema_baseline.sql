@@ -428,6 +428,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
 	ON users (identity_id) WHERE tenant_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS tenant_suspended_memberships (
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (tenant_id, user_id),
+    UNIQUE (user_id)
+);
+
 CREATE TABLE IF NOT EXISTS work_reports (
 	id UUID NOT NULL, 
 	tenant_id UUID NOT NULL, 

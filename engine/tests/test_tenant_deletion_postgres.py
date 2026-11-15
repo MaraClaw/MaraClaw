@@ -39,6 +39,16 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
 ) -> None:
     # Given
     content = await seed_deletion_content(deletion_pg)
+    async with connection_ctx() as db:
+        await db.execute(
+            "INSERT INTO tenant_suspended_memberships (tenant_id, user_id) VALUES (%(tenant)s, %(user)s), (%(other_tenant)s, %(other_user)s)",
+            {
+                "tenant": deletion_pg.tenant_id,
+                "user": deletion_pg.actor.id,
+                "other_tenant": deletion_pg.other_tenant_id,
+                "other_user": deletion_pg.other_user_id,
+            },
+        )
     app = FastAPI()
     app.include_router(tenants.router, prefix="/api", dependencies=[Depends(bind_crud_connection)])
     app.dependency_overrides[get_current_user] = lambda: replace(deletion_pg.actor, role="platform_admin")
@@ -54,6 +64,9 @@ async def test_delete_removes_owned_rows_and_retains_audit_when_http_request_com
     rows = await deletion_pg.snapshot()
     assert [row["id"] for row in rows["tenants"]] == [deletion_pg.other_tenant_id]
     assert [row["id"] for row in rows["users"]] == [deletion_pg.other_user_id]
+    assert await deletion_pg.rows("SELECT tenant_id, user_id FROM tenant_suspended_memberships") == [
+        {"tenant_id": deletion_pg.other_tenant_id, "user_id": deletion_pg.other_user_id}
+    ]
     assert [row["id"] for row in rows["agents"]] == [content.peer_id]
     assert {row["name"] for row in rows["skills"]} == {"Unrelated", "Global"}
     assert {row["content"] for row in rows["skill_files"]} == {"Unrelated", "Global"}
@@ -155,6 +168,11 @@ async def test_delete_rolls_back_audit_rows_and_invalidation_when_later_fallback
 ) -> None:
     # Given
     await seed_deletion_content(deletion_pg)
+    async with connection_ctx() as db:
+        await db.execute(
+            "INSERT INTO tenant_suspended_memberships (tenant_id, user_id) VALUES (%(tenant)s, %(user)s)",
+            {"tenant": deletion_pg.tenant_id, "user": deletion_pg.actor.id},
+        )
     before = await deletion_pg.snapshot()
 
     async def failed_fallback(_identity_id: object, *, exclude_tenant_id: object) -> None:
@@ -166,6 +184,9 @@ async def test_delete_rolls_back_audit_rows_and_invalidation_when_later_fallback
         await tenants.delete_tenant(deletion_pg.tenant_id, replace(deletion_pg.actor, role="platform_admin"))
     # Then
     assert await deletion_pg.snapshot() == before
+    assert await deletion_pg.rows("SELECT tenant_id, user_id FROM tenant_suspended_memberships") == [
+        {"tenant_id": deletion_pg.tenant_id, "user_id": deletion_pg.actor.id}
+    ]
     assert deletion_pg.events == []
     assert deletion_pg.runtime_calls == []
     assert (deletion_pg.runtime_root / str(deletion_pg.agent_id) / "SOUL.md").exists()

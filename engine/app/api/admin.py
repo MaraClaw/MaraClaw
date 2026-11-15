@@ -35,6 +35,8 @@ from app.records.organization_plan import OrganizationPlanId
 from app.records.user import UserRecord
 from app.schemas.admin_audit import AdminAuditPageOut
 from app.schemas.admin_companies import (
+    CompanyActivationOut,
+    CompanyActivationRequest,
     CompanyAgentSections,
     CompanyAgentSectionsUpdate,
     CompanyOption,
@@ -70,7 +72,7 @@ from app.services.admin_provisioning import (
     set_peer_admin_active,
 )
 from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
-from app.services.tenant_lifecycle import set_tenant_active
+from app.services.tenant_lifecycle import change_tenant_active
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
 
 
@@ -403,33 +405,38 @@ async def list_admin_audit_logs(
     return [AdminAuditLogOut.model_validate(log) for log in logs]
 
 
-@router.put("/companies/{company_id}/toggle")
+@router.put("/companies/{company_id}/toggle", response_model=CompanyActivationOut)
 async def toggle_company(
     company_id: uuid.UUID,
+    data: CompanyActivationRequest,
     current_user: UserRecord = Depends(require_role("platform_admin")),
     client_ip: str | None = Depends(get_client_ip),
-):
+) -> CompanyActivationOut:
     """Enable or disable a company."""
     tenant = await tenant_dao.get(company_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    new_state = not tenant.is_active
     try:
-        _ = await set_tenant_active(tenant, is_active=new_state)
+        result = await change_tenant_active(tenant, is_active=data.is_active)
     except DefaultOrgUnavailableError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await write_admin_audit(
-        actor=current_user,
-        action="company_toggle",
-        target_type="tenant",
-        target_id=company_id,
-        tenant_id=company_id,
-        changes={"is_active": field_change(tenant.is_active, new_state)},
-        ip_address=client_ip,
+    if result.changed:
+        await write_admin_audit(
+            actor=current_user,
+            action="company_toggle",
+            target_type="tenant",
+            target_id=company_id,
+            tenant_id=company_id,
+            changes={"is_active": field_change(not result.tenant.is_active, result.tenant.is_active)},
+            ip_address=client_ip,
+        )
+    return CompanyActivationOut(
+        is_active=result.tenant.is_active,
+        restored_members=result.restored_members,
+        inactive_members=result.inactive_members,
     )
-    return {"ok": True, "is_active": new_state}
 
 
 @router.get("/companies/{company_id}/agent-sections", response_model=CompanyAgentSections)
