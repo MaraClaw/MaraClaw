@@ -19,5 +19,5 @@ export default defineConfig({
     timeout: process.env.CI ? 180_000 : 60_000,
     reuseExistingServer: !process.env.CI,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], channel: 'chromium' } }],
 })

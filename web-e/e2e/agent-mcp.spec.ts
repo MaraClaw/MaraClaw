@@ -193,7 +193,7 @@ for (const action of ['save', 'remove'] as const) {
     await page.getByRole('button', { name: action === 'save' ? 'Configure research' : 'Remove research', exact: true }).click()
     await page.getByRole('button', { name: action === 'save' ? 'Save server' : 'Remove server', exact: true }).click()
     await requested.promise
-    await page.clock.install()
+    // pauseAt installs the clock itself; a running install can overtake the Node timestamp.
     await page.clock.pauseAt(new Date())
     denied = true
     try {

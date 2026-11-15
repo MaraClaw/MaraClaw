@@ -10,7 +10,7 @@ npm run test:e2e
 ```
 - Script expands to `playwright test`; configuration: `../playwright.config.ts`.
 - Configured server command: `npm run build && npm run preview -- --host 127.0.0.1 --port 4173`.
-- `testDir: './e2e'`; project `chromium` uses `Desktop Chrome`.
+- `testDir: './e2e'`; project `chromium` uses `Desktop Chrome` with the bundled full Chromium channel (`channel: 'chromium'`), including its new headless mode. The installed headless shell exited prematurely in a direct lifetime probe; preserve the full-browser selection when overriding test configuration.
 - `baseURL` is `http://127.0.0.1:4173`; existing server reuse only outside CI.
 - `fullyParallel: true`; CI forbids focused tests and enables one retry; local retries: zero.
 - Trace mode: `on-first-retry`, not an always-on local trace.
