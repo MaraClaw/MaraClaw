@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { delayedAgent, originalAgent } from './session-fencing-fixture'
 import {
-  assertHistoryRequest, historyExecution, historyPath, latestId, olderId, prepareTriggerHistory,
+  assertHistoryRequest, historyExecution, historyPath, latestId, olderId, prepareTriggerHistory, prepareTriggerTasks,
   primaryTrigger, secondaryHistoryPath, secondaryTrigger, tasksPath,
 } from './trigger-executions-fixture'
 
@@ -51,7 +51,7 @@ test('pagination keeps loaded executions through a generic additional-page failu
       await release.promise
       return route.fulfill({ status: 503, json: { detail: 'private payload failure' } })
     }
-    return route.fulfill({ json: { items: [historyExecution(olderId, 'succeeded')], next_cursor: null } })
+    return route.fulfill({ json: { items: [historyExecution(olderId, 'completed')], next_cursor: null } })
   })
   await page.goto(tasksPath)
   await page.getByRole('button', { name: `Show execution history for ${primaryTrigger.name}` }).click()
@@ -64,17 +64,14 @@ test('pagination keeps loaded executions through a generic additional-page failu
   await expect(history.getByRole('button', { name: 'Loading older executions…', exact: true })).toBeDisabled()
   await expect(history.getByRole('listitem')).toHaveCount(1)
   release.resolve()
-  await expect(history.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load older executions. Try again.' })).toBeVisible()
   await expect(page.getByText('private payload failure')).toHaveCount(0)
   await expect(history.getByRole('listitem')).toHaveCount(1)
   const retry = history.getByRole('button', { name: 'Retry older executions', exact: true })
-  expect(await retry.evaluate((button) => {
-    const alert = button.previousElementSibling
-    const list = button.closest('section')?.querySelector('ul')
-    return alert?.getAttribute('role') === 'alert'
-      && Boolean(list && (list.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING))
-  })).toBe(true)
-  await retry.click()
+  await expect(retry).toBeEnabled()
+  await retry.focus()
+  await expect(retry).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect(history.getByRole('listitem')).toHaveCount(2)
   await expect(history.getByRole('button', { name: /older executions/ })).toHaveCount(0)
   await history.locator('summary').first().click()
@@ -103,7 +100,7 @@ test('initial loading and malformed-response failure recover to empty history wi
   const history = page.getByRole('region', { name: `${primaryTrigger.name} execution history` })
   await expect(history.getByRole('status')).toContainText('Loading')
   release.resolve()
-  await expect(history.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load execution history. Try again.' })).toBeVisible()
   await expect(page.getByText('private invalid date')).toHaveCount(0)
   await history.getByRole('button', { name: 'Retry history', exact: true }).click()
   await expect(history.getByRole('status')).toContainText('No executions')
@@ -144,15 +141,16 @@ test('read-only history wraps at phone width and keeps exact identity values sel
   await page.setViewportSize({ width: 390, height: 844 })
   await prepareTriggerHistory(page)
   await page.route(`**${historyPath}*`, (route) => route.fulfill({ json: { items: [{
-    ...historyExecution(latestId, 'awaiting_external_confirmation'), source: 'persisted-source-with-a-long-name',
+    ...historyExecution(latestId, 'processing'), source: 'persisted-source-with-a-long-name',
   }], next_cursor: null } }))
   await page.goto(tasksPath)
   // When
   await page.getByRole('button', { name: `Show execution history for ${primaryTrigger.name}` }).click()
   // Then
   const history = page.getByRole('region', { name: `${primaryTrigger.name} execution history` })
-  await expect(history.getByText('Awaiting External Confirmation', { exact: true })).toBeVisible()
+  await expect(history.getByText('Processing', { exact: true })).toBeVisible()
   await history.locator('summary').click()
+  await expect(history.getByText('persisted-source-with-a-long-name', { exact: true })).toBeVisible()
   await expect(history.getByText(originalAgent.id, { exact: true })).toBeVisible()
   expect(await history.locator('dl').evaluate((node) => getComputedStyle(node).userSelect)).toBe('text')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -167,9 +165,8 @@ test('navigating to another agent starts its history without rows or cursors fro
   await page.route(`**/api/agents/${delayedAgent.id}/openclaw-update`, (route) => route.fulfill({
     json: { notice: null, run: null, required: false, can_upgrade: false },
   }))
-  for (const path of ['tasks/', 'focus/']) {
-    await page.route(`**/api/agents/${delayedAgent.id}/${path}`, (route) => route.fulfill({ json: [] }))
-  }
+  await prepareTriggerTasks(page, delayedAgent.id)
+  await page.route(`**/api/agents/${delayedAgent.id}/focus/`, (route) => route.fulfill({ json: [] }))
   await page.route(`**/api/agents/${delayedAgent.id}/triggers`, (route) => route.fulfill({ json: [primaryTrigger] }))
   await page.route(`**${historyPath}*`, (route) => route.fulfill({ json: { items: [historyExecution()], next_cursor: 'first-agent-only' } }))
   const requested = Promise.withResolvers<void>()
