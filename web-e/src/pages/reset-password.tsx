@@ -1,6 +1,6 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useId, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { PasswordField } from '@/components/ui/password-field'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
@@ -106,9 +107,7 @@ export function ResetPasswordPage() {
         </form>
       )}
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        <Link to="/login" className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline">
-          <ArrowLeft className="size-3.5" aria-hidden />
-          {translate("Back to sign in")}</Link>
+        <BackLink to="/login" variant="ghost" label={translate("Back to sign in")} />
       </p>
     </AuthShell>
   )

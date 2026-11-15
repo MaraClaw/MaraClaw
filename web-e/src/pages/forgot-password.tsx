@@ -1,14 +1,14 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, Loader2, Mail } from 'lucide-react'
+import { Loader2, Mail } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link } from 'react-router-dom'
 import { z } from 'zod'
 import { toast } from 'sonner'
 
 import { AuthShell } from '@/components/auth/auth-shell'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -66,11 +66,7 @@ export function ForgotPasswordPage() {
         <div className="space-y-4">
           <p className="rounded-xl border border-border/80 bg-muted/40 px-3.5 py-3 text-sm text-muted-foreground">
             {translate("Sent to")}{' '}<span className="font-medium text-foreground">{getValues('email')}</span>{translate(". Check spam if you do not see it.")}</p>
-          <Button asChild variant="outline" className="h-11 w-full">
-            <Link to="/login">
-              <ArrowLeft className="size-4" aria-hidden />
-              {translate("Return to sign in")}</Link>
-          </Button>
+          <BackLink to="/login" label={translate("Return to sign in")} />
         </div>
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
@@ -102,8 +98,7 @@ export function ForgotPasswordPage() {
       )}
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
-          {translate("Back to sign in")}</Link>
+        <BackLink to="/login" variant="ghost" label={translate("Back to sign in")} />
       </p>
     </AuthShell>
   )

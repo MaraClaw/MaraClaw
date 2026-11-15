@@ -1,12 +1,12 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { Building2, Loader2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AuthShell } from '@/components/auth/auth-shell'
 import { RequestErrorToast } from '@/components/request-error-toast'
-import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { useAuth } from '@/hooks/use-auth'
 import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { bindProvider, oauthCallback } from '@/lib/auth-api'
@@ -190,9 +190,7 @@ export function SsoCallbackPage() {
           })}
         </ul>
       ) : error ? (
-        <Button asChild className="h-11 w-full">
-          <Link to="/login">{translate("Back to sign in")}</Link>
-        </Button>
+        <BackLink to="/login" label={translate("Back to sign in")} />
       ) : (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden />
