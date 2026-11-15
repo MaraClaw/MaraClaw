@@ -183,7 +183,7 @@ for (const flow of flows) {
     // When
     await page.getByRole('button', { name: flow.button, exact: true }).click()
     // Then
-    await expect(page.getByRole('alert')).toHaveText('Organization change refused')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Organization change refused' })).toHaveText('Organization change refused')
     await expect(page).toHaveURL(flow.route)
     await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(0)
     expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(originalToken)
@@ -202,7 +202,7 @@ for (const response of [
     // When
     await page.getByRole('button', { name: flows[1].button, exact: true }).click()
     // Then
-    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to join or open the workspace. Try again.' })).toHaveText('Unable to join or open the workspace. Try again.')
     await expect(page).toHaveURL('/join')
     await expect(page.locator('[data-sonner-toast][data-type="success"]')).toHaveCount(0)
     expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(originalToken)
