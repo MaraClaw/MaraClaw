@@ -2,9 +2,10 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { NotificationKind } from '../src/lib/notifications-api'
 import type { AgentUpdate } from '../src/lib/openclaw-updates-api'
-import { originalCompany, originalUser } from './session-fencing-fixture'
+import { lifecycleReady } from './agent-lifecycle-data'
+import { originalAgent, originalToken, prepareWorkspace, replacementUser } from './session-fencing-fixture'
 
-const agentId = '22222222-2222-4222-8222-222222222222'
+const agentId = originalAgent.id
 const notice = {
   id: '11111111-1111-4111-8111-111111111111', title: 'OpenClaw workspace upgrade',
   body: 'This update improves the agent runtime.\nSave your work, open Settings, and wait for the upgrade to finish.',
@@ -14,34 +15,37 @@ const runId = '33333333-3333-4333-8333-333333333333'
 const agentPath = `/app/agents/${agentId}`
 
 async function prepare(page: Page) {
+  await prepareWorkspace(page)
   const update: AgentUpdate = { notice, run: null, required: true, can_upgrade: true }
   const state = {
-    agent: { id: agentId, name: 'Research assistant', status: 'stopped', creator_id: originalUser.id, access_level: 'manage' },
+    agent: { ...originalAgent, name: 'Research assistant' },
     update,
     upgrades: 0, starts: 0, fileReads: 0, statusError: false,
     statusReady: Promise.resolve(),
   }
-  await page.addInitScript(() => localStorage.setItem('maraclaw-enduser-token', 'synthetic-upgrade-session'))
   await page.route('**/api/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
+    const request = route.request()
+    expect(request.headers().authorization).toBe(`Bearer ${originalToken}`)
+    const url = new URL(request.url())
+    const path = url.pathname
+    expect(request.method()).toBe(path.endsWith('/start') || (path.endsWith('/openclaw-update') && request.method() === 'POST') ? 'POST' : 'GET')
     switch (path) {
-      case '/api/member/auth/me': return route.fulfill({ json: originalUser })
-      case '/api/tenants/me': return route.fulfill({ json: originalCompany })
-      case '/api/company-admissions/mine/page': return route.fulfill({ json: { items: [], next_cursor: null } })
-      case '/api/onboarding/status': return route.fulfill({ json: { status: 'completed' } })
+      case '/api/agent-deletion-requests': return route.fulfill({ json: { items: [], next_cursor: null } })
       case '/api/notifications/unread-count': return route.fulfill({ json: { unread_count: 1 } })
-      case '/api/notifications': return route.fulfill({ json: [{ ...notice, type: NotificationKind.OpenClawUpdate, is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }] })
-      case '/api/agents/': return route.fulfill({ json: [state.agent] })
+      case '/api/notifications/page':
+        expect(Object.fromEntries(url.searchParams)).toEqual({ category: 'all', limit: '50', view: 'active', unread_only: 'false' })
+        return route.fulfill({ json: { items: [{ ...notice, type: NotificationKind.OpenClawUpdate, is_read: false, archived_at: null, link: `/app/updates/${notice.id}` }], next_cursor: null } })
       case '/api/agents/page': return route.fulfill({ json: { items: [state.agent], next_cursor: null, has_more: false } })
       case `/api/agents/${agentId}`: return route.fulfill({ json: state.agent })
       case `/api/agents/${agentId}/metrics`: return route.fulfill({ json: {} })
+      case `/api/agents/${agentId}/lifecycle`: return route.fulfill({ json: { ...lifecycleReady, runtime: { ...lifecycleReady.runtime, recorded_status: state.agent.status }, upgrade: state.update } })
       case `/api/agents/${agentId}/start`:
         state.starts += 1
         state.agent.status = 'running'
         return route.fulfill({ json: state.agent })
-      case `/api/agents/${agentId}/files/`:
+      case `/api/agents/${agentId}/files/page`:
         state.fileReads += 1
-        return route.fulfill({ json: [] })
+        return route.fulfill({ json: { items: [], next_cursor: null } })
       case `/api/openclaw-updates/${notice.id}`: return route.fulfill({ json: { notice: state.update.notice, agents: [{ agent_id: agentId, ...state.agent, update: state.update }] } })
       case `/api/agents/${agentId}/openclaw-update`:
         if (route.request().method() === 'POST') {
@@ -54,7 +58,7 @@ async function prepare(page: Page) {
         return state.statusError
           ? route.fulfill({ status: 503, json: { detail: 'Unavailable' } })
           : route.fulfill({ json: state.update })
-      default: return route.fulfill({ status: 404, json: { detail: 'Unexpected test request' } })
+      default: return route.fallback()
     }
   })
   return state
@@ -73,8 +77,8 @@ for (const width of [390, 1440, 1920]) {
         // Then
         const back = page.getByRole('link', { name: 'Back to Inbox', exact: true })
         await expect(back).toBeVisible()
-        await expect(back.locator('svg.lucide-arrow-left')).toBeVisible()
-        await expect(back.locator('svg.lucide-arrow-left')).toHaveAttribute('aria-hidden', 'true')
+        await expect(back.locator('svg.lucide-move-left')).toBeVisible()
+        await expect(back.locator('svg.lucide-move-left')).toHaveAttribute('aria-hidden', 'true')
         const detail = page.locator('[data-slot="card"]').filter({ has: page.getByRole('heading', { name: notice.title, exact: true }) })
         await expect(detail).toBeVisible()
         await expect(detail).toHaveCSS('border-top-width', '1px')
@@ -159,7 +163,7 @@ test(`initial loading and status errors never mount ${tab}, while Settings stays
   await page.screenshot({ path: testInfo.outputPath('loading-gate.png') })
   state.statusError = true
   statusReady.resolve()
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to confirm OpenClaw upgrade status' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
   expect(state.fileReads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('error-gate.png') })
@@ -175,7 +179,7 @@ test('optional use-only agents allow work before an upgrade but cannot start one
   const state = await prepare(page)
   state.agent.status = 'running'
   state.agent.access_level = 'use'
-  state.agent.creator_id = 'manager'
+  state.agent.creator_id = replacementUser.id
   state.update = { ...state.update, notice: { ...notice, mandatory: false }, required: false, can_upgrade: false }
   // When
   await page.goto(`${agentPath}/files`)
