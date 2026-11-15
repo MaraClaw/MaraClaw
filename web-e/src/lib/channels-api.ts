@@ -2,9 +2,8 @@ import { z } from 'zod'
 
 import { ApiError, apiRequest, type RequestOptions } from './http.ts'
 import { ChannelConfigOutSchema } from './engine-contracts.generated.ts'
-export type { ChannelConfigOut as ChannelConfig } from './engine-contracts.generated.ts'
-import type { ChannelConfigOut as ChannelConfig } from './engine-contracts.generated.ts'
-
+const channelConfigSchema = ChannelConfigOutSchema
+export type ChannelConfig = z.infer<typeof channelConfigSchema>
 
 export type ChannelField = { readonly key: string; readonly label: string; readonly secret?: boolean; readonly multiline?: boolean }
 
@@ -67,6 +66,10 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
     { key: 'app_secret', label: 'App secret', secret: true },
     { key: 'api_version', label: 'API version' },
   ],
+  telegram: [
+    { key: 'bot_token', label: 'Bot token', secret: true },
+    { key: 'secret_token', label: 'Webhook secret token', secret: true },
+  ],
 }
 
 // REST endpoint metadata only (webhook means the webhook-url route exists). UI capabilities and names belong to the engine catalog.
@@ -79,6 +82,7 @@ export const CHANNELS = [
   { key: 'wecom', path: 'wecom-channel', webhook: true },
   { key: 'dingtalk', path: 'dingtalk-channel', webhook: false },
   { key: 'whatsapp', path: 'whatsapp-channel', webhook: true },
+  { key: 'telegram', path: 'telegram-channel', webhook: true },
 ] as const
 
 export function googleChatCredentialsConfigured(config?: ChannelConfig | null): boolean {
@@ -112,7 +116,7 @@ export async function getChannelCatalog(context: RequestContext = {}): Promise<r
 export async function getChannel(agentId: string, path: string, context: RequestContext = {}): Promise<ChannelConfig | null> {
   try {
     return await apiRequest(`/api/agents/${agentId}/${path}`, {
-      schema: ChannelConfigOutSchema,
+      schema: channelConfigSchema,
       ...(context.owner === undefined ? {} : { owner: context.owner }),
       ...(context.signal === undefined ? {} : { signal: context.signal }),
     })
@@ -125,7 +129,7 @@ export async function getChannel(agentId: string, path: string, context: Request
 export async function saveChannel(target: { readonly agentId: string; readonly path: string }, body: Record<string, string>, context: RequestContext = {}): Promise<ChannelConfig> {
   const { agentId, path } = target
   return apiRequest(`/api/agents/${agentId}/${path}`, {
-    schema: ChannelConfigOutSchema, method: 'POST', body,
+    schema: channelConfigSchema, method: 'POST', body,
     ...(context.owner === undefined ? {} : { owner: context.owner }),
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   })
