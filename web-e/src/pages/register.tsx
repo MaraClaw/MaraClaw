@@ -1,8 +1,8 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { Building2, Loader2, Lock, Mail, Sparkles } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -57,7 +57,7 @@ export function RegisterPage() {
   const { status, owner, capture, isCurrent, applySession, needsOrgConfirm } = useAuth()
   const navigate = useNavigate()
   const formId = useId()
-  const [showPassword, setShowPassword] = useState(false)
+  const emailCheck = useRef(0)
   const [formError, setFormError] = useState<string | null>(null)
   const [inviteRequired, setInviteRequired] = useState(false)
   const [registrationDestination, setRegistrationDestination] = useState<{
@@ -86,7 +86,10 @@ export function RegisterPage() {
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<RegisterFormValues>({
-    resolver: zodResolver(registerSchema),
+    resolver: zodResolver(registerSchema.refine((data) => !inviteRequired || Boolean(data.invitation_code), {
+      message: 'An invitation code is required',
+      path: ['invitation_code'],
+    })),
     defaultValues: { email: '', password: '', confirm_password: '', invitation_code: '' },
   })
 
@@ -136,6 +139,7 @@ export function RegisterPage() {
     >
       {formError ? (
         <div
+          id={`${formId}-form-error`}
           role="alert"
           className="mb-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-sm text-destructive"
         >
@@ -153,8 +157,18 @@ export function RegisterPage() {
               type="email"
               autoComplete="email"
               className="pl-10"
+              aria-invalid={errors.email || formError ? true : undefined}
+              aria-describedby={[
+                errors.email ? `${formId}-email-error` : null,
+                formError ? `${formId}-form-error` : null,
+              ].filter(Boolean).join(' ') || undefined}
               {...register('email', {
+                onChange: () => {
+                  emailCheck.current += 1
+                  setFormError((current) => current === duplicateEmailMessage ? null : current)
+                },
                 onBlur: (event) => {
+                  const check = ++emailCheck.current
                   const expectedOwner = owner
                   if (!isCurrent(expectedOwner)) return
                   const email = event.target.value.trim()
@@ -164,44 +178,30 @@ export function RegisterPage() {
                   }
                   void checkDuplicate({ email }, expectedOwner)
                     .then((result) => {
-                      if (!isCurrent(expectedOwner)) return
+                      if (!isCurrent(expectedOwner) || emailCheck.current !== check) return
                       setFormError((current) => {
                         if (result.email_exists) return duplicateEmailMessage
                         return current === duplicateEmailMessage ? null : current
                       })
                     })
                     .catch((error: unknown) => {
-                      if (isCurrent(expectedOwner)) toast.error(userFacingRequestError(error, translate("Unable to check this email. Try again.")))
+                      if (!isCurrent(expectedOwner) || emailCheck.current !== check) return
+                      toast.error(userFacingRequestError(error, translate("Unable to check this email. Try again.")))
                     })
                 },
               })}
             />
           </div>
-          {errors.email ? <p className="text-xs text-destructive"><ValidationMessage message={errors.email.message} /></p> : null}
+          {errors.email ? <p id={`${formId}-email-error`} role="alert" className="text-xs text-destructive"><ValidationMessage message={errors.email.message} /></p> : null}
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor={`${formId}-password`}>{translate("Password")}</Label>
-          <div className="relative">
-            <Lock className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              id={`${formId}-password`}
-              type={showPassword ? 'text' : 'password'}
-              autoComplete="new-password"
-              className="pr-11 pl-10"
-              {...register('password')}
-            />
-            <button
-              type="button"
-              className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              onClick={() => setShowPassword((value) => !value)}
-              aria-label={showPassword ? translate("Hide password") : translate("Show password")}
-            >
-              {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-            </button>
-          </div>
-          {errors.password ? <p className="text-xs text-destructive"><ValidationMessage message={errors.password.message} /></p> : null}
-        </div>
+        <PasswordField
+          id={`${formId}-password`}
+          label={translate("Password")}
+          autoComplete="new-password"
+          error={errors.password?.message}
+          {...register('password')}
+        />
 
         <PasswordField
           label={translate("Confirm password")}
@@ -217,12 +217,12 @@ export function RegisterPage() {
             id={`${formId}-invite`}
             placeholder={inviteRequired ? translate("Required") : translate("Optional")}
             autoComplete="off"
-            {...register('invitation_code', {
-              required: inviteRequired ? 'An invitation code is required' : false,
-            })}
+            aria-invalid={errors.invitation_code ? true : undefined}
+            aria-describedby={errors.invitation_code ? `${formId}-invite-error` : undefined}
+            {...register('invitation_code')}
           />
           {errors.invitation_code ? (
-            <p className="text-xs text-destructive"><ValidationMessage message={errors.invitation_code.message} /></p>
+            <p id={`${formId}-invite-error`} role="alert" className="text-xs text-destructive"><ValidationMessage message={errors.invitation_code.message} /></p>
           ) : null}
         </div>
 

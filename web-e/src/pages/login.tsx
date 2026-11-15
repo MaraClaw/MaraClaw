@@ -1,8 +1,8 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { ValidationMessage } from '@/components/validation-message'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, Users } from 'lucide-react'
-import { useId, useRef, useState } from 'react'
+import { Building2, Loader2, Lock, Mail, Sparkles, Users } from 'lucide-react'
+import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { SsoButtons } from '@/components/auth/sso-buttons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import {
@@ -57,14 +58,11 @@ export function LoginPage() {
   const identifierId = `${formId}-identifier`
   const passwordId = `${formId}-password`
   const formErrorId = `${formId}-form-error`
-  const [showPassword, setShowPassword] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [tenantChoices, setTenantChoices] = useState<TenantChoice[] | null>(null)
   const [pendingPassword, setPendingPassword] = useState<string | null>(null)
   const [pendingIdentifier, setPendingIdentifier] = useState<string | null>(null)
   const [selectingTenantId, setSelectingTenantId] = useState<string | null>(null)
-  const identifierRef = useRef<HTMLInputElement | null>(null)
-  const passwordRef = useRef<HTMLInputElement | null>(null)
 
   const from =
     (location.state as { from?: { pathname?: string } } | null)?.from?.pathname &&
@@ -81,9 +79,6 @@ export function LoginPage() {
     resolver: zodResolver(loginSchema),
     defaultValues: { login_identifier: '', password: '' },
   })
-
-  const identifierField = register('login_identifier')
-  const passwordField = register('password')
 
   if (status === 'loading') {
     return (
@@ -252,50 +247,26 @@ export function LoginPage() {
                 placeholder="name@company.com"
                 className="pl-10"
                 disabled={isBusy}
-                {...identifierField}
-                ref={(el) => {
-                  identifierField.ref(el)
-                  identifierRef.current = el
-                }}
+                aria-invalid={errors.login_identifier ? true : undefined}
+                aria-describedby={errors.login_identifier ? `${identifierId}-error` : undefined}
+                {...register('login_identifier')}
               />
             </div>
             {errors.login_identifier ? (
-              <p className="text-xs text-destructive"><ValidationMessage message={errors.login_identifier.message} /></p>
+              <p id={`${identifierId}-error`} role="alert" className="text-xs text-destructive"><ValidationMessage message={errors.login_identifier.message} /></p>
             ) : null}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor={passwordId}>{translate("Password")}</Label>
-            <div className="relative">
-              <Lock
-                className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                id={passwordId}
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="pr-11 pl-10"
-                disabled={isBusy}
-                {...passwordField}
-                ref={(el) => {
-                  passwordField.ref(el)
-                  passwordRef.current = el
-                }}
-              />
-              <button
-                type="button"
-                className="absolute top-1/2 right-2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={() => setShowPassword((value) => !value)}
-                aria-label={showPassword ? translate("Hide password") : translate("Show password")}
-              >
-                {showPassword ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
-              </button>
-            </div>
-            {errors.password ? (
-              <p className="text-xs text-destructive"><ValidationMessage message={errors.password.message} /></p>
-            ) : null}
+            <PasswordField
+              id={passwordId}
+              label={translate("Password")}
+              autoComplete="current-password"
+              placeholder="••••••••"
+              disabled={isBusy}
+              error={errors.password?.message}
+              {...register('password')}
+            />
             <p className="text-right text-xs">
               <Link to="/forgot-password" className="font-medium text-primary underline-offset-4 hover:underline">
                 {translate("Forgot password?")}</Link>
