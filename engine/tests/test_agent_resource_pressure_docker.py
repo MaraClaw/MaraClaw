@@ -124,6 +124,32 @@ def _inspect_json(
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "running", "restarting", "pressure_running"),
+    [
+        ("created", False, False, False),
+        ("restarting", True, True, False),
+        ("exited", False, False, False),
+        ("dead", False, False, False),
+        ("running", True, False, True),
+    ],
+)
+def test_inspect_preserves_container_status_and_pressure_running_semantics(
+    monkeypatch,
+    status,
+    running,
+    restarting,
+    pressure_running,
+):
+    payload = json.loads(_inspect_json(running=running, restarting=restarting))
+    payload["State"]["Status"] = status
+    _cli(monkeypatch, stdout=json.dumps(payload))
+    found = docker.inspect_guests(_client(), [FULL_A], 5.0)
+    assert found is not None
+    assert found[FULL_A].status == status
+    assert found[FULL_A].running is pressure_running
+
+
 def test_inspect_runs_one_batched_cli_call_without_a_shell(monkeypatch: pytest.MonkeyPatch):
     calls = _cli(monkeypatch, stdout=_inspect_json(FULL_A) + "\n" + _inspect_json(FULL_B) + "\n")
 

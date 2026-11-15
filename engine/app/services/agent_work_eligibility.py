@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
@@ -10,6 +11,8 @@ from app.dao.company_admission_dao import company_admission_dao
 from app.dao.company_transfer_cleanup_dao import company_transfer_cleanup_dao
 from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
+from app.records.tenant import TenantRecord
+from app.records.user import UserRecord
 from app.services.quota_guard import AgentExpired
 
 type AgentWorkBlockCode = Literal[
@@ -17,11 +20,22 @@ type AgentWorkBlockCode = Literal[
 ]
 
 
-async def agent_work_blocking_codes(agent: AgentRecord) -> tuple[AgentWorkBlockCode, ...]:
+@dataclass(frozen=True, slots=True)
+class AgentWorkPolicyContext:
+    """Pre-read eligibility facts at one instant; evaluating them performs no I/O."""
+
+    owner: UserRecord | None
+    tenant: TenantRecord | None
+    transfer_pending: bool
+    now: datetime
+
+
+def policy_blocking_codes(agent: AgentRecord, context: AgentWorkPolicyContext) -> tuple[AgentWorkBlockCode, ...]:
+    """Shared new-work policy over a caller's single-agent or batched snapshot."""
     codes: list[AgentWorkBlockCode] = []
-    if agent.is_expired or (agent.expires_at is not None and agent.expires_at <= datetime.now(UTC)):
+    if agent.is_expired or (agent.expires_at is not None and agent.expires_at <= context.now):
         codes.append("expired")
-    owner = await user_dao.get_with_identity(agent.creator_id, fresh=True)
+    owner = context.owner
     if owner is None or not owner.is_active:
         codes.append("owner_inactive")
     if owner is not None:
@@ -30,12 +44,20 @@ async def agent_work_blocking_codes(agent: AgentRecord) -> tuple[AgentWorkBlockC
         if owner.tenant_id != agent.tenant_id:
             codes.append("owner_tenant_changed")
     if agent.tenant_id is not None:
-        tenant = await company_admission_dao.tenant(agent.tenant_id)
+        tenant = context.tenant
         if tenant is None or not tenant.is_active:
             codes.append("tenant_inactive")
-    if await company_transfer_cleanup_dao.is_pending(agent.id):
+    if context.transfer_pending:
         codes.append("transfer_pending")
     return tuple(codes)
+
+
+async def agent_work_blocking_codes(agent: AgentRecord) -> tuple[AgentWorkBlockCode, ...]:
+    now = datetime.now(UTC)
+    owner = await user_dao.get_with_identity(agent.creator_id, fresh=True)
+    tenant = await company_admission_dao.tenant(agent.tenant_id) if agent.tenant_id is not None else None
+    transfer_pending = await company_transfer_cleanup_dao.is_pending(agent.id)
+    return policy_blocking_codes(agent, AgentWorkPolicyContext(owner, tenant, transfer_pending, now))
 
 
 async def load_agent_for_new_work(agent_id: UUID) -> AgentRecord:

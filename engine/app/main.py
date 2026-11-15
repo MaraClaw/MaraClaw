@@ -105,6 +105,8 @@ app.add_middleware(
 from app.api.activity import router as activity_router
 from app.api.admin import router as admin_router
 from app.api.admin_capacity import router as admin_capacity_router
+from app.api.admin_company_runtime import router as admin_company_runtime_router
+from app.api.admin_company_tier import router as admin_company_tier_router
 from app.api.admin_resource_pressure import (
     export_router as admin_resource_pressure_export_router,
     router as admin_resource_pressure_router,
@@ -232,6 +234,8 @@ app.include_router(ws_router)
 app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_capacity_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(admin_company_runtime_router, prefix=settings.API_PREFIX)
+app.include_router(admin_company_tier_router, prefix=settings.API_PREFIX)
 app.include_router(admin_tavily_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_search_analytics_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(admin_resource_pressure_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

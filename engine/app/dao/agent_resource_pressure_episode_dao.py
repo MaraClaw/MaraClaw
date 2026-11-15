@@ -142,14 +142,17 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
         peak_ratio: float,
         threshold_ratio: float,
         detail: dict[str, object],
-    ) -> AgentResourcePressureEpisodeRecord:
-        """Open the agent's threshold episode for ``resource`` or extend the open one, in one statement.
+    ) -> AgentResourcePressureEpisodeRecord | None:
+        """Open or extend pressure only while the sample's tier is still current; otherwise return ``None``.
 
         The partial unique index makes concurrent callers converge on a single open row. An extension bumps
         ``last_seen_at`` and ``sample_count``; the peak, its limit and its detail move together only when the new
         sample's ratio is higher. ``tier`` and ``threshold_ratio`` stay as they were when the episode opened.
         """
         async with self.session() as db:
+            tenant = await db.fetchone("SELECT tier FROM tenants WHERE id = %(id)s FOR SHARE", {"id": tenant_id})
+            if tenant is None or str_from_row(tenant["tier"]) != tier.value:
+                return None
             row = await db.fetchone(
                 f"""
                 INSERT INTO {self.table} AS e
@@ -188,9 +191,7 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
                     "detail": as_jsonb(detail),
                 },
             )
-            if row is None:
-                raise RuntimeError(f"upsert into {self.table} returned no row")
-            return self._from_row(row)
+            return self._from_row(row) if row is not None else None
 
     async def record_oom(
         self,
@@ -287,6 +288,18 @@ class AgentResourcePressureEpisodeDAO(BaseDAO[AgentResourcePressureEpisodeRecord
                     "reason": reason,
                     "except_tenant": except_tenant_id,
                 },
+            )
+            return len(rows)
+
+    async def close_for_tenant(self, tenant_id: UUID, *, reason: str) -> int:
+        """Close all open threshold episodes in the caller's tenant-locked tier-change transaction."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"UPDATE {self.table} "
+                "SET ended_at = GREATEST(clock_timestamp(), last_seen_at), "
+                "detail = detail || jsonb_build_object('closed_reason', %(reason)s::text) "
+                "WHERE tenant_id = %(tenant)s AND ended_at IS NULL AND kind = 'threshold' RETURNING id",
+                {"tenant": tenant_id, "reason": reason},
             )
             return len(rows)
 
