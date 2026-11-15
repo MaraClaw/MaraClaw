@@ -1,12 +1,11 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
-import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AgentCreateForm } from '@/components/agent-create-form'
-import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { userFacingRequestError } from '@/lib/http'
 import { createAgent } from '@/lib/workspace-api'
 
@@ -40,15 +39,7 @@ export function AgentNewPage() {
   return (
     <div className="mx-auto max-w-lg space-y-6 p-6">
       <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="mb-3 rounded-full px-4"
-          onClick={goBack}
-        >
-          <ArrowLeft className="size-4" aria-hidden />
-          {translate("Back")}</Button>
+        <BackButton className="mb-3" onClick={goBack} label={translate("Back")} />
         <h1 className="font-display text-2xl font-semibold">{translate("New agent")}</h1>
         <p className="text-sm text-muted-foreground">{translate("Private by default. Share with a department or the company if teammates should use it.")}</p>
       </div>

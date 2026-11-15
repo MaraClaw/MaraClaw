@@ -1,8 +1,9 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useState } from 'react'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { RefreshButton } from '@/components/ui/refresh-button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +22,7 @@ export function AgentActivityPage() {
       <section className="space-y-4 p-6" aria-labelledby="activity-heading">
         <h1 id="activity-heading" className="font-display text-xl font-semibold">{translate("Activity")}</h1>
         <p className="text-sm text-muted-foreground">{translate("Only agent managers can view activity. Ask a manager for access.")}</p>
-        <Button variant="outline" asChild><Link to={`/app/agents/${encodeURIComponent(agent.id)}/chat`}>{translate("Return to chat")}</Link></Button>
+        <BackLink to={`/app/agents/${encodeURIComponent(agent.id)}/chat`} label={translate("Return to chat")} />
       </section>
     )
   }

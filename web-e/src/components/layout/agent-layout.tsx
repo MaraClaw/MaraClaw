@@ -1,12 +1,12 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useQuery } from '@/hooks/session-workspace'
 import { Loader2 } from 'lucide-react'
-import { Link, matchPath, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
+import { matchPath, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { AgentUpdateGate } from '@/components/layout/agent-update-gate'
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
-import { Button } from '@/components/ui/button'
+import { BackLink } from '@/components/ui/back-button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { hiddenSectionRedirect, visibleAgentTabs } from '@/lib/agent-section-visibility'
 import { fetchMyTenant } from '@/lib/auth-api'
@@ -80,7 +80,7 @@ export function AgentLayout() {
       <div className={chat ? layoutClass : 'space-y-3 p-6'}>
         {chat ? <SectionRail items={visibleTabs} label={translate("Agent sections")} className={railClass} /> : null}
         <div className={chat ? 'min-w-0 space-y-3 p-6 md:col-start-2' : undefined}>
-          {chat ? <Button variant="outline" asChild><Link to="/app/agents">{translate("Agents")}</Link></Button> : null}
+          {chat ? <BackLink to="/app/agents" label={translate("Agents")} /> : null}
           <RequestErrorToast error={query.error} message={query.error instanceof ApiError && query.error.status !== 404
               ? userFacingRequestError(query.error, translate("Unable to load this agent. Try again."))
               : 'This agent is not available.'} />
