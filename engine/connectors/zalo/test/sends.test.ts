@@ -1,0 +1,78 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { Sends } from '../src/sends.js';
+import type { SendCommand, SendResult } from '../src/protocol.js';
+
+const command: SendCommand = { type: 'send', id: 's', token: 't', command_id: 'c', thread_id: '123', text: 'hello' };
+test('undispatched sends reject and a replay cannot become dispatchable', () => {
+  const results: SendResult[] = [];
+  let dispatched = 0;
+  const sends = new Sends(result => results.push(result), async () => { dispatched++; return '999'; });
+  sends.receive(command);
+  sends.open();
+  sends.receive(command);
+  sends.close();
+  assert.equal(dispatched, 0);
+  assert.deepEqual(results.map(result => result.outcome), ['rejected', 'rejected']);
+});
+test('pending duplicate commands dispatch once and conflicting replays fail closed', () => {
+  const pending = Promise.withResolvers<string | null>();
+  const results: SendResult[] = [];
+  let dispatched = 0;
+  const sends = new Sends(result => results.push(result), () => { dispatched++; return pending.promise; });
+  sends.open();
+  sends.receive(command);
+  sends.receive({ ...command, id: 'new-envelope-id' });
+  assert.throws(() => sends.receive({ ...command, text: 'changed' }), { reason: 'protocol_error' });
+  sends.close();
+  pending.resolve('late-ack');
+  assert.equal(dispatched, 1);
+  assert.deepEqual(results, [{ type: 'send_result', command_id: 'c', message_id: '', outcome: 'uncertain' }]);
+});
+test('send deadline marks uncertain and a late provider ack cannot change the result', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = Promise.withResolvers<string | null>();
+  const results: SendResult[] = [];
+  const sends = new Sends(result => results.push(result), () => pending.promise);
+  sends.open();
+  sends.receive(command);
+  context.mock.timers.tick(15_000);
+  pending.resolve('late-ack');
+  await pending.promise;
+  sends.receive(command);
+  assert.deepEqual(results.map(result => result.outcome), ['uncertain', 'uncertain']);
+  sends.close();
+});
+test('in-flight budget rejects excess sends without dispatch and command history stays bounded', () => {
+  const results: SendResult[] = [];
+  let dispatched = 0;
+  const pending = Promise.withResolvers<string | null>();
+  const sends = new Sends(result => results.push(result), () => { dispatched++; return pending.promise; });
+  sends.open();
+  for (let i = 0; i < 33; i++) sends.receive({ ...command, command_id: String(i) });
+  assert.equal(dispatched, 32);
+  assert.equal(results[0]?.outcome, 'rejected');
+  sends.close();
+  pending.resolve(null);
+  for (let i = 33; i < 10_000; i++) sends.receive({ ...command, command_id: String(i) });
+  assert.throws(() => sends.receive({ ...command, command_id: 'over-budget' }), { reason: 'protocol_error' });
+});
+test('SDK calls remain in flight after receipt timeout until their promises settle', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const results: SendResult[] = [];
+  let dispatched = 0;
+  const pending = Promise.withResolvers<string | null>();
+  const sends = new Sends(result => results.push(result), () => { dispatched++; return pending.promise; });
+  sends.open();
+  for (let i = 0; i < 32; i++) sends.receive({ ...command, command_id: String(i) });
+  context.mock.timers.tick(15_000);
+  assert.equal(results.filter(result => result.outcome === 'uncertain').length, 32);
+  sends.receive({ ...command, command_id: 'after-timeout' });
+  assert.equal(dispatched, 32);
+  assert.equal(results.at(-1)?.outcome, 'rejected');
+  pending.resolve('late-ack');
+  await pending.promise;
+  sends.receive({ ...command, command_id: 'after-settlement' });
+  assert.equal(dispatched, 33);
+  sends.close();
+});
