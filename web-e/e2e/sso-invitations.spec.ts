@@ -94,7 +94,7 @@ test('SSO clears invitation continuation when the callback fails', async ({ page
   // When SSO fails.
   await page.getByRole('button', { name: 'Synthetic SSO', exact: true }).click()
   // Then retrying cannot reuse the invitation transaction.
-  await expect(page.getByRole('alert')).toHaveText('Synthetic SSO refused')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Synthetic SSO refused' })).toHaveText('Synthetic SSO refused')
   expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith('maraclaw-sso-')))).toEqual([])
 })
 
