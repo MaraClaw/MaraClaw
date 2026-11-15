@@ -30,14 +30,14 @@ for (const surface of ['chat', 'workspace'] as const) {
           // Then
           expect(selectedSize).toBe(limit + Number(over))
           if (over) {
-            await expect(page.locator('[data-sonner-toast]')).toContainText(/exceeds/)
+            await expect(page.locator('[data-sonner-toast]').filter({ hasText: /exceeds/ })).toContainText(/exceeds/)
             expect(fixture.uploads).toEqual([])
             expect(fixture.sockets.flatMap((socket) => socket.sent)).toEqual([])
             await expect(input).toHaveValue('')
           } else {
             await expect.poll(() => fixture.uploads.length).toBe(1)
             if (surface === 'chat') await expect.poll(() => fixture.sockets[0]?.sent.length).toBe(1)
-            else await expect(page.locator('[data-sonner-toast]')).toContainText('Uploaded')
+            else await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Uploaded' })).toContainText('Uploaded')
           }
         } finally { await rm(root, { recursive: true, force: true }) }
       })
@@ -139,7 +139,7 @@ for (const [filename, mimeType, size, accepted] of [
     // Then
     if (accepted) await expect.poll(() => fixture.uploads.length).toBe(1)
     else {
-      await expect(page.locator('[data-sonner-toast]')).toContainText(/7 bytes/)
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: /7 bytes/ })).toContainText(/7 bytes/)
       expect(fixture.uploads).toEqual([])
     }
   })
@@ -161,7 +161,7 @@ for (const surface of ['chat', 'workspace'] as const) {
       await openUploads(page, surface)
       const retry = page.getByRole('button', { name: 'Retry upload limits' })
       await expect(retry).toBeVisible()
-      await expect(page.getByRole('alert')).toContainText('Uploading is unavailable')
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Uploading is unavailable' })).toContainText('Uploading is unavailable')
       await expect(page.getByLabel(uploadLabel(surface), { exact: true })).toBeDisabled()
       // When
       await retry.focus()

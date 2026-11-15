@@ -55,7 +55,7 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
     await page.route('**/api/chat/upload', async (route) => {
       requested.resolve()
       await release.promise
-      await route.fulfill({ json: { filename: 'late.txt', extracted_text: 'Scoped uploaded content' } })
+      await route.fulfill({ json: { filename: 'late.txt', extracted_text: 'Scoped uploaded content', workspace_path: 'uploads/late.txt' } })
     })
     await page.goto(chatPath())
     const retired = await chat.socket()
@@ -72,7 +72,7 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
         break
       case 'effect recreation':
         chat.setOnboarded(true)
-        retired.route.send(JSON.stringify({ type: 'onboarded' }))
+        retired.route.send(JSON.stringify({ type: 'onboarded', agent_id: originalAgent.id }))
         break
       default: boundary satisfies never
     }
@@ -84,7 +84,8 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
     await finished
     if (boundary === 'effect recreation') {
       await expect.poll(() => current.sent.length).toBe(1)
-      expect(submitted(current)).toMatchObject({ content: 'Scoped uploaded content', file_name: 'late.txt', display_content: 'late.txt' })
+      expect(submitted(current)).toMatchObject({ content: 'Scoped uploaded content', file_name: 'late.txt', display_content: 'late.txt',
+        attachments: [{ path: 'uploads/late.txt', name: 'late.txt' }] })
     } else {
       complete(current.route, message('current', 'Current conversation remains usable'))
       await expect(page.getByText('Current conversation remains usable', { exact: true })).toBeVisible()
