@@ -1,10 +1,12 @@
 import type { AgentRuntimeLossOut } from './engine-contracts.generated.ts'
+import { startAgent, startNewContainer } from './agents-api.ts'
 import { ApiError } from './http.ts'
 import type { TranslationKey } from './i18n/catalog.ts'
 
 export type RuntimeLossReason = AgentRuntimeLossOut['reason']
 
 export const runtimeLossSummary = {
+  container_stopped: 'The container this agent runs in has stopped, so it can’t reply right now.',
   container_missing: 'The container this agent runs in is no longer available, so it can’t reply right now.',
   image_unavailable: 'The container this agent runs in is no longer available, and the platform can’t create a new one yet. The platform team has been notified.',
 } as const satisfies Record<RuntimeLossReason, TranslationKey>
@@ -61,3 +63,44 @@ export function classifyStartNewContainerError(error: unknown): StartNewContaine
 export function startNewContainerErrorMessage(error: unknown): (typeof startNewContainerFailureMessage)[StartNewContainerFailure] {
   return startNewContainerFailureMessage[classifyStartNewContainerError(error)]
 }
+
+const startStoppedFailureMessage = {
+  ...startNewContainerFailureMessage,
+  forbidden: 'Only this agent’s managers can start it.',
+  setup_incomplete: 'Finish this agent’s setup before starting it.',
+  capacity_exceeded: 'There isn’t enough capacity to start this agent right now. Try again in a few minutes.',
+  start_failed: 'This agent couldn’t be started. Try again in a moment.',
+  unknown: 'Unable to start this agent. Try again, or contact your company admin if it keeps happening.',
+} as const satisfies Record<StartNewContainerFailure, TranslationKey>
+
+const newContainerRecovery = {
+  start: startNewContainer,
+  label: 'Start a new container',
+  pending: 'Starting a new container...',
+  success: 'New container started',
+  managerMessage: 'Your conversations, memory, skills, integrations and schedules are kept. Any message you already sent will be answered once a new container starts.',
+  memberMessage: 'Ask the agent’s manager to start a new container. Your messages are saved.',
+  errorMessage: startNewContainerErrorMessage,
+} as const
+
+export const runtimeLossRecovery = {
+  container_missing: newContainerRecovery,
+  image_unavailable: newContainerRecovery,
+  container_stopped: {
+    start: startAgent,
+    label: 'Start',
+    pending: 'Starting...',
+    success: 'Agent started',
+    managerMessage: 'Your conversations, memory, skills, integrations and schedules are kept. Any message you already sent will be answered once this agent starts again.',
+    memberMessage: 'Ask the agent’s manager to start it again. Your messages are saved.',
+    errorMessage: (error: unknown) => startStoppedFailureMessage[classifyStartNewContainerError(error)],
+  },
+} as const satisfies Record<RuntimeLossReason, {
+  readonly start: typeof startAgent
+  readonly label: TranslationKey
+  readonly pending: TranslationKey
+  readonly success: TranslationKey
+  readonly managerMessage: TranslationKey
+  readonly memberMessage: TranslationKey
+  readonly errorMessage: (error: unknown) => TranslationKey
+}>

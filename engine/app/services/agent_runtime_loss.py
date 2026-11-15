@@ -6,6 +6,7 @@ observed the loss.
 
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, assert_never
 from uuid import UUID, uuid5
 
 from anyio import to_thread
@@ -29,6 +30,7 @@ from app.services.openclaw_update_snapshot import drop_snapshot
 _REASONS: dict[RuntimeLossReason, str] = {
     "container_missing": "The agent's guest container no longer exists on the Docker daemon.",
     "image_unavailable": "The guest image the agent is pinned to no longer exists on the Docker daemon.",
+    "container_stopped": "The agent's guest container still exists on the Docker daemon but is stopped.",
 }
 _RECOVERY = "The agent manager can start a new container from the agent's settings; pending messages are kept and will be answered."
 _SNAPSHOT_NAMESPACE = UUID("6f1d3c2e-8a54-4f0b-9b7e-2d61c0a4e5f7")
@@ -57,7 +59,16 @@ async def report_runtime_loss(agent: AgentRecord, reason: RuntimeLossReason, *, 
 
 
 async def report_missing_guest(agent: AgentRecord) -> None:
-    """Dispatch found no owned guest: report only a running agent with no pending start or active upgrade."""
+    await _report_unavailable_guest(agent, "container_missing")
+
+
+async def report_stopped_guest(agent: AgentRecord) -> None:
+    await _report_unavailable_guest(agent, "container_stopped")
+
+
+async def _report_unavailable_guest(
+    agent: AgentRecord, reason: Literal["container_missing", "container_stopped"]
+) -> None:
     if agent.status != "running":
         return
     try:
@@ -69,7 +80,7 @@ async def report_missing_guest(agent: AgentRecord) -> None:
         return
     if active_upgrade or (operation is not None and operation.state == "pending"):
         return
-    await report_runtime_loss(agent, "container_missing")
+    await report_runtime_loss(agent, reason)
 
 
 async def get_runtime_loss(agent_id: UUID) -> AgentRuntimeLoss | None:
@@ -80,6 +91,14 @@ async def get_runtime_loss(agent_id: UUID) -> AgentRuntimeLoss | None:
 async def clear_runtime_loss(agent_id: UUID) -> None:
     async with committed_start_connection() as db:
         await agent_runtime_loss_dao.clear(db, agent_id)
+
+
+async def clear_stopped_guest_loss(agent_id: UUID) -> None:
+    try:
+        async with committed_start_connection() as db:
+            await agent_runtime_loss_dao.clear_stopped(db, agent_id)
+    except Exception as exc:
+        logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] stopped clear failed agent={}", agent_id)
 
 
 async def guest_published(agent: AgentRecord, agent_dir: Path) -> None:
@@ -112,7 +131,13 @@ async def _notify_admins(agent: AgentRecord, loss: AgentRuntimeLoss, pending: in
         except Exception as exc:
             logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] company lookup failed")
     body = _body(agent, loss, company, pending)
-    title = f"Agent {agent.name} lost its guest container"[:200]
+    match loss.reason:
+        case "container_stopped":
+            title = f"Agent {agent.name} has a stopped guest container"[:200]
+        case "container_missing" | "image_unavailable":
+            title = f"Agent {agent.name} lost its guest container"[:200]
+        case unreachable:
+            assert_never(unreachable)
     link = f"/companies/{agent.tenant_id}" if agent.tenant_id is not None else None
     recipients = await user_dao.list_active_platform_admins()
     for recipient in recipients:
@@ -133,6 +158,13 @@ async def _notify_admins(agent: AgentRecord, loss: AgentRuntimeLoss, pending: in
 
 def _body(agent: AgentRecord, loss: AgentRuntimeLoss, company: str, pending: int) -> str:
     detected: datetime = loss.detected_at
+    match loss.reason:
+        case "container_stopped":
+            recovery = "Use Start to resume the existing guest container; pending messages are kept and will be answered once it is running."
+        case "container_missing" | "image_unavailable":
+            recovery = _RECOVERY
+        case unreachable:
+            assert_never(unreachable)
     return "\n".join(
         (
             f"Agent: {agent.name} ({agent.id})",
@@ -145,6 +177,6 @@ def _body(agent: AgentRecord, loss: AgentRuntimeLoss, company: str, pending: int
             f"Detected at: {detected.isoformat()}",
             f"Pending messages: {pending}",
             "",
-            _RECOVERY,
+            recovery,
         )
     )

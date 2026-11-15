@@ -1,4 +1,4 @@
-"""Recorded loss of an agent's guest container, kept until a start publishes a new one."""
+"""Recorded unavailability of an agent's guest container."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ from pydantic import TypeAdapter
 
 from app.core.json_types import datetime_from_row, uuid_from_row
 
-RuntimeLossReason = Literal["container_missing", "image_unavailable"]
+RuntimeLossReason = Literal["container_missing", "image_unavailable", "container_stopped"]
 _reason = TypeAdapter(RuntimeLossReason)
 
 

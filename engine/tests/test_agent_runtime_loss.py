@@ -22,6 +22,7 @@ from app.services import (
 )
 from app.services.agent_manager import agent_manager
 from app.services.guest_admission import GuestStartPreflightError
+from app.services.guest_identity import GuestIdentity, GuestOwnershipError, GuestResolutionCache
 from app.services.openclaw_native_capacity import LaneKey, shutdown_native_capacity
 from app.services.openclaw_release_backoff import ReleaseBackoff
 from app.services.openclaw_update_snapshot import commit_snapshot, snapshot_path
@@ -95,11 +96,12 @@ async def test_pull_failure_stays_a_generic_preflight_failure(monkeypatch):
     assert images.pulled == ["registry.example/openclaw:1"]
 
 
-async def test_report_alerts_every_platform_admin_once_and_never_raises(monkeypatch):
+@pytest.mark.parametrize("reason", ["image_unavailable", "container_stopped"])
+async def test_report_alerts_every_platform_admin_once_and_never_raises(monkeypatch, reason):
     # Given a lost guest, two platform admins (one of whom cannot be notified) and a claim that succeeds once.
     agent = guest()
     detected = datetime(2026, 11, 13, tzinfo=UTC)
-    recorded = AgentRuntimeLoss(agent.id, "image_unavailable", agent.container_id, "sha256:gone", detected)
+    recorded = AgentRuntimeLoss(agent.id, reason, agent.container_id, "sha256:gone", detected)
     claims = iter([True, False])
     dao = SimpleNamespace(
         record=AsyncMock(return_value=recorded),
@@ -120,8 +122,8 @@ async def test_report_alerts_every_platform_admin_once_and_never_raises(monkeypa
     monkeypatch.setattr(loss.tenant_dao, "get", AsyncMock(return_value=SimpleNamespace(name="Acme")))
     monkeypatch.setattr(loss, "send_notification", send)
     # When the loss is reported twice.
-    await loss.report_runtime_loss(agent, "image_unavailable", image="sha256:gone")
-    await loss.report_runtime_loss(agent, "image_unavailable", image="sha256:gone")
+    await loss.report_runtime_loss(agent, reason, image="sha256:gone")
+    await loss.report_runtime_loss(agent, reason, image="sha256:gone")
     # Then only the claimed report alerts, the failed recipient does not block the other, and no row targets the agent.
     assert dao.record.await_count == 2
     assert [user_id for user_id, _fields in sent] == [admins[1].id]
@@ -135,23 +137,36 @@ async def test_report_alerts_every_platform_admin_once_and_never_raises(monkeypa
     assert fields["notification_kind"] == "system_alert"
     assert len(fields["title"]) <= 200
     assert "Pending messages: 3" in fields["body"]
+    if reason == "container_stopped":
+        assert "stopped" in fields["title"]
+        assert "stopped" in fields["body"]
+        assert "Start" in fields["body"]
+        assert "resume the existing" in fields["body"]
+        assert "start a new container" not in fields["body"]
     # And a storage failure is contained.
     monkeypatch.setattr(dao, "record", AsyncMock(side_effect=RuntimeError("database down")))
     await loss.report_runtime_loss(agent, "container_missing")
 
 
 @pytest.mark.parametrize(
+    ("reporter", "reason"),
+    [("report_missing_guest", "container_missing"), ("report_stopped_guest", "container_stopped")],
+)
+@pytest.mark.parametrize(
     ("status", "start_state", "upgrading", "reported"),
     [
         (AgentStatus.RUNNING, None, False, True),
         (AgentStatus.RUNNING, "failed", False, True),
         (AgentStatus.STOPPED, None, False, False),
+        (AgentStatus.IDLE, None, False, False),
+        (AgentStatus.CREATING, None, False, False),
+        (AgentStatus.ERROR, None, False, False),
         (AgentStatus.RUNNING, "pending", False, False),
         (AgentStatus.RUNNING, None, True, False),
     ],
 )
-async def test_missing_guest_is_reported_only_for_a_running_agent_without_start_or_upgrade(
-    monkeypatch, status, start_state, upgrading, reported
+async def test_unavailable_guest_is_reported_only_for_a_running_agent_without_start_or_upgrade(
+    monkeypatch, reporter, reason, status, start_state, upgrading, reported
 ):
     # Given dispatch found no owned guest for an agent in a given recorded state.
     agent = guest(status)
@@ -159,23 +174,91 @@ async def test_missing_guest_is_reported_only_for_a_running_agent_without_start_
     report = AsyncMock()
     monkeypatch.setattr(loss, "committed_start_connection", committed)
     monkeypatch.setattr(loss.agent_start_dao, "get", AsyncMock(return_value=operation))
-    monkeypatch.setattr(loss.openclaw_update_notice_dao, "gate_state", AsyncMock(return_value=(upgrading, False)))
+    monkeypatch.setattr(loss.openclaw_update_notice_dao, "gate_state", AsyncMock(return_value=(upgrading, True)))
     monkeypatch.setattr(loss, "report_runtime_loss", report)
-    # When the missing guest is reported.
-    await loss.report_missing_guest(agent)
+    # When the unavailable guest is reported.
+    await getattr(loss, reporter)(agent)
     # Then only an unexplained absence is recorded as a lost container.
     if reported:
-        report.assert_awaited_once_with(agent, "container_missing")
+        report.assert_awaited_once_with(agent, reason)
     else:
         report.assert_not_awaited()
 
 
-@pytest.mark.parametrize("observation", ["absent", "stopped", "docker_error"])
-async def test_dispatch_reports_only_an_absent_guest_and_keeps_its_outcome(monkeypatch, observation):
-    # Given a native turn and a guest that is absent, stopped, or cannot be inspected.
+@pytest.mark.parametrize("reporter", ["report_missing_guest", "report_stopped_guest"])
+@pytest.mark.parametrize("failure", ["connection", "start", "upgrade"])
+async def test_unavailable_guest_guard_failure_does_not_report_or_escape(monkeypatch, reporter, failure):
+    agent, report = guest(), AsyncMock()
+
+    @asynccontextmanager
+    async def unavailable_connection():
+        raise RuntimeError("database unavailable")
+        yield
+
+    monkeypatch.setattr(
+        loss, "committed_start_connection", unavailable_connection if failure == "connection" else committed
+    )
+    monkeypatch.setattr(
+        loss.agent_start_dao,
+        "get",
+        AsyncMock(return_value=None, side_effect=RuntimeError("start lookup failed") if failure == "start" else None),
+    )
+    monkeypatch.setattr(
+        loss.openclaw_update_notice_dao,
+        "gate_state",
+        AsyncMock(
+            return_value=(False, True),
+            side_effect=RuntimeError("upgrade lookup failed") if failure == "upgrade" else None,
+        ),
+    )
+    monkeypatch.setattr(loss, "report_runtime_loss", report)
+    await getattr(loss, reporter)(agent)
+    report.assert_not_awaited()
+
+
+async def test_running_clear_is_conditional_and_best_effort(monkeypatch):
+    agent_id = uuid4()
+    cleared = AsyncMock(side_effect=[None, RuntimeError("database down")])
+    monkeypatch.setattr(loss, "committed_start_connection", committed)
+    monkeypatch.setattr(loss.agent_runtime_loss_dao, "clear_stopped", cleared)
+    await loss.clear_stopped_guest_loss(agent_id)
+    await loss.clear_stopped_guest_loss(agent_id)
+    assert cleared.await_count == 2
+    assert all(call.args[1] == agent_id for call in cleared.await_args_list)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize(
+    ("observation", "running", "restarting", "reason"),
+    [
+        ("absent", False, False, "container_missing"),
+        ("exited", False, False, "container_stopped"),
+        ("created", False, None, "container_stopped"),
+        ("exited", False, True, None),
+        ("created", False, True, None),
+        ("restarting", False, True, None),
+        ("dead", False, False, None),
+        ("paused", False, False, None),
+        ("removing", False, False, None),
+        ("unknown", False, False, None),
+        ("no_state", False, False, None),
+        ("docker_error", False, False, None),
+        ("inspect_error", False, False, None),
+        ("foreign", False, False, None),
+    ],
+)
+async def test_dispatch_reports_only_proven_missing_or_resumable_stopped_guests(
+    monkeypatch, cached, observation, running, restarting, reason
+):
+    # Given an owned resolution (possibly cached), or a failed/foreign resolution.
     agent = guest()
     message = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
     report = AsyncMock()
+    cleared = AsyncMock()
+    cache = GuestResolutionCache(30)
+    owned = GuestIdentity("owned", "owned", str(agent.id), ())
+    if cached and observation not in ("absent", "docker_error", "foreign"):
+        cache.put(agent, owned)
 
     @asynccontextmanager
     async def exclusion(_agent_id):
@@ -184,22 +267,41 @@ async def test_dispatch_reports_only_an_absent_guest_and_keeps_its_outcome(monke
     def resolve(*_args):
         if observation == "docker_error":
             raise DockerException(["docker", "inspect"], 1)
-        return None if observation == "absent" else SimpleNamespace(id="owned")
+        if observation == "foreign":
+            raise GuestOwnershipError(agent.id, "foreign-container", str(uuid4()))
+        return None if observation == "absent" else owned
 
-    stopped = SimpleNamespace(state=SimpleNamespace(running=False))
+    def inspect(_reference):
+        if observation == "inspect_error":
+            raise DockerException(["docker", "inspect"], 1)
+        return SimpleNamespace(state=state)
+
+    state = (
+        None
+        if observation == "no_state"
+        else SimpleNamespace(status=observation, running=running, restarting=restarting)
+    )
     monkeypatch.setattr(rpc, "guest_write_section", exclusion)
     monkeypatch.setattr(rpc, "assert_work_allowed", AsyncMock(return_value=None))
     monkeypatch.setattr(rpc.agent_dao, "get", AsyncMock(return_value=agent))
     monkeypatch.setattr(rpc, "resolve_guest", resolve)
-    monkeypatch.setattr(rpc, "report_missing_guest", report)
-    monkeypatch.setattr(
-        agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(inspect=lambda _id: stopped))
-    )
+    monkeypatch.setattr(rpc, "guest_resolutions", cache)
+    monkeypatch.setattr(rpc, "clear_stopped_guest_loss", cleared)
+    monkeypatch.setattr(loss, "committed_start_connection", committed)
+    monkeypatch.setattr(loss.agent_start_dao, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(loss.openclaw_update_notice_dao, "gate_state", AsyncMock(return_value=(False, False)))
+    monkeypatch.setattr(loss, "report_runtime_loss", report)
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(inspect=inspect)))
     # When the turn is dispatched.
     outcome = await rpc.execute_gateway_turn(agent, message)
-    # Then the outcome is unchanged and only an absent guest is reported.
+    # Then only proven loss records a reason; every refusal keeps its exact admission result and drops the cache.
     assert outcome == rpc.NotAdmittedOutcome(str(message.id), "not_submitted", "guest_unavailable")
-    assert report.await_count == (1 if observation == "absent" else 0)
+    if reason is None:
+        report.assert_not_awaited()
+    else:
+        report.assert_awaited_once_with(agent, reason)
+    assert cache.get(agent) is None
+    cleared.assert_not_awaited()
 
 
 async def test_publication_clears_loss_forgets_backoff_drops_snapshot_and_wakes(monkeypatch, tmp_path):

@@ -4,7 +4,7 @@ import { ZodError } from 'zod'
 
 import { getAgentLifecycle } from '../src/lib/agent-lifecycle-api.ts'
 import {
-  canManageAgent, classifyStartNewContainerError, runtimeLossSummary, startNewContainerErrorMessage,
+  canManageAgent, classifyStartNewContainerError, runtimeLossRecovery, runtimeLossSummary, startNewContainerErrorMessage,
   startNewContainerFailureMessage, type StartNewContainerFailure,
 } from '../src/lib/agent-runtime-loss.ts'
 import { getAgent, startNewContainer } from '../src/lib/agents-api.ts'
@@ -21,7 +21,7 @@ const agent = {
 const detectedAt = '2026-11-13T09:30:00Z'
 const engineText = 'The agent still has a guest container; use Start'
 
-for (const reason of ['container_missing', 'image_unavailable'] as const) {
+for (const reason of ['container_missing', 'image_unavailable', 'container_stopped'] as const) {
   test(`Given the ${reason} loss reason, When its message is read, Then it is a translated catalog entry`, () => {
     // Given / When
     const message = runtimeLossSummary[reason]
@@ -31,9 +31,10 @@ for (const reason of ['container_missing', 'image_unavailable'] as const) {
   })
 }
 
-test('Given both loss reasons, When their messages are compared, Then each reason has its own message', () => {
+test('Given all loss reasons, When their messages are compared, Then each reason has its own message', () => {
   // Given / When / Then
-  assert.notEqual(runtimeLossSummary.container_missing, runtimeLossSummary.image_unavailable)
+  const messages = Object.values(runtimeLossSummary)
+  assert.equal(new Set(messages).size, messages.length)
 })
 
 const known: ReadonlyArray<readonly [string, number, unknown, StartNewContainerFailure]> = [
@@ -80,12 +81,15 @@ for (const [label, error] of unrecognised) {
 test('Given the engine detail text, When a failure is mapped, Then the message is a catalog entry and never the engine text', () => {
   // Given
   for (const [, status, detail] of known) {
-    // When
-    const message = startNewContainerErrorMessage(new ApiError(status, detail))
-    // Then
-    assert.ok(isTranslationKey(message))
-    assert.notEqual(message, engineText)
-    assert.notEqual(message, detail)
+    for (const recovery of Object.values(runtimeLossRecovery)) {
+      // When
+      const message = recovery.errorMessage(new ApiError(status, detail))
+      // Then
+      assert.ok(isTranslationKey(message))
+      assert.notEqual(vietnamese[message], message)
+      assert.notEqual(message, engineText)
+      assert.notEqual(message, detail)
+    }
   }
 })
 
@@ -111,7 +115,11 @@ for (const [label, access, creator, userId, allowed] of [
   })
 }
 
-test('Given a lost container, When a new one is started, Then the client POSTs without a body and keeps the parsed agent', async (t) => {
+for (const [reason, endpoint, label] of [
+  ['container_missing', 'start-new-container', 'Start a new container'],
+  ['image_unavailable', 'start-new-container', 'Start a new container'],
+  ['container_stopped', 'start', 'Start'],
+] as const) test(`Given ${reason}, When its recovery is started, Then ${label} POSTs to ${endpoint} without a body`, async (t) => {
   // Given
   let path: RequestInfo | URL | undefined
   let request: RequestInit | undefined
@@ -120,12 +128,18 @@ test('Given a lost container, When a new one is started, Then the client POSTs w
     path = input; request = init; return Response.json(started)
   })
   // When
-  const result = await startNewContainer(id)
+  const recovery = runtimeLossRecovery[reason]
+  const result = await recovery.start(id)
   // Then
   assert.deepEqual(result, started)
-  assert.equal(path, `/api/agents/${id}/start-new-container`)
+  assert.equal(path, `/api/agents/${id}/${endpoint}`)
   assert.equal(request?.method, 'POST')
   assert.equal(request?.body, undefined)
+  assert.equal(recovery.label, label)
+  for (const message of [recovery.label, recovery.pending, recovery.success, recovery.managerMessage, recovery.memberMessage, recovery.errorMessage(new TypeError('network'))]) {
+    assert.ok(isTranslationKey(message))
+    assert.notEqual(vietnamese[message], message)
+  }
 })
 
 test('Given an engine refusal, When a new container is requested, Then the ApiError carries the status and code to classify', async (t) => {
@@ -141,14 +155,14 @@ test('Given an engine refusal, When a new container is requested, Then the ApiEr
   assert.equal(classifyStartNewContainerError(error), 'image_unavailable')
 })
 
-test('Given a runtime loss on the agent, When it is read, Then runtime_loss is preserved with its reason and time', async (t) => {
+for (const reason of ['container_missing', 'image_unavailable', 'container_stopped'] as const) test(`Given ${reason} on the agent, When it is read, Then runtime_loss preserves its reason and time`, async (t) => {
   // Given
-  const lost = { ...agent, runtime_loss: { reason: 'container_missing', detected_at: detectedAt } }
+  const lost = { ...agent, runtime_loss: { reason, detected_at: detectedAt } }
   t.mock.method(globalThis, 'fetch', async () => Response.json(lost))
   // When
   const result = await getAgent(id)
   // Then
-  assert.deepEqual(result.runtime_loss, { reason: 'container_missing', detected_at: detectedAt })
+  assert.deepEqual(result.runtime_loss, { reason, detected_at: detectedAt })
 })
 
 test('Given an agent without a loss, When it is read, Then runtime_loss is absent or null', async (t) => {
@@ -169,7 +183,7 @@ test('Given an unknown loss reason, When the agent is read, Then the response fa
 
 test('Given a loss in the lifecycle projection, When it is read, Then runtime.loss is preserved and unknown reasons fail closed', async (t) => {
   // Given
-  const loss = { reason: 'image_unavailable', detected_at: detectedAt }
+  const loss = { reason: 'container_stopped', detected_at: detectedAt }
   t.mock.method(globalThis, 'fetch', async () => Response.json({ ...lifecycle, runtime: { ...lifecycle.runtime, loss } }))
   // When
   const result = await getAgentLifecycle(id)

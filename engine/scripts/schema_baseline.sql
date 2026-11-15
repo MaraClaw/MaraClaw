@@ -1054,7 +1054,7 @@ CREATE OR REPLACE TRIGGER agent_start_retry_state_changed
 -- agent and tenant deletion remove it explicitly, like agent_start_operations.
 CREATE TABLE IF NOT EXISTS agent_runtime_losses (
     agent_id uuid PRIMARY KEY,
-    reason text NOT NULL CHECK (reason IN ('container_missing', 'image_unavailable')),
+    reason text NOT NULL CHECK (reason IN ('container_missing', 'image_unavailable', 'container_stopped')),
     recorded_container_id text,
     image text,
     detected_at timestamptz NOT NULL DEFAULT now(),

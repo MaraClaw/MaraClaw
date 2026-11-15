@@ -856,8 +856,10 @@ are not producers of this event.
 
 A guest container can disappear outside the engine (manual `docker rm`, a Docker
 reset), and an agent pinned to an image id loses its image when that local image
-is rebuilt. The engine records such a loss, alerts platform admins once and lets
-the agent manager start a new container. It never starts one by itself.
+is rebuilt. An owned container can also stop outside the engine while the agent
+is still recorded as running. The engine records these losses and alerts platform
+admins; the agent manager chooses the recovery action. Detection never starts,
+stops, updates or removes a guest.
 
 **Detection** ([recording](../app/services/agent_runtime_loss.py)):
 
@@ -868,19 +870,26 @@ the agent manager start a new container. It never starts one by itself.
   failures, deadlines and Docker errors are not losses.
 - `container_missing`: native dispatch finds no owned guest at all while the
   agent is recorded `running`, no start operation is pending and no OpenClaw
-  update run is active. A stopped guest or a Docker inspection error is not a
-  loss. The dispatch outcome (`guest_unavailable`, row released to `pending`) is
-  unchanged.
+  update run is active.
+- `container_stopped`: native dispatch inspects an owned guest in Docker state
+  `exited` or `created`, with `restarting` not true, under the same recorded-running,
+  pending-start and active-upgrade guards as a missing guest. Use ordinary Start
+  to resume it. Running, restarting, dead, other states, inspection errors and
+  failed guard lookups do not record a stopped loss. Ownership resolution still
+  requires the exact agent label. Both dispatch losses preserve `guest_unavailable`
+  and release the exact delivery claim back to `pending`; reporting is best effort.
 
-One `agent_runtime_losses` row per agent keeps the first detection time; a
-re-report with another reason replaces reason and image. Recording and alerting
+One `agent_runtime_losses` row per agent keeps the detection and notification time
+for repeated reports of the same reason. A different reason replaces reason and
+image, resets detection time and clears the notification claim so admins are
+alerted again. Recording and alerting
 are best effort and never change the start or dispatch result. The table is a new
 baseline `CREATE TABLE IF NOT EXISTS` with no foreign key; agent and company
 deletion remove its rows. No existing table is altered and no upgrade patch is
 involved.
 
 **Visibility:** `GET /api/agents/{id}/lifecycle` returns `runtime.loss`
-(`{"reason": "container_missing" | "image_unavailable", "detected_at": "<UTC>"}`
+(`{"reason": "container_missing" | "image_unavailable" | "container_stopped", "detected_at": "<UTC>"}`
 or `null`) from the database without Docker. `GET /api/agents/{id}` returns the
 same object as `runtime_loss` so chat members see it; list endpoints leave it `null`.
 
@@ -890,8 +899,9 @@ platform admin. Rows carry `ref_id` = agent id, `link` = `/companies/{tenant_id}
 (or none) and sender `System`, and never `agent_id`: heartbeat drains unread rows by
 `agent_id` into the agent prompt. The plain-text body lists agent, company, reason,
 recorded container, unavailable, pinned and configured images, detection time,
-pending message count and the recovery action. A loss cleared by a published start
-and later detected again alerts again.
+pending message count and the recovery action. Stopped-container alerts explain
+that the guest still exists and ordinary Start resumes it. A changed reason, or
+a loss cleared by a published start and later detected again, alerts again.
 
 **Recovery endpoint:** `POST /api/agents/{agent_id}/start-new-container`
 ([service](../app/services/agent_container_recovery.py)) has the same
@@ -921,7 +931,12 @@ attempt left, restores the snapshot and re-pins the old image only if the pin is
 still empty. If that removal fails, the snapshot is kept rather than restored under
 a live guest, and the next published start drops it.
 
-**After publication:** every published start clears the loss, drops a leftover
+**Running observation:** native dispatch clears only a `container_stopped` loss
+when the owned guest is observed running. The delete checks the reason in the
+same statement, preserving a concurrent missing-container or unavailable-image
+report. A failed clear never changes the dispatch result.
+
+**After publication:** every published start clears any loss reason, drops a leftover
 recovery snapshot, forgets this process's release backoff for the agent and wakes
 all its pending lanes, so messages queued during the loss are answered at once.
 Other processes keep their own backoff (up to 30 s) and catch up through the

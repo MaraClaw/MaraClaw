@@ -16,12 +16,14 @@ class AgentRuntimeLossDAO:
         recorded_container_id: str | None,
         image: str | None,
     ) -> AgentRuntimeLoss:
-        """Upsert; a re-report keeps the first detection and notification, a new reason replaces reason/image."""
+        """A repeated reason preserves its episode; a changed reason starts a new alertable episode."""
         row = await db.fetchone(
             "INSERT INTO agent_runtime_losses AS l (agent_id,reason,recorded_container_id,image) "
             "VALUES (%(id)s,%(reason)s,%(container)s,%(image)s) "
             "ON CONFLICT (agent_id) DO UPDATE SET "
             "image=CASE WHEN l.reason=EXCLUDED.reason THEN COALESCE(EXCLUDED.image,l.image) ELSE EXCLUDED.image END,"
+            "detected_at=CASE WHEN l.reason=EXCLUDED.reason THEN l.detected_at ELSE EXCLUDED.detected_at END,"
+            "notified_at=CASE WHEN l.reason=EXCLUDED.reason THEN l.notified_at ELSE NULL END,"
             "reason=EXCLUDED.reason,"
             "recorded_container_id=COALESCE(l.recorded_container_id,EXCLUDED.recorded_container_id) "
             f"RETURNING {_COLUMNS}",
@@ -37,6 +39,11 @@ class AgentRuntimeLossDAO:
 
     async def clear(self, db: DbConnection, agent_id: UUID) -> None:
         await db.execute("DELETE FROM agent_runtime_losses WHERE agent_id=%(id)s", {"id": agent_id})
+
+    async def clear_stopped(self, db: DbConnection, agent_id: UUID) -> None:
+        await db.execute(
+            "DELETE FROM agent_runtime_losses WHERE agent_id=%(id)s AND reason='container_stopped'", {"id": agent_id}
+        )
 
     async def claim_notification(self, db: DbConnection, agent_id: UUID) -> bool:
         """Exactly one caller across workers wins the right to alert for the current loss."""
