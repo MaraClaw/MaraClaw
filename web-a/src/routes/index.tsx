@@ -30,7 +30,6 @@ const UsersPage = lazy(() => import('@/pages/users').then((module) => ({ default
 const NotificationsPage = lazy(() => import('@/pages/notifications').then((module) => ({ default: module.NotificationsPage })))
 const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) => ({ default: module.AdminAuditPage })))
 const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
-const OrganizationAdmissionsPage = lazy(() => import('@/pages/organization-admissions').then((module) => ({ default: module.OrganizationAdmissionsPage })))
 const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
 const PaymentsPage = lazy(() => import('@/pages/payments').then((module) => ({ default: module.PaymentsPage })))
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
@@ -111,7 +110,7 @@ export function AppRouter() {
                 <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />
               </Route>
               <Route element={<OrganizationAdmissionReviewRoute />}>
-                <Route path="organization-admissions" element={<OrganizationAdmissionsPage />} />
+                <Route path="organization-admissions" element={<Navigate to="/payments?tab=admissions" replace />} />
               </Route>
               <Route element={<BroadcastRoute />}>
                 <Route path="broadcast" element={<BroadcastPage />} />

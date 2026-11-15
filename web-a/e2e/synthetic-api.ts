@@ -1,8 +1,11 @@
 import type { BrowserContext } from '@playwright/test'
 import { purchaseOrder } from '../tests/capacity-fixtures.ts'
 import { pendingTransfer } from '../tests/transfer-review-fixtures.ts'
+import { organizationAdmission } from '../tests/organization-admission-fixtures.ts'
+import { capacityPaymentSettingsRequestSchema, capacityPaymentSettingsSchema } from '../src/lib/capacity-api.ts'
+import { organizationAdmissionDecisionSchema } from '../src/lib/organization-admissions-api.ts'
 
-export type Actor = 'platform_admin' | 'org_admin' | 'member' | 'forced' | 'anonymous'
+export type Actor = 'platform_admin' | 'genesis_platform_admin' | 'org_admin' | 'member' | 'forced' | 'anonymous'
 export const paymentAliases = [
   { path: `/transfer-payments/${pendingTransfer.id}`, heading: 'Transfer payment' },
   { path: `/capacity-payments/${purchaseOrder.id}`, heading: 'Capacity payment' },
@@ -17,7 +20,7 @@ const company = {
 } as const
 
 export function syntheticState(actor: Actor = 'platform_admin', theme: 'light' | 'dark' = 'light') {
-  const platform = actor === 'platform_admin' || actor === 'forced'
+  const platform = actor === 'platform_admin' || actor === 'genesis_platform_admin' || actor === 'forced'
   const requests: { method: string; path: string; body: unknown }[] = []
   const unexpected: string[] = []
   const companies: (typeof company)[] = []
@@ -27,8 +30,9 @@ export function syntheticState(actor: Actor = 'platform_admin', theme: 'light' |
     user: {
       id: '22222222-2222-4222-8222-222222222222', identity_id: '33333333-3333-4333-8333-333333333333',
       email: 'operator@example.test', display_name: 'Operator', avatar_url: null,
-      role: actor === 'forced' || actor === 'anonymous' ? 'platform_admin' : actor,
+      role: platform || actor === 'anonymous' ? 'platform_admin' : actor,
       is_platform_admin: platform, tenant_id: platform ? null : company.id,
+      is_genesis: actor === 'genesis_platform_admin',
       is_active: true, email_verified: true, must_change_password: actor === 'forced',
       created_at: '2026-11-01T00:00:00Z',
     },
@@ -38,6 +42,11 @@ export function syntheticState(actor: Actor = 'platform_admin', theme: 'light' |
     createGate: Promise.withResolvers<void>(),
     holdCreate: false,
     createStatus: 200,
+    admission: organizationAdmission,
+    paymentSettings: capacityPaymentSettingsSchema.parse({
+      configured: true, bank_name: 'Example Bank', account_number: '0123456789',
+      branch_name: 'District 1 Branch', usd_vnd_rate: 25000,
+    }),
   }
 }
 
@@ -75,6 +84,24 @@ export async function installSyntheticApi(context: BrowserContext, baseURL: stri
     else if (method === 'GET' && path === `/api/admin/capacity-orders/${purchaseOrder.id}`) body = purchaseOrder
     else if (method === 'GET' && path === '/api/users/admin-audit-logs/page') body = { items: [], next_cursor: null }
     else if (method === 'GET' && path === '/api/company-admissions/transfers/review/page') body = { items: [], next_cursor: null }
+    else if (method === 'GET' && path === '/api/admin/capacity-orders') body = { items: [], has_more: false }
+    else if (path === '/api/admin/capacity-payment-settings' && state.actor === 'genesis_platform_admin' && (method === 'GET' || method === 'PUT')) {
+      if (method === 'PUT') state.paymentSettings = capacityPaymentSettingsSchema.parse({
+        ...capacityPaymentSettingsRequestSchema.parse(request.postDataJSON()), configured: true,
+      })
+      body = state.paymentSettings
+    } else if (method === 'GET' && path === '/api/admin/organization-admissions' && state.actor === 'genesis_platform_admin') {
+      body = { items: state.admission.status === url.searchParams.get('status') ? [state.admission] : [], has_more: false }
+    } else if (method === 'POST' && path === `/api/admin/organization-admissions/${state.admission.id}/decision` && state.actor === 'genesis_platform_admin') {
+      const decision = organizationAdmissionDecisionSchema.parse(request.postDataJSON())
+      state.admission = { ...state.admission, status: decision.decision === 'approve' ? 'approved' : 'rejected',
+        credential_email_status: decision.decision === 'approve' ? 'pending' : null,
+        review_note: decision.note ?? null, reviewed_at: '2026-11-15T00:00:00Z', reviewed_by: state.user.id }
+      body = state.admission
+    } else if (method === 'GET' && path === `/api/admin/organization-admissions/${state.admission.id}/evidence` && state.actor === 'genesis_platform_admin') {
+      await route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64') })
+      return
+    }
     else {
       state.unexpected.push(`${method} ${url.href}`)
       await route.abort('blockedbyclient')

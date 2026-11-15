@@ -11,16 +11,14 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { capacityKeys } from '@/hooks/capacity-options'
-import { useCapacityAccess, useCapacityReviewOrders } from '@/hooks/use-capacity'
+import { useCapacityReviewOrders } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
 import { CAPACITY_ORDERS_PAGE_SIZE, capacityOrderStatusSchema, type CapacityOrderStatus } from '@/lib/capacity-api'
 import { formatVnd } from '@/lib/capacity-format'
 import { ApiError } from '@/lib/http'
-import { CapacityPaymentSettingsSection } from './capacity-payment-settings'
 
 export function CapacityPaymentsPanel() {
   const { t, locale, date, distance, number } = useTranslation()
-  const { canManageSettings } = useCapacityAccess()
   const filterId = useId()
   const client = useQueryClient()
   const [status, setStatus] = useState<CapacityOrderStatus>('submitted')
@@ -29,7 +27,6 @@ export function CapacityPaymentsPanel() {
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    {canManageSettings ? <CapacityPaymentSettingsSection /> : null}
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor={filterId}>{t('Payment status')}</Label>

@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
 import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewOrganizationAdmissions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 type NavItem = {
@@ -26,7 +26,6 @@ type NavItem = {
   broadcastOnly?: boolean
   invitationsOnly?: boolean
   admissionReviewOnly?: boolean
-  organizationAdmissionReviewOnly?: boolean
   agentDeletionReviewOnly?: boolean
   paymentReviewOnly?: boolean
 }
@@ -42,7 +41,6 @@ const navItems: NavItem[] = [
   { to: '/invitations', label: 'Invitations', icon: 'users', invitationsOnly: true },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
-  { to: '/organization-admissions', label: 'Org admissions', icon: 'companies', organizationAdmissionReviewOnly: true },
   { to: '/agent-deletion-requests', label: 'Agent deletions', icon: 'tools', agentDeletionReviewOnly: true },
   { to: '/payments', label: 'Payments', icon: 'analytics', aliases: ['/transfer-payments', '/capacity-payments'], paymentReviewOnly: true },
   { to: '/broadcast', label: 'Broadcast', icon: 'overview', broadcastOnly: true },
@@ -125,12 +123,11 @@ function NavItems({
   return (
     <>
       {navItems.map((item) => {
-        const { to, label, icon, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
+        const { to, label, icon, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (invitationsOnly && !canManageInvitations(user)) return null
         if (admissionReviewOnly && !canReviewAdmissions(user)) return null
-        if (organizationAdmissionReviewOnly && !canReviewOrganizationAdmissions(user)) return null
         if (agentDeletionReviewOnly && !canReviewAgentDeletions(user)) return null
         if (paymentReviewOnly && !paymentAccess.canReview) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined

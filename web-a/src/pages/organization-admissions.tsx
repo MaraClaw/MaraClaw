@@ -158,7 +158,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   </>
 }
 
-export function OrganizationAdmissionsPage() {
+export function OrganizationAdmissionsPanel() {
   const { t, locale, date, number } = useTranslation()
   const filterId = useId()
   const queueHeading = useRef<HTMLHeadingElement>(null)
@@ -166,15 +166,17 @@ export function OrganizationAdmissionsPage() {
   const [status, setStatus] = useState<OrganizationAdmissionStatus>('pending')
   const [offset, setOffset] = useState(0)
   const [selected, setSelected] = useState<OrganizationAdmission | null>(null)
-  useEffect(() => { if (selected === null) queueHeading.current?.focus() }, [selected])
   const reviews = useOrganizationAdmissions(status, offset)
   const items = reviews.data?.items ?? []
 
   return <div className="admission-content mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
-    <header><h1 ref={queueHeading} tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight outline-none">{t('Organization admissions')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Review requests for a new organization, the commercial terms quoted at submission and the payment evidence uploaded with them.')}</p></header>
+    <h2 ref={queueHeading} tabIndex={-1} className="font-display text-lg font-semibold outline-none">{t('Organization admissions')}</h2>
     {selected && reviews.isFetching ? <p role="status" className="text-sm">{t('Refreshing request status...')}</p> : null}
     {reviews.isError ? <div className="flex flex-col items-start gap-3"><ErrorToast error={reviews.error} message={reviews.error instanceof ApiError ? reviews.error.message : t('Unable to load organization requests.')} /><Button variant="outline" disabled={reviews.isFetching} onClick={() => { void reviews.refetch() }}>{t('Retry')}</Button></div> : null}
-    {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => setSelected(null)} /> : <>
+    {selected ? <OrganizationAdmissionReview key={selected.id} request={items.find((item) => item.id === selected.id) ?? selected} ready={reviews.isSuccess && !reviews.isFetching && items.some((item) => item.id === selected.id)} onBack={() => {
+      setSelected(null)
+      queueMicrotask(() => queueHeading.current?.focus())
+    }} /> : <>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-2"><Label htmlFor={filterId}>{t('Request status')}</Label>
           <Select id={filterId} fit value={status} onChange={(event) => { setStatus(organizationAdmissionStatusSchema.parse(event.currentTarget.value)); setOffset(0) }}>
