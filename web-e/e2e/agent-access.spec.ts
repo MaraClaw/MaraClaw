@@ -32,7 +32,8 @@ for (const [reason, label] of reasons) {
     await page.getByRole('navigation', { name: 'Agent sections' }).getByRole('link', { name: 'Settings', exact: true }).click()
     await expect(page.getByRole('heading', { name: agent.name, exact: true })).toBeVisible()
     await expect(page.getByText(label, { exact: true })).toHaveCount(0)
-    expect(reads).toBe(1)
+    // Layout loads once; the runtime-loss notice rechecks on the Chat and Settings visits.
+    expect(reads).toBe(3)
   })
 }
 
