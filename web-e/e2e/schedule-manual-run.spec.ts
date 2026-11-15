@@ -29,7 +29,8 @@ for (const uncertainty of ['transport', 'server', 'malformed'] as const) {
     const run = row.getByRole('button', { name: 'Run', exact: true })
     await expect(run).toBeEnabled()
     await run.click()
-    await expect(row.getByText(/Acceptance could not be confirmed/)).toBeVisible()
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: /Acceptance could not be confirmed/ })).toBeVisible()
+    await expect(row.getByText('Retry Run to check the same request without starting another run.', { exact: true })).toBeVisible()
     // When: retry the uncertain intent, not a second run.
     await run.click()
     // Then
@@ -143,7 +144,8 @@ for (const status of [403, 404]) {
     // When
     await page.clock.runFor(2100)
     // Then
-    await expect(receipt.getByRole('status')).toHaveText('Receipt unavailable')
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Receipt unavailable' })).toBeVisible()
+    await expect(receipt.getByText('Run status unavailable.', { exact: true })).toBeVisible()
     await expect(receipt.getByRole('button')).toHaveCount(0)
     await page.clock.runFor(8000)
     expect(reads).toBe(2)
