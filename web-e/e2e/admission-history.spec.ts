@@ -128,17 +128,19 @@ for (const status of [403, 503]) {
     // Given
     await prepareHistory(page)
     await page.goto('/app/admissions')
-    await expect(page.getByRole('listitem')).toHaveCount(2)
+    const rows = page.getByRole('list', { name: 'Admission requests' }).getByRole('listitem')
+    await expect(rows).toHaveCount(2)
     await page.route(`**${historyPath}*`, (route) => route.fulfill({ status, json: { detail: 'History access refused' } }))
     // When
     await page.getByRole('button', { name: 'Refresh status' }).click()
     // Then
-    await expect(page.getByRole('alert')).toContainText(status === 403 ? 'History access refused' : 'Unable to load requests')
-    await expect(page.getByRole('listitem')).toHaveCount(0)
+    const message = status === 403 ? 'History access refused' : 'Unable to load requests'
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: message })).toContainText(message)
+    await expect(rows).toHaveCount(0)
     await page.unroute(`**${historyPath}*`)
     await page.route(`**${historyPath}*`, (route) => route.fulfill({ json: { items: historyRows.slice(0, 1), next_cursor: null } }))
     await page.getByRole('button', { name: 'Refresh status' }).click()
-    await expect(page.getByRole('listitem')).toHaveCount(1)
+    await expect(rows).toHaveCount(1)
     await expect(page.getByRole('alert')).toHaveCount(0)
   })
 }

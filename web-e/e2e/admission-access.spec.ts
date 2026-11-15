@@ -74,7 +74,7 @@ test('failed access checks fail closed and retry without mounting blocked querie
   const { calls } = await prepareAccess(page)
   await page.route(accessEndpoint, (route) => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }))
   await page.goto('/app/agents')
-  await expect(page.getByRole('alert')).toContainText('Unable to confirm organization access')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to confirm organization access' })).toContainText('Unable to confirm organization access')
   await expect(page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('link')).toHaveText(restrictedLabels)
   expect(workspaceRequests(calls)).toEqual([])
   await page.unroute(accessEndpoint)
