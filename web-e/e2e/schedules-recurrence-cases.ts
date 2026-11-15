@@ -138,7 +138,7 @@ export function registerScheduleRecurrenceTests() {
 
     await page.getByRole('button', { name: 'Add schedule', exact: true }).click()
 
-    await expect(page.getByRole('status').filter({ hasText: 'Cron expression is invalid.' })).toBeVisible()
+    await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Cron expression is invalid.' })).toBeVisible()
     await expect(page.getByLabel('Repeat', { exact: true })).toHaveValue('custom')
     await expect(page.getByLabel('Cron', { exact: true })).toHaveValue('not cron  ')
     await expect(page.getByLabel('Instruction', { exact: true })).toHaveValue(savedSchedule.instruction)

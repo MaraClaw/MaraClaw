@@ -22,7 +22,7 @@ test('creation saves the UTC instant rather than browser-local or recurrence tim
   }])
   await page.reload()
   const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
-  await expect(row).toContainText('Ends before 16 Jan 2030, 01:30:00 UTC')
+  await expect(row).toContainText('Ends before Jan 16, 2030, 1:30:00 AM UTC')
   await row.getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(page.getByLabel(endLabel, { exact: true })).toHaveValue('2030-01-16T01:30')
 })
@@ -42,7 +42,7 @@ for (const ends_at of [cutoff, '2030-01-16T09:30:00+08:00', null, undefined]) {
     const row = page.getByRole('listitem', { name: savedSchedule.name, exact: true })
     if (ends_at) {
       await expect(row.locator('time')).toHaveAttribute('datetime', ends_at)
-      await expect(row.locator('time')).toHaveText(ends_at === cutoff ? '16 Jan 2030, 01:30:45.123456 UTC' : '16 Jan 2030, 01:30:00 UTC')
+      await expect(row.locator('time')).toHaveText(ends_at === cutoff ? 'Jan 16, 2030, 1:30:45 AM.123456 UTC' : 'Jan 16, 2030, 1:30:00 AM UTC')
     }
     else await expect(row).toContainText('No end time')
   })
@@ -77,7 +77,7 @@ test('cutoff rejection preserves the UTC draft and enables correction', async ({
   // When
   await page.getByRole('button', { name: 'Save schedule', exact: true }).click()
   // Then
-  await expect(page.getByRole('status').filter({ hasText: 'End time is invalid' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'End time is invalid' })).toBeVisible()
   await expect(page.getByLabel(endLabel, { exact: true })).toHaveValue('2031-02-03T04:05')
   await expect(page.getByRole('button', { name: 'Save schedule', exact: true })).toBeEnabled()
 })
@@ -88,6 +88,8 @@ test('read-only members see the absolute UTC cutoff without editor controls', as
   // When
   await page.goto(schedulesPath)
   // Then
-  await expect(page.getByRole('listitem', { name: savedSchedule.name, exact: true }).locator('time')).toHaveText('16 Jan 2030, 01:30:45.123456 UTC')
+  const time = page.getByRole('listitem', { name: savedSchedule.name, exact: true }).locator('time')
+  await expect(time).toHaveAttribute('datetime', cutoff)
+  await expect(time).toHaveText('Jan 16, 2030, 1:30:45 AM.123456 UTC')
   await expect(page.getByLabel(endLabel, { exact: true })).toHaveCount(0)
 })
