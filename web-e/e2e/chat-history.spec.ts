@@ -83,7 +83,7 @@ test('keyboard earlier loading can retry a failure while the existing socket rem
   } finally {
     releaseFailure.resolve()
   }
-  await expect(page.getByRole('alert')).toHaveText('Could not load earlier messages. You can keep chatting.')
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveText('Could not load earlier messages. You can keep chatting.')
   const retry = page.getByRole('button', { name: 'Retry earlier messages', exact: true })
   await expect(retry).toBeFocused()
   const composer = page.getByRole('textbox', { name: `Message ${originalAgent.name}` })
@@ -105,10 +105,12 @@ for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earl
   // Given
   const history = rows(125)
   const chat = await prepareChat(page, history)
-  const cursors: (string | null)[] = []
+  const requests: { readonly cursor: string | null; readonly revision: string | null; readonly after: string | null }[] = []
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (url.pathname.endsWith(`/sessions/${firstSession}/messages/page`)) cursors.push(url.searchParams.get('cursor'))
+    if (url.pathname.endsWith(`/sessions/${firstSession}/messages/page`)) {
+      requests.push({ cursor: url.searchParams.get('cursor'), revision: url.searchParams.get('revision'), after: url.searchParams.get('after_message_id') })
+    }
   })
   await page.goto(chatPath())
   await chat.socket()
@@ -120,16 +122,17 @@ for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earl
   const expanded = rows(125 + gap)
   chat.setHistory(expanded)
   const release = chat.holdNextHistory()
-  const before = cursors.length
+  const before = requests.length
   // When
   await navigateChat(page, chatPath())
   await expectVirtualTranscript(page, history.slice(25))
-  await expect.poll(() => cursors.length).toBe(before + 1)
+  await expect.poll(() => requests.length).toBe(before + 1)
   await release()
   // Then
   const start = gap === 20 ? 25 : expanded.length - 50
   await expectVirtualTranscript(page, expanded.slice(start))
-  expect(cursors.slice(before)).toEqual([null])
+  expect(requests[before]).toEqual({ cursor: null, revision: '1', after: history.at(-1)?.message_id })
+  expect(requests.slice(before).filter((request) => request.cursor !== null)).toEqual([])
   await expect(page.getByText(`History entry ${expanded.length - 1}`, { exact: true })).toBeInViewport()
   await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
   await activateEarlier(page.getByRole('button', { name: 'Load earlier messages', exact: true }))
@@ -137,7 +140,7 @@ for (const gap of [20, 145]) test(`a cached revisit ${gap === 20 ? 'retains earl
   if (earlierStart === 0) await expect(page.getByText('Beginning of conversation', { exact: true })).toHaveCount(1)
   else await expect(page.getByRole('button', { name: 'Load earlier messages', exact: true })).toBeEnabled()
   await expectVirtualTranscript(page, expanded.slice(earlierStart))
-  expect(cursors.slice(before)).toEqual([null, `history-${start}`])
+  expect(requests.slice(before).filter((request) => request.cursor !== null)).toEqual([{ cursor: `history-${start}`, revision: null, after: null }])
   await page.screenshot({ path: testInfo.outputPath(`history-refresh-${gap}.png`), fullPage: true })
 })
 
@@ -149,6 +152,7 @@ test('live completions preserve the reading position away from the bottom and fo
   const socket = await chat.socket()
   const thread = page.locator(threadSelector)
   await thread.evaluate((element) => { element.scrollTop = 300; element.dispatchEvent(new Event('scroll')) })
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   const anchor = await visibleEntry(thread)
   const first = message('live-first', 'New reply while reading earlier')
   chat.setHistory([...history, first])
@@ -210,7 +214,7 @@ test('initial history loading and failure offer explicit recovery before opening
   } finally {
     release.resolve()
   }
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveText('Could not load this conversation.')
   // When
   await page.getByRole('button', { name: 'Retry conversation', exact: true }).click()
   // Then

@@ -182,8 +182,8 @@ test('reconnect fetches missed history without dropping older parents or replayi
   await page.getByPlaceholder(`Message ${originalAgent.name}…`).press('Enter')
   await expect.poll(() => socket.sent.length).toBe(1)
   const envelope = submitted(socket)
-  accept(socket, envelope.client_submission_id)
-  chat.setHistory([overlap, { ...sent, client_submission_id: envelope.client_submission_id }, missed])
+  accept(socket, envelope.client_submission_id, sent.message_id)
+  chat.setHistory([older, overlap, { ...sent, client_submission_id: envelope.client_submission_id }, missed])
   // When
   socket.route.close({ code: 1011 })
   const current = await chat.socket(1)
