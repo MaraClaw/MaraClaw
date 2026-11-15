@@ -10,6 +10,13 @@ RUN npm ci
 COPY connectors/whatsapp/ ./
 RUN npm test && npm run build && npm prune --omit=dev
 
+FROM node:26.13.1-trixie-slim AS zalo
+WORKDIR /bridge
+COPY connectors/zalo/package.json connectors/zalo/package-lock.json ./
+RUN npm ci
+COPY connectors/zalo/ ./
+RUN npm test && npm prune --omit=dev
+
 FROM python:3.15.2-slim-trixie AS deps
 
 ARG APT_MIRROR=deb.debian.org
@@ -91,6 +98,9 @@ COPY --chown=maraclaw:maraclaw . .
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/package.json /app/connectors/whatsapp/package.json
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/dist/ /app/connectors/whatsapp/dist/
 COPY --from=whatsapp --chown=maraclaw:maraclaw /bridge/node_modules/ /app/connectors/whatsapp/node_modules/
+COPY --from=zalo --chown=maraclaw:maraclaw /bridge/package.json /app/connectors/zalo/package.json
+COPY --from=zalo --chown=maraclaw:maraclaw /bridge/dist/ /app/connectors/zalo/dist/
+COPY --from=zalo --chown=maraclaw:maraclaw /bridge/node_modules/ /app/connectors/zalo/node_modules/
 RUN test "$(node --version)" = "v26.13.1"
 
 # Prove firecrawl-anydoc imports and converts in this image (not host-only).
