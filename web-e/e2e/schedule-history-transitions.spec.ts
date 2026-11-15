@@ -23,7 +23,7 @@ test('changing schedules clears accumulated history, cursor, and page errors bef
   await history.getByRole('button', { name: 'Load older runs' }).click()
   await expect(history.getByRole('listitem')).toHaveCount(2)
   await history.getByRole('button', { name: 'Load older runs' }).click()
-  await expect(history.getByRole('status')).toContainText('Unable to load older runs')
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').filter({ hasText: 'Unable to load older runs' })).toBeVisible()
 
   await page.getByRole('listitem', { name: second.name, exact: true }).getByRole('button', { name: 'History', exact: true }).click()
 
