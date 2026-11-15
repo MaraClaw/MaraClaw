@@ -12,13 +12,13 @@ npm test
 - Exact script: `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`.
 - `../tsconfig.tests.json` includes `tests` and extends `../tsconfig.app.json`.
 - TS/TSX helpers, fixtures and type proofs (`api-request.types.ts`) are typechecked; `.mjs` browser files are neither typechecked by this config nor selected by the Node test glob.
-- `npm test` never starts a browser, Vite or the engine. No `test:e2e` script exists; no npm script invokes any `*.browser.mjs`.
+- `npm test` never starts a browser, Vite or the engine. `npm run test:e2e` separately runs the selected portable specs in `../e2e/`; no npm script invokes any `*.browser.mjs`.
 - Generated contracts are checked separately by `npm run contracts:check`, not by this suite.
 
 ## What CI runs
 
 - `../../.github/workflows/frontend-ci.yml`, `web-a` matrix entry: `contracts:check`, then Unit tests (`npm test`) on Node `26.13.1`.
-- No standalone browser QA step; browser evidence does not imply CI execution.
+- The separate `admin-browser` job runs `npm run test:e2e` for company validation/submission, payment aliases and admin access. Legacy standalone browser QA files remain outside CI; browser evidence from those files does not imply CI execution.
 
 ## Conventions
 

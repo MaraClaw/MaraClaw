@@ -42,6 +42,6 @@ Scope: console navigation, notification entry point and shared screen chrome.
 ## Gotchas
 
 - `/search-engine` pathname prefixes and `/payments` remove the main area's usual padding.
-- `aliases` on a nav item (Payments: `/transfer-payments`, `/capacity-payments`) lets detail routes outside its prefix highlight the entry and set the document title through `matchesNavItem`.
-- Mobile nav scrolls the active link into view on pathname changes, not query changes.
+- `aliases` on a nav item (Payments: `/transfer-payments`, `/capacity-payments`) lets detail routes outside its prefix highlight the entry, set `aria-current="page"` and set the document title through the shared `matchesNavItem`. Shell entries use `Link` with that shared current state because `NavLink` drops `aria-current` outside its own prefix.
+- Mobile nav scrolls the alias-aware current link into view on pathname changes, not query changes; do not reject detail aliases by checking the link's pathname prefix.
 - `AuthShell.className` styles the centered content wrapper, not the page root.
