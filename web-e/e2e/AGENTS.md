@@ -19,7 +19,7 @@ npm run test:e2e
 
 - `../../.github/workflows/frontend-ci.yml` selects the `web-e` package.
 - Its Unit tests step executes `npm test`, whose runtime glob is `tests/*.test.ts`.
-- No e2e step: these specs are not executed by that workflow.
+- Its independent `browser` job installs locked dependencies and Chromium with system dependencies, then runs the full `npm run test:e2e -- --workers=2 --reporter=line,html` suite. Failed runs upload `playwright-report/` and `test-results/`.
 
 ## Conventions
 

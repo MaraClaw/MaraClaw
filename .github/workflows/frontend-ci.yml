@@ -47,3 +47,38 @@ jobs:
         run: npm run build
       - name: Build final Caddy image
         run: docker build --tag maraclaw-${{ matrix.package }}:ci .
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: web-e
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          cache: npm
+          cache-dependency-path: web-e/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npm run test:e2e -- --workers=2 --reporter=line,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+      - name: Upload browser failure artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e-playwright
+          path: |
+            web-e/playwright-report/
+            web-e/test-results/
+          retention-days: 14
+          if-no-files-found: warn
