@@ -25,7 +25,7 @@ export function registerSelectedNotificationMoveTests() {
           // When
           await page.getByRole('button', { name: label, exact: true }).click()
           // Then
-          await expect(page.getByRole('alert')).toContainText('Unable to move selected notifications')
+          await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to move selected notifications' })).toContainText('Unable to move selected notifications')
           await expect(checkbox).toBeChecked()
           await expect(page.getByText(`${action === 'archive' ? 1 : 0} unread in Social`, { exact: true })).toBeVisible()
           await page.screenshot({ path: testInfo.outputPath('selected-error.png'), fullPage: true })
