@@ -5,6 +5,7 @@ import { useId, useState } from 'react'
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { useWorkspaceSession } from '@/hooks/session-workspace'
 import type { TriggerExecution, TriggerExecutionTarget } from '@/lib/trigger-executions-api'
 import { triggerExecutionQuery } from '@/lib/trigger-executions-query'
@@ -43,8 +44,8 @@ function ExecutionPages({ target }: { readonly target: TriggerExecutionTarget })
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="font-display text-base font-semibold">{translate("Execution history")}</h3>
-      {history.data ? <Button type="button" variant="ghost" disabled={history.isFetching}
-        onClick={scope.effect(() => { void history.refetch() })}>{translate("Refresh history")}</Button> : null}
+      {history.data ? <RefreshButton label={translate("Refresh history")} variant="ghost" disabled={history.isFetching}
+        onClick={scope.effect(() => { void history.refetch() })} /> : null}
     </div>
     {history.isPending || (history.isFetching && !history.data)
       ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading execution history…")}</p> : null}

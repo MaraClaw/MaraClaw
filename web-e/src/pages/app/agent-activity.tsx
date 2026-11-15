@@ -4,6 +4,7 @@ import { Link, useOutletContext } from 'react-router-dom'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useInfiniteQuery, useWorkspaceSession } from '@/hooks/session-workspace'
@@ -64,6 +65,7 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
   const items = [...new Map(history.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item])).values()]
   const olderError = history.isFetchNextPageError
   const windowed = history.data?.pageParams[0] != null
+  const refresh = scope.effect(() => { void scope.client.resetQueries({ queryKey: [...key, filter], exact: true }) })
 
   return (
     <section className="max-w-2xl space-y-6 p-6" aria-labelledby="activity-heading">
@@ -117,10 +119,9 @@ function ManagerActivity({ agent }: { readonly agent: AgentOut }) {
             {olderError ? translate("Retry older activity") : translate("Load older activity")}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" disabled={history.isFetching || history.isPaused}
-          onClick={scope.effect(() => { void scope.client.resetQueries({ queryKey: [...key, filter], exact: true }) })}>
-          {history.isError && !olderError ? translate("Retry activity") : translate("Refresh activity")}
-        </Button>
+        {history.isError && !olderError ? <Button type="button" variant="outline" disabled={history.isFetching || history.isPaused}
+          onClick={refresh}>{translate("Retry activity")}</Button>
+          : <RefreshButton label={translate("Refresh activity")} disabled={history.isFetching || history.isPaused} onClick={refresh} />}
       </div>
     </section>
   )

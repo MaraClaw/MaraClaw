@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom'
 import { RequestErrorToast } from '@/components/request-error-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { useAuth } from '@/hooks/use-auth'
 import { useJoinedWorkspace } from '@/hooks/use-joined-workspace'
@@ -58,7 +59,7 @@ function TransferDetail({ id }: { readonly id: string }) {
     <Button asChild variant="outline"><Link to="/app/notifications?category=admissions">{translate("All admission requests")}</Link></Button>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h1 className="font-display text-2xl font-semibold">{translate("Transfer request")}</h1>
-      <Button variant="outline" className="h-auto min-h-11 whitespace-normal" disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })}>{translate("Refresh status")}</Button>
+      <RefreshButton label={translate("Refresh status")} disabled={query.isFetching || withdraw.isPending} onClick={scope.effect(() => { withdraw.reset(); void query.refetch() })} />
     </div>
     {query.isPending ? <p role="status" className="text-sm text-muted-foreground">{translate("Loading transfer request…")}</p> : null}
     {query.isError ? <RequestErrorToast error={query.error} message={userFacingRequestError(query.error, translate("Unable to load this transfer. Refresh to try again."))} /> : null}
