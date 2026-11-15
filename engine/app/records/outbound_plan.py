@@ -19,6 +19,8 @@ class OutboundProvider(StrEnum):
     WHATSAPP = "whatsapp"
     WECHAT = "wechat"
     DISCORD = "discord"
+    TELEGRAM = "telegram"
+    ZALO = "zalo_personal"
 
 
 @final

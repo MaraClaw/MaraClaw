@@ -2,6 +2,7 @@ import asyncio
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import anyio
@@ -30,6 +31,7 @@ def personal_connection_absent(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(whatsapp_personal_dao, "get_personal", absent)
+    monkeypatch.setattr("app.dao.zalo_personal_dao.get_personal", absent)
 
 
 @pytest.fixture
@@ -112,3 +114,28 @@ async def test_dingtalk_thread_that_outlives_stop_keeps_cleanup_pending(monkeypa
     finally:
         release.set()
         await anyio.to_thread.run_sync(lambda: join(1))
+
+
+@pytest.mark.parametrize("provider", ["whatsapp", "zalo"])
+async def test_personal_child_claim_keeps_transfer_cleanup_pending(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    agent_id = uuid4()
+
+    async def claimed(requested: UUID) -> SimpleNamespace:
+        assert requested == agent_id
+        return SimpleNamespace(claim_token=uuid4())
+
+    async def stopped(_id: UUID) -> None:
+        return None
+
+    monkeypatch.setattr(f"app.dao.{provider}_personal_dao.get_personal", claimed)
+    for manager in (
+        feishu_ws_manager,
+        dingtalk_stream_manager,
+        wecom_stream_manager,
+        wechat_poll_manager,
+        discord_gateway_manager,
+    ):
+        monkeypatch.setattr(manager, "stop_client", stopped)
+    assert await connectors.stop_free_transfer_connectors(agent_id) == "connector_cleanup_pending"

@@ -172,8 +172,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
                     or "creator_id" in obj_in
                 ):
                     from app.dao.whatsapp_personal_dao import revoke
+                    from app.dao.zalo_personal_dao import revoke as revoke_zalo
 
                     await revoke(db_obj.id, purge="tenant_id" in obj_in or "creator_id" in obj_in)
+                    await revoke_zalo(db_obj.id, purge="tenant_id" in obj_in or "creator_id" in obj_in)
             updated = await super().update(db_obj=db_obj, obj_in=obj_in)
             memo_set("agent", updated.id, updated)
             if db is not None and (
@@ -835,12 +837,14 @@ class AgentDAO(BaseDAO[AgentRecord]):
         """Stop every agent in the tenant (``paused`` is not a valid agent_status)."""
         async with self.session() as db:
             from app.dao.whatsapp_personal_dao import revoke
+            from app.dao.zalo_personal_dao import revoke as revoke_zalo
 
             personal_agents = await db.fetchall(
                 "SELECT id FROM agents WHERE tenant_id=%(tenant)s ORDER BY id FOR UPDATE", {"tenant": tenant_id}
             )
             for personal_agent in personal_agents:
                 await revoke(uuid_from_row(personal_agent["id"]), purge=True)
+                await revoke_zalo(uuid_from_row(personal_agent["id"]), purge=True)
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
                 "WHERE tenant_id = %(tenant_id)s RETURNING id",
@@ -864,12 +868,14 @@ class AgentDAO(BaseDAO[AgentRecord]):
             params["tenant_id"] = tenant_id
         async with self.session() as db:
             from app.dao.whatsapp_personal_dao import revoke
+            from app.dao.zalo_personal_dao import revoke as revoke_zalo
 
             personal_agents = await db.fetchall(
                 "SELECT id FROM agents WHERE " + " AND ".join(clauses) + " ORDER BY id FOR UPDATE", params
             )
             for personal_agent in personal_agents:
                 await revoke(uuid_from_row(personal_agent["id"]), purge=True)
+                await revoke_zalo(uuid_from_row(personal_agent["id"]), purge=True)
             rows = await db.fetchall(
                 "UPDATE agents SET status = 'stopped', heartbeat_enabled = FALSE, updated_at = NOW() "
                 "WHERE " + " AND ".join(clauses) + f" RETURNING {self._select_list()}",
@@ -971,8 +977,10 @@ class AgentDAO(BaseDAO[AgentRecord]):
         params = {"aid": agent_id}
         async with self.session() as db:
             from app.dao.whatsapp_personal_dao import revoke
+            from app.dao.zalo_personal_dao import revoke as revoke_zalo
 
             await revoke(agent_id, purge=True)
+            await revoke_zalo(agent_id, purge=True)
             async with long_running_statement(db):
                 await execute_cleanup(db, AGENT_DELETE_CLEANUP_SQL, params)
                 await db.execute("DELETE FROM agents WHERE id = %(aid)s", params)

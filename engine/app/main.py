@@ -128,6 +128,7 @@ from app.api.auth import router as auth_router
 from app.api.capacity import router as capacity_router
 from app.api.capacity_evidence import router as capacity_evidence_router
 from app.api.channel_catalog import router as channel_catalog_router
+from app.api.channel_links import router as channel_links_router
 from app.api.chat_sessions import router as chat_sessions_router
 from app.api.clawbook import router as clawbook_router
 from app.api.company_admissions import router as company_admissions_router
@@ -161,6 +162,7 @@ from app.api.sso import router as sso_router
 from app.api.tasks import router as tasks_router
 from app.api.tavily_proxy import router as tavily_proxy_router
 from app.api.teams import router as teams_router
+from app.api.telegram import router as telegram_router
 from app.api.tenant_email import router as tenant_email_router
 from app.api.tenants import router as tenants_router
 from app.api.tools import probe_router as tools_probe_router, router as tools_router
@@ -172,6 +174,7 @@ from app.api.websocket import router as ws_router
 from app.api.wechat import router as wechat_router
 from app.api.wecom import router as wecom_router
 from app.api.whatsapp import router as whatsapp_router
+from app.api.zalo_personal import router as zalo_personal_router
 
 # Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound.
 _CRUD_DB = [Depends(bind_crud_connection)]
@@ -190,6 +193,7 @@ app.include_router(files_router, prefix=settings.API_PREFIX)
 app.include_router(file_previews_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
 app.include_router(channel_catalog_router, prefix=settings.API_PREFIX)
+app.include_router(channel_links_router, prefix=settings.API_PREFIX)
 app.include_router(sso_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
@@ -222,6 +226,8 @@ app.include_router(wecom_router, prefix=settings.API_PREFIX)
 app.include_router(wechat_router, prefix=settings.API_PREFIX)
 app.include_router(whatsapp_router, prefix=settings.API_PREFIX)
 app.include_router(teams_router, prefix=settings.API_PREFIX)
+app.include_router(telegram_router, prefix=settings.API_PREFIX)
+app.include_router(zalo_personal_router, prefix=settings.API_PREFIX)
 app.include_router(atlassian_router, prefix=settings.API_PREFIX)
 app.include_router(triggers_router, dependencies=_CRUD_DB)
 app.include_router(focus_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

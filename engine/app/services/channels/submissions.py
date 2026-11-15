@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, override
+from typing import TYPE_CHECKING, Literal, override
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -39,6 +39,9 @@ from app.services.openclaw_model_selection import prepare_shared_openclaw_messag
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message
 from app.services.quota_guard import charge_conversation_quota
 
+if TYPE_CHECKING:
+    from app.records.zalo_personal import ZaloSource
+
 
 @dataclass(frozen=True, slots=True)
 class ChannelEvent:
@@ -60,11 +63,14 @@ class ChannelEvent:
     provider_timestamp_source: str | None = None
     personal_source: PersonalSource | None = None
     stream_source: StreamSource | None = None
+    zalo_source: ZaloSource | None = None
 
     def fingerprint(self) -> str:
         payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
         if self.personal_source is not None:
             payload[1] = str(self.personal_source.auth_epoch)
+        if self.zalo_source is not None:
+            payload[1] = str(self.zalo_source.auth_epoch)
         if (
             self.provider_account_id is not None
             or self.provider_timestamp_source is not None
@@ -109,6 +115,16 @@ class AcceptedChannelEvent:
 
 async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
     clear_entity_memo()
+    if event.zalo_source is not None and normalize_channel_type(event.provider) != normalize_channel_type("zalo"):
+        raise HTTPException(403, "Invalid Zalo source")
+    if event.provider in {"telegram", "zalo", "zalo_personal"}:
+        from app.services.channels.sender_links import authorize_link_source, resolve_explicit_sender
+
+        config, agent = await authorize_link_source(event)
+        if event.provider_account_id is None:
+            raise HTTPException(403, "Provider account is required")
+        sender = await resolve_explicit_sender(config, agent, event.provider_account_id, event.sender_id)
+        return agent, sender
     if event.personal_source is not None:
         from app.services.channels.whatsapp_personal_intake import resolve_personal_sender
 
@@ -155,7 +171,7 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
 def _receipt(event: ChannelEvent, agent: AgentRecord) -> ChannelEventReceiptRecord:
     return ChannelEventReceiptRecord(
         config_id=event.config_id,
-        provider=event.provider,
+        provider="zalo" if event.zalo_source is not None else event.provider,
         event_key=event.event_key,
         agent_id=agent.id,
         tenant_id=agent.tenant_id,

@@ -319,6 +319,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as WHATSAPP_PERSONAL_BUDGET_SECONDS,
                 personal_supervisor,
             )
+            from app.services.channels.zalo_personal_supervisor import (
+                PROGRESS_BUDGET_SECONDS as ZALO_PERSONAL_BUDGET_SECONDS,
+                personal_supervisor as zalo_personal_supervisor,
+            )
             from app.services.company_transfer_cleanup import (
                 PROGRESS_BUDGET_SECONDS as TRANSFER_CLEANUP_BUDGET_SECONDS,
                 start_transfer_cleanup_reconciler,
@@ -333,6 +337,12 @@ class Runtime:
                 progress_budget_seconds=WHATSAPP_PERSONAL_BUDGET_SECONDS,
             )
             self.tasks.start("ss-local-proxy", self.proxy.start(), requirement="setup")
+            self.tasks.start(
+                "zalo_personal",
+                zalo_personal_supervisor(),
+                requirement="loop",
+                progress_budget_seconds=ZALO_PERSONAL_BUDGET_SECONDS,
+            )
             for manager in self.managers:
                 initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
                 self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")

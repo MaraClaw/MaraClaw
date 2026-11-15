@@ -333,9 +333,9 @@ export type ChangePasswordRequest = z.infer<typeof ChangePasswordRequestSchema>;
 export const ChangePasswordResponseSchema = z.looseObject({ ["access_token"]: z.string().optional(), ["must_change_password"]: z.boolean(), ["ok"]: z.boolean() });
 export type ChangePasswordResponse = z.infer<typeof ChangePasswordResponseSchema>;
 
-export const ChannelTypeValues = ["feishu","wecom","wechat","whatsapp","dingtalk","slack","discord","atlassian","microsoft_teams","agentbay","google_chat"] as const;
-export const ChannelType = { FEISHU: "feishu", WECOM: "wecom", WECHAT: "wechat", WHATSAPP: "whatsapp", DINGTALK: "dingtalk", SLACK: "slack", DISCORD: "discord", ATLASSIAN: "atlassian", MICROSOFT_TEAMS: "microsoft_teams", AGENTBAY: "agentbay", GOOGLE_CHAT: "google_chat" } as const;
-export const ChannelTypeSchema = z.intersection(z.union([z.literal("feishu"), z.literal("wecom"), z.literal("wechat"), z.literal("whatsapp"), z.literal("dingtalk"), z.literal("slack"), z.literal("discord"), z.literal("atlassian"), z.literal("microsoft_teams"), z.literal("agentbay"), z.literal("google_chat")]), z.string());
+export const ChannelTypeValues = ["feishu","wecom","wechat","whatsapp","dingtalk","slack","discord","atlassian","microsoft_teams","agentbay","google_chat","telegram","zalo"] as const;
+export const ChannelType = { FEISHU: "feishu", WECOM: "wecom", WECHAT: "wechat", WHATSAPP: "whatsapp", DINGTALK: "dingtalk", SLACK: "slack", DISCORD: "discord", ATLASSIAN: "atlassian", MICROSOFT_TEAMS: "microsoft_teams", AGENTBAY: "agentbay", GOOGLE_CHAT: "google_chat", TELEGRAM: "telegram", ZALO: "zalo" } as const;
+export const ChannelTypeSchema = z.intersection(z.union([z.literal("feishu"), z.literal("wecom"), z.literal("wechat"), z.literal("whatsapp"), z.literal("dingtalk"), z.literal("slack"), z.literal("discord"), z.literal("atlassian"), z.literal("microsoft_teams"), z.literal("agentbay"), z.literal("google_chat"), z.literal("telegram"), z.literal("zalo")]), z.string());
 export type ChannelType = z.infer<typeof ChannelTypeSchema>;
 
 export const ChannelCatalogEntrySchema = z.looseObject({ ["channel_type"]: ChannelTypeSchema, ["display_name"]: z.string(), ["supports_inbound"]: z.boolean(), ["supports_proactive"]: z.boolean(), ["transport"]: z.string() });
@@ -346,6 +346,16 @@ export type ChannelConfigCreate = z.infer<typeof ChannelConfigCreateSchema>;
 
 export const ChannelConfigOutSchema = z.looseObject({ ["agent_id"]: z.guid(), ["app_id"]: z.union([z.string(), z.null()]).optional(), ["app_secret"]: z.union([z.string(), z.null()]).optional(), ["channel_type"]: ChannelTypeSchema, ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["encrypt_key"]: z.union([z.string(), z.null()]).optional(), ["extra_config"]: z.union([JsonOutputObjectSchema, z.null()]).optional(), ["id"]: z.guid(), ["is_configured"]: z.boolean(), ["is_connected"]: z.boolean(), ["last_tested_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["verification_token"]: z.union([z.string(), z.null()]).optional() });
 export type ChannelConfigOut = z.infer<typeof ChannelConfigOutSchema>;
+
+export const LinkChannelValues = ["telegram","zalo"] as const;
+export const LinkChannelSchema = z.intersection(z.union([z.literal("telegram"), z.literal("zalo")]), z.string());
+export type LinkChannel = z.infer<typeof LinkChannelSchema>;
+
+export const ChannelLinkCodeResponseSchema = z.strictObject({ ["account_hint"]: z.union([z.string(), z.null()]), ["channel"]: LinkChannelSchema, ["code"]: z.string(), ["deep_link"]: z.union([z.string(), z.null()]), ["expires_at"]: z.iso.datetime({ offset: true, local: true }) });
+export type ChannelLinkCodeResponse = z.infer<typeof ChannelLinkCodeResponseSchema>;
+
+export const ChannelLinkStatusSchema = z.strictObject({ ["available"]: z.boolean(), ["channel"]: LinkChannelSchema, ["external_hint"]: z.union([z.string(), z.null()]), ["linked"]: z.boolean(), ["linked_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]) });
+export type ChannelLinkStatus = z.infer<typeof ChannelLinkStatusSchema>;
 
 export const ChatEventTypeValues = ["connected","turn_accepted","turn_rejected","chunk","thinking","tool_call","agentbay_live","workspace_draft","status","info","error","done","onboarded","trigger_notification","heartbeat"] as const;
 export const ChatEventType = { CONNECTED: "connected", TURN_ACCEPTED: "turn_accepted", TURN_REJECTED: "turn_rejected", CHUNK: "chunk", THINKING: "thinking", TOOL_CALL: "tool_call", AGENTBAY_LIVE: "agentbay_live", WORKSPACE_DRAFT: "workspace_draft", STATUS: "status", INFO: "info", ERROR: "error", DONE: "done", ONBOARDED: "onboarded", TRIGGER_NOTIFICATION: "trigger_notification", HEARTBEAT: "heartbeat" } as const;
@@ -1213,6 +1223,15 @@ export type TaskUpdate = z.infer<typeof TaskUpdateSchema>;
 export const TeamsChannelPayloadSchema = z.looseObject({ ["app_id"]: z.string().optional(), ["app_secret"]: z.string().optional(), ["tenant_id"]: z.string().optional(), ["use_managed_identity"]: z.boolean().optional() });
 export type TeamsChannelPayload = z.infer<typeof TeamsChannelPayloadSchema>;
 
+export const TelegramBotTokenSchema = z.string().refine(value => [...value].length <= 512).regex(new RegExp("^[1-9][0-9]*:[A-Za-z0-9_-]+$", "u"));
+export type TelegramBotToken = z.infer<typeof TelegramBotTokenSchema>;
+
+export const TelegramSecretTokenSchema = z.string().regex(new RegExp("^[A-Za-z0-9_-]{1,256}$", "u"));
+export type TelegramSecretToken = z.infer<typeof TelegramSecretTokenSchema>;
+
+export const TelegramChannelConfigUpdateSchema = z.strictObject({ ["bot_token"]: z.union([TelegramBotTokenSchema, z.null()]).optional(), ["secret_token"]: z.union([TelegramSecretTokenSchema, z.null()]).optional() });
+export type TelegramChannelConfigUpdate = z.infer<typeof TelegramChannelConfigUpdateSchema>;
+
 export const TemplateCreateSchema = z.looseObject({ ["category"]: z.string().optional(), ["default_autonomy_policy"]: JsonInputObjectSchema.optional(), ["default_skills"]: z.array(z.string()).optional(), ["description"]: z.string().optional(), ["icon"]: z.string().optional(), ["name"]: z.string(), ["soul_template"]: z.string().optional() });
 export type TemplateCreate = z.infer<typeof TemplateCreateSchema>;
 
@@ -1331,3 +1350,15 @@ export type WhatsAppChannelPayload = z.infer<typeof WhatsAppChannelPayloadSchema
 
 export const WorkReportOutSchema = z.looseObject({ ["author_id"]: z.string(), ["author_type"]: z.string(), ["content"]: z.string(), ["created_at"]: z.string(), ["id"]: z.string(), ["period_date"]: z.string(), ["report_type"]: z.string(), ["source"]: z.string() });
 export type WorkReportOut = z.infer<typeof WorkReportOutSchema>;
+
+export const ZaloPersonalRelinkSchema = z.strictObject({ ["expected_generation"]: z.guid() });
+export type ZaloPersonalRelink = z.infer<typeof ZaloPersonalRelinkSchema>;
+
+export const ZaloPersonalStartSchema = z.strictObject({ ["expected_generation"]: z.union([z.guid(), z.null()]) });
+export type ZaloPersonalStart = z.infer<typeof ZaloPersonalStartSchema>;
+
+export const ZaloPersonalQRSchema = z.strictObject({ ["expires_at"]: z.iso.datetime({ offset: true, local: true }), ["value"]: z.string().refine(value => [...value].length <= 768000) });
+export type ZaloPersonalQR = z.infer<typeof ZaloPersonalQRSchema>;
+
+export const ZaloPersonalStatusSchema = z.strictObject({ ["account_hint"]: z.union([z.string(), z.null()]).optional(), ["attempt_id"]: z.union([z.guid(), z.null()]).optional(), ["error_code"]: z.union([z.intersection(z.union([z.literal("account_in_use"), z.literal("identity_ambiguous"), z.literal("protocol_error"), z.literal("login_failed"), z.literal("auth_store_failed"), z.literal("transport_failed"), z.literal("qr_expired"), z.literal("qr_declined"), z.literal("lease_expired")]), z.string()), z.null()]).optional(), ["expires_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["generation"]: z.union([z.guid(), z.null()]).optional(), ["mode"]: z.intersection(z.literal("personal_qr"), z.string()).optional(), ["qr"]: z.union([ZaloPersonalQRSchema, z.null()]).optional(), ["revision"]: z.number().refine(Number.isInteger).optional(), ["state"]: z.intersection(z.union([z.literal("pending"), z.literal("qr"), z.literal("connected"), z.literal("reconnecting"), z.literal("paused"), z.literal("expired"), z.literal("disconnecting"), z.literal("disconnected"), z.literal("failed")]), z.string()).optional() });
+export type ZaloPersonalStatus = z.infer<typeof ZaloPersonalStatusSchema>;

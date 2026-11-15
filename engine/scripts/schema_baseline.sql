@@ -10,7 +10,9 @@ DO $$ BEGIN CREATE TYPE agent_status_enum AS ENUM ('creating', 'running', 'idle'
 DO $$ BEGIN CREATE TYPE activity_action_enum AS ENUM ('chat_reply', 'tool_call', 'feishu_msg_sent', 'agent_msg_sent', 'web_msg_sent', 'task_created', 'task_updated', 'file_written', 'error', 'schedule_run', 'heartbeat', 'clawbook_post'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE permission_scope_enum AS ENUM ('company', 'department', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE approval_status_enum AS ENUM ('pending', 'approved', 'rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE channel_type_enum AS ENUM ('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', 'atlassian', 'microsoft_teams', 'agentbay', 'google_chat'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE channel_type_enum AS ENUM ('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', 'atlassian', 'microsoft_teams', 'agentbay', 'google_chat', 'telegram', 'zalo'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER TYPE channel_type_enum ADD VALUE IF NOT EXISTS 'telegram';
+ALTER TYPE channel_type_enum ADD VALUE IF NOT EXISTS 'zalo';
 DO $$ BEGIN CREATE TYPE chat_role_enum AS ENUM ('user', 'assistant', 'system', 'tool_call'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE task_type_enum AS ENUM ('todo', 'supervision'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE task_status_enum AS ENUM ('pending', 'doing', 'done'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -1486,6 +1488,94 @@ CREATE TABLE IF NOT EXISTS whatsapp_personal_sends (
 );
 CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_pending ON whatsapp_personal_sends(config_id, created_at)
     WHERE state='pending';
+
+-- Personal Zalo reservations intentionally survive agent/config deletion until physical child reap.
+CREATE TABLE IF NOT EXISTS zalo_personal_connections (
+    config_id UUID PRIMARY KEY,
+    agent_id UUID NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    owner_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    attempt_id UUID NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','qr','connected','reconnecting','paused','expired',
+                                                         'disconnecting','disconnected','failed')),
+    desired BOOLEAN NOT NULL DEFAULT true,
+    claim_token UUID,
+    lease_until TIMESTAMPTZ,
+    account_id TEXT CHECK (account_id ~ '^[0-9]{1,64}$'),
+    qr_value BYTEA,
+    qr_expires_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    activated_at TIMESTAMPTZ,
+    error_code TEXT CHECK (error_code IN ('account_in_use','identity_ambiguous','protocol_error','login_failed',
+        'auth_store_failed','transport_failed','qr_expired','qr_declined','lease_expired')),
+    purge_requested BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((claim_token IS NULL) = (lease_until IS NULL)),
+    CHECK ((qr_value IS NULL) = (qr_expires_at IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_account ON zalo_personal_connections(account_id)
+    WHERE account_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS zalo_personal_auth (
+    config_id UUID NOT NULL REFERENCES zalo_personal_connections(config_id) ON DELETE CASCADE,
+    auth_epoch UUID NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(config_id,auth_epoch)
+);
+
+CREATE TABLE IF NOT EXISTS zalo_personal_sends (
+    command_id UUID PRIMARY KEY,
+    config_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    account_id TEXT NOT NULL CHECK (account_id ~ '^[0-9]{1,64}$'),
+    peer_id TEXT NOT NULL CHECK (peer_id ~ '^[0-9]{1,64}$'),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 2000 AND length(btrim(text)) > 0),
+    purpose TEXT NOT NULL DEFAULT 'reply' CHECK (purpose IN ('reply','link_notice')),
+    message_id TEXT,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending','dispatch_started','accepted','rejected','uncertain','cancelled')),
+    claim_token UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_zalo_personal_pending ON zalo_personal_sends(config_id,created_at,command_id)
+    WHERE state='pending';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_sent_message ON zalo_personal_sends(account_id,message_id)
+    WHERE message_id IS NOT NULL;
+
+-- Explicit member sender linking (Telegram and Zalo). Fresh schema only.
+CREATE TABLE IF NOT EXISTS channel_sender_bindings (
+    config_id UUID NOT NULL REFERENCES channel_configs(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'zalo')),
+    provider_account_id VARCHAR(64) NOT NULL CHECK (provider_account_id ~ '^[0-9]{1,64}$'),
+    external_user_id VARCHAR(64) NOT NULL CHECK (external_user_id ~ '^[0-9]{1,64}$'),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (config_id, provider_account_id, external_user_id),
+    UNIQUE (config_id, provider_account_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS channel_link_codes (
+    code_hash TEXT PRIMARY KEY CHECK (code_hash ~ '^[0-9a-f]{64}$'),
+    config_id UUID NOT NULL REFERENCES channel_configs(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'zalo')),
+    provider_account_id VARCHAR(64) NOT NULL CHECK (provider_account_id ~ '^[0-9]{1,64}$'),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_link_codes_open_member
+    ON channel_link_codes(config_id, provider_account_id, user_id) WHERE consumed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS channel_event_receipts (
     config_id UUID NOT NULL REFERENCES channel_configs (id) ON DELETE CASCADE,

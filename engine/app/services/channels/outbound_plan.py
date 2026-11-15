@@ -1,4 +1,6 @@
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from os import environ
 from typing import assert_never
 from urllib.parse import urlsplit
@@ -14,7 +16,7 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
 from app.records.outbound_plan import OutboundChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.services.channels.google_chat import _service_account_info, parse_external_conv_id
-from app.services.channels.types import normalize_channel_type
+from app.services.channels.types import outbound_provider_key
 from app.services.wechat_channel import WECHAT_ILINK_BASE_URL
 
 _provider = TypeAdapter(OutboundProvider)
@@ -28,6 +30,8 @@ _LIMITS: dict[OutboundProvider, int] = {
     OutboundProvider.WHATSAPP: 4096,
     OutboundProvider.WECHAT: 2000,
     OutboundProvider.DISCORD: 2000,
+    OutboundProvider.TELEGRAM: 4096,
+    OutboundProvider.ZALO: 2000,
 }
 
 
@@ -39,14 +43,16 @@ class ConfiguredOutbound:
 
 
 async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) -> ConfiguredOutbound:
-    provider = _provider.validate_python(normalize_channel_type(session.source_channel))
-    channel_type = ChannelType(provider)
+    provider = _provider.validate_python(outbound_provider_key(session.source_channel))
+    channel_type = ChannelType.ZALO if provider == OutboundProvider.ZALO else ChannelType(provider)
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=channel_type)
     if config is None and provider == OutboundProvider.FEISHU and agent.tenant_id is not None:
         config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=channel_type)
     external = (session.external_conv_id or "").strip()
     if config is None:
-        if provider == OutboundProvider.WHATSAPP and external.startswith("whatsapp_personal:"):
+        if provider == OutboundProvider.ZALO or (
+            provider == OutboundProvider.WHATSAPP and external.startswith("whatsapp_personal:")
+        ):
             from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
 
             raise PersonalSendTerminalError("personal_route_revoked")
@@ -81,6 +87,49 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     destination, thread, recipient_type, endpoint, enterprise_agent_id = external, None, "", "", ""
     account: tuple[str, ...] = (config.app_id or "",)
     match provider:
+        case OutboundProvider.ZALO:
+            from app.dao.zalo_personal_dao import get_personal as get_zalo_personal
+            from app.records.zalo_personal import ZaloRoute
+            from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+            from app.services.channels.zalo_personal_journal import route_matches as zalo_route_matches
+
+            if extra.get("mode") != "personal_qr":
+                raise PersonalSendTerminalError("personal_cloud_route_forbidden")
+            try:
+                zalo_route = ZaloRoute.from_external_id(external)
+            except ValueError:
+                raise PersonalSendTerminalError("personal_route_invalid") from None
+            zalo_connection = await get_zalo_personal(agent.id)
+            if (
+                zalo_route.config_id != config.id
+                or zalo_connection is None
+                or not zalo_route_matches(zalo_connection, zalo_route)
+                or zalo_connection.claim_token is None
+                or zalo_connection.lease_until is None
+                or zalo_connection.lease_until <= datetime.now(UTC)
+            ):
+                raise PersonalSendTerminalError("personal_route_revoked")
+            return ConfiguredOutbound(
+                OutboundTarget(
+                    provider=provider,
+                    mode="personal_qr",
+                    config_id=config.id,
+                    account=(zalo_route.account_id, str(zalo_route.auth_epoch), str(zalo_route.generation)),
+                    destination=zalo_route.external_id(),
+                ),
+                config,
+                agent.tenant_id,
+            )
+        case OutboundProvider.TELEGRAM:
+            if (
+                re.fullmatch(r"[1-9][0-9]*", config.app_id or "") is None
+                or not (config.app_secret or "").strip()
+                or (config.app_secret or "").partition(":")[0] != config.app_id
+            ):
+                raise ValueError("Telegram bot identity or token is unavailable")
+            if re.fullmatch(r"telegram_[1-9][0-9]*", external) is None:
+                raise ValueError("Telegram private destination is invalid")
+            destination = external.removeprefix("telegram_")
         case OutboundProvider.SLACK | OutboundProvider.DISCORD:
             token = (config.app_secret or "").strip()
             if not token:

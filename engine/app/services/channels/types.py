@@ -27,6 +27,7 @@ class ChannelKind:
 
 # Aliases map alternate / legacy names onto the stored channel_type.
 _ALIASES: Final[dict[str, str]] = {
+    "zalo_personal": "zalo",
     "teams": "microsoft_teams",
     "ms_teams": "microsoft_teams",
     "msteams": "microsoft_teams",
@@ -53,6 +54,8 @@ CHANNEL_TYPES: Final[dict[str, ChannelKind]] = {
     "discord": ChannelKind(ChannelType.DISCORD, "discord", "Discord", "gateway", supports_proactive=False),
     "microsoft_teams": ChannelKind(ChannelType.MICROSOFT_TEAMS, "teams", "MS Teams", "webhook"),
     "google_chat": ChannelKind(ChannelType.GOOGLE_CHAT, "google_chat", "Google Chat", "webhook"),
+    "telegram": ChannelKind(ChannelType.TELEGRAM, "telegram", "Telegram Bot", "webhook", supports_proactive=False),
+    "zalo": ChannelKind(ChannelType.ZALO, "zalo_personal", "Zalo Personal", "gateway", supports_proactive=False),
     "atlassian": ChannelKind(
         ChannelType.ATLASSIAN,
         "atlassian",

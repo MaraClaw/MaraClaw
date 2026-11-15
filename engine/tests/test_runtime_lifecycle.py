@@ -199,7 +199,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         task_lease,
         trigger_daemon,
     )
-    from app.services.channels import whatsapp_personal_supervisor
+    from app.services.channels import whatsapp_personal_supervisor, zalo_personal_supervisor
     from app.services.tavily import export
 
     events: list[str] = []
@@ -321,6 +321,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(openclaw_update_worker, "start_openclaw_update_worker", loop)
     monkeypatch.setattr(openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop", reconcile_bursts)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
+    monkeypatch.setattr(zalo_personal_supervisor, "personal_supervisor", loop)
     monkeypatch.setattr(broadcast_email_worker, "start_broadcast_email_worker", broadcast)
     monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", required_worker("auth_email"))
     monkeypatch.setattr(broadcast_fanout_worker, "start_broadcast_fanout_worker", required_worker("broadcast_fanout"))
@@ -426,6 +427,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("capacity_renewal" in names) == role_enabled(roles, "worker")
     assert ("whatsapp_personal" in names) == role_enabled(roles, "connector")
+    assert ("zalo_personal" in names) == role_enabled(roles, "connector")
     assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
     assert ("ChildManager" in names) == role_enabled(roles, "connector")
@@ -883,7 +885,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
     from app.runtime import readiness
     from app.runtime.tasks import loop_progress
     from app.services import audit_logger, company_transfer_cleanup, wechat_channel
-    from app.services.channels import whatsapp_personal_supervisor
+    from app.services.channels import whatsapp_personal_supervisor, zalo_personal_supervisor
 
     now = 0.0
     runtime = lifecycle.Runtime()
@@ -926,6 +928,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
             await budgeted("wechat-reconcile")()
 
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", budgeted("whatsapp_personal"))
+    monkeypatch.setattr(zalo_personal_supervisor, "personal_supervisor", budgeted("zalo_personal"))
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", reconcile_transfers)
     monkeypatch.setattr(whatsapp_personal_supervisor, "PROGRESS_BUDGET_SECONDS", 41.0)
     monkeypatch.setattr(company_transfer_cleanup, "PROGRESS_BUDGET_SECONDS", 42.0)

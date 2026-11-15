@@ -51,6 +51,32 @@ async def schema_db(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DbConnecti
             await db.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
+async def test_existing_channel_enum_accepts_new_integrations_without_replacing_legacy_rows(
+    schema_db: DbConnection,
+) -> None:
+    await schema_db.execute(
+        "CREATE TYPE channel_type_enum AS ENUM "
+        "('feishu', 'wecom', 'wechat', 'whatsapp', 'dingtalk', 'slack', 'discord', "
+        "'atlassian', 'microsoft_teams', 'agentbay', 'google_chat')"
+    )
+    await schema_db.execute("CREATE TABLE legacy_channel_probe (channel channel_type_enum PRIMARY KEY, body TEXT)")
+    await schema_db.execute("INSERT INTO legacy_channel_probe VALUES ('whatsapp', 'preserved')")
+    original_type = await schema_db.fetchone("SELECT 'channel_type_enum'::regtype::oid AS oid")
+    with pytest.raises(DbError):
+        await schema_db.fetchone("SELECT %(channel)s::channel_type_enum", {"channel": "telegram"})
+
+    await bootstrap_db.main()
+    for channel in ("telegram", "zalo"):
+        row = await schema_db.fetchone("SELECT %(channel)s::channel_type_enum::text AS channel", {"channel": channel})
+        assert row == {"channel": channel}
+    await bootstrap_db.main()
+
+    assert await schema_db.fetchone("SELECT 'channel_type_enum'::regtype::oid AS oid") == original_type
+    assert await schema_db.fetchall("SELECT channel::text AS channel, body FROM legacy_channel_probe") == [
+        {"channel": "whatsapp", "body": "preserved"}
+    ]
+
+
 async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnection) -> None:
     # Given an empty, uniquely owned schema.
     # When the real bootstrap initializes it and reruns.
