@@ -84,7 +84,7 @@ export async function assertDecided(h, page, id, status) {
     return {
       status: badge.textContent, color: statusStyle.color, background: statusStyle.backgroundColor,
       rgb: [...context.getImageData(0, 0, 1, 1).data].slice(0, 3),
-      text: link.textContent, slot: link.dataset.slot, width: rect.width, height: rect.height,
+      text: link.textContent, name: link.getAttribute('aria-label'), slot: link.dataset.slot, width: rect.width, height: rect.height,
       radius: parseFloat(control.borderTopLeftRadius), border: control.borderTopWidth,
       alignment: control.alignSelf, decoration: control.textDecorationLine,
       icon: [icon.getAttribute('aria-hidden'), iconRect.width, iconRect.height],
@@ -92,12 +92,13 @@ export async function assertDecided(h, page, id, status) {
       viewport: innerWidth, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
     }
   })
-  // Then status meaning and the standard labelled, rounded outline control are preserved.
+  // Then status meaning and the named, rounded outline icon control are preserved.
   const [red, green, blue] = presentation.rgb
   h.verify(`${status} detail uses its semantic status color`, status === 'approved' ? green > red * 1.2 && green > blue : red > green * 1.2 && red > blue)
-  h.verify('detail Back retains its visible label', presentation.text, 'Back to admission approvals')
+  h.verify('detail Back retains its accessible name', presentation.name, 'Back to admission approvals')
+  h.verify('detail Back is icon only', presentation.text, '')
   h.verify('detail Back uses the shared outline button', [presentation.slot, presentation.border, presentation.alignment, presentation.decoration], ['button', '1px', 'flex-start', 'none'])
-  h.verify('detail Back is a normal rounded rectangle, not an icon circle', presentation.height === 44 && presentation.width > presentation.height * 3 && presentation.radius > 0 && presentation.radius < presentation.height / 2)
+  h.verify('detail Back is a rounded 44px icon control', presentation.height === 44 && presentation.width === 44 && presentation.radius > 0 && presentation.radius < presentation.height / 2)
   h.verify('detail Back has a decorative 16px arrow', presentation.icon, ['true', 16, 16])
   h.verify('detail Back shows a keyboard focus ring', presentation.focused && presentation.shadow !== 'none')
   if (!h.receipt.detailPresentation) h.receipt.detailPresentation = []

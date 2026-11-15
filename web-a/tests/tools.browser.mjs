@@ -323,7 +323,7 @@ async function selectCompany(page, state, scope) {
   state.scope = scope
   await field(page, ui.company).selectOption(scope)
   await detached(page.locator(`[id=${JSON.stringify(previousHeading)}]`))
-  await visible(page.locator('button:not(:disabled):not([aria-label])').filter({ hasText: exactText('Refresh catalog') }))
+  await visible(page.locator('button[aria-label="Refresh catalog"]:not(:disabled)'))
 }
 
 async function assertDeniedControl(locator) {

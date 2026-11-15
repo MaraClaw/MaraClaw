@@ -3,6 +3,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { broadcastEmailStatusOptions } from '@/hooks/broadcast-options'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
@@ -94,7 +95,7 @@ export function BroadcastEmailProgress({ receipt }: { readonly receipt: Broadcas
             {busy ? <p>{t('Cancelling unclaimed email and refreshing progress...')}</p> : null}
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button type="button" variant="outline" className={buttonMotion} disabled={busy} aria-disabled={busy || status.isFetching} onClick={() => { if (!busy && !status.isFetching) void status.refetch() }}>{t(status.isFetching && !busy ? 'Refreshing progress...' : 'Refresh email progress')}</Button>
+            <RefreshButton label={t('Refresh email progress')} aria-label={t(status.isFetching && !busy ? 'Refreshing progress...' : 'Refresh email progress')} disabled={busy} aria-disabled={busy || status.isFetching} onClick={() => { if (!busy && !status.isFetching) void status.refetch() }} />
             <Button ref={cancelButton} type="button" variant="outline" className={buttonMotion} disabled={busy || !canCancel || confirming} onClick={() => { cancellation.reset(); setConfirming(true) }}>{t('Cancel queued email')}</Button>
           </div>
           {confirming ? (

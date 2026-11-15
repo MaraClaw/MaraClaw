@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -48,7 +49,7 @@ export function AdmissionApprovalsPage() {
             {admissionStatusSchema.options.map((value) => <option key={value} value={value}>{t(admissionStatusLabels[value])}</option>)}
           </Select>
         </div>
-        <Button variant="outline" className={actionClass} disabled={reviews.isFetching} onClick={refresh}>{t('Refresh requests')}</Button>
+        <RefreshButton label={t('Refresh requests')} disabled={reviews.isFetching} onClick={refresh} />
       </div>
       {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading admission requests...')}</CardContent></Card> : null}
       {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">

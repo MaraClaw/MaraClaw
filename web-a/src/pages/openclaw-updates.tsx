@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -154,7 +155,9 @@ export function OpenClawUpdatesPage() {
             </dl>
             <p className="text-sm text-muted-foreground">{snapshot.mandatory ? t('Mandatory blocks agent work until the end user upgrades in the agent’s Settings and the upgrade completes.') : t('Optional lets end users continue agent work without upgrading.')} {t('Sending a notice does not automatically restart agents.')}</p>
             <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="outline" className={actionClass} disabled={sending.isPending} onClick={editNewNotice}>{sendError || storageError ? t('Compose a new notice') : t('Back to edit')}</Button>
+              {sendError || storageError
+                ? <Button type="button" variant="outline" className={actionClass} disabled={sending.isPending} onClick={editNewNotice}>{t('Compose a new notice')}</Button>
+                : <BackButton label={t('Back to edit')} disabled={sending.isPending} onClick={editNewNotice} />}
               <Button type="button" className={`${actionClass} sm:ml-auto`} disabled={sending.isPending} onClick={() => {
                 if (submitting.current || !active.current || !isSessionCurrent()) return
                 request.current ??= Object.freeze({ ...snapshot, request_id: crypto.randomUUID() })

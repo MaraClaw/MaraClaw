@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
-import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AgentDailyMessages } from '@/components/users/agent-daily-messages'
 import { ApiError } from '@/lib/http'
@@ -35,10 +34,7 @@ export function UserDetailPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-      <Button type="button" variant="outline" size="sm" className="w-fit" onClick={goBack}>
-        <ArrowLeft className="size-3.5" aria-hidden />
-        {t('Back')}
-      </Button>
+      <BackButton label={t('Back')} onClick={goBack} />
 
       {detail.isLoading ? <p className="text-sm text-muted-foreground">{t('Loading user…')}</p> : null}
       {detail.error ? (

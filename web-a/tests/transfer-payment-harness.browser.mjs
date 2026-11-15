@@ -8,7 +8,7 @@ import { createServer } from 'vite'
 import { bounded, paymentFixture, responseBarrier } from './transfer-payment-fixture.browser.mjs'
 
 export const visible = (locator) => locator.waitFor({ state: 'visible', timeout: 15_000 })
-export const button = (page, text) => page.locator('main button').filter({ hasText: new RegExp(`^${text}$`, 'u') }).last()
+export const button = (page, text) => text === 'Refresh payments' ? page.locator('main button[aria-label="Refresh payments"]').last() : page.locator('main button').filter({ hasText: new RegExp(`^${text}$`, 'u') }).last()
 export const matrix = [390, 1440, 1920].flatMap((width) => ['light', 'dark'].map((theme) => ({ width, theme })))
 const tempRoot = '/var/folders/fm/dhwbb9lj4yn1dkrn1qncq8sh0000gn/T/opencode'
 const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'"

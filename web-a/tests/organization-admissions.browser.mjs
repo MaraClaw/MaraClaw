@@ -83,7 +83,7 @@ await runBrowser(async ({ scenario, capture, verify, receipt }) => {
           await enabledButton(page, 'Retry credentials email').focus(); await button(page, 'Retry credentials email').press('Enter')
           await bounded(barrier.entered)
           await visible(page.locator('[role="status"]').filter({ hasText: exact('Queueing credentials email...') }))
-          verify('pending retry locks Back', await page.evaluate(() => [...document.querySelectorAll('main button')].find((el) => el.textContent === 'Back to requests')?.disabled))
+          verify('pending retry locks Back', await page.evaluate(() => document.querySelector('main button[aria-label="Back to requests"]')?.disabled))
           verify('pending retry locks only its action without a decision form', await page.evaluate(() => !document.querySelector('main form') && [...document.querySelectorAll('main button')].find((el) => el.textContent === 'Retry credentials email')?.disabled))
           await capture(page, state, 'email-retry-pending'); barrier.release()
           await visible(page.locator('[role="status"]').filter({ hasText: /queued for delivery/u }))

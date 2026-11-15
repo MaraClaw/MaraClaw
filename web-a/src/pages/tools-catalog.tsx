@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Plus, RefreshCw, Wrench } from 'lucide-react'
+import { Plus, Wrench } from 'lucide-react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/hooks/use-translation'
 import { listTools } from '@/lib/tools-api'
@@ -51,7 +52,7 @@ export function ToolsCatalog({ tenantId, concreteCompany }: {
         {catalog.data ? <p className="text-sm text-muted-foreground">{t(catalog.data.length === 1 ? '{count} tool available in this catalog context' : '{count} tools available in this catalog context', { count: number(catalog.data.length) })}</p> : null}
       </div>
       <div className="flex flex-wrap gap-3">
-        <Button variant="outline" className={toolButtonClass} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }}><RefreshCw aria-hidden className="size-4" />{t('Refresh catalog')}</Button>
+        <RefreshButton label={t('Refresh catalog')} disabled={catalog.isFetching} onClick={() => { void catalog.refetch() }} />
         <Button variant={editor ? 'outline' : 'default'} className={toolButtonClass} disabled={busy || !concreteCompany} aria-describedby={!concreteCompany ? 'tools-company-help' : undefined} onClick={(event) => open({ kind: 'create' }, event.currentTarget)}><Plus aria-hidden className="size-4" />{t('Create MCP tool')}</Button>
       </div>
     </div>

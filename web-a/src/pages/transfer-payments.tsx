@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -42,7 +43,7 @@ export function TransferPaymentsPanel() {
           <option value="pending">{t('Pending payment review')}</option><option value="recent">{t('Recent paid-choice requests')}</option>
         </Select>
       </div>
-      <Button variant="outline" className={transferActionClass} disabled={reviews.isFetching} onClick={refresh}>{t('Refresh payments')}</Button>
+      <RefreshButton label={t('Refresh payments')} disabled={reviews.isFetching} onClick={refresh} />
     </div>
     {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading transfer payments...')}</CardContent></Card> : null}
     {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">

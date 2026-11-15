@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { PaymentEvidencePreview } from '@/components/payment-evidence-preview'
 import { Button } from '@/components/ui/button'
+import { BackButton } from '@/components/ui/back-button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -96,7 +98,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
   }
 
   return <>
-    <Button variant="outline" className={`self-start ${actionClass}`} disabled={busy} onClick={onBack}>{t('Back to requests')}</Button>
+    <BackButton label={t('Back to requests')} className="self-start" disabled={busy} onClick={onBack} />
     <Card>
       <CardHeader className="gap-3">
         <h2 ref={resultHeading} tabIndex={-1} className="font-display text-lg font-semibold outline-none">{detail.organization_name ?? t('Organization name not provided')}</h2>
@@ -179,7 +181,7 @@ export function OrganizationAdmissionsPage() {
             {organizationAdmissionStatusSchema.options.map((value) => <option key={value} value={value}>{t(statusLabels[value])}</option>)}
           </Select>
         </div>
-        <Button variant="outline" className={actionClass} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: organizationAdmissionKeys.all }) }}>{t('Refresh requests')}</Button>
+        <RefreshButton label={t('Refresh requests')} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: organizationAdmissionKeys.all }) }} />
       </div>
       {reviews.isPending ? <p role="status" className="text-sm">{t('Loading organization requests...')}</p> : null}
       {reviews.isSuccess && items.length === 0 ? <p role="status" className="text-sm">{t('No {status} requests', { status: t(statusLabels[status]).toLowerCase() })}. {t(offset > 0 ? 'Return to the previous page.' : 'New requests will appear here after submission.')}</p> : null}

@@ -6,6 +6,7 @@ import { capacityActionClass, capacityKindLabels, capacityStatusLabels } from '@
 import { CapacityStatusBadge } from '@/components/capacity/capacity-status-badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -39,7 +40,7 @@ export function CapacityPaymentsPanel() {
           {capacityOrderStatusSchema.options.map((value) => <option key={value} value={value}>{t(capacityStatusLabels[value])}</option>)}
         </Select>
       </div>
-      <Button variant="outline" className={capacityActionClass} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: capacityKeys.all }) }}>{t('Refresh payments')}</Button>
+      <RefreshButton label={t('Refresh payments')} disabled={reviews.isFetching} onClick={() => { setOffset(0); void client.invalidateQueries({ queryKey: capacityKeys.all }) }} />
     </div>
     {reviews.isPending ? <Card><CardContent role="status" className="text-sm text-muted-foreground">{t('Loading payments...')}</CardContent></Card> : null}
     {reviews.isError ? <Card><CardContent className="flex flex-col items-start gap-3">

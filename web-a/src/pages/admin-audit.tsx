@@ -6,6 +6,7 @@ import { z } from 'zod'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
+import { RefreshButton } from '@/components/ui/refresh-button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -108,7 +109,7 @@ export function AdminAuditPage() {
       <section aria-labelledby={`${id}-results`} aria-busy={activity.isFetching} className="flex min-w-0 flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id={`${id}-results`} className="font-display text-lg font-semibold">{activity.isSuccess ? t(activity.data.items.length === 1 ? '{count} recent event' : '{count} recent events', { count: number(activity.data.items.length) }) : t('Activity results')}</h2>
-          <Button type="button" variant="outline" className={buttonClass} onClick={refreshActivity}>{t('Refresh activity')}</Button>
+          <RefreshButton label={t('Refresh activity')} onClick={refreshActivity} />
         </div>
         <p role="status" className="text-sm text-muted-foreground">{t(activity.isSuccess && activity.data.next_cursor === null ? 'Page {page} · End of available history' : 'Page {page}', { page: number(cursors.length + 1) })}</p>
         {filters.start_at || filters.end_at ? <p className="text-sm text-muted-foreground">{t('Applied UTC window: {start} (inclusive) to {end} (exclusive).', { start: filters.start_at ?? t('Any start'), end: filters.end_at ?? t('Any end') })}</p> : null}
