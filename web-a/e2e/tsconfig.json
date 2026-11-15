@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.tests.json",
+  "compilerOptions": { "noEmit": true, "incremental": false },
+  "include": ["./**/*.ts", "../playwright.config.ts"]
+}

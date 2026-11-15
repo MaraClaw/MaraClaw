@@ -39,7 +39,7 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
     control,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting, isValid },
+    formState: { errors, isSubmitting },
   } = useForm<CreateCompanyValues>({
     resolver: zodResolver(createCompanySchema),
     mode: 'onTouched',
@@ -109,10 +109,11 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
               id={`${formId}-name`}
               autoComplete="organization"
               aria-invalid={errors.name ? true : undefined}
+              aria-describedby={errors.name ? `${formId}-name-error` : undefined}
               {...register('name')}
             />
             {errors.name ? (
-              <p className="text-xs text-destructive" role="alert">
+              <p id={`${formId}-name-error`} className="text-xs text-destructive" role="alert">
                 {owned(errors.name.message)}
               </p>
             ) : null}
@@ -210,10 +211,11 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
               type="email"
               autoComplete="off"
               aria-invalid={errors.admin_email ? true : undefined}
+              aria-describedby={errors.admin_email ? `${formId}-email-error` : undefined}
               {...register('admin_email')}
             />
             {errors.admin_email ? (
-              <p className="text-xs text-destructive" role="alert">
+              <p id={`${formId}-email-error`} className="text-xs text-destructive" role="alert">
                 {owned(errors.admin_email.message)}
               </p>
             ) : null}
@@ -245,7 +247,7 @@ export function CreateCompanyForm({ onCreated }: CreateCompanyFormProps) {
             <ErrorToast message={formError} />
           ) : null}
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-            <Button type="submit" disabled={isSubmitting || !isValid}>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
               {t('Create company')}
             </Button>

@@ -1,6 +1,6 @@
 import { LogOut } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import { MaraClawLogo } from '@/components/brand/maraclaw-logo'
 import { NavIcon, type NavIconName } from '@/components/layout/nav-icon'
@@ -125,7 +125,7 @@ function NavItems({
   return (
     <>
       {navItems.map((item) => {
-        const { to, label, icon, end, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
+        const { to, label, icon, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, organizationAdmissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (invitationsOnly && !canManageInvitations(user)) return null
@@ -154,34 +154,32 @@ function NavItems({
           )
         }
         return (
-          <NavLink
+          <Link
             key={to}
             to={to}
-            end={end}
             onClick={onNavigate}
+            aria-current={matched ? 'page' : undefined}
             aria-label={notificationCount === undefined ? undefined : t('{label}, {count} unread', { label: t(label), count: number(notificationCount) })}
-            className={({ isActive }) =>
+            className={
               navItemClass(
                 Boolean(compact),
                 cn(
                   'transition-[color,transform] duration-150 ease-out hover:text-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   'active:scale-[0.96] motion-reduce:active:scale-100 motion-reduce:transition-none',
-                  (isActive || matched) && 'text-foreground',
+                  matched && 'text-foreground',
                 ),
               )
             }
           >
-            {({ isActive }) => (
-              <NavItemContent
-                icon={icon}
-                label={t(label)}
-                compact={compact}
-                active={isActive || matched}
-                unreadCount={notificationCount}
-              />
-            )}
-          </NavLink>
+            <NavItemContent
+              icon={icon}
+              label={t(label)}
+              compact={compact}
+              active={matched}
+              unreadCount={notificationCount}
+            />
+          </Link>
         )
       })}
     </>
@@ -196,8 +194,9 @@ export function AdminShell() {
   const mobileNav = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
     const rail = mobileNav.current
-    const active = rail?.querySelector<HTMLAnchorElement>('[aria-current="page"]')
-    if (!rail || !active || !pathname.startsWith(active.pathname) || rail.clientWidth === 0) return
+    const activePath = navItems.find((item) => matchesNavItem(item, pathname))?.to
+    const active = rail?.querySelector<HTMLAnchorElement>(`[aria-current="page"][href="${activePath}"]`)
+    if (!rail || !active || rail.clientWidth === 0) return
     const bounds = rail.getBoundingClientRect()
     const target = active.getBoundingClientRect()
     rail.scrollLeft += Math.max(0, target.right - bounds.right) + Math.min(0, target.left - bounds.left)
