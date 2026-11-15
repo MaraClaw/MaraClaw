@@ -15,6 +15,7 @@ const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((mo
 const LoginPage = lazy(() => import('@/pages/login').then((module) => ({ default: module.LoginPage })))
 const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({ default: module.CompaniesPage })))
 const CompanyDetailPage = lazy(() => import('@/pages/company-detail').then((module) => ({ default: module.CompanyDetailPage })))
+const CompanyRuntimePage = lazy(() => import('@/pages/company-runtime-page').then((module) => ({ default: module.CompanyRuntimePage })))
 const OverviewPage = lazy(() => import('@/pages/overview').then((module) => ({ default: module.OverviewPage })))
 const OpenClawUpdatesPage = lazy(() => import('@/pages/openclaw-updates').then((module) => ({ default: module.OpenClawUpdatesPage })))
 const UpgradeSignalsPage = lazy(() => import('@/pages/upgrade-signals').then((module) => ({ default: module.UpgradeSignalsPage })))
@@ -122,6 +123,7 @@ export function AppRouter() {
                 <Route path="upgrade-signals" element={<UpgradeSignalsPage />} />
                 <Route path="companies" element={<CompaniesPage />} />
                 <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+                <Route path="companies/:companyId/runtimes" element={<CompanyRuntimePage />} />
                 <Route path="search-engine" element={<SearchEnginePage />} />
               </Route>
               <Route path="users" element={<UsersPage />} />
