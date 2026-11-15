@@ -71,7 +71,7 @@ test('a malformed cursor envelope renders a retryable error instead of rows', as
   // When
   await page.goto(inboxPath)
   // Then
-  await expect(page.getByRole('alert')).toContainText('Unable to load notifications')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load notifications' })).toContainText('Unable to load notifications')
   await expect(page.getByText('Untrusted row', { exact: true })).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('malformed-envelope.png'), fullPage: true })
   await page.unroute('**/api/notifications/page?**')

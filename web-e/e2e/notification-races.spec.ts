@@ -47,7 +47,7 @@ test('a failed next page retains loaded rows and retries the same cursor', async
   const beforeLoadMore = fixture.requests.length
   await page.getByRole('button', { name: 'Load more', exact: true }).click()
   // Then
-  await expect(page.getByRole('alert')).toContainText('Unable to load more')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load more' })).toContainText('Unable to load more')
   await expect(list.getByRole('listitem')).toHaveCount(50)
   fixture.failLists(false)
   await page.getByRole('button', { name: 'Retry load more', exact: true }).click()
@@ -139,7 +139,7 @@ for (const action of ['archive', 'restore'] as const) {
     // When
     await page.getByRole('button', { name: `${label} notification: Move me`, exact: true }).click()
     // Then
-    await expect(page.getByRole('alert')).toContainText('Unable to move this notification')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to move this notification' })).toContainText('Unable to move this notification')
     await expect(page.getByRole('button', { name: 'Mark as read: Move me', exact: true })).toBeVisible()
     await expect(page.getByText(`${action === 'archive' ? 1 : 0} unread in All`, { exact: true })).toBeVisible()
     fixture.failWrites(false)
