@@ -59,7 +59,7 @@ test('a review race reports conflict and refreshes the winning decision without 
   // When
   await page.getByRole('button', { name: 'Withdraw request' }).click()
   // Then
-  await expect(page.getByRole('alert')).toHaveText('Request already approved')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Request already approved' })).toHaveText('Request already approved')
   await expect(page.getByText('Approved', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Withdraw request' })).toHaveCount(0)
   expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).toBe(originalToken)
@@ -76,7 +76,7 @@ test('a failed withdrawal keeps pending status and offers a safe retry', async (
   })
   await page.goto(admissionPage)
   await page.getByRole('button', { name: 'Withdraw request' }).click()
-  await expect(page.getByRole('alert')).toContainText('Unable to withdraw')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to withdraw' })).toContainText('Unable to withdraw')
   await expect(page.getByText('Awaiting review', { exact: true })).toBeVisible()
   // When
   await page.getByRole('button', { name: 'Withdraw request' }).click()
