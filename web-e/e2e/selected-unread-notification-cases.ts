@@ -21,7 +21,7 @@ export function registerSelectedUnreadNotificationTests() {
         await page.getByRole('checkbox', { name: 'Select notification: Other announcement', exact: true }).check()
         fixture.failWrites(true)
         await page.getByRole('button', { name: 'Mark selected unread', exact: true }).click()
-        await expect(page.getByRole('alert')).toContainText('Unable to mark selected notifications as unread')
+        await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to mark selected notifications as unread' })).toContainText('Unable to mark selected notifications as unread')
         await expect(selected).toBeChecked()
         await expect(page.getByText('1 unread in Social', { exact: true })).toBeVisible()
         fixture.failWrites(false)
