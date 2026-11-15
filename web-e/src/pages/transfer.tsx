@@ -12,6 +12,7 @@ import { AuthShell } from '@/components/auth/auth-shell'
 import { AdmissionPending } from '@/components/auth/admission-pending'
 import { InvitationCode } from '@/components/auth/invitation-code'
 import { TransferChoice } from '@/components/auth/transfer-choice'
+import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -85,7 +86,7 @@ function TransferForm({ initialCode }: { readonly initialCode: string }) {
       <Button type="submit" className="h-11 w-full" disabled={disabled}>{flow.busy ? translate("Submitting…") : translate("Continue transfer")}</Button>
     </form> : null}
     <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm">
-      <Link to="/app" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">{translate("Back to workspace")}</Link>
+      <BackLink to="/app" variant="ghost" label={translate("Back to workspace")} />
       <Link to="/app/notifications?category=admissions" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">{translate("View saved requests")}</Link>
     </div>
     {flow.selection && flow.quote ? <TransferChoice quote={flow.quote} busy={flow.busy} error={flow.error} onCancel={flow.cancel} onConfirm={flow.confirm} /> : null}

@@ -1,10 +1,10 @@
-import { ArrowLeft } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode, SyntheticEvent } from 'react'
 
 import { CopyField } from '@/components/copy-field'
 import { SiteFooter } from '@/components/layout/site-footer'
 import { SiteHeader } from '@/components/layout/site-header'
+import { BackAnchor } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -223,9 +223,7 @@ export function OrganizationPaymentPage() {
       <main id="main" className="container-page py-10 sm:py-14">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 [overflow-wrap:anywhere]">
           <header className="flex flex-col gap-3">
-            <Button asChild variant="outline" className="min-h-11 self-start text-base">
-              <a href="/#pricing"><ArrowLeft aria-hidden="true" />{translate("Back to pricing")}</a>
-            </Button>
+            <span className="self-start"><BackAnchor href="/#pricing" label={translate("Back to pricing")} /></span>
             <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{translate("Pay for your organization")}</h1>
           </header>
           {content}
