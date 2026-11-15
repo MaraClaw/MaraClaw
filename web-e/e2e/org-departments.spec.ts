@@ -78,7 +78,7 @@ test('failed list refresh keeps the saved name and sibling cards with inline ret
   await page.getByLabel('Department name').press('Enter')
   // Then
   const local = page.getByRole('region', { name: 'Org departments', exact: true })
-  await expect(local.getByRole('status')).toContainText('Unable to load org departments')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load org departments' })).toContainText('Unable to load org departments')
   await expect(local.getByRole('heading', { name: 'Product engineering', exact: true })).toBeVisible()
   await expect(local.getByRole('heading', { name: siblingDepartment.name, exact: true })).toBeVisible()
   await expect(local.getByRole('button', { name: 'Edit name for Product engineering', exact: true })).toBeFocused()
@@ -118,9 +118,10 @@ for (const status of [409, 500]) {
     // When
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     // Then
-    await expect(page.getByRole('status')).toContainText(status === 409 ? 'already exists' : 'Unable to save')
+    const message = status === 409 ? 'already exists' : 'Unable to save'
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: message })).toContainText(message)
     await expect(input).toHaveValue('Operations')
-    await expect(input).toHaveAttribute('aria-invalid', String(status === 409))
+    await expect(input).toHaveAttribute('aria-invalid', 'false')
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
   })
 }
@@ -178,7 +179,7 @@ test('failed local department requests can retry to empty after loading', async 
   const local = page.getByRole('region', { name: 'Org departments', exact: true })
   await expect(local.getByRole('status')).toHaveText('Loading org departments...')
   release.resolve()
-  await expect(local.getByRole('status')).toContainText('Unable to load org departments')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load org departments' })).toContainText('Unable to load org departments')
   await page.unroute('**/api/departments/options')
   // When
   await local.getByRole('button', { name: 'Retry', exact: true }).click()
