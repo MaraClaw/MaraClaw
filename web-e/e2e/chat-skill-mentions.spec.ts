@@ -190,7 +190,7 @@ test('loading appears only at the active trigger and agent navigation resets dis
 })
 
 for (const status of [404, 503]) {
-  test(`a ${status} installed list is inline only and never blocks ordinary sending`, async ({ page }) => {
+  test(`a ${status} installed list never blocks ordinary sending`, async ({ page }) => {
     // Given
     const fixture = await prepareChatSkills(page)
     fixture.setStatus(status)
@@ -200,7 +200,8 @@ for (const status of [404, 503]) {
     await expect(page.getByRole('region', { name: 'Installed skills' })).toHaveCount(0)
     await composer.fill('@')
     const picker = page.getByRole('region', { name: 'Installed skills' })
-    await expect(picker.getByText(status === 404 ? 'No skills installed for this agent.' : /Could not load installed skills/)).toBeVisible()
+    if (status === 404) await expect(picker.getByText('No skills installed for this agent.')).toBeVisible()
+    else await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveText('Could not load installed skills. Keep typing, or reopen @ to try again.')
     await composer.fill('Keep ordinary chat working')
     // When
     await composer.press('Enter')
