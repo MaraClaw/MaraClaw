@@ -63,7 +63,7 @@ test('switching from a live shared conversation to a denied archive clears the r
 test('an archive ending in a human turn does not pretend to await a new reply', async ({ page }) => {
   await prepareChat(page)
   await page.route(`**/sessions/${archivedSession}/messages/page?*`, (route) => route.fulfill({ json: {
-    items: [message('archived-user', 'Last archived question', 'user')], next_cursor: null, has_more: false,
+    items: [message('archived-user', 'Last archived question', 'user')], next_cursor: null, has_more: false, revision: 'archive-1',
   } }))
   await page.goto(chatPath(archivedSession))
   await expect(page.locator('article > [data-chat-content]')).toHaveText(['Last archived question'])
