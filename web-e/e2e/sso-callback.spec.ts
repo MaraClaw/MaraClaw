@@ -76,7 +76,7 @@ for (const failure of [
 
     await page.goto('/sso/callback?provider=example&code=code&state=expected')
 
-    await expect(page.getByRole('alert')).toHaveText(failure.message)
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: failure.message })).toHaveText(failure.message)
     await expect(page.getByRole('link', { name: 'Back to sign in' })).toBeVisible()
   })
 }
