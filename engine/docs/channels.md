@@ -130,11 +130,55 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 | `google_chat` | Google Chat | Chat app HTTP endpoint | `api/google_chat.py` (full shared package) |
 | `wechat` | WeChat | poll / ilink | `api/wechat.py`, `services/wechat_channel.py` |
 | `whatsapp` | WhatsApp | Cloud webhook / Personal QR connector | `api/whatsapp.py`, `channels/whatsapp_personal_supervisor.py` (proactive not registered) |
+| `telegram` | Telegram bot | Bot API webhook | `api/telegram.py`, `channels/telegram.py` |
+| `zalo` | Zalo personal | QR login / live listener | `api/zalo_personal.py`, `channels/zalo_personal_supervisor.py` |
 | `atlassian` | Atlassian tools | not chat inbound | `api/atlassian.py` |
 | `agentbay` | AgentBay | not chat inbound | AgentBay APIs |
 
 Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 `app/services/channels/types.py`.
+
+## Telegram bot and Zalo personal
+
+These channels accept private text messages and return the agent's reply through the
+durable outbound pipeline. Groups, incoming attachments and proactive tool sends are
+not enabled. A connected provider account does not grant its contacts access to an
+agent: each sender must link an active MaraClaw membership with access to that agent.
+Use the member Channels tab to issue a temporary linking code, send the displayed
+command to the bot or linked personal account, and check the resulting link status.
+
+For Telegram, the agent creator saves a BotFather bot token and a webhook secret in
+the Channels tab. Saving does not register a webhook with Telegram. Configure Bot
+API `setWebhook` with the HTTPS URL returned by the setup panel, the same secret as
+`secret_token`, and `allowed_updates` restricted to `message`. Telegram supplies that
+secret in `X-Telegram-Bot-Api-Secret-Token`; the engine checks it before parsing the
+request. Keep bot tokens out of command history and HTTP debug logs. The provider
+adapter sends replies with `sendMessage` and requires a message acknowledgment.
+
+For Zalo, the agent creator starts login and scans the displayed QR image in the
+Zalo mobile app. The image expires and stays out of browser storage and query caches.
+The connector stores the completed login credentials encrypted on the server and
+restores them after restart. A failed restore requires explicit relinking. Disconnect
+revokes the session and its reply routes; old pending replies cannot target a new
+account. The connector role must be running, and the bridge must be built:
+
+```sh
+npm ci --prefix connectors/zalo
+npm test --prefix connectors/zalo
+```
+
+The bridge pins the unofficial personal-account SDK `zca-js` to 2.3.0. It is separate
+from the Zalo Official Account API. Its listener has no offline replay guarantee, and
+another Zalo Web session may interrupt it. Provider acknowledgment is not proof of
+recipient delivery; ambiguous sends are not automatically retried. See
+[`connectors/zalo/README.md`](../connectors/zalo/README.md) for the subprocess protocol.
+
+Run the schema bootstrap before starting the updated API. It adds the missing
+`telegram` and `zalo` values to an existing `channel_type_enum` without replacing
+the type or existing channel rows, and creates the sender-link and Zalo session
+tables. Re-running bootstrap preserves those values and rows. Startup through
+`start-from-docker.sh` with the default `all` role runs this bootstrap; deployments
+using separate API/connector roles must run the `bootstrap` role first.
 
 ## Fresh Installation
 
