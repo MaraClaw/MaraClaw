@@ -46,7 +46,7 @@ test('manager adds, configures and removes a server while validation failures pr
   await expect(page.getByLabel('Remote URL', { exact: true })).toBeDisabled()
   await page.screenshot({ path: testInfo.outputPath('save-pending.png') })
   releaseSave.resolve()
-  await expect(page.getByRole('alert')).toHaveText('This server configuration is invalid.')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'This server configuration is invalid.' })).toHaveText('This server configuration is invalid.')
   await expect(page.getByLabel('Value 1', { exact: true })).toHaveValue('synthetic-secret')
   await page.screenshot({ path: testInfo.outputPath('invalid-config-retained.png') })
   await page.getByRole('button', { name: 'Save server', exact: true }).click()
@@ -95,7 +95,7 @@ test('MCP list errors offer retry and delayed requests show loading without an e
     await expect(page.getByText('Loading MCP servers...', { exact: true })).toBeVisible()
     await expect(page.getByText('No MCP servers', { exact: true })).toHaveCount(0)
     release.resolve()
-    await expect(page.getByRole('alert')).toHaveText('Unable to load MCP servers. Check your connection and try again.')
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load MCP servers. Check your connection and try again.' })).toHaveText('Unable to load MCP servers. Check your connection and try again.')
     recovered = true
     await page.getByRole('button', { name: 'Retry servers', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'research', exact: true })).toBeVisible()
