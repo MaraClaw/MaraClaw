@@ -96,7 +96,7 @@ test('failed list requests can retry to an empty category', async ({ page }) => 
   const fixture = await prepareNotifications(page)
   fixture.failLists(true)
   await page.goto(inboxPath)
-  await expect(page.getByRole('alert')).toContainText('Unable to load notifications')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to load notifications' })).toContainText('Unable to load notifications')
   fixture.failLists(false)
   // When
   await page.getByRole('button', { name: 'Retry', exact: true }).click()
@@ -114,7 +114,7 @@ test('failed bulk requests preserve unread rows and badge until a successful ret
   // When
   await page.getByRole('button', { name: 'Mark all read', exact: true }).click()
   // Then
-  await expect(page.getByRole('alert')).toContainText('Unable to mark notifications')
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Unable to mark notifications' })).toContainText('Unable to mark notifications')
   await expect(page.getByRole('button', { name: 'Mark as read: Unread tool', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: /^Inbox\s*,\s*2 unread$/ }).first()).toBeVisible()
   fixture.failWrites(false)
