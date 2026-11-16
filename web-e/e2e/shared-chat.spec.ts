@@ -1,6 +1,29 @@
 import { expect, test } from '@playwright/test'
 import { archivedSession, chatPath, complete, firstSession, message, navigateChat, prepareChat, sessionRow } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
+import { prepareVideoChat, videoAttachment, videoMessage } from './attachment-video-fixture'
+
+test('live IM video references remain lazy and survive authoritative history reload', async ({ page }) => {
+  const fixture = await prepareVideoChat(page)
+  fixture.chat.setHistory([])
+  await page.goto(chatPath())
+  const socket = await fixture.chat.socket()
+  complete(socket.route, videoMessage)
+  await expect(page.locator('article')).toHaveCount(1)
+  await expect(page.getByText(videoAttachment.name, { exact: true })).toBeVisible()
+  expect(fixture.metadataCalls()).toBe(0)
+  expect(fixture.byteCalls()).toBe(0)
+  fixture.chat.setHistory([videoMessage])
+  await page.reload()
+  await expect(page.locator('article')).toHaveCount(1)
+  await expect(page.getByText(videoAttachment.name, { exact: true })).toBeVisible()
+  expect(fixture.metadataCalls()).toBe(0)
+  expect(fixture.byteCalls()).toBe(0)
+  await page.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(page.locator('video')).toBeVisible()
+  expect(fixture.metadataCalls()).toBe(1)
+  expect(fixture.byteCalls()).toBe(1)
+})
 
 test('opening chat ensures the empty shared conversation instead of the newest private primary', async ({ page }) => {
   const chat = await prepareChat(page)
