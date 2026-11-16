@@ -222,6 +222,10 @@ consume (`UPDATE ... WHERE is_active AND unexpired AND used_count < max_uses AND
 invited_email = <account email>`) all apply the same predicate, so a missing or
 different address matches nothing.
 
+Emailed invitations link to `/transfer#code=<code>` on the configured public
+frontend origin. The code stays in the URL fragment, not the query string;
+the recipient email is not included in the URL.
+
 `POST /api/tenants/invitations/preview {invitation_code}` (authenticated eligible
 unassigned or default-org member) returns `{tenant: {id, name}}` for an active
 ordinary company, otherwise one generic **400**. It never consumes or moves anything.
