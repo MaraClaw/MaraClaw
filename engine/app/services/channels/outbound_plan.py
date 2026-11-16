@@ -13,8 +13,9 @@ from app.core.json_types import json_as_str_or, json_object_from
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
+from app.records.channel_media import StoredFile
 from app.records.chat import ChatSessionRecord
-from app.records.outbound_plan import OutboundChunk, OutboundPlan, OutboundProvider, OutboundTarget
+from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.services.channels.google_chat import _service_account_info, parse_external_conv_id
 from app.services.channels.types import outbound_provider_key
 from app.services.wechat_channel import WECHAT_ILINK_BASE_URL
@@ -90,8 +91,11 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
         case OutboundProvider.ZALO:
             from app.dao.zalo_personal_dao import get_personal as get_zalo_personal
             from app.records.zalo_personal import ZaloRoute
-            from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
-            from app.services.channels.zalo_personal_journal import route_matches as zalo_route_matches
+            from app.services.channels.whatsapp_personal_journal import (
+                PersonalSendPendingError,
+                PersonalSendTerminalError,
+            )
+            from app.services.channels.zalo_personal_journal import route_state as zalo_route_state
 
             if extra.get("mode") != "personal_qr":
                 raise PersonalSendTerminalError("personal_cloud_route_forbidden")
@@ -99,16 +103,16 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
                 zalo_route = ZaloRoute.from_external_id(external)
             except ValueError:
                 raise PersonalSendTerminalError("personal_route_invalid") from None
-            zalo_connection = await get_zalo_personal(agent.id)
-            if (
-                zalo_route.config_id != config.id
-                or zalo_connection is None
-                or not zalo_route_matches(zalo_connection, zalo_route)
-                or zalo_connection.claim_token is None
-                or zalo_connection.lease_until is None
-                or zalo_connection.lease_until <= datetime.now(UTC)
-            ):
+            if zalo_route.config_id != config.id:
                 raise PersonalSendTerminalError("personal_route_revoked")
+            zalo_connection = await get_zalo_personal(agent.id)
+            match zalo_route_state(zalo_connection, zalo_route, datetime.now(UTC)):
+                case "recovering":
+                    raise PersonalSendPendingError
+                case "revoked":
+                    raise PersonalSendTerminalError("personal_route_revoked")
+                case "live":
+                    pass
             return ConfiguredOutbound(
                 OutboundTarget(
                     provider=provider,
@@ -195,10 +199,51 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     return ConfiguredOutbound(target, config, agent.tenant_id)
 
 
+def _split_zalo_chunks(content: str, limit: int) -> tuple[str, ...]:
+    """Prefer readable cuts while reserving nonblank text for every remaining chunk."""
+    # A suffix is viable if a nonblank chunk can reach another viable suffix.
+    viable = [False] * (len(content) + 1)
+    viable[-1] = True
+    end = next_text = len(content)
+    for start in range(len(content) - 1, -1, -1):
+        if not content[start].isspace():
+            next_text = start
+        end = min(end, start + limit)
+        while end > start and not viable[end]:
+            end -= 1
+        viable[start] = end > next_text
+    if not viable[0]:
+        raise ValueError("Cannot split Zalo content within the text limit without blank chunks")
+    chunks: list[str] = []
+    start = 0
+    while start < len(content):
+        end = min(start + limit, len(content))
+        while not viable[end]:
+            end -= 1
+        if end < len(content):
+            for separator in ("\n", " "):
+                boundary = next(
+                    (
+                        index
+                        for index in range(end, start + limit // 2, -1)
+                        if content[index - 1] == separator and viable[index] and content[start:index].strip()
+                    ),
+                    None,
+                )
+                if boundary is not None:
+                    end = boundary
+                    break
+        chunks.append(content[start:end])
+        start = end
+    return tuple(chunks)
+
+
 def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:
     if not content.strip():
         raise ValueError("Cannot plan empty IM content")
     limit = _LIMITS[provider]
+    if provider == OutboundProvider.ZALO:
+        return _split_zalo_chunks(content, limit)
     chunks: list[str] = []
     start, size = 0, 0
     for index, character in enumerate(content):
@@ -211,7 +256,22 @@ def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:
     return tuple(chunks)
 
 
-def build_plan(target: OutboundTarget, content: str, delivery_id: UUID) -> OutboundPlan:
+def build_plan(
+    target: OutboundTarget, content: str, delivery_id: UUID, *, files: tuple[StoredFile, ...] = ()
+) -> OutboundPlan:
+    if files:
+        text = split_chunks(content, target.provider) if content.strip() else ()
+        return OutboundPlan(
+            version=2,
+            target=target,
+            chunks=(
+                *(OutboundChunk(text=value, key=uuid5(delivery_id, f"v2:{index}")) for index, value in enumerate(text)),
+                *(
+                    OutboundFileChunk(file=file, key=uuid5(delivery_id, f"v2:{len(text) + index}"))
+                    for index, file in enumerate(files)
+                ),
+            ),
+        )
     return OutboundPlan(
         target=target,
         chunks=tuple(

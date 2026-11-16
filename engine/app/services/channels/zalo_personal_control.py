@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from cryptography.exceptions import InvalidTag
@@ -9,14 +9,15 @@ from app.core.domain.channels import ChannelType
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.zalo_personal_auth_dao import PURPOSE
 from app.dao.zalo_personal_dao import get_personal, revoke
+from app.dao.zalo_personal_runtime_dao import has_auth, interrupted, reset_runtime, runtime_for
 from app.db.session import connection_ctx
 from app.records.zalo_personal import ZaloConnection
-from app.schemas.zalo_personal import ZaloPersonalQR, ZaloPersonalStatus
+from app.schemas.zalo_personal import ZaloPersonalDiagnostics, ZaloPersonalQR, ZaloPersonalStatus
 from app.services.channels.whatsapp_personal_crypto import AuthCipher, AuthKey
 from app.services.channels.zalo_personal_access import require_running, zalo_owner
 
 
-def public_status(connection: ZaloConnection | None) -> ZaloPersonalStatus:
+async def public_status(connection: ZaloConnection | None) -> ZaloPersonalStatus:
     if connection is None:
         return ZaloPersonalStatus()
     qr = None
@@ -41,6 +42,15 @@ def public_status(connection: ZaloConnection | None) -> ZaloPersonalStatus:
         qr=qr,
         account_hint="***" + connection.account_id[-4:] if connection.account_id is not None else None,
         error_code=connection.error_code,
+        resumable=(
+            connection.claim_token is None
+            and not connection.desired
+            and not connection.purge_requested
+            and connection.state in {"paused", "failed"}
+            and connection.account_id is not None
+            and await has_auth(connection)
+        ),
+        diagnostics=ZaloPersonalDiagnostics.model_validate((await runtime_for(connection.config_id)).model_dump()),
     )
 
 
@@ -50,13 +60,14 @@ async def status(agent_id: UUID, actor_id: UUID) -> ZaloPersonalStatus:
         row = await get_personal(agent_id)
         expired = (
             row is not None
+            and row.claim_token is not None
             and row.state in {"pending", "qr", "reconnecting"}
             and row.expires_at is not None
             and row.expires_at <= datetime.now(UTC)
         )
         if not expired:
             try:
-                return public_status(row)
+                return await public_status(row)
             except InvalidTag, UnicodeError:
                 pass
     async with connection_ctx() as db:
@@ -64,30 +75,34 @@ async def status(agent_id: UUID, actor_id: UUID) -> ZaloPersonalStatus:
         row = await get_personal(agent_id, lock=True)
         if row is not None:
             expired = (
-                row.state in {"pending", "qr", "reconnecting"}
+                row.claim_token is not None
+                and row.state in {"pending", "qr", "reconnecting"}
                 and row.expires_at is not None
                 and row.expires_at <= datetime.now(UTC)
             )
             if expired:
-                await revoke(agent_id, purge=True)
-                await db.execute(
-                    "UPDATE zalo_personal_connections SET error_code='qr_expired',"
-                    "state=CASE WHEN claim_token IS NULL THEN 'expired' ELSE 'disconnecting' END "
-                    "WHERE agent_id=%(id)s",
-                    {"id": agent_id},
-                )
+                if row.account_id is not None and await has_auth(row):
+                    await interrupted(row)
+                else:
+                    await revoke(agent_id, purge=True)
+                    await db.execute(
+                        "UPDATE zalo_personal_connections SET error_code='qr_expired',"
+                        "state=CASE WHEN claim_token IS NULL THEN 'expired' ELSE 'disconnecting' END "
+                        "WHERE agent_id=%(id)s",
+                        {"id": agent_id},
+                    )
             else:
                 try:
-                    return public_status(row)
+                    return await public_status(row)
                 except InvalidTag, UnicodeError:
-                    await revoke(agent_id, purge=True)
+                    await revoke(agent_id, purge=False)
                     await db.execute(
                         "UPDATE zalo_personal_connections SET error_code='auth_store_failed',"
                         "state=CASE WHEN claim_token IS NULL THEN 'failed' ELSE 'disconnecting' END "
                         "WHERE agent_id=%(id)s",
                         {"id": agent_id},
                     )
-        return public_status(await get_personal(agent_id))
+        return await public_status(await get_personal(agent_id))
 
 
 async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink: bool = False) -> ZaloPersonalStatus:
@@ -105,7 +120,8 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
                 "UPDATE zalo_personal_connections SET desired=TRUE,error_code=NULL WHERE agent_id=%(id)s",
                 {"id": agent_id},
             )
-            return public_status(await get_personal(agent_id))
+            await reset_runtime(row.config_id)
+            return await public_status(await get_personal(agent_id))
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.ZALO)
         if config is None:
             config = await channel_config_dao.create(obj_in={"agent_id": agent_id, "channel_type": "zalo"})
@@ -122,7 +138,6 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
                 "app_secret": None,
                 "encrypt_key": None,
                 "verification_token": None,
-                "extra_config": {"mode": "personal_qr"},
                 "is_configured": True,
                 "is_connected": False,
             },
@@ -130,9 +145,14 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
         resumable = (
             row is not None
             and not relink
+            and row.claim_token is None
+            and not row.desired
             and not row.purge_requested
+            and row.state in {"paused", "failed"}
+            and row.account_id is not None
             and row.owner_id == owner.id
             and row.tenant_id == agent.tenant_id
+            and await has_auth(row)
         )
         epoch = row.auth_epoch if row is not None and resumable else uuid4()
         if not resumable:
@@ -142,7 +162,7 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
             "attempt_id,expires_at) VALUES(%(id)s,%(agent)s,%(owner)s,%(tenant)s,%(epoch)s,%(generation)s,"
             "%(attempt)s,%(expires)s) ON CONFLICT(agent_id) DO UPDATE SET owner_id=EXCLUDED.owner_id,"
             "tenant_id=EXCLUDED.tenant_id,auth_epoch=EXCLUDED.auth_epoch,generation=EXCLUDED.generation,"
-            "attempt_id=EXCLUDED.attempt_id,expires_at=EXCLUDED.expires_at,state='pending',desired=TRUE,"
+            "attempt_id=EXCLUDED.attempt_id,expires_at=EXCLUDED.expires_at,state=%(state)s,desired=TRUE,"
             "purge_requested=FALSE,qr_value=NULL,qr_expires_at=NULL,error_code=NULL,activated_at=NULL,"
             "revision=zalo_personal_connections.revision+1,updated_at=now(),"
             "account_id=CASE WHEN %(resume)s THEN zalo_personal_connections.account_id ELSE NULL END",
@@ -152,13 +172,15 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
                 "owner": owner.id,
                 "tenant": agent.tenant_id,
                 "epoch": epoch,
-                "generation": uuid4(),
+                "generation": row.generation if row is not None and resumable else uuid4(),
                 "attempt": uuid4(),
-                "expires": datetime.now(UTC) + timedelta(seconds=120),
+                "expires": None,
                 "resume": resumable,
+                "state": "reconnecting" if resumable else "pending",
             },
         )
-        return public_status(await get_personal(agent_id))
+        await reset_runtime(config.id)
+        return await public_status(await get_personal(agent_id))
 
 
 async def disconnect(agent_id: UUID, actor_id: UUID, expected: UUID) -> ZaloPersonalStatus:
@@ -168,4 +190,4 @@ async def disconnect(agent_id: UUID, actor_id: UUID, expected: UUID) -> ZaloPers
         if row is None or row.generation != expected:
             raise HTTPException(409, "Stale Zalo generation")
         await revoke(agent_id, purge=True)
-        return public_status(await get_personal(agent_id))
+        return await public_status(await get_personal(agent_id))

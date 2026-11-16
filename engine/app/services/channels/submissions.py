@@ -14,6 +14,7 @@ from app.core.permissions import compute_agent_access_level
 from app.core.row_memo import clear_entity_memo
 from app.core.security import load_user_principal
 from app.dao import agent_dao, channel_config_dao
+from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.channel_source_lock import lock_channel_source
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -21,6 +22,8 @@ from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
+from app.records.channel_media import StoredFile
+from app.records.chat_attachment import ChatAttachment
 from app.records.personal_burst_input import ReceiptKey
 from app.records.user import UserRecord
 from app.records.whatsapp_personal import PersonalSource
@@ -64,6 +67,8 @@ class ChannelEvent:
     personal_source: PersonalSource | None = None
     stream_source: StreamSource | None = None
     zalo_source: ZaloSource | None = None
+    attachments: tuple[ChatAttachment, ...] = ()
+    media: tuple[StoredFile, ...] = ()
 
     def fingerprint(self) -> str:
         payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
@@ -251,18 +256,21 @@ async def accept_channel_event(
             user_id=sender.id,
             conversation_id=str(session.id),
             content=event.text if saved_content is None else saved_content,
+            attachments=event.attachments,
         )
         await ensure_workspace_within_quota(agent)
         # Last before enqueue: the per-agent counter row stays locked until commit and is shared by every conversation
         # with this agent, so it must not be held across route selection.
         await charge_agent_daily_message(agent)
-        await enqueue_prepared_openclaw_message(
+        message = await enqueue_prepared_openclaw_message(
             prepared,
             sender_user_id=sender.id,
             conversation_id=str(session.id),
             reply_session_id=reply.id,
             deduplicate=False,
         )
+        if event.media:
+            await channel_event_media_dao.insert(candidate, message.id, event.media)
     return AcceptedChannelEvent(replayed=False)
 
 

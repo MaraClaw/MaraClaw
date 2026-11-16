@@ -6,7 +6,7 @@ from typing import assert_never
 import httpx
 
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
-from app.records.outbound_plan import OutboundChunk, OutboundProvider
+from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundProvider
 from app.services import im_token_cache
 from app.services.channels.outbound_errors import ProviderDeliveryError, provider_deadline, response_body
 from app.services.channels.outbound_http import outbound_client
@@ -58,10 +58,18 @@ async def _feishu_send(
 
 
 async def send_chunk(
-    outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] = utcnow
+    outbound: ConfiguredOutbound, chunk: OutboundChunk | OutboundFileChunk, *, clock: Callable[[], datetime] = utcnow
 ) -> str | None:
     """Send one chunk; return the native message id for WhatsApp and Telegram acknowledgments."""
     target, config = outbound.target, outbound.config
+    if isinstance(chunk, OutboundFileChunk):
+        from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+        from app.services.channels.zalo_personal_media_journal import enqueue_media
+
+        if target.provider != OutboundProvider.ZALO or target.mode != "personal_qr":
+            raise PersonalSendTerminalError("media_provider_forbidden")
+        await enqueue_media(target.destination, chunk)
+        return None
     if target.mode == "personal_qr":
         match target.provider:
             case OutboundProvider.WHATSAPP:

@@ -157,6 +157,9 @@ async def _deliver_agent(
 
 async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], datetime], timing: RelayTimeline) -> None:
     prepared = None
+    candidate = None
+    prepared_result = None
+    media_invalid = False
     if claim.im_plan is None or claim.next_chunk < len(claim.im_plan.chunks):
         try:
             message, agent = await _source(claim)
@@ -166,6 +169,17 @@ async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], da
             pass
         else:
             prepared = await preflight_outbound(await configured_outbound(agent, session))
+            if claim.im_plan is None and prepared.target.provider == OutboundProvider.ZALO:
+                from app.services.channels.channel_media import ChannelMediaError, snapshot_reply_media
+                from app.services.openclaw_transcript import ReplyMediaError
+                from app.services.storage_runtime.base import StorageReadLimitExceededError
+
+                prepared_result = message.result
+                try:
+                    content, files = await snapshot_reply_media(agent, message.result or "")
+                    candidate = build_plan(prepared.target, content, claim.id, files=files)
+                except ChannelMediaError, ReplyMediaError, FileNotFoundError, ValueError, StorageReadLimitExceededError:
+                    media_invalid = True
     async with connection_ctx():
         if not await gateway_report_delivery_dao.lock_claim(claim, now=clock()):
             raise LostClaimError
@@ -185,9 +199,19 @@ async def _deliver_im(claim: GatewayReportDeliveryRecord, clock: Callable[[], da
         if prepared is None or current != prepared.snapshot:
             raise InvalidReportDestinationError("IM configuration or credentials changed during preflight")
         outbound = replace(prepared.snapshot, target=prepared.target)
-        plan = claim.im_plan
+        plan = (
+            await gateway_report_delivery_dao.stored_plan(claim)
+            if outbound.target.provider == OutboundProvider.ZALO
+            else claim.im_plan
+        )
         if plan is None:
-            plan = build_plan(outbound.target, message.result or "", claim.id)
+            if media_invalid:
+                from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+
+                raise PersonalSendTerminalError("zalo_media_source_invalid")
+            if candidate is not None and message.result != prepared_result:
+                raise InvalidReportDestinationError("Report changed during media preparation")
+            plan = candidate or build_plan(outbound.target, message.result or "", claim.id)
             if not await gateway_report_delivery_dao.initialize_plan(claim, plan, now=clock()):
                 raise LostClaimError
         elif plan.target != outbound.target:

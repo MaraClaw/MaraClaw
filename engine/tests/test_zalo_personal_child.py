@@ -4,9 +4,10 @@ from uuid import uuid4
 
 import anyio
 import pytest
-from tests.zalo_personal_fixtures import bind, channel_db, claimed, receipt_db, route_for
+from tests.zalo_personal_fixtures import bind, channel_db, claimed, connected, receipt_db, route_for
 
 from app.dao.zalo_personal_dao import claim, get_personal
+from app.dao.zalo_personal_runtime_dao import runtime_for
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.outbound_plan import OutboundChunk
@@ -21,7 +22,7 @@ __all__ = ["channel_db", "receipt_db"]
 _BRIDGE = """
 import json,sys,psycopg
 init=json.loads(sys.stdin.readline())
-assert init['type']=='init' and init['lease_ms']==30000
+assert init['type']=='init' and init['lease_ms']==30000 and init['keepalive_interval_ms']==300000
 token=init['token']
 def emit(kind,**fields):
     print(json.dumps(dict(id=kind,token=token,type=kind,**fields)),flush=True)
@@ -85,6 +86,7 @@ async def test_real_subprocess_commits_before_ack_dispatches_and_restores(channe
                 with pytest.raises(PersonalSendPendingError):
                     await enqueue(destination, chunk)
                 await sent.wait()
+                assert (await runtime_for(owned.config_id)).last_activity_at is not None
                 await enqueue(destination, chunk)
                 tasks.cancel_scope.cancel()
         assert child.process is not None
@@ -124,3 +126,84 @@ async def test_spawn_isolates_parent_secrets(monkeypatch):
             pass
         assert await process.wait() == 0
     assert not set(secrets) & set(json.loads(raw))
+
+
+@pytest.mark.parametrize("closure", ["closed", "eof"])
+async def test_real_transport_exit_is_reaped_once_and_keeps_login(channel_db, closure):
+    f = channel_db
+    async with transaction(f.db.first):
+        owned = await connected(f)
+        sealed = await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth")
+    script = """
+import json,sys
+init=json.loads(sys.stdin.readline())
+assert init['credentials']=='opaque-session'
+if sys.argv[1]=='closed':
+    print(json.dumps(dict(type='closed',id='drop',token=init['token'],reason='transport_failed')),flush=True)
+"""
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=4)
+    try:
+        child = ZaloChild(owned)
+        with anyio.fail_after(10):
+            await child.run((sys.executable, "-u", "-c", script, closure))
+        assert child.process is not None
+        assert child.process.returncode == 0
+        async with transaction(f.db.first):
+            current = await get_personal(owned.agent_id)
+            assert current is not None
+            assert current.state == "reconnecting"
+            assert current.claim_token is None
+            assert current.account_id == owned.account_id
+            assert await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth") == sealed
+            assert (await runtime_for(owned.config_id)).reconnect_attempts == 1
+    finally:
+        await close_pool()
+
+
+async def test_refresh_database_failure_nacks_and_preserves_committed_auth(channel_db):
+    f = channel_db
+    async with transaction(f.db.first):
+        owned = await connected(f)
+        sealed = await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth")
+        await f.db.first.execute(
+            "CREATE FUNCTION reject_refresh() RETURNS trigger LANGUAGE plpgsql AS $$ "
+            "BEGIN RAISE EXCEPTION 'private-provider-error'; END $$"
+        )
+        await f.db.first.execute(
+            "CREATE TRIGGER reject_refresh BEFORE UPDATE ON zalo_personal_auth "
+            "FOR EACH ROW EXECUTE FUNCTION reject_refresh()"
+        )
+    script = """
+import json,sys,psycopg
+init=json.loads(sys.stdin.readline())
+assert init['credentials']=='opaque-session'
+token=init['token']
+print(json.dumps(dict(type='creds_set',id='refresh',token=token,creds='replacement')),flush=True)
+for line in sys.stdin:
+    frame=json.loads(line)
+    if frame['type']=='result':
+        assert frame['request_id']=='refresh' and frame['ok'] is False
+        with psycopg.connect(sys.argv[1]) as db:
+            assert db.execute('SELECT ciphertext FROM zalo_personal_auth').fetchone()[0].hex()==sys.argv[2]
+        print(json.dumps(dict(type='closed',id='end',token=token,reason='auth_store_failed')),flush=True)
+    elif frame['type']=='shutdown':
+        break
+"""
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=4)
+    try:
+        child = ZaloChild(owned)
+        with anyio.fail_after(10):
+            await child.run((sys.executable, "-u", "-c", script, f.db.conninfo, sealed.hex()))
+        assert child.settled
+        assert child.process is not None
+        assert child.process.returncode == 0
+        async with transaction(f.db.first):
+            assert await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth") == sealed
+            current = await get_personal(owned.agent_id)
+            assert current is not None
+            assert current.state == "reconnecting"
+            runtime = await runtime_for(owned.config_id)
+            assert runtime.last_error == "auth_store_failed"
+            assert runtime.reconnect_attempts == 1
+    finally:
+        await close_pool()

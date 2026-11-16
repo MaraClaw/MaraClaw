@@ -50,6 +50,8 @@ async def test_creator_api_is_no_store_and_fences_mutations(channel_db):
             "qr",
             "account_hint",
             "error_code",
+            "resumable",
+            "diagnostics",
         }
         assert (await client.post(path + "/start", json={"expected_generation": None})).status_code == 409
         assert (await client.post(path + "/relink", json={})).status_code == 422
@@ -92,8 +94,9 @@ async def test_encrypted_qr_credentials_identity_then_ready_and_restart(channel_
         restored = await claim(owned.config_id)
         assert restored is not None
         assert await read_auth(restored) == "session-secret"
-        with pytest.raises(ValueError, match="identity_missing"):
-            await handle_frame(restored, Ready(type="ready", id="early", token="test"))
+        assert restored.state == "reconnecting"
+        await handle_frame(restored, Ready(type="ready", id="restored", token="test"))
+        assert (await status(owned.agent_id, f.db.user.id)).state == "connected"
 
 
 async def test_stale_or_expired_claim_cannot_work_or_release_account(channel_db):

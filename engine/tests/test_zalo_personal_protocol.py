@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.records.zalo_personal import ZaloRoute
 from app.services.channels.whatsapp_personal_crypto import AuthCipher, AuthKey
-from app.services.channels.zalo_personal_protocol import child_frame
+from app.services.channels.zalo_personal_protocol import Closed, Heartbeat, child_frame
 
 
 def test_route_roundtrips_strict_fences_and_refuses_overflow():
@@ -40,12 +40,20 @@ def test_concrete_child_contract_rejects_old_frames_and_malformed_png():
     png = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
     valid = {**common, "type": "qr", "value": png, "expires_at": datetime.now(UTC).isoformat()}
     assert child_frame.validate_json(json.dumps(valid)).type == "qr"
+    heartbeat = child_frame.validate_json(json.dumps({**common, "type": "heartbeat", "ok": True}))
+    assert isinstance(heartbeat, Heartbeat)
+    assert heartbeat.ok
+    closed = child_frame.validate_json(json.dumps({**common, "type": "closed", "reason": "session_replaced"}))
+    assert isinstance(closed, Closed)
+    assert closed.reason == "session_replaced"
     for invalid in [
         {**valid, "value": "data:image/png;base64," + png},
         {**valid, "value": "A" * 768001},
         {**common, "type": "auth_get", "category": "creds", "ids": ["main"]},
         {**common, "type": "identity", "account_id": "not-numeric"},
         {**common, "type": "ready", "extra": 1},
+        {**common, "type": "heartbeat", "ok": "true"},
+        {**common, "type": "heartbeat", "ok": 1},
     ]:
         with pytest.raises(ValidationError):
             child_frame.validate_json(json.dumps(invalid))

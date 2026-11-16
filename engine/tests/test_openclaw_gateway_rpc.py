@@ -14,6 +14,7 @@ from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, ObservationCancelled, ObservationLimitError, ObservationTimeout
 
 from app.config import get_settings
+from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
@@ -436,6 +437,14 @@ class _Turn:
         async def lookup(user_id):
             return self.users.get(user_id)
 
+        async def no_media(_message_id, _agent_id):
+            return ()
+
+        async def no_zalo_origin(_message_id, _agent_id):
+            return False
+
+        monkeypatch.setattr(channel_event_media_dao, "for_message", no_media)
+        monkeypatch.setattr(channel_event_media_dao, "is_zalo_turn", no_zalo_origin)
         monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: self.storage)
         monkeypatch.setattr(user_dao, "get", lookup)
 

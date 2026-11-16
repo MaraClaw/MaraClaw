@@ -22,6 +22,14 @@ from gateway_report_relay_fakes import RelayStore
 TOKEN = "123456:private_bot-token"
 
 
+def text_chunks(plan: OutboundPlan) -> tuple[OutboundChunk, ...]:
+    chunks: list[OutboundChunk] = []
+    for chunk in plan.chunks:
+        assert isinstance(chunk, OutboundChunk)
+        chunks.append(chunk)
+    return tuple(chunks)
+
+
 @pytest.fixture
 def telegram_store(monkeypatch: pytest.MonkeyPatch) -> RelayStore:
     store = RelayStore()
@@ -50,7 +58,9 @@ async def test_telegram_plan_chunks_by_codepoints_and_roundtrips(
 
     plan = outbound_plan.build_plan(configured.target, text, uuid4())
 
-    assert tuple(chunk.text for chunk in plan.chunks) == ((text,) if delta <= 0 else (character * 4096, character))
+    assert tuple(chunk.text for chunk in text_chunks(plan)) == (
+        (text,) if delta <= 0 else (character * 4096, character)
+    )
     assert plan.target.account == ("123456",)
     assert plan.target.destination == "42"
     encoded = plan.model_dump_json()
@@ -119,7 +129,7 @@ async def test_telegram_send_chunk_uses_provider_helper_and_acknowledgment(
     assert proved.target == configured.target
     assert acknowledged == ["1", "2"]
     assert [json.loads(request.content) for request in requests] == [
-        {"chat_id": "42", "text": chunk.text} for chunk in plan.chunks
+        {"chat_id": "42", "text": chunk.text} for chunk in text_chunks(plan)
     ]
     assert all(request.url.raw_path == f"/bot{TOKEN}/sendMessage".encode() for request in requests)
 
@@ -173,7 +183,9 @@ async def test_zalo_plan_preserves_fences_and_codepoint_boundaries(
 
     plan = outbound_plan.build_plan(configured.target, text, uuid4())
 
-    assert tuple(chunk.text for chunk in plan.chunks) == ((text,) if delta <= 0 else (character * 2000, character))
+    assert tuple(chunk.text for chunk in text_chunks(plan)) == (
+        (text,) if delta <= 0 else (character * 2000, character)
+    )
     assert plan.target.mode == "personal_qr"
     assert plan.target.destination == store.session.external_conv_id
     assert plan.target.account == ("123", str(connection.auth_epoch), str(connection.generation))
@@ -189,10 +201,10 @@ async def test_zalo_plan_preserves_fences_and_codepoint_boundaries(
         pytest.param(lambda c: replace(c, generation=uuid4()), id="generation"),
         pytest.param(lambda c: replace(c, account_id="999"), id="account"),
         pytest.param(lambda c: replace(c, desired=False), id="disabled"),
-        pytest.param(lambda c: replace(c, state="reconnecting"), id="disconnected"),
-        pytest.param(lambda c: replace(c, claim_token=None), id="unclaimed"),
-        pytest.param(lambda c: replace(c, lease_until=None), id="no-lease"),
-        pytest.param(lambda c: replace(c, lease_until=c.created_at - timedelta(seconds=1)), id="expired-lease"),
+        pytest.param(lambda c: replace(c, purge_requested=True), id="purging"),
+        pytest.param(lambda c: replace(c, state="paused"), id="paused"),
+        pytest.param(lambda c: replace(c, state="failed"), id="failed"),
+        pytest.param(lambda c: replace(c, state="pending"), id="new-login"),
     ],
 )
 async def test_zalo_plan_refuses_stale_connections(

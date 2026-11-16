@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+import anyio
 from fastapi import HTTPException
 
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
@@ -20,11 +21,14 @@ from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
+from app.records.chat_attachment import ChatAttachment
 from app.records.gateway_message import GatewayMessageRecord
 from app.schemas.chat_wire import ChatEventType
+from app.services.agent_manager import agent_manager
 from app.services.channels.types import normalize_channel_type
 from app.services.gateway_report_wake import wake_gateway_report_relay
 from app.services.openclaw_gateway_stream import GatewayDelta
+from app.services.openclaw_transcript import ReplyMediaError, recover_media
 from app.services.response_identity import response_guard
 from app.services.shared_chat import shared_session_id
 
@@ -35,6 +39,8 @@ CHUNK_SEND_TIMEOUT_SECONDS = 1.0
 class RecordedReport:
     message: GatewayMessageRecord
     assistant_message_id: UUID | None
+    display_text: str | None = None
+    attachments: tuple[ChatAttachment, ...] = ()
 
 
 def _utcnow() -> datetime:
@@ -78,6 +84,17 @@ async def record_report(
     """Commit the winning completion, chat, last-seen touch, and delivery intents."""
     at = now or _utcnow()
     shared_id = shared_session_id(agent.id)
+    attachments: tuple[ChatAttachment, ...] = ()
+    if "MEDIA:" in result:
+        try:
+            media = await anyio.to_thread.run_sync(recover_media, agent_manager._agent_dir(agent.id), result, True)
+            attachments = media.attachments
+            display_text = media.text
+        except ReplyMediaError as error:
+            result = f"The agent could not return the generated file ({error.code})."
+            display_text = result
+    else:
+        display_text = result
     async with connection_ctx():
         candidate = await gateway_message_dao.get_for_agent(message_id, agent.id)
         if candidate is not None and candidate.conversation_id == str(shared_id):
@@ -98,21 +115,34 @@ async def record_report(
             )
         if won is None:
             return None
-        answer = won.result or ""
+        answer = guard.redact(display_text)
         assistant_message_id = None
-        if won.conversation_id not in (None, "") and answer:
+        if won.conversation_id not in (None, "") and (answer or attachments):
             participant = await participant_dao.get_by_type_ref("agent", agent.id)
-            inserted = await chat_message_dao.insert_message(
-                agent_id=agent.id,
-                user_id=won.sender_user_id or agent.creator_id,
-                role="assistant",
-                content=answer,
-                conversation_id=won.conversation_id,
-                participant_id=participant.id if participant else None,
-            )
+            if attachments:
+                inserted = await chat_message_dao.create(
+                    obj_in={
+                        "agent_id": agent.id,
+                        "user_id": won.sender_user_id or agent.creator_id,
+                        "role": "assistant",
+                        "content": answer,
+                        "conversation_id": won.conversation_id,
+                        "participant_id": participant.id if participant else None,
+                        "attachments": [ref.as_dict() for ref in attachments],
+                    }
+                )
+            else:
+                inserted = await chat_message_dao.insert_message(
+                    agent_id=agent.id,
+                    user_id=won.sender_user_id or agent.creator_id,
+                    role="assistant",
+                    content=answer,
+                    conversation_id=won.conversation_id,
+                    participant_id=participant.id if participant else None,
+                )
             assistant_message_id = inserted.id
         await _finalize_report(agent, won, at)
-    return RecordedReport(message=won, assistant_message_id=assistant_message_id)
+    return RecordedReport(won, assistant_message_id, answer, attachments)
 
 
 async def adopt_recovered_report(
@@ -177,12 +207,14 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
             event: dict[str, object] = {
                 "type": ChatEventType.DONE,
                 "role": "assistant",
-                "content": message.result or "",
+                "content": report.display_text if report.display_text is not None else message.result or "",
                 "turn_id": str(message.id),
             }
             if report.assistant_message_id is not None:
                 event["message_id"] = str(report.assistant_message_id)
                 event["entry_id"] = str(report.assistant_message_id)
+            if report.attachments:
+                event["attachments"] = [ref.as_dict() for ref in report.attachments]
             await manager.send_to_session(
                 str(agent.id),
                 message.conversation_id,
