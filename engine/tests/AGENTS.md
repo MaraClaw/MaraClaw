@@ -27,6 +27,7 @@ node --test tests/contract_codegen.test.mjs tests/contract_public_names.test.mjs
 - HTTP: `httpx.ASGITransport(app=app)` + `AsyncClient` when you need the stack; most tests call handlers directly.
 - Clear `app.dependency_overrides` after use. Storage tests use `tmp_path`.
 - Telegram configuration requests accept only `bot_token`; `secret_token` is server-managed, not a field on `TelegramChannelConfigUpdate`.
+- Telegram PostgreSQL route tests supply a public HTTPS URL and use `httpx.MockTransport` for webhook registration; database opt-in does not enable live Telegram calls.
 
 ## Test Navigation And Coverage
 

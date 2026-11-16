@@ -18,7 +18,8 @@ from app.dao.channel_sender_link_dao import channel_sender_link_dao
 from app.db.session import get_connection, transaction
 from app.records.zalo_personal import ZaloSource
 from app.services.channel_user_service import ChannelUserResolutionError
-from app.services.channels import sender_links, submissions
+from app.services.channels import sender_links, submissions, telegram_setup
+from app.services.platform_service import platform_service
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -370,15 +371,20 @@ async def test_telegram_account_swap_invalidates_links_and_open_codes(linked_cha
         _ = await issue(fixture)
         creator = await load_user_principal(fixture.db.user.id, fresh=True)
     monkeypatch.setattr(telegram, "require_channel_creator", AsyncMock())
+    monkeypatch.setattr(platform_service, "get_public_base_url", AsyncMock(return_value="https://engine.example"))
     from app.schemas.telegram import TelegramChannelConfigUpdate
 
-    for account in ("999", "123456"):
-        async with transaction(fixture.db.first):
-            await telegram.configure_telegram_channel(
-                fixture.event.agent_id,
-                TelegramChannelConfigUpdate(bot_token=f"{account}:secret"),
-                creator,
-            )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"ok": True, "result": True}))
+    ) as provider:
+        monkeypatch.setattr(telegram_setup, "outbound_client", lambda: provider)
+        for account in ("999", "123456"):
+            async with transaction(fixture.db.first):
+                await telegram.configure_telegram_channel(
+                    fixture.event.agent_id,
+                    TelegramChannelConfigUpdate(bot_token=f"{account}:secret"),
+                    creator,
+                )
     async with transaction(fixture.db.first):
         assert await fixture.db.first.fetchval("SELECT count(*) FROM channel_sender_bindings") == 0
         assert await fixture.db.first.fetchval("SELECT count(*) FROM channel_link_codes") == 0
