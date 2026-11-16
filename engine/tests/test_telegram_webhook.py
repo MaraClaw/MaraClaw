@@ -99,7 +99,6 @@ async def test_unauthenticated_updates_reject_before_parsing_or_acceptance(webho
         {"chat": {"id": -42, "type": "group"}},
         {"chat": {"id": -42, "type": "supergroup"}},
         {"chat": {"id": -42, "type": "channel"}},
-        {"text": None, "photo": [{"file_id": "photo-id"}]},
         {"text": " \n "},
     ],
 )
@@ -108,6 +107,49 @@ async def test_unsupported_messages_ack_without_submission(webhook_api, patch: d
     response = await client.post(PATH, json={"update_id": 5, "message": {**native_message(), **patch}}, headers=HEADERS)
     assert response.status_code == 200
     accept.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["photo", "document", "video"])
+async def test_media_only_update_reaches_storage_and_replay_skips_download(webhook_api, monkeypatch, tmp_path, kind):
+    from contextlib import asynccontextmanager
+
+    from app.services.channels import submissions, telegram_media
+    from app.services.storage_runtime import agent_files
+    from app.services.storage_runtime.local import LocalStorageBackend
+
+    client, accept, _ = webhook_api
+    replay = AsyncMock(side_effect=[False, True])
+    monkeypatch.setattr(submissions, "is_channel_event_replay", replay)
+    storage = LocalStorageBackend(str(tmp_path))
+    monkeypatch.setattr(agent_files, "get_storage_backend", lambda: storage)
+    calls = []
+
+    def download(request):
+        calls.append(request)
+        if request.url.path.endswith("getFile"):
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": "files/inbound"}})
+        return httpx.Response(200, content=b"file bytes")
+
+    @asynccontextmanager
+    async def provider_client(**_kwargs):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as http:
+            yield http
+
+    monkeypatch.setattr(telegram_media, "public_http_client", provider_client)
+    item = {"file_id": "media1", "file_name": "report.pdf" if kind == "document" else "clip.mp4"}
+    message = {**native_message(), "text": None, kind: [item] if kind == "photo" else item}
+    for _ in range(2):
+        response = await client.post(PATH, json={"update_id": 9, "message": message}, headers=HEADERS)
+        assert response.status_code == 200
+    accept.assert_awaited_once()
+    assert accept.await_args is not None
+    event = accept.await_args.args[0]
+    assert event.kind == kind
+    assert event.media_ids == ("media1",)
+    reference = event.attachments[0]
+    assert await storage.read_bytes(f"{AGENT_ID}/{reference.path}") == b"file bytes"
+    assert accept.await_args.kwargs["saved_content"] == f"[file:{reference.path}]"
+    assert len(calls) == 2
 
 
 async def test_nonmessage_update_acknowledges_and_optional_date_is_supported(webhook_api) -> None:

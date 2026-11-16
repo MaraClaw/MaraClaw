@@ -285,8 +285,13 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                 message = json_object_from(message_raw)
                 message_id = json_as_str_or(message.get("id")).strip()
                 user_text = _extract_message_text(message)
+                kind = json_as_str_or(message.get("type"), "text")
+                media = json_object_from(message.get(kind)) if kind in ("image", "document", "video") else {}
+                media_id = json_as_str_or(media.get("id"))
+                if media_id:
+                    user_text = json_as_str_or(media.get("caption")).strip()
                 sender_phone = json_as_str_or(message.get("from")).strip()
-                if not user_text or not sender_phone:
+                if (not user_text and not media_id) or not sender_phone:
                     continue
 
                 if not message_id:
@@ -310,13 +315,23 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                     sender_id=sender_phone,
                     conversation_id=f"whatsapp_{sender_phone}",
                     text=user_text,
-                    kind=json_as_str_or(message.get("type"), "text"),
+                    kind=kind,
+                    media_ids=(media_id,) if media_id else (),
                     provider_timestamp=provider_timestamp(message.get("timestamp"), received_at),
                     provider_account_id=account,
                     provider_timestamp_source=json.dumps(message.get("timestamp"), separators=(",", ":")),
                 )
                 try:
-                    await accept_channel_event(native)
+                    if media_id:
+                        from app.services.channels.submissions import is_channel_event_replay
+                        from app.services.channels.whatsapp_cloud_media import enrich_media
+
+                        if await is_channel_event_replay(native):
+                            continue
+                        enriched, content = await enrich_media(config, native, media)
+                        await accept_channel_event(enriched, content=content, saved_content=content)
+                    else:
+                        await accept_channel_event(native)
                 except ChannelUserResolutionError, AgentExpired, QuotaExceeded:
                     continue
                 except HTTPException as exc:

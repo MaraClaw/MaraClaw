@@ -121,7 +121,16 @@ async def telegram_event_webhook(config_id: UUID, request: Request) -> OkAcknowl
                 }[result]
             return {"method": "sendMessage", "chat_id": event.conversation_id.removeprefix("telegram_"), "text": text}
         try:
-            _ = await accept_channel_event(event)
+            if event.media_ids and update.message is not None:
+                from app.services.channels.submissions import is_channel_event_replay
+                from app.services.channels.telegram_media import enrich_media
+
+                if await is_channel_event_replay(event):
+                    return {"ok": True}
+                enriched, content = await enrich_media(config, event, update.message)
+                _ = await accept_channel_event(enriched, content=content, saved_content=content)
+            else:
+                _ = await accept_channel_event(event)
         except ChannelUserResolutionError:
             return {
                 "method": "sendMessage",

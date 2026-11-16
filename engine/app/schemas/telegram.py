@@ -35,6 +35,15 @@ class TelegramChat(BaseModel):
     type: str
 
 
+class TelegramMedia(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    file_id: str = Field(min_length=1, max_length=1024)
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = Field(default=None, ge=0)
+
+
 class TelegramMessage(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
 
@@ -43,6 +52,10 @@ class TelegramMessage(BaseModel):
     sender: TelegramSender | None = Field(default=None, alias="from")
     sender_chat: TelegramChat | None = None
     text: str | None = None
+    caption: str | None = None
+    photo: list[TelegramMedia] = Field(default_factory=list, max_length=10)
+    document: TelegramMedia | None = None
+    video: TelegramMedia | None = None
     date: int | None = Field(default=None, ge=0, le=253402300799)
 
 
