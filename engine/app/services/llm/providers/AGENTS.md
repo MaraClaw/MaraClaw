@@ -13,7 +13,6 @@ Provider-specific LLM clients live here. They translate external protocols into 
 
 ## Conventions
 
-- Add provider selection in `app/services/llm/registry.py` through `ProviderSpec`, aliases, protocol mappings, and token limits.
 - Add new protocol client construction in `app/services/llm/factory.py`; callers should not branch on provider names directly.
 - Normalize provider output into parent-package DTOs. Do not leak provider-native response shapes above this layer.
 - Streaming must preserve `on_chunk`, `on_tool_delta`, and `on_thinking` callbacks where the provider exposes those signals.
@@ -30,7 +29,7 @@ Provider-specific LLM clients live here. They translate external protocols into 
 
 ## Avoid
 
-- `llm/client.py` is retired; keep provider parsing and protocol-specific retries in the owning provider modules, not a recreated compatibility facade.
+- Keep provider parsing and protocol-specific retries in the owning provider modules.
 - Do not bypass the parent `finish` tool protocol or tool-call sanitization from provider code.
 - HTTP is acquired from `app.services.llm.http_pool`. Wrapper `close()` detaches only; do not `aclose()` the pooled transport.
 - Do not log API keys, request headers, raw credentials, or full prompt payloads in provider errors.
