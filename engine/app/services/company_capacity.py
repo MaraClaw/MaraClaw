@@ -18,6 +18,7 @@ DAO session that joins it.
 """
 
 from dataclasses import dataclass
+from datetime import date
 from typing import ClassVar
 from uuid import UUID
 
@@ -82,7 +83,11 @@ class CompanyAgentLimitReachedError(Exception):
 
 
 async def company_caps(
-    conn: DbConnection, tenant_id: UUID | None, *, tier: OrganizationPlanId | None = None
+    conn: DbConnection,
+    tenant_id: UUID | None,
+    *,
+    tier: OrganizationPlanId | None = None,
+    on_date: date | None = None,
 ) -> CompanyCaps | None:
     """The caps of a non-system organization; ``None`` means uncapped: a system organization, or no organization."""
     if tenant_id is None:
@@ -91,7 +96,7 @@ async def company_caps(
         return None
     governing_tier = await tier_for_tenant(tenant_id) if tier is None else tier
     plan = plan_for(governing_tier)
-    extras = await effective_extras(conn, tenant_id, vn_today())
+    extras = await effective_extras(conn, tenant_id, on_date if on_date is not None else vn_today())
     return CompanyCaps(
         tier=governing_tier,
         account_limit=plan.included_accounts + extras.accounts,
