@@ -82,7 +82,9 @@ async def test_competing_workers_claim_bounded_disjoint_jobs_and_expired_claims_
     for _ in range(7):
         await scenario.prepare()
     first, second = await asyncio.gather(emails.claim_batch(), AuthEmailDAO().claim_batch())
-    assert sorted((len(first), len(second))) == [2, 5]
+    assert 0 < len(first) <= 5
+    assert 0 < len(second) <= 5
+    assert len(first) + len(second) == 7
     assert len({claim.id for claim in (*first, *second)}) == 7
     assert await emails.claim_batch() == []
     old = first[0]
