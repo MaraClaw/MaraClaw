@@ -419,25 +419,34 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
 async def _accept_native_google_event(
     agent_id: uuid.UUID, config: ChannelConfigRecord, event: gchat.GoogleChatInbound
 ) -> bool:
-    if not bool(event.message_name) or not event.text or not (event.sender_name or event.sender_email):
+    if (
+        not bool(event.message_name)
+        or not (event.text or event.has_attachment)
+        or not (event.sender_name or event.sender_email)
+    ):
         return False
+    from app.services.channels.google_chat_media import GoogleChatAttachment, accept_google_chat_media
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     message = json_object_from(event.raw.get("message"))
     attachments_raw = message.get("attachment") or message.get("attachments")
     attachments = attachments_raw if isinstance(attachments_raw, list) else []
-    await accept_channel_event(
-        ChannelEvent(
-            config_id=config.id,
-            agent_id=agent_id,
-            provider=CHANNEL_TYPE,
-            event_key=json.dumps([config.app_id, event.space_name, event.message_name], separators=(",", ":")),
-            sender_id=event.sender_name or event.sender_email,
-            conversation_id=gchat.external_conv_id_for_inbound(event),
-            text=event.text,
-            kind="attachments" if event.has_attachment else "text",
-            media_ids=tuple(json_as_str_or(json_object_from(item).get("name")) for item in attachments),
-            is_group=gchat.is_group_space(event),
-        )
+    native = ChannelEvent(
+        config_id=config.id,
+        agent_id=agent_id,
+        provider=CHANNEL_TYPE,
+        event_key=json.dumps([config.app_id, event.space_name, event.message_name], separators=(",", ":")),
+        sender_id=event.sender_name or event.sender_email,
+        conversation_id=gchat.external_conv_id_for_inbound(event),
+        text=event.text,
+        kind="attachments" if event.has_attachment else "text",
+        media_ids=tuple(json_as_str_or(json_object_from(item).get("name")) for item in attachments),
+        is_group=gchat.is_group_space(event),
     )
+    if attachments:
+        await accept_google_chat_media(
+            native, config, tuple(GoogleChatAttachment.model_validate(item) for item in attachments)
+        )
+    else:
+        await accept_channel_event(native)
     return True
